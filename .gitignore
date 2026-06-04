@@ -1,0 +1,103 @@
+# CECBS Project - Git Ignore
+# Updated: June 4, 2026
+
+# === Node Modules ===
+node_modules/
+**/node_modules/
+
+# === Build Artifacts ===
+dist/
+build/
+*.exe
+*.o
+*.so
+*.dll
+
+# === Chaincode Artifacts ===
+chaincodes/coffee/chaincode
+chaincodes/coffee/chaincode-linux
+chaincodes/coffee/coffee.exe
+chaincodes/coffee/vendor/
+chaincodes/coffee/package*/
+chaincodes/coffee/*.tar.gz
+
+# === Docker Volumes ===
+volumes/
+
+# === Logs ===
+*.log
+logs/
+api/logs/*.log
+
+# === Database ===
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# === Environment Variables ===
+.env
+.env.local
+.env.*.local
+api/.env
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Temporary Files ===
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# === Certificates (generated) ===
+*.crt
+*.key
+*.pem
+!blockchain/organizations/**/*.crt
+!blockchain/organizations/**/*.key
+!blockchain/organizations/**/*.pem
+
+# === Blockchain Artifacts ===
+blockchain/channel-artifacts/*.block
+blockchain/channel-artifacts/*.tx
+!blockchain/channel-artifacts/.gitkeep
+
+# === Archive ===
+archive/chaincode-backups/
+archive/packages/
+archive/scripts/
+archive/docs/
+
+# === Go ===
+chaincodes/**/go.sum
+!chaincodes/coffee/go.sum
+
+# === Next.js ===
+.next/
+out/
+ui/.next/
+ui/out/
+
+# === Test Coverage ===
+coverage/
+*.cover
+*.coverage
+
+# === Package Managers ===
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# === Generated Documentation ===
+docs/generated/

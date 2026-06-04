@@ -1,0 +1,293 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+)
+
+// ==================== CUSTOMS DECLARATION STRUCTURE ====================
+
+type CustomsDeclaration struct {
+	DeclarationID     string    `json:"declarationId"`
+	ContractID        string    `json:"contractId"`
+	ExporterID        string    `json:"exporterId"`
+	LCID              string    `json:"lcId"`
+	ForexID           string    `json:"forexId"`
+	Quantity          float64   `json:"quantity"`
+	TotalValue        float64   `json:"totalValue"`
+	Currency          string    `json:"currency"`
+	Destination       string    `json:"destination"`
+	PortOfExit        string    `json:"portOfExit"`
+	Status            string    `json:"status"` // SUBMITTED, UNDER_REVIEW, CLEARED, HELD, REJECTED
+	SubmissionDate    time.Time `json:"submissionDate"`
+	ReviewDate        string    `json:"reviewDate"`
+	ClearanceDate     string    `json:"clearanceDate"`
+	ClearanceNumber   string    `json:"clearanceNumber"`
+	CustomsOfficer    string    `json:"customsOfficer"`
+	Documents         []string  `json:"documents"` // Document hashes
+	InspectionNotes   string    `json:"inspectionNotes"`
+	DutiesAmount      float64   `json:"dutiesAmount"`
+	RejectionReason   string    `json:"rejectionReason"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+// ==================== CUSTOMS FUNCTIONS ====================
+
+// SubmitDeclaration - Exporter submits customs declaration
+func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInterface,
+	declarationID, contractID, exporterID, lcID, forexID, quantityStr, totalValueStr,
+	currency, destination, portOfExit string, documents []string) error {
+
+	quantity, err := strconv.ParseFloat(quantityStr, 64)
+	if err != nil {
+		return fmt.Errorf("invalid quantity: %v", err)
+	}
+
+	totalValue, err := strconv.ParseFloat(totalValueStr, 64)
+	if err != nil {
+		return fmt.Errorf("invalid total value: %v", err)
+	}
+
+	// Verify prerequisites
+	lcExists, err := c.LCExists(ctx, lcID)
+	if err != nil {
+		return fmt.Errorf("failed to check LC: %v", err)
+	}
+	if !lcExists {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	forexExists, err := c.ForexExists(ctx, forexID)
+	if err != nil {
+		return fmt.Errorf("failed to check forex: %v", err)
+	}
+	if !forexExists {
+		return fmt.Errorf("forex %s does not exist", forexID)
+	}
+
+	// Check if declaration already exists
+	existingDecl, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if existingDecl != nil {
+		return fmt.Errorf("declaration %s already exists", declarationID)
+	}
+
+	declaration := CustomsDeclaration{
+		DeclarationID:  declarationID,
+		ContractID:     contractID,
+		ExporterID:     exporterID,
+		LCID:           lcID,
+		ForexID:        forexID,
+		Quantity:       quantity,
+		TotalValue:     totalValue,
+		Currency:       currency,
+		Destination:    destination,
+		PortOfExit:     portOfExit,
+		Status:         "SUBMITTED",
+		SubmissionDate: time.Now(),
+		Documents:      documents,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	declarationJSON, err := json.Marshal(declaration)
+	if err != nil {
+		return fmt.Errorf("failed to marshal declaration: %v", err)
+	}
+
+	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+}
+
+// ReviewDeclaration - Customs officer reviews declaration
+func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInterface,
+	declarationID, customsOfficer, inspectionNotes string) error {
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if declarationJSON == nil {
+		return fmt.Errorf("declaration %s does not exist", declarationID)
+	}
+
+	var declaration CustomsDeclaration
+	err = json.Unmarshal(declarationJSON, &declaration)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal declaration: %v", err)
+	}
+
+	if declaration.Status != "SUBMITTED" {
+		return fmt.Errorf("declaration cannot be reviewed, current status: %s", declaration.Status)
+	}
+
+	declaration.Status = "UNDER_REVIEW"
+	declaration.CustomsOfficer = customsOfficer
+	declaration.InspectionNotes = inspectionNotes
+	declaration.ReviewDate = time.Now().Format(time.RFC3339)
+	declaration.UpdatedAt = time.Now()
+
+	declarationJSON, err = json.Marshal(declaration)
+	if err != nil {
+		return fmt.Errorf("failed to marshal declaration: %v", err)
+	}
+
+	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+}
+
+// ClearDeclaration - Customs clears the declaration
+func (c *CoffeeContract) ClearDeclaration(ctx contractapi.TransactionContextInterface,
+	declarationID, clearanceNumber, dutiesAmountStr string) error {
+
+	dutiesAmount, err := strconv.ParseFloat(dutiesAmountStr, 64)
+	if err != nil {
+		return fmt.Errorf("invalid duties amount: %v", err)
+	}
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if declarationJSON == nil {
+		return fmt.Errorf("declaration %s does not exist", declarationID)
+	}
+
+	var declaration CustomsDeclaration
+	err = json.Unmarshal(declarationJSON, &declaration)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal declaration: %v", err)
+	}
+
+	if declaration.Status != "UNDER_REVIEW" {
+		return fmt.Errorf("declaration cannot be cleared, current status: %s", declaration.Status)
+	}
+
+	declaration.Status = "CLEARED"
+	declaration.ClearanceNumber = clearanceNumber
+	declaration.DutiesAmount = dutiesAmount
+	declaration.ClearanceDate = time.Now().Format(time.RFC3339)
+	declaration.UpdatedAt = time.Now()
+
+	declarationJSON, err = json.Marshal(declaration)
+	if err != nil {
+		return fmt.Errorf("failed to marshal declaration: %v", err)
+	}
+
+	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+}
+
+// RejectDeclaration - Customs rejects the declaration
+func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInterface,
+	declarationID, reason string) error {
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if declarationJSON == nil {
+		return fmt.Errorf("declaration %s does not exist", declarationID)
+	}
+
+	var declaration CustomsDeclaration
+	err = json.Unmarshal(declarationJSON, &declaration)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal declaration: %v", err)
+	}
+
+	if declaration.Status == "CLEARED" {
+		return fmt.Errorf("cannot reject cleared declaration")
+	}
+
+	declaration.Status = "REJECTED"
+	declaration.RejectionReason = reason
+	declaration.UpdatedAt = time.Now()
+
+	declarationJSON, err = json.Marshal(declaration)
+	if err != nil {
+		return fmt.Errorf("failed to marshal declaration: %v", err)
+	}
+
+	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+}
+
+// ReadDeclaration - Get declaration details
+func (c *CoffeeContract) ReadDeclaration(ctx contractapi.TransactionContextInterface,
+	declarationID string) (*CustomsDeclaration, error) {
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if declarationJSON == nil {
+		return nil, fmt.Errorf("declaration %s does not exist", declarationID)
+	}
+
+	var declaration CustomsDeclaration
+	err = json.Unmarshal(declarationJSON, &declaration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal declaration: %v", err)
+	}
+
+	return &declaration, nil
+}
+
+// QueryDeclarationsByExporter - Get all declarations for an exporter
+func (c *CoffeeContract) QueryDeclarationsByExporter(ctx contractapi.TransactionContextInterface,
+	exporterID string) ([]*CustomsDeclaration, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
+	return c.queryDeclarations(ctx, queryString)
+}
+
+// QueryDeclarationsByStatus - Get all declarations with specific status
+func (c *CoffeeContract) QueryDeclarationsByStatus(ctx contractapi.TransactionContextInterface,
+	status string) ([]*CustomsDeclaration, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"status":"%s"}}`, status)
+	return c.queryDeclarations(ctx, queryString)
+}
+
+// DeclarationExists - Check if declaration exists
+func (c *CoffeeContract) DeclarationExists(ctx contractapi.TransactionContextInterface,
+	declarationID string) (bool, error) {
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return false, fmt.Errorf("failed to read declaration: %v", err)
+	}
+	return declarationJSON != nil, nil
+}
+
+// Helper function for querying declarations
+func (c *CoffeeContract) queryDeclarations(ctx contractapi.TransactionContextInterface,
+	queryString string) ([]*CustomsDeclaration, error) {
+
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query declarations: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var declarations []*CustomsDeclaration
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var declaration CustomsDeclaration
+		err = json.Unmarshal(queryResponse.Value, &declaration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal declaration: %v", err)
+		}
+		declarations = append(declarations, &declaration)
+	}
+
+	return declarations, nil
+}

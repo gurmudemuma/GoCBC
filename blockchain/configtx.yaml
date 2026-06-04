@@ -1,0 +1,295 @@
+Organizations:
+  - &OrdererOrg
+      Name: OrdererOrg
+      ID: OrdererMSP
+      MSPDir: organizations/ordererOrganizations/cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('OrdererMSP.member')"
+        Writers:
+          Type: Signature
+          Rule: "OR('OrdererMSP.member')"
+        Admins:
+          Type: Signature
+          Rule: "OR('OrdererMSP.admin')"
+      OrdererEndpoints:
+        - orderer.cecbs.et:7050
+
+
+  - &ECTA
+      Name: ECTAMSP
+      ID: ECTAMSP
+      MSPDir: organizations/peerOrganizations/ecta.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.peer', 'ECTAMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('ECTAMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('ECTAMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.ecta.cecbs.et
+          Port: 7051
+
+  - &ECX
+      Name: ECXMSP
+      ID: ECXMSP
+      MSPDir: organizations/peerOrganizations/ecx.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('ECXMSP.admin', 'ECXMSP.peer', 'ECXMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('ECXMSP.admin', 'ECXMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('ECXMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('ECXMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.ecx.cecbs.et
+          Port: 8051
+
+  - &Exporters
+      Name: ExportersMSP
+      ID: ExportersMSP
+      MSPDir: organizations/peerOrganizations/exporters.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.peer', 'ExportersMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('ExportersMSP.peer')"
+
+
+  - &Exporters
+      Name: ExportersMSP
+      ID: ExportersMSP
+      MSPDir: organizations/peerOrganizations/exporters.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.peer', 'ExportersMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('ExportersMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('ExportersMSP.peer')"
+
+
+  - &Banks
+      Name: BanksMSP
+      ID: BanksMSP
+      MSPDir: organizations/peerOrganizations/banks.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('BanksMSP.admin', 'BanksMSP.peer', 'BanksMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('BanksMSP.admin', 'BanksMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('BanksMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('BanksMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.banks.cecbs.et
+          Port: 9051
+
+  - &NBE
+      Name: NBEMSP
+      ID: NBEMSP
+      MSPDir: organizations/peerOrganizations/nbe.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('NBEMSP.admin', 'NBEMSP.peer', 'NBEMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('NBEMSP.admin', 'NBEMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('NBEMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('NBEMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.nbe.cecbs.et
+          Port: 10051
+
+  - &Customs
+      Name: CustomsMSP
+      ID: CustomsMSP
+      MSPDir: organizations/peerOrganizations/customs.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('CustomsMSP.admin', 'CustomsMSP.peer', 'CustomsMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('CustomsMSP.admin', 'CustomsMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('CustomsMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('CustomsMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.customs.cecbs.et
+          Port: 11051
+
+  - &Shipping
+      Name: ShippingMSP
+      ID: ShippingMSP
+      MSPDir: organizations/peerOrganizations/shipping.cecbs.et/msp
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('ShippingMSP.admin', 'ShippingMSP.peer', 'ShippingMSP.client')"
+        Writers:
+          Type: Signature
+          Rule: "OR('ShippingMSP.admin', 'ShippingMSP.client')"
+        Admins:
+          Type: Signature
+          Rule: "OR('ShippingMSP.admin')"
+        Endorsement:
+          Type: Signature
+          Rule: "OR('ShippingMSP.peer')"
+      AnchorPeers:
+        - Host: peer0.shipping.cecbs.et
+          Port: 12051
+
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer.cecbs.et:7050
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.cecbs.et
+        Port: 7050
+        ClientTLSCert: organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/tls/server.crt
+        ServerTLSCert: organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/tls/server.crt
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+  Capabilities:
+    <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+
+Profiles:
+  CoffeeOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+    Consortiums:
+      CoffeeConsortium:
+        Organizations:
+          - *ECTA
+          - *ECX
+          - *Banks
+          - *NBE
+          - *Customs
+          - *Shipping
+
+  CoffeeChannel:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities: *OrdererCapabilities
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *ECTA
+        - *ECX
+        - *Banks
+        - *NBE
+        - *Customs
+        - *Shipping
+      Capabilities: *ApplicationCapabilities

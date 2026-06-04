@@ -1,0 +1,14 @@
+NodeOUs:
+  Enable: false
+  ClientOUIdentifier:
+    Certificate: cacerts/ca.nbe.cecbs.et-cert.pem
+    OrganizationalUnitIdentifier: client
+  PeerOUIdentifier:
+    Certificate: cacerts/ca.nbe.cecbs.et-cert.pem
+    OrganizationalUnitIdentifier: peer
+  AdminOUIdentifier:
+    Certificate: cacerts/ca.nbe.cecbs.et-cert.pem
+    OrganizationalUnitIdentifier: admin
+  OrdererOUIdentifier:
+    Certificate: cacerts/ca.nbe.cecbs.et-cert.pem
+    OrganizationalUnitIdentifier: orderer

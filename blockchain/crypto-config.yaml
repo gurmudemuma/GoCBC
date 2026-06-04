@@ -1,0 +1,57 @@
+OrdererOrgs:
+  - Name: Orderer
+    Domain: cecbs.et
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+
+PeerOrgs:
+  - Name: ECTA
+    Domain: ecta.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 100
+
+  - Name: ECX
+    Domain: ecx.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 2
+
+
+
+  - Name: Banks
+    Domain: banks.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 2
+
+  - Name: NBE
+    Domain: nbe.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 2
+
+  - Name: Customs
+    Domain: customs.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 2
+
+  - Name: Shipping
+    Domain: shipping.cecbs.et
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 2

@@ -1,0 +1,439 @@
+version: '3.8'
+
+networks:
+  cecbs:
+    name: cecbs-network
+
+volumes:
+  orderer.cecbs.et:
+  peer0.ecta.cecbs.et:
+  peer0.ecx.cecbs.et:
+  peer0.exporters.cecbs.et:
+  peer0.banks.cecbs.et:
+  peer0.nbe.cecbs.et:
+  peer0.customs.cecbs.et:
+  peer0.shipping.cecbs.et:
+  peer0.buyers.cecbs.et:
+  postgres-data:
+  redis-data:
+  kafka-data:
+  zookeeper-data:
+
+services:
+  # Orderer
+  orderer.cecbs.et:
+    container_name: orderer.cecbs.et
+    image: hyperledger/fabric-orderer:2.5
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
+      - ORDERER_GENERAL_LISTENPORT=7050
+      - ORDERER_GENERAL_LOCALMSPID=OrdererMSP
+      - ORDERER_GENERAL_LOCALMSPDIR=/var/hyperledger/orderer/msp
+      - ORDERER_GENERAL_TLS_ENABLED=true
+      - ORDERER_GENERAL_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_CLUSTER_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_BOOTSTRAPMETHOD=none
+      - ORDERER_CHANNELPARTICIPATION_ENABLED=true
+      - ORDERER_ADMIN_TLS_ENABLED=true
+      - ORDERER_ADMIN_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_ADMIN_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_ADMIN_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_TLS_CLIENTROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_LISTENADDRESS=0.0.0.0:7053
+    working_dir: /root
+    command: orderer
+    volumes:
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp:/var/hyperledger/orderer/msp
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/tls:/var/hyperledger/orderer/tls
+      - orderer.cecbs.et:/var/hyperledger/production/orderer
+    ports:
+      - 7050:7050
+      - 7053:7053
+    networks:
+      - cecbs
+
+  # ECTA Peer
+  peer0.ecta.cecbs.et:
+    container_name: peer0.ecta.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.ecta.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.ecta.cecbs.et:7052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ecta.cecbs.et:7051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ecta.cecbs.et:7051
+      - CORE_PEER_LOCALMSPID=ECTAMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.ecta:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0ecta"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
+      - peer0.ecta.cecbs.et:/var/hyperledger/production
+    ports:
+      - 7051:7051
+    depends_on:
+      - couchdb.ecta
+    networks:
+      - cecbs
+
+  couchdb.ecta:
+    container_name: couchdb.ecta
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 5984:5984
+    networks:
+      - cecbs
+
+  # ECX Peer
+  peer0.ecx.cecbs.et:
+    container_name: peer0.ecx.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.ecx.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.ecx.cecbs.et:8051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:8051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.ecx.cecbs.et:8052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:8052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ecx.cecbs.et:8051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ecx.cecbs.et:8051
+      - CORE_PEER_LOCALMSPID=ECXMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.ecx:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0ecx"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
+      - peer0.ecx.cecbs.et:/var/hyperledger/production
+    ports:
+      - 8051:8051
+    depends_on:
+      - couchdb.ecx
+    networks:
+      - cecbs
+
+  couchdb.ecx:
+    container_name: couchdb.ecx
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 6984:5984
+    networks:
+      - cecbs
+
+  # Banks Peer
+  peer0.banks.cecbs.et:
+    container_name: peer0.banks.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.banks.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.banks.cecbs.et:9051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:9051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.banks.cecbs.et:9052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:9052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.banks.cecbs.et:9051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.banks.cecbs.et:9051
+      - CORE_PEER_LOCALMSPID=BanksMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.banks:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0banks"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/users:/etc/hyperledger/fabric/users
+      - peer0.banks.cecbs.et:/var/hyperledger/production
+    ports:
+      - 9051:9051
+    depends_on:
+      - couchdb.banks
+    networks:
+      - cecbs
+
+  couchdb.banks:
+    container_name: couchdb.banks
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 7984:5984
+    networks:
+      - cecbs
+
+  # NBE Peer
+  peer0.nbe.cecbs.et:
+    container_name: peer0.nbe.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.nbe.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.nbe.cecbs.et:10051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:10051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.nbe.cecbs.et:10052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:10052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.nbe.cecbs.et:10051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.nbe.cecbs.et:10051
+      - CORE_PEER_LOCALMSPID=NBEMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.nbe:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0nbe"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/users:/etc/hyperledger/fabric/users
+      - peer0.nbe.cecbs.et:/var/hyperledger/production
+    ports:
+      - 10051:10051
+    depends_on:
+      - couchdb.nbe
+    networks:
+      - cecbs
+
+  couchdb.nbe:
+    container_name: couchdb.nbe
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 8984:5984
+    networks:
+      - cecbs
+
+  # Customs Peer
+  peer0.customs.cecbs.et:
+    container_name: peer0.customs.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.customs.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.customs.cecbs.et:11051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:11051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.customs.cecbs.et:11052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:11052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.customs.cecbs.et:11051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.customs.cecbs.et:11051
+      - CORE_PEER_LOCALMSPID=CustomsMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.customs:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0customs"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/users:/etc/hyperledger/fabric/users
+      - peer0.customs.cecbs.et:/var/hyperledger/production
+    ports:
+      - 11051:11051
+    depends_on:
+      - couchdb.customs
+    networks:
+      - cecbs
+
+  couchdb.customs:
+    container_name: couchdb.customs
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 9984:5984
+    networks:
+      - cecbs
+
+  # Shipping Peer
+  peer0.shipping.cecbs.et:
+    container_name: peer0.shipping.cecbs.et
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.shipping.cecbs.et
+      - CORE_PEER_ADDRESS=peer0.shipping.cecbs.et:12051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:12051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.shipping.cecbs.et:12052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:12052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.shipping.cecbs.et:12051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.shipping.cecbs.et:12051
+      - CORE_PEER_LOCALMSPID=ShippingMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.shipping:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peername":"peer0shipping"}
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/users:/etc/hyperledger/fabric/users
+      - peer0.shipping.cecbs.et:/var/hyperledger/production
+    ports:
+      - 12051:12051
+    depends_on:
+      - couchdb.shipping
+    networks:
+      - cecbs
+
+  couchdb.shipping:
+    container_name: couchdb.shipping
+    image: couchdb:3.3
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - 10984:5984
+    networks:
+      - cecbs
+
+  # PostgreSQL
+  postgres:
+    container_name: cecbs-postgres
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=cecbs
+      - POSTGRES_PASSWORD=cecbs123
+      - POSTGRES_DB=cecbs
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - 5432:5432
+    networks:
+      - cecbs
+
+  # Redis
+  redis:
+    container_name: cecbs-redis
+    image: redis:7-alpine
+    command: redis-server --requirepass redis123
+    volumes:
+      - redis-data:/data
+    ports:
+      - 6379:6379
+    networks:
+      - cecbs
+
+  # Zookeeper
+  zookeeper:
+    container_name: cecbs-zookeeper
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+    networks:
+      - cecbs
+
+  # Kafka
+  kafka:
+    container_name: cecbs-kafka
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - 9092:9092
+    networks:
+      - cecbs

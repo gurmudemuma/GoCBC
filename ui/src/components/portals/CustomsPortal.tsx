@@ -1,0 +1,802 @@
+// Ethiopian Coffee Export Consortium Blockchain System (CECBS)
+// Customs Portal - Export Declaration & Clearance Management
+
+import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Grid,
+  Card,
+  CardContent,
+  Typography,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Chip,
+  IconButton,
+  Tooltip,
+  Alert,
+  Tabs,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  LinearProgress,
+  Divider,
+  TextField,
+} from '@mui/material';
+import {
+  Add,
+  CheckCircle,
+  Cancel,
+  LocalShipping,
+  Security,
+  Assignment,
+  Visibility,
+  Download,
+  Warning,
+  Gavel,
+  TrendingUp,
+  QrCode,
+} from '@mui/icons-material';
+import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+
+// Modern Components - 2026 Design
+import {
+  ModernCard,
+  AnimatedButton,
+  DashboardKPI,
+  StatusChip,
+  ThemeToggle,
+} from '@/components/modern';
+
+interface CustomsDeclaration {
+  declarationId: string;
+  shipmentId: string;
+  exporterId: string;
+  declarationType: 'STANDARD' | 'SIMPLIFIED' | 'EUDR_ENHANCED';
+  hsCode: string;
+  quantity: number;
+  value: number;
+  currency: string;
+  destination: string;
+  status: 'SUBMITTED' | 'UNDER_REVIEW' | 'CLEARED' | 'HELD' | 'REJECTED';
+  submissionDate: string;
+  clearanceDate?: string;
+  customsOfficer: string;
+  inspectionRequired: boolean;
+  eudrCompliant: boolean;
+}
+
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
+  <div hidden={value !== index}>
+    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
+  </div>
+);
+
+const CustomsPortal: React.FC = () => {
+  const [tabValue, setTabValue] = useState(0);
+  const [declarations, setDeclarations] = useState<CustomsDeclaration[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedDeclaration, setSelectedDeclaration] = useState<CustomsDeclaration | null>(null);
+  const [clearanceDialogOpen, setClearanceDialogOpen] = useState(false);
+  const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
+  // Mock customs declarations data
+  const mockDeclarations: CustomsDeclaration[] = [
+    {
+      declarationId: 'CD2026001',
+      shipmentId: 'SHIPMENT2026001',
+      exporterId: 'EXP2026001',
+      declarationType: 'EUDR_ENHANCED',
+      hsCode: '090111',
+      quantity: 2000,
+      value: 18500,
+      currency: 'USD',
+      destination: 'Germany',
+      status: 'UNDER_REVIEW',
+      submissionDate: '2026-05-31T10:00:00Z',
+      customsOfficer: 'Officer Alemayehu T.',
+      inspectionRequired: true,
+      eudrCompliant: true,
+    },
+    {
+      declarationId: 'CD2026002',
+      shipmentId: 'SHIPMENT2026002',
+      exporterId: 'EXP2026002',
+      declarationType: 'STANDARD',
+      hsCode: '090111',
+      quantity: 1500,
+      value: 12750,
+      currency: 'USD',
+      destination: 'USA',
+      status: 'CLEARED',
+      submissionDate: '2026-05-30T14:30:00Z',
+      clearanceDate: '2026-05-31T09:15:00Z',
+      customsOfficer: 'Officer Meron K.',
+      inspectionRequired: false,
+      eudrCompliant: false,
+    },
+  ];
+
+  const clearanceData = [
+    { month: 'Jan', standard: 145, simplified: 89, eudr: 23 },
+    { month: 'Feb', standard: 152, simplified: 95, eudr: 28 },
+    { month: 'Mar', standard: 148, simplified: 102, eudr: 35 },
+    { month: 'Apr', standard: 165, simplified: 108, eudr: 42 },
+    { month: 'May', standard: 172, simplified: 115, eudr: 48 },
+  ];
+
+  const statusDistribution = [
+    { name: 'Cleared', value: 78, color: '#4caf50' },
+    { name: 'Under Review', value: 15, color: '#ff9800' },
+    { name: 'Held', value: 5, color: '#f44336' },
+    { name: 'Submitted', value: 2, color: '#2196f3' },
+  ];
+
+  const inspectionData = [
+    { type: 'Physical', count: 45, avgTime: 4.2 },
+    { type: 'Documentary', count: 123, avgTime: 1.8 },
+    { type: 'EUDR Enhanced', count: 28, avgTime: 6.5 },
+    { type: 'Risk-based', count: 67, avgTime: 3.1 },
+  ];
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      // In real implementation, load from API
+      setDeclarations(mockDeclarations);
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearDeclaration = async (declarationId: string) => {
+    try {
+      // In real implementation, call API
+      console.log('Clearing declaration:', declarationId);
+      setClearanceDialogOpen(false);
+      loadData();
+    } catch (error) {
+      console.error('Failed to clear declaration:', error);
+    }
+  };
+  const declarationColumns: GridColDef[] = [
+    { field: 'declarationId', headerName: 'Declaration ID', width: 140 },
+    { field: 'shipmentId', headerName: 'Shipment ID', width: 150 },
+    { field: 'exporterId', headerName: 'Exporter', width: 130 },
+    {
+      field: 'declarationType',
+      headerName: 'Type',
+      width: 130,
+      renderCell: (params) => (
+        <Chip
+          label={params.value}
+          size="small"
+          color={
+            params.value === 'STANDARD' ? 'primary' :
+            params.value === 'SIMPLIFIED' ? 'secondary' : 'success'
+          }
+        />
+      ),
+    },
+    { field: 'hsCode', headerName: 'HS Code', width: 100 },
+    { field: 'quantity', headerName: 'Quantity (kg)', width: 120 },
+    {
+      field: 'value',
+      headerName: 'Value',
+      width: 120,
+      renderCell: (params) => formatCurrency(params.value, params.row.currency),
+    },
+    { field: 'destination', headerName: 'Destination', width: 120 },
+    {
+      field: 'eudrCompliant',
+      headerName: 'EUDR',
+      width: 80,
+      renderCell: (params) => (
+        params.value ? <CheckCircle color="success" /> : <Cancel color="disabled" />
+      ),
+    },
+    {
+      field: 'inspectionRequired',
+      headerName: 'Inspection',
+      width: 100,
+      renderCell: (params) => (
+        params.value ? <Security color="warning" /> : <CheckCircle color="success" />
+      ),
+    },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 120,
+      renderCell: (params) => (
+        <StatusChip status={params.value} />
+      ),
+    },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 150,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
+      renderCell: (params) => (
+        <Box onClick={(e) => e.stopPropagation()}>
+          <Tooltip title="View Details">
+            <IconButton 
+              size="small" 
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedDeclaration(params.row);
+              }}
+            >
+              <Visibility />
+            </IconButton>
+          </Tooltip>
+          {params.row.status === 'UNDER_REVIEW' && (
+            <Tooltip title="Clear Declaration">
+              <IconButton 
+                size="small" 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedDeclaration(params.row);
+                  setClearanceDialogOpen(true);
+                }}
+              >
+                <CheckCircle />
+              </IconButton>
+            </Tooltip>
+          )}
+          {params.row.inspectionRequired && (
+            <Tooltip title="Schedule Inspection">
+              <IconButton 
+                size="small" 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedDeclaration(params.row);
+                  setInspectionDialogOpen(true);
+                }}
+              >
+                <Security />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      ),
+    },
+  ];
+
+  const getDeclarationStats = () => {
+    const total = declarations.length;
+    const cleared = declarations.filter(d => d.status === 'CLEARED').length;
+    const pending = declarations.filter(d => d.status === 'UNDER_REVIEW').length;
+    const totalValue = declarations.reduce((sum, declaration) => sum + declaration.value, 0);
+
+    return { total, cleared, pending, totalValue };
+  };
+
+  const stats = getDeclarationStats();
+
+  // Brand colors for Customs Portal
+  const brandPrimary = '#0F47AF'; // Government Blue
+  const brandSecondary = '#FCDD09'; // Ethiopian Gold
+
+  return (
+    <Box sx={{ p: 3 }}>
+      {/* Header */}
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Box>
+          <Typography variant="h4" component="h1" gutterBottom>
+            🛃 Customs Portal
+          </Typography>
+          <Typography variant="subtitle1" color="textSecondary">
+            Ethiopian Customs Commission - Export Declaration & Clearance Management
+          </Typography>
+        </Box>
+        <Box display="flex" gap={2} alignItems="center">
+          <AnimatedButton
+            variant="outlined"
+            startIcon={<Download />}
+            brandColor={brandPrimary}
+          >
+            Export Report
+          </AnimatedButton>
+          <AnimatedButton
+            variant="contained"
+            startIcon={<Add />}
+            brandColor={brandPrimary}
+          >
+            New Declaration
+          </AnimatedButton>
+        </Box>
+      </Box>
+
+      {/* Statistics Cards */}
+      <Grid container spacing={3} mb={3}>
+        <Grid item xs={12} md={3}>
+          <DashboardKPI
+            title="Total Declarations"
+            value={stats.total}
+            icon={<Assignment />}
+            trend="up"
+            trendValue="+18%"
+            brandColor={brandPrimary}
+          />
+        </Grid>
+        <Grid item xs={12} md={3}>
+          <DashboardKPI
+            title="Cleared"
+            value={stats.cleared}
+            icon={<CheckCircle />}
+            trend="up"
+            trendValue="+12%"
+            brandColor="#4caf50"
+          />
+        </Grid>
+        <Grid item xs={12} md={3}>
+          <DashboardKPI
+            title="Under Review"
+            value={stats.pending}
+            icon={<Warning />}
+            trend="down"
+            trendValue="-5%"
+            brandColor="#ff9800"
+          />
+        </Grid>
+        <Grid item xs={12} md={3}>
+          <DashboardKPI
+            title="Total Value"
+            value={`$${(stats.totalValue / 1000).toFixed(1)}K`}
+            icon={<LocalShipping />}
+            trend="up"
+            trendValue="+22%"
+            brandColor={brandSecondary}
+          />
+        </Grid>
+      </Grid>
+      {/* 2026 EUDR Compliance Alert */}
+      <Alert severity="info" sx={{ mb: 3 }}>
+        <Typography variant="body2">
+          <strong>EUDR Compliance (2026):</strong> Enhanced documentation required for EU destinations. 
+          Deforestation-free verification mandatory for all coffee exports to European Union.
+          <br />
+          <strong>Processing Time:</strong> Standard: 1.8 days • EUDR Enhanced: 6.5 days • Risk-based: 3.1 days
+        </Typography>
+      </Alert>
+
+      {/* Tabs */}
+      <ModernCard>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
+            <Tab label="Export Declarations" />
+            <Tab label="Inspections" />
+            <Tab label="EUDR Compliance" />
+            <Tab label="Analytics" />
+          </Tabs>
+        </Box>
+
+        <TabPanel value={tabValue} index={0}>
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={declarations}
+              columns={declarationColumns}
+              getRowId={(row) => row.declarationId}
+              loading={loading}
+              pageSizeOptions={[25, 50, 100]}
+              initialState={{
+                pagination: { paginationModel: { pageSize: 25 } },
+              }}
+              checkboxSelection
+              disableRowSelectionOnClick
+            />
+          </Box>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={1}>
+          <Typography variant="h6" gutterBottom>
+            Inspection Management
+          </Typography>
+          <Grid container spacing={3} mb={3}>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Inspection Queue
+                  </Typography>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Type</TableCell>
+                        <TableCell>Count</TableCell>
+                        <TableCell>Avg Time</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {inspectionData.map((inspection) => (
+                        <TableRow key={inspection.type}>
+                          <TableCell>{inspection.type}</TableCell>
+                          <TableCell>{inspection.count}</TableCell>
+                          <TableCell>{inspection.avgTime}h</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Inspection Status
+                  </Typography>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" color="textSecondary">
+                      Physical Inspections: 45 pending
+                    </Typography>
+                    <LinearProgress variant="determinate" value={75} sx={{ mt: 1 }} />
+                  </Box>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" color="textSecondary">
+                      Documentary Reviews: 123 pending
+                    </Typography>
+                    <LinearProgress variant="determinate" value={60} sx={{ mt: 1 }} />
+                  </Box>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" color="textSecondary">
+                      EUDR Enhanced: 28 pending
+                    </Typography>
+                    <LinearProgress variant="determinate" value={40} sx={{ mt: 1 }} />
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Inspection Workflow (2026)
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Chip label="1. Declaration Review" color="primary" />
+                <Typography>→</Typography>
+                <Chip label="2. Risk Assessment" color="secondary" />
+                <Typography>→</Typography>
+                <Chip label="3. Physical/Documentary" color="warning" />
+                <Typography>→</Typography>
+                <Chip label="4. EUDR Verification" color="success" />
+                <Typography>→</Typography>
+                <Chip label="5. Clearance" color="success" />
+              </Box>
+              <Typography variant="body2" color="textSecondary">
+                Enhanced inspection protocols for 2026 include mandatory EUDR compliance checks for EU destinations,
+                GPS-based origin verification, and blockchain-integrated traceability validation.
+              </Typography>
+            </CardContent>
+          </Card>
+        </TabPanel>
+        <TabPanel value={tabValue} index={2}>
+          <Typography variant="h6" gutterBottom>
+            EUDR Compliance Management (2026)
+          </Typography>
+          <Grid container spacing={3} mb={3}>
+            <Grid item xs={12} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    EUDR Declarations
+                  </Typography>
+                  <Typography variant="h4" color="success.main">
+                    48
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    This month
+                  </Typography>
+                  <LinearProgress variant="determinate" value={85} sx={{ mt: 1 }} />
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Compliance Rate
+                  </Typography>
+                  <Typography variant="h4" color="primary.main">
+                    98.2%
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    Deforestation-free
+                  </Typography>
+                  <LinearProgress variant="determinate" value={98.2} sx={{ mt: 1 }} />
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    GPS Verification
+                  </Typography>
+                  <Typography variant="h4" color="secondary.main">
+                    100%
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    Origin verified
+                  </Typography>
+                  <LinearProgress variant="determinate" value={100} sx={{ mt: 1 }} />
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                EUDR Requirements Checklist
+              </Typography>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Mandatory Documentation:
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    ✅ GPS coordinates of coffee farms
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    ✅ Deforestation-free certification
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    ✅ Supply chain traceability data
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    ✅ Due diligence statements
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Verification Process:
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    🔍 Satellite imagery analysis
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    🔍 Third-party certification review
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    🔍 Blockchain traceability validation
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    🔍 Risk assessment scoring
+                  </Typography>
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
+          <Typography variant="h6" gutterBottom>
+            Customs Analytics & Performance
+          </Typography>
+          <Grid container spacing={3} mb={3}>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Clearance Trends by Type
+                  </Typography>
+                  <Box sx={{ height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={clearanceData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="month" />
+                        <YAxis />
+                        <RechartsTooltip />
+                        <Line type="monotone" dataKey="standard" stroke="#2196f3" strokeWidth={3} name="Standard" />
+                        <Line type="monotone" dataKey="simplified" stroke="#4caf50" strokeWidth={3} name="Simplified" />
+                        <Line type="monotone" dataKey="eudr" stroke="#ff9800" strokeWidth={3} name="EUDR Enhanced" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Declaration Status Distribution
+                  </Typography>
+                  <Box sx={{ height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={statusDistribution}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          dataKey="value"
+                          label={({ name, value }) => `${name}: ${value}%`}
+                        >
+                          {statusDistribution.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <RechartsTooltip />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Key Performance Indicators
+              </Typography>
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={3}>
+                  <Box textAlign="center">
+                    <Typography variant="h4" color="primary.main">
+                      3.2
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      Avg Clearance Days
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Box textAlign="center">
+                    <Typography variant="h4" color="success.main">
+                      94.5%
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      First-time Clearance
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Box textAlign="center">
+                    <Typography variant="h4" color="secondary.main">
+                      98.2%
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      EUDR Compliance
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Box textAlign="center">
+                    <Typography variant="h4" color="warning.main">
+                      2.1%
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      Rejection Rate
+                    </Typography>
+                  </Box>
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
+        </TabPanel>
+      </ModernCard>
+      {/* Clearance Dialog */}
+      <Dialog open={clearanceDialogOpen} onClose={() => setClearanceDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Clear Export Declaration</DialogTitle>
+        <DialogContent>
+          {selectedDeclaration && (
+            <Box>
+              <Typography variant="body1" gutterBottom>
+                <strong>Declaration ID:</strong> {selectedDeclaration.declarationId}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Shipment ID:</strong> {selectedDeclaration.shipmentId}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Exporter:</strong> {selectedDeclaration.exporterId}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Declaration Type:</strong> {selectedDeclaration.declarationType}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>HS Code:</strong> {selectedDeclaration.hsCode}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Destination:</strong> {selectedDeclaration.destination}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Value:</strong> {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>EUDR Compliant:</strong> {selectedDeclaration.eudrCompliant ? 'Yes' : 'No'}
+              </Typography>
+              
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Clearing this declaration will authorize export and update blockchain records. 
+                {selectedDeclaration.eudrCompliant && selectedDeclaration.destination === 'Germany' && 
+                  ' EUDR compliance verified for EU destination.'}
+              </Alert>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setClearanceDialogOpen(false)}>
+            Cancel
+          </AnimatedButton>
+          <AnimatedButton 
+            variant="contained" 
+            brandColor="#4caf50"
+            onClick={() => {
+              if (!selectedDeclaration) return;
+              handleClearDeclaration(selectedDeclaration.declarationId);
+            }}
+          >
+            Clear Declaration
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* Inspection Dialog */}
+      <Dialog open={inspectionDialogOpen} onClose={() => setInspectionDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Schedule Inspection</DialogTitle>
+        <DialogContent>
+          {selectedDeclaration && (
+            <Box>
+              <Typography variant="body1" gutterBottom>
+                <strong>Declaration ID:</strong> {selectedDeclaration.declarationId}
+              </Typography>
+              <Typography variant="body1" gutterBottom>
+                <strong>Inspection Type:</strong> {selectedDeclaration.eudrCompliant ? 'EUDR Enhanced' : 'Standard Physical'}
+              </Typography>
+              
+              <TextField
+                fullWidth
+                label="Inspector Notes"
+                multiline
+                rows={3}
+                sx={{ mt: 2 }}
+                placeholder="Enter inspection requirements and special instructions..."
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setInspectionDialogOpen(false)}>
+            Cancel
+          </AnimatedButton>
+          <AnimatedButton 
+            variant="contained" 
+            brandColor="#0F47AF"
+            onClick={() => setInspectionDialogOpen(false)}
+          >
+            Schedule Inspection
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+};
+
+export default CustomsPortal;
