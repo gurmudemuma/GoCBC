@@ -1,5 +1,5 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
-// Banks Portal - Export Permit Issuance & Multi-Bank Authorization
+// Banks Portal - Letter of Credit, Forex & Export Permit Management
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -13,6 +13,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  TextField,
+  MenuItem,
   Chip,
   IconButton,
   Tooltip,
@@ -26,48 +28,48 @@ import {
   TableHead,
   TableRow,
   Paper,
-  LinearProgress,
+  Stepper,
+  Step,
+  StepLabel,
   Divider,
 } from '@mui/material';
 import {
-  Add,
-  CheckCircle,
-  Cancel,
   AccountBalance,
   CurrencyExchange,
   Assignment,
   Visibility,
-  Download,
-  Warning,
-  Security,
+  CheckCircle,
+  Payment,
+  Description,
   TrendingUp,
+  Warning,
+  AttachMoney,
 } from '@mui/icons-material';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import api, { formatDate, formatCurrency, getStatusColor, getChartColors } from '@/utils/api';
 
-// Modern Components - 2026 Design
+// Modern Components
 import {
   ModernCard,
   AnimatedButton,
   DashboardKPI,
   StatusChip,
-  ThemeToggle,
 } from '@/components/modern';
 
-interface ExportPermit {
-  permitId: string;
+interface SalesContract {
   contractId: string;
+  nbeReferenceNumber: string;
   exporterId: string;
-  bankName: string;
-  permitType: 'STANDARD' | 'FRANCO_VALUTA' | 'DIASPORA';
-  amount: number;
+  buyerName: string;
+  buyerCountry: string;
+  buyerBank?: string;      // Issuing bank (buyer's bank)
+  exporterBank?: string;   // Advising bank (exporter's bank)
+  coffeeType: string;
+  quantity: number;
+  pricePerKg: number;
+  totalValue: number;
   currency: string;
-  status: 'PENDING' | 'APPROVED' | 'ISSUED' | 'UTILIZED' | 'EXPIRED';
-  requestDate: string;
+  status: string;
+  registrationDate: string;
   approvalDate?: string;
-  expiryDate: string;
-  authorizingBanks: string[];
 }
 
 interface LetterOfCredit {
@@ -76,1156 +78,899 @@ interface LetterOfCredit {
   exporterId: string;
   bankName: string;
   issuingBank: string;
-  beneficiaryBank: string;
-  beneficiary: string;
+  advisingBank: string;
   amount: number;
   currency: string;
-  status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'UTILIZED' | 'EXPIRED';
+  status: string;
   expiryDate: string;
   requestDate: string;
-  approvalDate?: string;
-  issueDate?: string;
-  terms?: string;
 }
 
-interface Payment {
-  paymentId: string;
+interface ForexAllocation {
+  forexId: string;
   contractId: string;
   exporterId: string;
   lcId: string;
-  amount: number;
+  requestedAmount: number;
+  allocatedAmount: number;
   currency: string;
   exchangeRate: number;
   retentionRate: number;
-  retainedAmount: number;
-  convertedAmount: number;
-  amountBirr: number;
-  status: 'PENDING' | 'DOCUMENTS_SUBMITTED' | 'VERIFIED' | 'SWIFT_INITIATED' | 'SWIFT_RECEIVED' | 'SETTLED';
-  paymentMethod: 'SWIFT_MT103' | 'SWIFT_MT700' | 'TT';
-  receivingBank: string;
-  receivingBankBIC: string;
-  payingBank?: string;
-  payingBankBIC?: string;
-  swiftReference?: string;
-  swiftStatus?: 'SENT' | 'IN_TRANSIT' | 'RECEIVED' | 'SETTLED';
+  status: string;
+  expiryDate: string;
 }
-
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
 
 const BanksPortal: React.FC = () => {
-  const [tabValue, setTabValue] = useState(0);
-  const [permits, setPermits] = useState<ExportPermit[]>([]);
-  const [lcs, setLcs] = useState<LetterOfCredit[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedPermit, setSelectedPermit] = useState<ExportPermit | null>(null);
-  const [selectedLC, setSelectedLC] = useState<LetterOfCredit | null>(null);
-  const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
-  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
-  const [lcDialogOpen, setLcDialogOpen] = useState(false);
-  const [swiftDialogOpen, setSwiftDialogOpen] = useState(false);
-  const [settlementDialogOpen, setSettlementDialogOpen] = useState(false);
-  // Mock export permits data
-  const mockPermits: ExportPermit[] = [
-    {
-      permitId: 'EP2026001',
-      contractId: 'CONTRACT2026001',
-      exporterId: 'EXP2026001',
-      bankName: 'Commercial Bank of Ethiopia',
-      permitType: 'STANDARD',
-      amount: 18500,
-      currency: 'USD',
-      status: 'APPROVED',
-      requestDate: '2026-05-31T10:00:00Z',
-      approvalDate: '2026-05-31T14:30:00Z',
-      expiryDate: '2026-08-31T23:59:59Z',
-      authorizingBanks: ['CBE', 'DBE', 'AIB'],
-    },
-    {
-      permitId: 'EP2026002',
-      contractId: 'CONTRACT2026002',
-      exporterId: 'EXP2026002',
-      bankName: 'Development Bank of Ethiopia',
-      permitType: 'FRANCO_VALUTA',
-      amount: 25000,
-      currency: 'EUR',
-      status: 'PENDING',
-      requestDate: '2026-05-31T09:15:00Z',
-      expiryDate: '2026-09-30T23:59:59Z',
-      authorizingBanks: ['DBE', 'CBE'],
-    },
-  ];
+  const [activeTab, setActiveTab] = useState(0);
+  const [contracts, setContracts] = useState<SalesContract[]>([]);
+  const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
+  const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
+  const [selectedContract, setSelectedContract] = useState<SalesContract | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | null>(null);
+  
+  // LC Form
+  const [lcForm, setLcForm] = useState({
+    issuingBank: '',
+    advisingBank: '',
+    beneficiary: '',
+    terms: 'Payment against shipping documents as per UCP 600',
+    expiryDays: '90',
+  });
 
-  const mockLCs: LetterOfCredit[] = [
-    {
-      lcId: 'LC20260603001',
-      contractId: 'CONTRACT2026001',
-      exporterId: 'EXP2026001',
-      bankName: 'Commercial Bank of Ethiopia',
-      issuingBank: 'Commercial Bank of Ethiopia',
-      beneficiaryBank: 'Deutsche Bank AG',
-      beneficiary: 'Ethiopian Coffee Exporter Ltd',
-      amount: 50000,
-      currency: 'USD',
-      status: 'ISSUED',
-      expiryDate: '2026-12-31',
-      requestDate: '2026-06-01T10:00:00Z',
-      approvalDate: '2026-06-01T14:00:00Z',
-      issueDate: '2026-06-02T09:00:00Z',
-      terms: 'Documentary credit payable at sight',
-    },
-    {
-      lcId: 'LC20260603002',
-      contractId: 'CONTRACT2026002',
-      exporterId: 'EXP2026002',
-      bankName: 'Development Bank of Ethiopia',
-      issuingBank: 'Development Bank of Ethiopia',
-      beneficiaryBank: 'HSBC Bank',
-      beneficiary: 'Coffee Export Company',
-      amount: 75000,
-      currency: 'USD',
-      status: 'REQUESTED',
-      expiryDate: '2026-11-30',
-      requestDate: '2026-06-03T08:00:00Z',
-    },
-  ];
-
-  const mockPayments: Payment[] = [
-    {
-      paymentId: 'PAY20260603001',
-      contractId: 'CONTRACT2026001',
-      exporterId: 'EXP2026001',
-      lcId: 'LC20260603001',
-      amount: 50000,
-      currency: 'USD',
-      exchangeRate: 115.5,
-      retentionRate: 40,
-      retainedAmount: 20000,
-      convertedAmount: 30000,
-      amountBirr: 3465000,
-      status: 'SWIFT_RECEIVED',
-      paymentMethod: 'SWIFT_MT103',
-      receivingBank: 'Commercial Bank of Ethiopia',
-      receivingBankBIC: 'CBETETAA',
-      payingBank: 'Deutsche Bank AG',
-      payingBankBIC: 'DEUTDEFF',
-      swiftReference: 'SWIFT2026060300123456',
-      swiftStatus: 'RECEIVED',
-    },
-  ];
-
-  const permitTrendsData = [
-    { month: 'Jan', standard: 45, francoValuta: 12, diaspora: 8 },
-    { month: 'Feb', standard: 52, francoValuta: 15, diaspora: 10 },
-    { month: 'Mar', standard: 48, francoValuta: 18, diaspora: 12 },
-    { month: 'Apr', standard: 55, francoValuta: 22, diaspora: 14 },
-    { month: 'May', standard: 58, francoValuta: 25, diaspora: 16 },
-  ];
-
-  const bankPerformanceData = [
-    { bank: 'CBE', permits: 145, value: 2500000, avgProcessing: 2.1 },
-    { bank: 'DBE', permits: 98, value: 1800000, avgProcessing: 1.8 },
-    { bank: 'AIB', permits: 76, value: 1200000, avgProcessing: 2.3 },
-    { bank: 'BOA', permits: 65, value: 950000, avgProcessing: 2.0 },
-    { bank: 'UB', permits: 54, value: 780000, avgProcessing: 2.5 },
-  ];
+  // Forex Form
+  const [forexForm, setForexForm] = useState({
+    allocatedAmount: '',
+    exchangeRate: '',
+    retentionRate: '40',
+    expiryDays: '180',
+    nbeOfficer: '',
+    nbeApprovalRef: '',
+  });
 
   useEffect(() => {
-    loadData();
+    loadBankingData();
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadBankingData = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
     try {
-      // In real implementation, load from API
-      setPermits(mockPermits);
-      setLcs(mockLCs);
-      setPayments(mockPayments);
+      // Load all NBE-approved contracts
+      const contractsResponse = await fetch('http://localhost:3001/api/v1/contracts', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const contractsResult = await contractsResponse.json();
+      
+      let nbeApprovedContracts: any[] = [];
+      
+      if (contractsResult.success) {
+        // Filter for NBE-approved contracts
+        nbeApprovedContracts = contractsResult.data.filter((c: any) => 
+          c.contractStatus === 'NBE_APPROVED' || c.contractStatus === 'APPROVED'
+        );
+        
+        setContracts(nbeApprovedContracts.map((c: any) => {
+          const mappedContract = {
+            contractId: c.contractID || c.contractId,
+            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber,
+            exporterId: c.exporterID || c.exporterId,
+            buyerName: c.buyerID || c.buyerId,
+            buyerCountry: c.buyerCountry,
+            buyerBank: c.buyerBank || c.BuyerBank || '',
+            exporterBank: c.exporterBank || c.ExporterBank || '',
+            coffeeType: c.coffeeType,
+            quantity: c.quantity,
+            pricePerKg: c.pricePerKg,
+            totalValue: c.totalValue,
+            currency: c.currency,
+            status: c.contractStatus,
+            registrationDate: c.registrationDate,
+            approvalDate: c.approvalDate,
+          };
+          console.log(`Mapped contract ${mappedContract.contractId}:`, {
+            buyerBank: mappedContract.buyerBank || '❌ MISSING',
+            exporterBank: mappedContract.exporterBank || '❌ MISSING',
+            hasBankData: !!(mappedContract.buyerBank && mappedContract.exporterBank),
+            rawData: { buyerBank: c.buyerBank, BuyerBank: c.BuyerBank, exporterBank: c.exporterBank, ExporterBank: c.ExporterBank }
+          });
+          return mappedContract;
+        }));
+      }
+
+      // Load Letters of Credit
+      try {
+        const lcResponse = await fetch('http://localhost:3001/api/v1/banking/lc', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const lcResult = await lcResponse.json();
+        if (lcResult.success) {
+          setLetterOfCredits(lcResult.data.map((lc: any) => ({
+            lcId: lc.lcId || lc.LCID,
+            contractId: lc.contractId || lc.ContractID,
+            exporterId: lc.exporterId || lc.ExporterID,
+            bankName: lc.bankName || lc.BankName,
+            issuingBank: lc.issuingBank || lc.IssuingBank,
+            advisingBank: lc.advisingBank || lc.AdvisingBank || lc.beneficiaryBank || lc.BeneficiaryBank,
+            amount: lc.amount || lc.Amount,
+            currency: lc.currency || lc.Currency,
+            status: lc.status || lc.Status,
+            expiryDate: lc.expiryDate || lc.ExpiryDate,
+            requestDate: lc.requestDate || lc.RequestDate,
+          })));
+        }
+      } catch (err) {
+        console.warn('Could not load LCs:', err);
+      }
+
+      // Load Forex Allocations  
+      try {
+        const forexResponse = await fetch('http://localhost:3001/api/v1/forex', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const forexResult = await forexResponse.json();
+        if (forexResult.success) {
+          setForexAllocations(forexResult.data.map((f: any) => ({
+            forexId: f.forexId || f.ForexID,
+            contractId: f.contractId || f.ContractID,
+            exporterId: f.exporterId || f.ExporterID,
+            lcId: f.lcId || f.LCID,
+            requestedAmount: f.requestedAmount || f.RequestedAmount,
+            allocatedAmount: f.allocatedAmount || f.AllocatedAmount,
+            currency: f.currency || f.Currency,
+            exchangeRate: f.exchangeRate || f.ExchangeRate,
+            retentionRate: f.retentionRate || f.RetentionRate,
+            status: f.status || f.Status,
+            expiryDate: f.expiryDate || f.ExpiryDate,
+          })));
+        }
+      } catch (err) {
+        console.warn('Could not load forex allocations:', err);
+      }
+
+      console.log(`Loaded ${nbeApprovedContracts?.length || 0} NBE-approved contracts for bank processing`);
+      
+      // Summary of bank data availability
+      if (nbeApprovedContracts && nbeApprovedContracts.length > 0) {
+        const contractsWithBanks = nbeApprovedContracts.filter((c: any) => 
+          (c.buyerBank || c.BuyerBank) && (c.exporterBank || c.ExporterBank)
+        ).length;
+        const contractsWithoutBanks = nbeApprovedContracts.length - contractsWithBanks;
+        
+        console.log('📊 Bank Data Summary:');
+        console.log(`  ✅ Contracts with bank data: ${contractsWithBanks}`);
+        console.log(`  ❌ Contracts without bank data: ${contractsWithoutBanks}`);
+        
+        if (contractsWithoutBanks > 0) {
+          console.warn('⚠️ Some contracts are missing bank data (created before bank fields were added)');
+          console.info('💡 TIP: Create a NEW contract to test auto-fill with complete bank data');
+        }
+      }
+      
     } catch (error) {
-      console.error('Failed to load data:', error);
-    } finally {
-      setLoading(false);
+      console.error('Failed to load banking data:', error);
     }
   };
 
-  const handleApprovePermit = async (permitId: string) => {
+  const handleOpenDialog = (type: 'lc' | 'forex' | 'permit', contract: SalesContract) => {
+    console.log('=== LC Dialog Opening ===');
+    console.log('Contract data:', {
+      contractId: contract.contractId,
+      exporterId: contract.exporterId,
+      buyerBank: contract.buyerBank,
+      exporterBank: contract.exporterBank,
+      totalValue: contract.totalValue,
+      currency: contract.currency
+    });
+    
+    setSelectedContract(contract);
+    setDialogType(type);
+    
+    // Auto-fill LC form with contract data
+    if (type === 'lc') {
+      const formData = {
+        issuingBank: contract.buyerBank || '',
+        advisingBank: contract.exporterBank || '',
+        beneficiary: contract.exporterId || '',
+        terms: 'Payment against shipping documents as per UCP 600',
+        expiryDays: '90',
+      };
+      console.log('Auto-filling LC form with data:', formData);
+      
+      // Add warning if banks are missing (old contract)
+      if (!contract.buyerBank || !contract.exporterBank) {
+        console.warn('⚠️ Contract missing bank data - this is likely an OLD contract created before bank fields were added');
+        console.warn('Create a NEW contract to test the auto-fill feature with bank data');
+      }
+      
+      setLcForm(formData);
+    }
+    
+    setDialogOpen(true);
+  };
+
+  const handleCloseDialog = () => {
+    setDialogOpen(false);
+    setSelectedContract(null);
+    setDialogType(null);
+    setLcForm({
+      issuingBank: '',
+      advisingBank: '',
+      beneficiary: '',
+      terms: 'Payment against shipping documents as per UCP 600',
+      expiryDays: '90',
+    });
+  };
+
+  const handleIssueLc = async () => {
+    if (!selectedContract) return;
+
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
     try {
-      // In real implementation, call API
-      console.log('Approving permit:', permitId);
-      setApprovalDialogOpen(false);
-      loadData();
-    } catch (error) {
-      console.error('Failed to approve permit:', error);
+      const lcId = `LC${Date.now()}`;
+      const expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + parseInt(lcForm.expiryDays));
+
+      const payload = {
+        lcID: lcId,
+        contractID: selectedContract.contractId,
+        exporterID: selectedContract.exporterId,
+        bankName: lcForm.advisingBank,
+        issuingBank: lcForm.issuingBank,
+        advisingBank: lcForm.advisingBank,
+        beneficiary: lcForm.beneficiary,
+        amount: selectedContract.totalValue.toString(),
+        currency: selectedContract.currency,
+        expiryDate: expiryDate.toISOString().split('T')[0],
+        terms: lcForm.terms,
+      };
+
+      // First request LC
+      const requestResponse = await fetch('http://localhost:3001/api/v1/banking/lc/request', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const requestResult = await requestResponse.json();
+
+      if (requestResult.success) {
+        // Then immediately approve and issue it
+        await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            issuingBank: lcForm.issuingBank,
+            advisingBank: lcForm.advisingBank,
+            beneficiary: lcForm.beneficiary,
+          }),
+        });
+
+        await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/issue`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            terms: lcForm.terms,
+          }),
+        });
+
+        alert(`✅ Letter of Credit ${lcId} issued successfully!\n\nNext Steps:\n1. NBE will allocate forex based on this LC\n2. Export permit will be issued\n3. Exporter can proceed with shipment`);
+        handleCloseDialog();
+        loadBankingData();
+      } else {
+        // Handle blockchain errors with better messaging
+        const errorMsg = requestResult.error?.message || 'Unknown error';
+        
+        if (errorMsg.includes('does not exist') || errorMsg.includes('not registered')) {
+          alert(`❌ Cannot issue LC: Exporter ${selectedContract.exporterId} is not registered on the blockchain.\n\n` +
+                `This can happen if:\n` +
+                `• The exporter was recently approved but blockchain hasn't synchronized yet\n` +
+                `• The approval process failed to register the exporter\n\n` +
+                `Solution:\n` +
+                `1. Wait 30 seconds and try again (blockchain may be syncing)\n` +
+                `2. Contact ECTA admin to re-register exporter: ${selectedContract.exporterId}\n` +
+                `3. ECTA can run: node register-missing-exporters.js in the api folder`);
+        } else if (errorMsg.includes('Peer endorsements do not match') || errorMsg.includes('not synchronized')) {
+          alert(`⚠️ Blockchain Synchronization Issue\n\n` +
+                `The blockchain peers are not fully synchronized yet. This usually happens when:\n` +
+                `• An exporter was just registered (wait 30 seconds)\n` +
+                `• Network is processing other transactions\n\n` +
+                `Solution: Wait 30 seconds and try again.\n\n` +
+                `If the issue persists, check that all peer containers are running:\n` +
+                `docker ps | grep peer`);
+        } else {
+          alert(`❌ Failed to issue LC: ${errorMsg}\n\nPlease contact system administrator.`);
+        }
+      }
+    } catch (error: any) {
+      console.error('Error issuing LC:', error);
+      const errorMsg = error.message || 'Network error';
+      alert(`❌ Failed to issue Letter of Credit\n\nError: ${errorMsg}\n\nPlease check:\n• API server is running\n• Blockchain network is connected\n• All peer nodes are healthy`);
     }
   };
 
-  const handleApproveLC = async (lcId: string) => {
+  const handleApproveLC = async (lcId: string, exporterId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      alert('❌ Authentication required');
+      return;
+    }
+
     try {
-      // Call API: POST /api/v1/banking/lc/approve
-      console.log('Approving LC:', lcId);
-      setLcDialogOpen(false);
-      loadData();
-    } catch (error) {
-      console.error('Failed to approve LC:', error);
+      // The backend will automatically use the logged-in user's organization as the bank
+      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          beneficiary: exporterId, // Use exporter ID as beneficiary
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ Letter of Credit ${lcId} approved successfully!\n\nThe LC is now approved and ready for issuance.`);
+        loadBankingData(); // Reload to show updated status
+      } else {
+        const errorMsg = result.error?.message || 'Unknown error';
+        alert(`❌ Failed to approve LC\n\nError: ${errorMsg}`);
+      }
+    } catch (error: any) {
+      console.error('Error approving LC:', error);
+      alert(`❌ Network error: ${error.message}`);
     }
   };
-
-  const handleInitiateSWIFT = async (paymentId: string, swiftData: any) => {
-    try {
-      // Call API: POST /api/v1/banking/payment/:paymentId/swift/initiate
-      console.log('Initiating SWIFT:', paymentId, swiftData);
-      setSwiftDialogOpen(false);
-      loadData();
-    } catch (error) {
-      console.error('Failed to initiate SWIFT:', error);
-    }
-  };
-
-  const handleSettlePayment = async (paymentId: string, settlementData: any) => {
-    try {
-      // Call API: POST /api/v1/banking/payment/:paymentId/settle
-      console.log('Settling payment:', paymentId, settlementData);
-      setSettlementDialogOpen(false);
-      loadData();
-    } catch (error) {
-      console.error('Failed to settle payment:', error);
-    }
-  };
-  const permitColumns: GridColDef[] = [
-    { field: 'permitId', headerName: 'Permit ID', width: 130 },
-    { field: 'contractId', headerName: 'Contract ID', width: 150 },
-    { field: 'exporterId', headerName: 'Exporter', width: 130 },
-    { field: 'bankName', headerName: 'Issuing Bank', width: 180 },
-    {
-      field: 'permitType',
-      headerName: 'Type',
-      width: 120,
-      renderCell: (params) => (
-        <Chip
-          label={params.value}
-          size="small"
-          color={
-            params.value === 'STANDARD' ? 'primary' :
-            params.value === 'FRANCO_VALUTA' ? 'secondary' : 'success'
-          }
-        />
-      ),
-    },
-    {
-      field: 'amount',
-      headerName: 'Amount',
-      width: 120,
-      renderCell: (params) => formatCurrency(params.value, params.row.currency),
-    },
-    {
-      field: 'status',
-      headerName: 'Status',
-      width: 120,
-      renderCell: (params) => (
-        <StatusChip
-          status={params.value === 'PENDING' ? 'PENDING' : params.value === 'APPROVED' ? 'APPROVED' : 'ACTIVE'}
-        />
-      ),
-    },
-    { field: 'requestDate', headerName: 'Request Date', width: 130, renderCell: (params) => formatDate(params.value) },
-    { field: 'expiryDate', headerName: 'Expiry Date', width: 130, renderCell: (params) => formatDate(params.value) },
-    {
-      field: 'actions',
-      headerName: 'Actions',
-      width: 150,
-      sortable: false,
-      filterable: false,
-      disableColumnMenu: true,
-      renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="View Details">
-            <IconButton 
-              size="small" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedPermit(params.row);
-              }}
-            >
-              <Visibility />
-            </IconButton>
-          </Tooltip>
-          {params.row.status === 'PENDING' && (
-            <Tooltip title="Approve Permit">
-              <IconButton 
-                size="small" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedPermit(params.row);
-                  setApprovalDialogOpen(true);
-                }}
-              >
-                <CheckCircle />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-      ),
-    },
-  ];
-  const getPermitStats = () => {
-    const total = permits.length;
-    const approved = permits.filter(p => p.status === 'APPROVED').length;
-    const pending = permits.filter(p => p.status === 'PENDING').length;
-    const totalValue = permits.reduce((sum, permit) => sum + permit.amount, 0);
-
-    return { total, approved, pending, totalValue };
-  };
-
-  const stats = getPermitStats();
-
-  // Brand colors for Banks Portal
-  const brandPrimary = '#9b30b7'; // Purple
-  const brandSecondary = '#FFD700'; // Golden
 
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Box>
-          <Typography variant="h4" component="h1" gutterBottom>
-            🏦 Banks Portal
-          </Typography>
-          <Typography variant="subtitle1" color="textSecondary">
-            Multi-Bank Export Permit System & Franco Valuta Management
-          </Typography>
-        </Box>
-        <Box display="flex" gap={2} alignItems="center">
-          <AnimatedButton
-            variant="outlined"
-            startIcon={<Download />}
-            brandColor={brandPrimary}
-          >
-            Export Report
-          </AnimatedButton>
-          <AnimatedButton
-            variant="contained"
-            startIcon={<Add />}
-            brandColor={brandPrimary}
-          >
-            New Permit
-          </AnimatedButton>
-        </Box>
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+          <AccountBalance sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Commercial Banks Portal
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Letter of Credit Issuance, Forex Management & Export Finance
+        </Typography>
       </Box>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={3} mb={3}>
-        <Grid item xs={12} md={3}>
+      {/* KPIs */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        <Grid item xs={12} sm={6} md={3}>
           <DashboardKPI
-            title="Total Permits"
-            value={stats.total}
+            title="Pending Contracts"
+            value={contracts.length}
             icon={<Assignment />}
-            trend="up"
-            trendValue="+12%"
-            brandColor={brandPrimary}
+            brandColor="#1976d2"
           />
         </Grid>
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} sm={6} md={3}>
           <DashboardKPI
-            title="Approved"
-            value={stats.approved}
-            icon={<CheckCircle />}
-            trend="up"
-            trendValue="+8%"
-            brandColor={brandSecondary}
+            title="Active LCs"
+            value={letterOfCredits.filter(lc => lc.status === 'ISSUED').length}
+            icon={<Description />}
+            brandColor="#2e7d32"
           />
         </Grid>
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} sm={6} md={3}>
           <DashboardKPI
-            title="Pending Review"
-            value={stats.pending}
-            icon={<Warning />}
-            trend="down"
-            trendValue="-3%"
-            brandColor={brandPrimary}
+            title="Forex Allocated"
+            value={`$${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000).toFixed(0)}K`}
+            icon={<CurrencyExchange />}
+            brandColor="#ed6c02"
           />
         </Grid>
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} sm={6} md={3}>
           <DashboardKPI
-            title="Total Value"
-            value={`$${(stats.totalValue / 1000).toFixed(1)}K`}
-            icon={<AccountBalance />}
-            trend="up"
-            trendValue="+15%"
-            brandColor={brandSecondary}
+            title="Payments Pending"
+            value="3"
+            icon={<Payment />}
+            brandColor="#d32f2f"
           />
         </Grid>
       </Grid>
 
-      {/* 2026 Franco Valuta Alert */}
-      <Alert severity="info" sx={{ mb: 3 }}>
-        <Typography variant="body2">
-          <strong>Franco Valuta Directive (FVD/01/2026):</strong> Multi-bank authorization system active. 
-          Enhanced forex channels for diaspora remittances and investor transactions now available.
-          <br />
-          <strong>Participating Banks:</strong> CBE, DBE, AIB, BOA, UB • <strong>Processing Time:</strong> 2.1 days average
-        </Typography>
-      </Alert>
-
       {/* Tabs */}
-      <ModernCard>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
-            <Tab label="Letters of Credit" />
-            <Tab label="SWIFT Payments" />
-            <Tab label="Export Permits" />
-            <Tab label="Multi-Bank Authorization" />
-            <Tab label="Analytics" />
-          </Tabs>
-        </Box>
+      <Paper sx={{ mb: 3 }}>
+        <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
+          <Tab label="NBE-Approved Contracts" icon={<Assignment />} iconPosition="start" />
+          <Tab label="Letters of Credit" icon={<Description />} iconPosition="start" />
+          <Tab label="Forex Allocations" icon={<CurrencyExchange />} iconPosition="start" />
+          <Tab label="Payment Processing" icon={<Payment />} iconPosition="start" />
+        </Tabs>
+      </Paper>
 
-        {/* Tab 0: Letters of Credit */}
-        <TabPanel value={tabValue} index={0}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h6">Letter of Credit Management</Typography>
-            <AnimatedButton
-              variant="contained"
-              startIcon={<Add />}
-              brandColor={brandPrimary}
-            >
-              Request New LC
-            </AnimatedButton>
-          </Box>
+      {/* Tab 0: NBE-Approved Contracts */}
+      {activeTab === 0 && (
+        <ModernCard>
+          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+            Contracts Awaiting Letter of Credit Issuance
+          </Typography>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <strong>Banking Workflow:</strong> Issue Letter of Credit (LC) for NBE-approved contracts. 
+            LC confirms payment guarantee from buyer's bank and enables forex allocation.
+          </Alert>
 
-          <Grid container spacing={2} mb={3}>
-            {lcs.map((lc) => (
-              <Grid item xs={12} md={6} key={lc.lcId}>
-                <ModernCard>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                      <Box>
-                        <Typography variant="h6">{lc.lcId}</Typography>
-                        <Typography variant="body2" color="textSecondary">
-                          Contract: {lc.contractId}
+          {contracts.length === 0 ? (
+            <Alert severity="info">
+              No NBE-approved contracts pending LC issuance.
+            </Alert>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>Contract ID</strong></TableCell>
+                    <TableCell><strong>Exporter</strong></TableCell>
+                    <TableCell><strong>Buyer/Country</strong></TableCell>
+                    <TableCell><strong>Coffee Type</strong></TableCell>
+                    <TableCell><strong>Quantity (kg)</strong></TableCell>
+                    <TableCell><strong>Total Value</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Actions</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {contracts.map((contract) => (
+                    <TableRow key={contract.contractId}>
+                      <TableCell>{contract.contractId}</TableCell>
+                      <TableCell>{contract.exporterId}</TableCell>
+                      <TableCell>
+                        {contract.buyerName}
+                        <br />
+                        <Typography variant="caption" color="text.secondary">
+                          {contract.buyerCountry}
                         </Typography>
-                      </Box>
-                      <StatusChip status={lc.status} />
-                    </Box>
-
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Amount</Typography>
-                        <Typography variant="body1" fontWeight={600}>
-                          {formatCurrency(lc.amount, lc.currency)}
+                      </TableCell>
+                      <TableCell>{contract.coffeeType}</TableCell>
+                      <TableCell>{contract.quantity.toLocaleString()}</TableCell>
+                      <TableCell>
+                        <strong>${contract.totalValue.toLocaleString()}</strong>
+                        <Typography variant="caption" display="block" color="text.secondary">
+                          @ ${contract.pricePerKg}/kg
                         </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Issuing Bank</Typography>
-                        <Typography variant="body2">{lc.issuingBank}</Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Beneficiary Bank</Typography>
-                        <Typography variant="body2">{lc.beneficiaryBank}</Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Expiry Date</Typography>
-                        <Typography variant="body2">{formatDate(lc.expiryDate)}</Typography>
-                      </Grid>
-                    </Grid>
+                      </TableCell>
+                      <TableCell>
+                        <StatusChip label="NBE Approved" status="approved" />
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip title="Issue Letter of Credit">
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="primary"
+                            startIcon={<Description />}
+                            onClick={() => handleOpenDialog('lc', contract)}
+                          >
+                            Issue LC
+                          </Button>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </ModernCard>
+      )}
 
-                    <Box display="flex" gap={1} mt={2}>
-                      {lc.status === 'REQUESTED' && (
-                        <AnimatedButton
-                          size="small"
-                          variant="contained"
-                          brandColor="#4caf50"
-                          onClick={() => {
-                            setSelectedLC(lc);
-                            setLcDialogOpen(true);
-                          }}
-                        >
-                          Approve
-                        </AnimatedButton>
-                      )}
-                      {lc.status === 'APPROVED' && (
-                        <AnimatedButton
-                          size="small"
-                          variant="contained"
-                          brandColor={brandPrimary}
-                        >
-                          Issue LC
-                        </AnimatedButton>
-                      )}
-                      <AnimatedButton size="small" variant="outlined">
-                        View Details
-                      </AnimatedButton>
-                    </Box>
-                  </CardContent>
-                </ModernCard>
-              </Grid>
-            ))}
-          </Grid>
-        </TabPanel>
+      {/* Tab 1: Letters of Credit */}
+      {activeTab === 1 && (
+        <ModernCard>
+          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+            Letter of Credit Management
+          </Typography>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <strong>LC Status Workflow:</strong> REQUESTED → APPROVED → ISSUED → UTILIZED<br />
+            Each issued LC enables NBE forex allocation and export permit issuance.
+          </Alert>
 
-        {/* Tab 1: SWIFT Payments */}
-        <TabPanel value={tabValue} index={1}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h6">SWIFT Payment Management</Typography>
-            <AnimatedButton
-              variant="contained"
-              startIcon={<CurrencyExchange />}
-              brandColor={brandPrimary}
-            >
-              Initiate Payment
-            </AnimatedButton>
-          </Box>
-
-          <Grid container spacing={2}>
-            {payments.map((payment) => (
-              <Grid item xs={12} key={payment.paymentId}>
-                <ModernCard>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                      <Box>
-                        <Typography variant="h6">{payment.paymentId}</Typography>
-                        <Typography variant="body2" color="textSecondary">
-                          LC: {payment.lcId} • Method: {payment.paymentMethod}
-                        </Typography>
-                        {payment.swiftReference && (
-                          <Typography variant="caption" color="primary">
-                            SWIFT: {payment.swiftReference}
-                          </Typography>
+          {letterOfCredits.length === 0 ? (
+            <Alert severity="info">
+              No Letters of Credit on record. Issue LCs from NBE-Approved Contracts tab.
+            </Alert>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>LC ID</strong></TableCell>
+                    <TableCell><strong>Contract</strong></TableCell>
+                    <TableCell><strong>Exporter</strong></TableCell>
+                    <TableCell><strong>Issuing Bank</strong></TableCell>
+                    <TableCell><strong>Advising Bank</strong></TableCell>
+                    <TableCell><strong>Amount</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Expiry</strong></TableCell>
+                    <TableCell><strong>Actions</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {letterOfCredits.map((lc) => (
+                    <TableRow key={lc.lcId}>
+                      <TableCell>{lc.lcId}</TableCell>
+                      <TableCell>{lc.contractId}</TableCell>
+                      <TableCell>{lc.exporterId}</TableCell>
+                      <TableCell>{lc.issuingBank || 'N/A'}</TableCell>
+                      <TableCell>{lc.advisingBank || lc.issuingBank || 'N/A'}</TableCell>
+                      <TableCell>
+                        <strong>${lc.amount.toLocaleString()}</strong> {lc.currency}
+                      </TableCell>
+                      <TableCell>
+                        <StatusChip 
+                          label={lc.status} 
+                          status={lc.status === 'ISSUED' ? 'APPROVED' : lc.status === 'REQUESTED' ? 'PENDING' : 'ACTIVE'} 
+                        />
+                      </TableCell>
+                      <TableCell>{new Date(lc.expiryDate).toLocaleDateString()}</TableCell>
+                      <TableCell>
+                        {lc.status === 'REQUESTED' ? (
+                          <Tooltip title="Approve LC">
+                            <IconButton 
+                              size="small" 
+                              color="success"
+                              onClick={() => handleApproveLC(lc.lcId, lc.exporterId)}
+                            >
+                              <CheckCircle />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="View Details">
+                            <IconButton size="small">
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
                         )}
-                      </Box>
-                      <Box textAlign="right">
-                        <StatusChip status={payment.status} />
-                        {payment.swiftStatus && (
-                          <Box mt={1}>
-                            <StatusChip status={payment.swiftStatus} size="small" />
-                          </Box>
-                        )}
-                      </Box>
-                    </Box>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </ModernCard>
+      )}
 
-                    <Grid container spacing={2} mb={2}>
-                      <Grid item xs={12} md={3}>
-                        <Typography variant="caption" color="textSecondary">Amount</Typography>
-                        <Typography variant="h6" color="primary">
-                          {formatCurrency(payment.amount, payment.currency)}
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={12} md={3}>
-                        <Typography variant="caption" color="textSecondary">Exchange Rate</Typography>
-                        <Typography variant="body1">1 {payment.currency} = {payment.exchangeRate} ETB</Typography>
-                      </Grid>
-                      <Grid item xs={12} md={3}>
-                        <Typography variant="caption" color="textSecondary">Retention (NBE)</Typography>
-                        <Typography variant="body1">{payment.retentionRate}% (${payment.retainedAmount.toLocaleString()})</Typography>
-                      </Grid>
-                      <Grid item xs={12} md={3}>
-                        <Typography variant="caption" color="textSecondary">Amount in Birr</Typography>
-                        <Typography variant="body1" fontWeight={600}>
-                          {payment.amountBirr.toLocaleString()} ETB
-                        </Typography>
-                      </Grid>
-                    </Grid>
+      {/* Tab 2: Forex Allocations */}
+      {activeTab === 2 && (
+        <ModernCard>
+          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+            Foreign Exchange Allocations
+          </Typography>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <strong>NBE Forex Retention Policy:</strong> 40% retained in USD, 60% converted to ETB<br />
+            Forex allocated after LC confirmation, valid for 180 days
+          </Alert>
 
-                    <Divider sx={{ my: 2 }} />
+          {forexAllocations.length === 0 ? (
+            <Alert severity="warning">
+              No forex allocations yet. Allocations are triggered by NBE after LC issuance.
+            </Alert>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>Forex ID</strong></TableCell>
+                    <TableCell><strong>LC Reference</strong></TableCell>
+                    <TableCell><strong>Exporter</strong></TableCell>
+                    <TableCell><strong>Allocated Amount</strong></TableCell>
+                    <TableCell><strong>Exchange Rate</strong></TableCell>
+                    <TableCell><strong>Retention (40%)</strong></TableCell>
+                    <TableCell><strong>Conversion (60%)</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Expiry</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {forexAllocations.map((forex) => (
+                    <TableRow key={forex.forexId}>
+                      <TableCell>{forex.forexId}</TableCell>
+                      <TableCell>{forex.lcId}</TableCell>
+                      <TableCell>{forex.exporterId}</TableCell>
+                      <TableCell>
+                        <strong>${forex.allocatedAmount.toLocaleString()}</strong>
+                      </TableCell>
+                      <TableCell>{forex.exchangeRate} ETB/USD</TableCell>
+                      <TableCell>
+                        ${(forex.allocatedAmount * 0.4).toLocaleString()} USD
+                      </TableCell>
+                      <TableCell>
+                        {(forex.allocatedAmount * 0.6 * forex.exchangeRate).toLocaleString()} ETB
+                      </TableCell>
+                      <TableCell>
+                        <StatusChip 
+                          label={forex.status} 
+                          status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                        />
+                      </TableCell>
+                      <TableCell>{new Date(forex.expiryDate).toLocaleDateString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
 
-                    <Grid container spacing={2}>
-                      <Grid item xs={12} md={6}>
-                        <Typography variant="caption" color="textSecondary">Receiving Bank</Typography>
-                        <Typography variant="body2">{payment.receivingBank}</Typography>
-                        <Typography variant="caption" color="textSecondary">BIC: {payment.receivingBankBIC}</Typography>
-                      </Grid>
-                      {payment.payingBank && (
-                        <Grid item xs={12} md={6}>
-                          <Typography variant="caption" color="textSecondary">Paying Bank</Typography>
-                          <Typography variant="body2">{payment.payingBank}</Typography>
-                          <Typography variant="caption" color="textSecondary">BIC: {payment.payingBankBIC}</Typography>
-                        </Grid>
-                      )}
-                    </Grid>
-
-                    <Box display="flex" gap={1} mt={2}>
-                      {payment.status === 'VERIFIED' && (
-                        <AnimatedButton
-                          size="small"
-                          variant="contained"
-                          brandColor={brandPrimary}
-                          startIcon={<CurrencyExchange />}
-                          onClick={() => {
-                            setSelectedPayment(payment);
-                            setSwiftDialogOpen(true);
-                          }}
-                        >
-                          Initiate SWIFT
-                        </AnimatedButton>
-                      )}
-                      {payment.status === 'SWIFT_RECEIVED' && (
-                        <AnimatedButton
-                          size="small"
-                          variant="contained"
-                          brandColor="#4caf50"
-                          onClick={() => {
-                            setSelectedPayment(payment);
-                            setSettlementDialogOpen(true);
-                          }}
-                        >
-                          Settle Payment
-                        </AnimatedButton>
-                      )}
-                      <AnimatedButton size="small" variant="outlined">
-                        View Documents
-                      </AnimatedButton>
-                      <AnimatedButton size="small" variant="outlined">
-                        Track SWIFT
-                      </AnimatedButton>
-                    </Box>
-                  </CardContent>
-                </ModernCard>
+          <Box sx={{ mt: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              <CurrencyExchange sx={{ mr: 1, verticalAlign: 'middle', fontSize: 20 }} />
+              Forex Allocation Summary
+            </Typography>
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="body2" color="text.secondary">Total Allocated</Typography>
+                <Typography variant="h6">
+                  ${forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0).toLocaleString()}
+                </Typography>
               </Grid>
-            ))}
-          </Grid>
-        </TabPanel>
-
-        {/* Tab 2: Export Permits */}
-        <TabPanel value={tabValue} index={2}>
-          <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
-              rows={permits}
-              columns={permitColumns}
-              getRowId={(row) => row.permitId}
-              loading={loading}
-              pageSizeOptions={[25, 50, 100]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 25 } },
-              }}
-              checkboxSelection
-              disableRowSelectionOnClick
-            />
+              <Grid item xs={12} sm={4}>
+                <Typography variant="body2" color="text.secondary">USD Retained (40%)</Typography>
+                <Typography variant="h6">
+                  ${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) * 0.4).toLocaleString()}
+                </Typography>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="body2" color="text.secondary">Active Allocations</Typography>
+                <Typography variant="h6">
+                  {forexAllocations.filter(f => f.status === 'ALLOCATED').length}
+                </Typography>
+              </Grid>
+            </Grid>
           </Box>
-        </TabPanel>
+        </ModernCard>
+      )}
 
-        {/* Tab 3: Multi-Bank Authorization */}
-        <TabPanel value={tabValue} index={3}>
-          <Typography variant="h6" gutterBottom>
-            Multi-Bank Authorization System
+      {/* Tab 3: Payment Processing */}
+      {activeTab === 3 && (
+        <ModernCard>
+          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+            Payment & Document Processing
           </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Authorization Network Status
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Active Banks: 5/5
-                    </Typography>
-                    <LinearProgress variant="determinate" value={100} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Network Uptime: 99.8%
-                    </Typography>
-                    <LinearProgress variant="determinate" value={99.8} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Cross-Bank Validation: Active
-                    </Typography>
-                    <LinearProgress variant="determinate" value={95} sx={{ mt: 1 }} />
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Bank Performance Metrics
-                  </Typography>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Bank</TableCell>
-                        <TableCell>Permits</TableCell>
-                        <TableCell>Avg Time</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {bankPerformanceData.map((bank) => (
-                        <TableRow key={bank.bank}>
-                          <TableCell>{bank.bank}</TableCell>
-                          <TableCell>{bank.permits}</TableCell>
-                          <TableCell>{bank.avgProcessing}d</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <strong>Document Verification & SWIFT Payment:</strong><br />
+            1. Exporter submits shipping documents (Bill of Lading, Certificate of Origin, Invoice)<br />
+            2. Bank verifies documents against LC terms (UCP 600)<br />
+            3. Bank initiates SWIFT payment (MT700/MT103)<br />
+            4. Payment settled with 40/60 forex retention
+          </Alert>
 
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Authorization Workflow
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                <Chip label="1. Contract Registration" color="success" />
-                <Typography>→</Typography>
-                <Chip label="2. Multi-Bank Validation" color="primary" />
-                <Typography>→</Typography>
-                <Chip label="3. Forex Allocation" color="secondary" />
-                <Typography>→</Typography>
-                <Chip label="4. Permit Issuance" color="success" />
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                The 2026 multi-bank authorization system requires validation from at least 2 participating banks 
-                for permits above $10,000 USD. Franco Valuta permits require additional diaspora/investor verification.
-              </Typography>
-            </CardContent>
-          </Card>
-        </TabPanel>
+          <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
+            <Typography variant="subtitle1" gutterBottom>
+              <Payment sx={{ mr: 1, verticalAlign: 'middle' }} />
+              SWIFT Payment Workflow
+            </Typography>
+            
+            <Stepper activeStep={-1} sx={{ mt: 2 }}>
+              <Step>
+                <StepLabel>Documents Submitted</StepLabel>
+              </Step>
+              <Step>
+                <StepLabel>Bank Verification</StepLabel>
+              </Step>
+              <Step>
+                <StepLabel>SWIFT Initiation</StepLabel>
+              </Step>
+              <Step>
+                <StepLabel>Payment Settlement</StepLabel>
+              </Step>
+            </Stepper>
 
-        {/* Tab 4: Analytics */}
-        <TabPanel value={tabValue} index={4}>
-          <Typography variant="h6" gutterBottom>
-            Franco Valuta Management (FVD/01/2026)
-          </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={4}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Diaspora Permits
-                  </Typography>
-                  <Typography variant="h4" color="success.main">
-                    16
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    This month
-                  </Typography>
-                  <LinearProgress variant="determinate" value={75} sx={{ mt: 1 }} />
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Investor Permits
-                  </Typography>
-                  <Typography variant="h4" color="primary.main">
-                    9
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    This month
-                  </Typography>
-                  <LinearProgress variant="determinate" value={60} sx={{ mt: 1 }} />
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    FV Utilization
-                  </Typography>
-                  <Typography variant="h4" color="secondary.main">
-                    92.3%
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Allocation rate
-                  </Typography>
-                  <LinearProgress variant="determinate" value={92.3} sx={{ mt: 1 }} />
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
+            <Alert severity="warning" sx={{ mt: 3 }}>
+              <strong>Compliance Checks Performed:</strong><br />
+              ✓ Sanctions screening (OFAC, UN, EU lists)<br />
+              ✓ Anti-Money Laundering (AML) verification<br />
+              ✓ Know Your Customer (KYC) validation<br />
+              ✓ EUDR traceability compliance<br />
+              ✓ Export permit validation
+            </Alert>
+          </Paper>
 
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Franco Valuta Guidelines (2026)
-              </Typography>
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Recent Payment Transactions
+            </Typography>
+            <Alert severity="info">
+              Payment transaction history will appear here once documents are submitted and verified.
+            </Alert>
+          </Box>
+        </ModernCard>
+      )}
+
+      {/* Contract Detail Dialog */}
+      <Dialog open={!!selectedContract && dialogType === null} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Contract Details</DialogTitle>
+        <DialogContent>
+          {selectedContract && (
+            <Box sx={{ pt: 2 }}>
               <Grid container spacing={2}>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Eligible Transactions:
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Diaspora remittance-funded exports
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Foreign direct investment proceeds
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Alternative forex channel transactions
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Enhanced capital requirement compliance
+                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">NBE Reference</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body1">{selectedContract.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Buyer / Country</Typography>
+                  <Typography variant="body1">{selectedContract.buyerName}</Typography>
+                  <Typography variant="caption" color="textSecondary">{selectedContract.buyerCountry}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Coffee Type</Typography>
+                  <Typography variant="body1">{selectedContract.coffeeType}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                  <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Price per Kg</Typography>
+                  <Typography variant="body1">${selectedContract.pricePerKg.toFixed(2)}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Total Value</Typography>
+                  <Typography variant="body1" color="primary" fontWeight={600}>
+                    ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Processing Requirements:
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Multi-bank verification (minimum 2 banks)
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Source of funds documentation
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • EUDR compliance for EU destinations
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Enhanced due diligence checks
-                  </Typography>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <StatusChip label={selectedContract.status} status="approved" />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
+                  <Typography variant="body1">{new Date(selectedContract.registrationDate).toLocaleDateString()}</Typography>
                 </Grid>
               </Grid>
-            </CardContent>
-          </Card>
-        </TabPanel>
-        <TabPanel value={tabValue} index={3}>
-          <Typography variant="h6" gutterBottom>
-            Banking Analytics & Trends
-          </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Permit Type Trends
-                  </Typography>
-                  <Box sx={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={permitTrendsData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month" />
-                        <YAxis />
-                        <RechartsTooltip />
-                        <Line type="monotone" dataKey="standard" stroke="#9b30b7" strokeWidth={3} name="Standard" />
-                        <Line type="monotone" dataKey="francoValuta" stroke="#FFD700" strokeWidth={3} name="Franco Valuta" />
-                        <Line type="monotone" dataKey="diaspora" stroke="#000000" strokeWidth={3} name="Diaspora" />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Bank Performance Comparison
-                  </Typography>
-                  <Box sx={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={bankPerformanceData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="bank" />
-                        <YAxis />
-                        <RechartsTooltip formatter={(value, name) => [
-                          name === 'permits' ? value : formatCurrency(value as number),
-                          name === 'permits' ? 'Permits' : 'Value (USD)'
-                        ]} />
-                        <Bar dataKey="permits" fill="#9b30b7" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Key Performance Indicators
-              </Typography>
-              <Grid container spacing={3}>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="primary.main">
-                      2.1
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Avg Processing Days
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="success.main">
-                      96.8%
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Approval Rate
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="secondary.main">
-                      $6.2M
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Monthly Volume
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="warning.main">
-                      99.8%
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      System Uptime
-                    </Typography>
-                  </Box>
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
-        </TabPanel>
-      </ModernCard>
-
-      {/* LC Approval Dialog */}
-      <Dialog open={lcDialogOpen} onClose={() => setLcDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Approve Letter of Credit</DialogTitle>
-        <DialogContent>
-          {selectedLC && (
-            <Box>
-              <Typography variant="body1" gutterBottom>
-                <strong>LC ID:</strong> {selectedLC.lcId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Exporter:</strong> {selectedLC.exporterId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Amount:</strong> {formatCurrency(selectedLC.amount, selectedLC.currency)}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Beneficiary:</strong> {selectedLC.beneficiary}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Beneficiary Bank:</strong> {selectedLC.beneficiaryBank}
-              </Typography>
-              <Alert severity="info" sx={{ mt: 2 }}>
-                Approving this LC will enable issuance and payment processing.
-              </Alert>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setLcDialogOpen(false)}>Cancel</AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#4caf50"
-            onClick={() => {
-              if (!selectedLC) return;
-              handleApproveLC(selectedLC.lcId);
-            }}
-          >
-            Approve LC
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
-
-      {/* SWIFT Initiation Dialog */}
-      <Dialog open={swiftDialogOpen} onClose={() => setSwiftDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Initiate SWIFT Transfer</DialogTitle>
-        <DialogContent>
-          {selectedPayment && (
-            <Box>
-              <Alert severity="info" sx={{ mb: 3 }}>
-                <Typography variant="body2">
-                  <strong>Payment:</strong> {selectedPayment.paymentId} | <strong>Amount:</strong> {formatCurrency(selectedPayment.amount, selectedPayment.currency)}
-                </Typography>
-              </Alert>
-
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>SWIFT Reference Number</Typography>
-                  <Typography variant="body2" color="textSecondary" sx={{ fontFamily: 'monospace' }}>
-                    SWIFT{new Date().getFullYear()}{String(new Date().getMonth() + 1).padStart(2, '0')}{String(new Date().getDate()).padStart(2, '0')}00123456
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>Message Type</Typography>
-                  <Chip label={selectedPayment.paymentMethod} color="primary" />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>Sender BIC</Typography>
-                  <Typography variant="body2">{selectedPayment.receivingBankBIC}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>Receiver BIC</Typography>
-                  <Typography variant="body2">{selectedPayment.payingBankBIC || 'DEUTDEFF'}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>Value Date</Typography>
-                  <Typography variant="body2">{new Date().toISOString().split('T')[0]}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>Charges</Typography>
-                  <Chip label="SHA (Shared)" size="small" />
-                </Grid>
-                <Grid item xs={12}>
-                  <Typography variant="subtitle2" gutterBottom>Remittance Information</Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Payment for coffee export - Contract {selectedPayment.contractId}
-                  </Typography>
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setSwiftDialogOpen(false)}>Cancel</AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor={brandPrimary}
-            startIcon={<CurrencyExchange />}
-            onClick={() => {
-              if (!selectedPayment) return;
-              handleInitiateSWIFT(selectedPayment.paymentId, {});
-            }}
-          >
-            Send SWIFT Message
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
-
-      {/* Payment Settlement Dialog */}
-      <Dialog open={settlementDialogOpen} onClose={() => setSettlementDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Settle Payment with NBE Retention</DialogTitle>
-        <DialogContent>
-          {selectedPayment && (
-            <Box>
-              <Alert severity="success" sx={{ mb: 3 }}>
-                <Typography variant="body2">
-                  <strong>SWIFT Received:</strong> {selectedPayment.swiftReference}
-                </Typography>
-              </Alert>
-
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                    <Typography variant="h6" gutterBottom>Payment Breakdown</Typography>
-                    <Divider sx={{ my: 1 }} />
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <Typography variant="body2" color="textSecondary">Total Amount:</Typography>
-                        <Typography variant="h6">{formatCurrency(selectedPayment.amount, selectedPayment.currency)}</Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="body2" color="textSecondary">Exchange Rate:</Typography>
-                        <Typography variant="h6">1 {selectedPayment.currency} = {selectedPayment.exchangeRate} ETB</Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="body2" color="textSecondary">NBE Retention ({selectedPayment.retentionRate}%):</Typography>
-                        <Typography variant="body1" color="warning.main">
-                          {formatCurrency(selectedPayment.retainedAmount, selectedPayment.currency)}
-                        </Typography>
-                        <Typography variant="caption">(Kept in foreign currency)</Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="body2" color="textSecondary">Converted Amount ({100-selectedPayment.retentionRate}%):</Typography>
-                        <Typography variant="body1" color="success.main">
-                          {formatCurrency(selectedPayment.convertedAmount, selectedPayment.currency)}
-                        </Typography>
-                        <Typography variant="caption">= {selectedPayment.amountBirr.toLocaleString()} ETB</Typography>
-                      </Grid>
-                    </Grid>
-                  </Box>
-                </Grid>
-
-                <Grid item xs={12}>
-                  <Typography variant="subtitle2" gutterBottom>Settlement Details</Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    • Paying Bank: {selectedPayment.payingBank}<br />
-                    • Receiving Bank: {selectedPayment.receivingBank}<br />
-                    • NBE Approval: Required for settlement<br />
-                    • Exporter will receive: <strong>{selectedPayment.amountBirr.toLocaleString()} ETB</strong>
-                  </Typography>
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setSettlementDialogOpen(false)}>Cancel</AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#4caf50"
-            onClick={() => {
-              if (!selectedPayment) return;
-              handleSettlePayment(selectedPayment.paymentId, {});
-            }}
-          >
-            Confirm Settlement
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
-      
-      {/* Permit Approval Dialog */}
-      <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Approve Export Permit</DialogTitle>
-        <DialogContent>
-          {selectedPermit && (
-            <Box>
-              <Typography variant="body1" gutterBottom>
-                <strong>Permit ID:</strong> {selectedPermit.permitId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Contract ID:</strong> {selectedPermit.contractId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Exporter:</strong> {selectedPermit.exporterId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Issuing Bank:</strong> {selectedPermit.bankName}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Permit Type:</strong> {selectedPermit.permitType}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Amount:</strong> {formatCurrency(selectedPermit.amount, selectedPermit.currency)}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Authorizing Banks:</strong> {selectedPermit.authorizingBanks.join(', ')}
-              </Typography>
               
               <Alert severity="info" sx={{ mt: 2 }}>
-                Approving this permit will enable forex allocation and export processing. 
-                Multi-bank authorization is {selectedPermit.authorizingBanks.length >= 2 ? 'satisfied' : 'required'}.
+                This contract has been approved by NBE. You can now issue a Letter of Credit for this contract.
               </Alert>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
-          <AnimatedButton onClick={() => setApprovalDialogOpen(false)}>
-            Cancel
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#4caf50"
-            onClick={() => {
-              if (!selectedPermit) return;
-              handleApprovePermit(selectedPermit.permitId);
-            }}
+          <Button onClick={() => setSelectedContract(null)}>
+            Close
+          </Button>
+          <AnimatedButton
+            variant="contained"
+            color="primary"
+            startIcon={<Description />}
+            onClick={() => handleOpenDialog('lc', selectedContract!)}
           >
-            Approve Permit
+            Issue LC
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* LC Issuance Dialog */}
+      <Dialog open={dialogOpen && dialogType === 'lc'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Issue Letter of Credit
+        </DialogTitle>
+        <DialogContent>
+          {selectedContract && (
+            <>
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <strong>International Trade Finance</strong><br />
+                Issuing LC confirms payment guarantee and enables forex allocation by NBE
+              </Alert>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Contract Details
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Typography variant="body2">
+                      <strong>Contract:</strong> {selectedContract.contractId}<br />
+                      <strong>Exporter:</strong> {selectedContract.exporterId}<br />
+                      <strong>Buyer:</strong> {selectedContract.buyerName} ({selectedContract.buyerCountry})<br />
+                      <strong>Amount:</strong> ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="Issuing Bank (Buyer's Bank)"
+                    value={lcForm.issuingBank}
+                    onChange={(e) => setLcForm({...lcForm, issuingBank: e.target.value})}
+                    placeholder="e.g., Deutsche Bank AG, Frankfurt"
+                    required
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="Advising Bank (Exporter's Bank)"
+                    value={lcForm.advisingBank}
+                    onChange={(e) => setLcForm({...lcForm, advisingBank: e.target.value})}
+                    placeholder="e.g., Commercial Bank of Ethiopia"
+                    required
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Beneficiary (Exporter)"
+                    value={lcForm.beneficiary}
+                    onChange={(e) => setLcForm({...lcForm, beneficiary: e.target.value})}
+                    placeholder="Exporter company name and account"
+                    required
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="LC Terms"
+                    value={lcForm.terms}
+                    onChange={(e) => setLcForm({...lcForm, terms: e.target.value})}
+                    multiline
+                    rows={3}
+                    helperText="Payment terms as per UCP 600 (Uniform Customs and Practice)"
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="LC Validity (Days)"
+                    type="number"
+                    value={lcForm.expiryDays}
+                    onChange={(e) => setLcForm({...lcForm, expiryDays: e.target.value})}
+                    helperText="Typically 90-180 days for coffee exports"
+                  />
+                </Grid>
+              </Grid>
+
+              <Alert severity="warning" sx={{ mt: 3 }}>
+                <strong>Next Steps After LC Issuance:</strong><br />
+                1. NBE allocates foreign exchange<br />
+                2. Export permit issued by bank<br />
+                3. Exporter ships coffee with required documents<br />
+                4. Bank verifies documents and releases payment
+              </Alert>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDialog}>Cancel</Button>
+          <AnimatedButton
+            variant="contained"
+            color="primary"
+            onClick={handleIssueLc}
+            startIcon={<CheckCircle />}
+          >
+            Issue Letter of Credit
           </AnimatedButton>
         </DialogActions>
       </Dialog>

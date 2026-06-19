@@ -729,6 +729,150 @@ const ShippingPortal: React.FC = () => {
           </Card>
         </TabPanel>
       </ModernCard>
+      {/* Shipping Record Detail Dialog */}
+      <Dialog open={!!selectedRecord && !trackingDialogOpen && !updateDialogOpen} onClose={() => setSelectedRecord(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Shipment Details</DialogTitle>
+        <DialogContent>
+          {selectedRecord && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Shipping ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedRecord.shippingId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Shipment ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedRecord.shipmentId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body1">{selectedRecord.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Shipping Line</Typography>
+                  <Typography variant="body1">{selectedRecord.shippingLine}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Container Number</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedRecord.containerNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Container Type</Typography>
+                  <Chip
+                    label={selectedRecord.containerType}
+                    size="small"
+                    color={
+                      selectedRecord.containerType === 'DRY' ? 'primary' :
+                      selectedRecord.containerType === 'REEFER' ? 'secondary' : 'success'
+                    }
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Vessel Name</Typography>
+                  <Typography variant="body1">{selectedRecord.vesselName}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Voyage Number</Typography>
+                  <Typography variant="body1">{selectedRecord.voyageNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Port of Loading</Typography>
+                  <Typography variant="body1">{selectedRecord.portOfLoading}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Port of Discharge</Typography>
+                  <Typography variant="body1">{selectedRecord.portOfDischarge}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Weight</Typography>
+                  <Typography variant="body1">{selectedRecord.weight.toLocaleString()} kg</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Volume</Typography>
+                  <Typography variant="body1">{selectedRecord.volume} CBM</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Bill of Lading</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedRecord.billOfLading}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Tracking Number</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedRecord.trackingNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <StatusChip status={selectedRecord.status as any} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Estimated Departure</Typography>
+                  <Typography variant="body1">{formatDate(selectedRecord.estimatedDeparture)}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Estimated Arrival</Typography>
+                  <Typography variant="body1">{formatDate(selectedRecord.estimatedArrival)}</Typography>
+                </Grid>
+                {selectedRecord.actualDeparture && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Actual Departure</Typography>
+                    <Typography variant="body1">{formatDate(selectedRecord.actualDeparture)}</Typography>
+                  </Grid>
+                )}
+                {selectedRecord.actualArrival && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Actual Arrival</Typography>
+                    <Typography variant="body1">{formatDate(selectedRecord.actualArrival)}</Typography>
+                  </Grid>
+                )}
+              </Grid>
+              
+              <Card sx={{ mt: 2, bgcolor: 'action.hover' }}>
+                <CardContent>
+                  <Typography variant="subtitle2" gutterBottom>Shipping Route</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Chip label={selectedRecord.portOfLoading} color="primary" size="small" />
+                    <Typography>→</Typography>
+                    <Chip label="At Sea" color="default" size="small" />
+                    <Typography>→</Typography>
+                    <Chip label={selectedRecord.portOfDischarge} color="success" size="small" />
+                  </Box>
+                </CardContent>
+              </Card>
+
+              {selectedRecord.status === 'IN_TRANSIT' && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  This shipment is currently in transit. Real-time tracking is available via IoT sensors.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedRecord(null)}>
+            Close
+          </AnimatedButton>
+          <AnimatedButton
+            variant="outlined"
+            brandColor="#0277bd"
+            onClick={() => {
+              setTrackingDialogOpen(true);
+            }}
+          >
+            Track Shipment
+          </AnimatedButton>
+          {selectedRecord && ['BOOKED', 'LOADED', 'DEPARTED', 'IN_TRANSIT'].includes(selectedRecord.status) && (
+            <AnimatedButton
+              variant="contained"
+              brandColor="#4caf50"
+              onClick={() => {
+                setUpdateDialogOpen(true);
+              }}
+            >
+              Update Status
+            </AnimatedButton>
+          )}
+        </DialogActions>
+      </Dialog>
+
       {/* Tracking Dialog */}
       <Dialog open={trackingDialogOpen} onClose={() => setTrackingDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Container Tracking Details</DialogTitle>

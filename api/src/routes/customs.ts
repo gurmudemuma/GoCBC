@@ -67,7 +67,7 @@ router.post('/declaration/submit', async (req, res) => {
   }
 });
 
-// Review declaration
+// Review declaration (start physical inspection)
 router.post('/declaration/:declarationId/review', async (req, res) => {
   try {
     const { declarationId } = req.params;
@@ -79,12 +79,34 @@ router.post('/declaration/:declarationId/review', async (req, res) => {
       'ReviewDeclaration',
       declarationId,
       customsOfficer,
-      inspectionNotes
+      inspectionNotes || 'Physical inspection initiated'
     );
     
     await gateway.disconnect();
     
-    res.json({ success: true, message: 'Declaration reviewed successfully' });
+    res.json({ success: true, message: 'Physical inspection started', status: 'UNDER_INSPECTION' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Complete physical inspection
+router.post('/declaration/:declarationId/complete-inspection', async (req, res) => {
+  try {
+    const { declarationId } = req.params;
+    const { inspectionNotes } = req.body;
+    
+    const { gateway, contract } = await connectToNetwork('Customs');
+    
+    await contract.submitTransaction(
+      'CompleteInspection',
+      declarationId,
+      inspectionNotes || 'Physical inspection completed'
+    );
+    
+    await gateway.disconnect();
+    
+    res.json({ success: true, message: 'Physical inspection completed', status: 'UNDER_REVIEW' });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }

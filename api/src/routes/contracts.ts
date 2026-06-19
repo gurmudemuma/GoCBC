@@ -65,6 +65,8 @@ router.post('/',
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
     body('buyerID').notEmpty().withMessage('Buyer ID is required'),
     body('buyerCountry').notEmpty().withMessage('Buyer country is required'),
+    body('buyerBank').optional().isString(),
+    body('exporterBank').optional().isString(),
     body('coffeeType').notEmpty().withMessage('Coffee type is required'),
     body('quantity').isNumeric().withMessage('Quantity must be a number'),
     body('pricePerKg').isNumeric().withMessage('Price per kg must be a number'),
@@ -79,6 +81,8 @@ router.post('/',
         exporterID,
         buyerID,
         buyerCountry,
+        buyerBank,
+        exporterBank,
         coffeeType,
         quantity,
         pricePerKg,
@@ -95,11 +99,20 @@ router.post('/',
         quantity.toString(),
         pricePerKg.toString(),
         currency,
-        eudrRequired.toString()
+        eudrRequired.toString(),
+        buyerBank || '',
+        exporterBank || ''
       );
 
       if (result.success) {
-        logger.info(`Sales contract registered successfully: ${contractID}`);
+        logger.info(`Sales contract registered successfully: ${contractID}, txId: ${result.txId}`);
+        
+        // Try to read back the contract immediately to verify
+        setTimeout(async () => {
+          const readResult = await fabricService.getSalesContract(contractID);
+          logger.info(`Read-back verification for ${contractID}: success=${readResult.success}, data=${JSON.stringify(readResult.data)}`);
+        }, 2000);
+        
         res.status(201).json({
           success: true,
           data: result.data,
@@ -172,6 +185,11 @@ router.post('/',
 router.get('/', async (req, res) => {
   try {
     const result = await fabricService.getAllContracts();
+    
+    logger.info(`QueryAllContracts result: success=${result.success}, dataLength=${result.data?.length || 0}`);
+    if (result.data) {
+      logger.info(`First contract sample: ${JSON.stringify(result.data[0] || 'none')}`);
+    }
 
     if (result.success) {
       const contracts = result.data || [];

@@ -702,6 +702,139 @@ const CustomsPortal: React.FC = () => {
           </Card>
         </TabPanel>
       </ModernCard>
+      {/* Declaration Detail Dialog */}
+      <Dialog open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen} onClose={() => setSelectedDeclaration(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Customs Declaration Details</DialogTitle>
+        <DialogContent>
+          {selectedDeclaration && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Declaration ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedDeclaration.declarationId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Shipment ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedDeclaration.shipmentId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body1">{selectedDeclaration.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Destination</Typography>
+                  <Typography variant="body1">{selectedDeclaration.destination}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Declaration Type</Typography>
+                  <Chip
+                    label={selectedDeclaration.declarationType}
+                    size="small"
+                    color={
+                      selectedDeclaration.declarationType === 'STANDARD' ? 'primary' :
+                      selectedDeclaration.declarationType === 'SIMPLIFIED' ? 'secondary' : 'success'
+                    }
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">HS Code</Typography>
+                  <Typography variant="body1">{selectedDeclaration.hsCode}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                  <Typography variant="body1">{selectedDeclaration.quantity.toLocaleString()} kg</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Value</Typography>
+                  <Typography variant="body1" color="primary" fontWeight={600}>
+                    {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">EUDR Compliant</Typography>
+                  <Box>
+                    {selectedDeclaration.eudrCompliant ? (
+                      <CheckCircle color="success" />
+                    ) : (
+                      <Cancel color="disabled" />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Inspection Required</Typography>
+                  <Box>
+                    {selectedDeclaration.inspectionRequired ? (
+                      <Security color="warning" />
+                    ) : (
+                      <CheckCircle color="success" />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <StatusChip status={selectedDeclaration.status} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Submission Date</Typography>
+                  <Typography variant="body1">{formatDate(selectedDeclaration.submissionDate)}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Customs Officer</Typography>
+                  <Typography variant="body1">{selectedDeclaration.customsOfficer}</Typography>
+                </Grid>
+                {selectedDeclaration.clearanceDate && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Clearance Date</Typography>
+                    <Typography variant="body1">{formatDate(selectedDeclaration.clearanceDate)}</Typography>
+                  </Grid>
+                )}
+              </Grid>
+              
+              {selectedDeclaration.status === 'UNDER_REVIEW' && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  This declaration is under review. {selectedDeclaration.inspectionRequired ? 'Inspection is required before clearance.' : 'Review and clear to proceed with export.'}
+                </Alert>
+              )}
+              
+              {selectedDeclaration.status === 'CLEARED' && (
+                <Alert severity="success" sx={{ mt: 2 }}>
+                  This declaration has been cleared. The shipment is authorized for export.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedDeclaration(null)}>
+            Close
+          </AnimatedButton>
+          {selectedDeclaration?.status === 'UNDER_REVIEW' && (
+            <>
+              {selectedDeclaration.inspectionRequired && (
+                <AnimatedButton
+                  variant="outlined"
+                  brandColor="#ff9800"
+                  onClick={() => {
+                    setInspectionDialogOpen(true);
+                  }}
+                >
+                  Schedule Inspection
+                </AnimatedButton>
+              )}
+              <AnimatedButton
+                variant="contained"
+                brandColor="#4caf50"
+                onClick={() => {
+                  setClearanceDialogOpen(true);
+                }}
+              >
+                Clear Declaration
+              </AnimatedButton>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+
       {/* Clearance Dialog */}
       <Dialog open={clearanceDialogOpen} onClose={() => setClearanceDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Clear Export Declaration</DialogTitle>

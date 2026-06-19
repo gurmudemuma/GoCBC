@@ -33,6 +33,7 @@ import {
   ListItem,
   ListItemText,
 } from '@mui/material';
+import BankSelect from '@/components/common/BankSelect';
 // Commented out until @mui/lab is installed
 // import {
 //   Timeline,
@@ -57,8 +58,11 @@ import {
   AttachMoney,
   Description,
   Notifications,
+  Assignment,
 } from '@mui/icons-material';
+import { alpha } from '@mui/material/styles';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
 
 // Modern Components - 2026 Design
@@ -85,12 +89,14 @@ interface ExportContract {
   nbeReferenceNumber: string;
   buyerName: string;
   buyerCountry: string;
+  buyerBank?: string;        // Issuing bank (buyer's bank)
+  exporterBank?: string;     // Advising bank (exporter's bank)
   coffeeType: string;
   quantity: number;
   pricePerKg: number;
   totalValue: number;
   currency: string;
-  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'ACTIVE' | 'COMPLETED';
+  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'NBE_APPROVED';
   registrationDate?: string;
   approvalDate?: string;
 }
@@ -105,6 +111,8 @@ interface ForexStatus {
   retentionRate: number;
   status: 'REQUESTED' | 'ALLOCATED' | 'UTILIZED';
   expiryDate: string;
+  allocationDate?: string;
+  requestDate?: Date;
 }
 
 interface LCStatus {
@@ -113,7 +121,7 @@ interface LCStatus {
   amount: number;
   currency: string;
   issuingBank: string;
-  beneficiaryBank: string;
+  advisingBank: string;
   status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'UTILIZED';
   expiryDate: string;
 }
@@ -122,7 +130,7 @@ interface ShipmentStatus {
   shipmentId: string;
   contractId: string;
   quantity: number;
-  status: 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED';
+  status: 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'SHIPPED';
   billOfLading?: string;
   vesselName?: string;
   currentLocation?: string;
@@ -171,169 +179,231 @@ const ExporterPortal: React.FC = () => {
   
   // Dialog States
   const [contractDialogOpen, setContractDialogOpen] = useState(false);
+  const [createContractDialogOpen, setCreateContractDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<ExportContract | null>(null);
+  const [isCreatingContract, setIsCreatingContract] = useState(false);
+  const [newContract, setNewContract] = useState({
+    buyerName: '',
+    buyerCompany: '',
+    buyerCountry: '',
+    buyerBank: '',           // Issuing bank (buyer's bank)
+    exporterBank: '',        // Advising bank (exporter's bank)
+    buyerEmail: '',
+    buyerPhone: '',
+    coffeeType: '',
+    quantity: '',
+    pricePerKg: '',
+    currency: 'USD',
+    incoterm: 'FOB',
+    portOfLoading: 'Djibouti',
+    portOfDestination: '',
+    deliveryDate: '',
+    eudrRequired: true,
+    organicCertified: false,
+    fairTradeCertified: false,
+    specialInstructions: ''
+  });
   
   // Mock Data for Testing
   useEffect(() => {
     loadMockData();
   }, []);
   
-  const loadMockData = () => {
-    // Mock Exporter Profile
-    setProfile({
-      exporterId: 'EXP2026001',
-      companyName: 'Ethiopian Premium Coffee Exporters PLC',
-      ectaLicenseNumber: 'ECTA-LIC-2026-001',
-      licenseStatus: 'ACTIVE',
-      licenseExpiryDate: '2026-12-31',
-      capitalRequirement: 15000000,
-      laboratoryCertified: true,
-    });
+  const loadMockData = async () => {
+    // Get user info from token
+    const token = localStorage.getItem('authToken');
+    let currentExporterId = 'EXP2120784'; // Will be updated from token
+    let userInfo: any = null;
     
-    // Mock Contracts
-    setContracts([
-      {
-        contractId: 'CONTRACT2026001',
-        nbeReferenceNumber: 'NBE-REF-2026-001',
-        buyerName: 'German Coffee Importers GmbH',
-        buyerCountry: 'Germany',
-        coffeeType: 'Yirgacheffe Grade 1',
-        quantity: 20000,
-        pricePerKg: 6.5,
-        totalValue: 130000,
-        currency: 'USD',
-        status: 'APPROVED',
-        registrationDate: '2026-05-15T10:00:00Z',
-        approvalDate: '2026-05-20T14:30:00Z',
-      },
-      {
-        contractId: 'CONTRACT2026002',
-        nbeReferenceNumber: 'NBE-REF-2026-002',
-        buyerName: 'Seattle Coffee Roasters Inc',
-        buyerCountry: 'USA',
-        coffeeType: 'Sidamo Grade 2',
-        quantity: 15000,
-        pricePerKg: 5.8,
-        totalValue: 87000,
-        currency: 'USD',
-        status: 'ACTIVE',
-        registrationDate: '2026-05-25T10:00:00Z',
-        approvalDate: '2026-05-28T16:00:00Z',
-      },
-      {
-        contractId: 'CONTRACT2026003',
-        nbeReferenceNumber: '',
-        buyerName: 'Tokyo Premium Coffee Co',
-        buyerCountry: 'Japan',
-        coffeeType: 'Harrar Grade 1',
-        quantity: 10000,
-        pricePerKg: 7.2,
-        totalValue: 72000,
-        currency: 'USD',
-        status: 'REGISTERED',
-        registrationDate: '2026-06-01T09:00:00Z',
-      },
-    ]);
+    if (token) {
+      try {
+        // Decode JWT to get user info
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        currentExporterId = payload.exporterId || payload.username;
+        userInfo = payload;
+        console.log('Current user:', userInfo);
+      } catch (e) {
+        console.warn('Could not decode token:', e);
+      }
+    }
     
-    // Mock Forex Allocations
-    setForexStatuses([
-      {
-        forexId: 'FOREX2026001',
-        contractId: 'CONTRACT2026001',
-        requestedAmount: 130000,
-        allocatedAmount: 130000,
-        currency: 'USD',
-        exchangeRate: 115.5,
-        retentionRate: 40,
-        status: 'ALLOCATED',
-        expiryDate: '2026-08-15',
-      },
-      {
-        forexId: 'FOREX2026002',
-        contractId: 'CONTRACT2026002',
-        requestedAmount: 87000,
-        allocatedAmount: 87000,
-        currency: 'USD',
-        exchangeRate: 115.5,
-        retentionRate: 40,
-        status: 'UTILIZED',
-        expiryDate: '2026-08-25',
-      },
-    ]);
+    // Load Exporter Profile from API
+    try {
+      if (token) {
+        const profileResponse = await fetch('http://localhost:3001/api/v1/exporters/me/profile', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        const profileResult = await profileResponse.json();
+        
+        if (profileResult.success && profileResult.data) {
+          const exporterData = profileResult.data;
+          setProfile({
+            exporterId: exporterData.exporterId || currentExporterId,
+            companyName: exporterData.companyName || userInfo?.organization || 'Your Coffee Company',
+            ectaLicenseNumber: exporterData.ectaLicenseNumber || userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
+            licenseStatus: exporterData.licenseStatus || 'ACTIVE',
+            licenseExpiryDate: exporterData.licenseExpiryDate || '2027-12-31',
+            capitalRequirement: exporterData.capitalRequirement || 50000000,
+            laboratoryCertified: exporterData.laboratoryCertified || false,
+          });
+          console.log('Loaded exporter profile:', exporterData);
+        } else {
+          // Fallback to token data if API fails
+          setProfile({
+            exporterId: currentExporterId,
+            companyName: userInfo?.organization || 'Your Coffee Company',
+            ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
+            licenseStatus: 'ACTIVE',
+            licenseExpiryDate: '2027-12-31',
+            capitalRequirement: 50000000,
+            laboratoryCertified: true,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load exporter profile, using fallback data:', error);
+      // Fallback to token data
+      setProfile({
+        exporterId: currentExporterId,
+        companyName: userInfo?.organization || 'Your Coffee Company',
+        ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
+        licenseStatus: 'ACTIVE',
+        licenseExpiryDate: '2027-12-31',
+        capitalRequirement: 50000000,
+        laboratoryCertified: true,
+      });
+    }
     
-    // Mock LC Status
-    setLCStatuses([
-      {
-        lcId: 'LC2026001',
-        contractId: 'CONTRACT2026001',
-        amount: 130000,
-        currency: 'USD',
-        issuingBank: 'Deutsche Bank AG',
-        beneficiaryBank: 'Commercial Bank of Ethiopia',
-        status: 'ISSUED',
-        expiryDate: '2026-09-15',
-      },
-      {
-        lcId: 'LC2026002',
-        contractId: 'CONTRACT2026002',
-        amount: 87000,
-        currency: 'USD',
-        issuingBank: 'Bank of America',
-        beneficiaryBank: 'Awash International Bank',
-        status: 'UTILIZED',
-        expiryDate: '2026-08-25',
-      },
-    ]);
+    // Load real contracts from blockchain
+    try {
+      if (token) {
+        const response = await fetch('http://localhost:3001/api/v1/contracts', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        const result = await response.json();
+        console.log('Contracts API response:', result);
+        if (result.success && result.data) {
+          console.log('Total contracts from API:', result.data.length);
+          console.log('Sample contract (if any):', result.data[0]);
+          
+          // Filter contracts for current exporter only  
+          // Handle both camelCase (exporterId) and PascalCase (ExporterID) from blockchain
+          const myContracts = result.data.filter((c: any) => {
+            const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
+            console.log(`Contract data:`, c);
+            console.log(`Contract ${c.contractID || c.contractId}: exporterId=${contractExporterId}, currentExporterId=${currentExporterId}`);
+            return contractExporterId === currentExporterId;
+          });
+          console.log(`Filtered contracts for ${currentExporterId}:`, myContracts.length);
+          
+          // Map blockchain contracts to UI format
+          const mappedContracts = myContracts.map((c: any, index: number) => {
+            // Ensure contractId exists, generate from timestamp if missing
+            const contractId = c.contractID || c.contractId || c.ContractID || 
+                              `TEMP_${currentExporterId}_${index}_${Date.now()}`;
+            
+            // Extract bank fields - check both camelCase and PascalCase
+            const buyerBank = c.buyerBank || c.BuyerBank || '';
+            const exporterBank = c.exporterBank || c.ExporterBank || '';
+            
+            console.log(`Mapping contract: originalId=${c.contractID || c.contractId}, mappedId=${contractId}`, {
+              buyerBank: buyerBank,
+              exporterBank: exporterBank,
+              rawData: { buyerBank: c.buyerBank, BuyerBank: c.BuyerBank, exporterBank: c.exporterBank, ExporterBank: c.ExporterBank }
+            });
+            
+            return {
+              contractId: contractId,
+              nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
+              buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
+              buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
+              buyerBank: buyerBank,
+              exporterBank: exporterBank,
+              coffeeType: c.coffeeType || c.CoffeeType || 'Unknown',
+              quantity: c.quantity || c.Quantity || 0,
+              pricePerKg: c.pricePerKg || c.PricePerKg || 0,
+              totalValue: c.totalValue || c.TotalValue || 0,
+              currency: c.currency || c.Currency || 'USD',
+              status: c.contractStatus || c.ContractStatus || 'REGISTERED',
+              registrationDate: c.registrationDate || c.RegistrationDate || new Date().toISOString(),
+              approvalDate: c.approvalDate || c.ApprovalDate || ''
+            };
+          });
+          setContracts(mappedContracts);
+          console.log(`Loaded ${mappedContracts.length} contracts for exporter ${currentExporterId}`);
+        } else {
+          console.log('No contracts data or query failed:', result);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load contracts:', error);
+    }
+
+    // Load LCs for current exporter
+    try {
+      if (token) {
+        const lcResponse = await fetch('http://localhost:3001/api/v1/banking/lc', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const lcResult = await lcResponse.json();
+        if (lcResult.success && lcResult.data) {
+          const myLCs = lcResult.data.filter((lc: any) => 
+            (lc.exporterId || lc.ExporterID) === currentExporterId
+          );
+          setLCStatuses(myLCs.map((lc: any) => ({
+            lcId: lc.lcId || lc.LCID,
+            contractId: lc.contractId || lc.ContractID,
+            amount: lc.amount || lc.Amount,
+            currency: lc.currency || lc.Currency,
+            status: lc.status || lc.Status,
+            issuingBank: lc.issuingBank || lc.IssuingBank || 'N/A',
+            advisingBank: lc.advisingBank || lc.AdvisingBank || lc.beneficiaryBank || lc.BeneficiaryBank,
+            expiryDate: lc.expiryDate || lc.ExpiryDate,
+          })));
+          console.log(`Loaded ${myLCs.length} LCs for exporter`);
+        }
+      }
+    } catch (error) {
+      console.warn('Could not load LCs:', error);
+    }
+
+    // Load Forex allocations for current exporter
+    try {
+      if (token) {
+        const forexResponse = await fetch('http://localhost:3001/api/v1/forex', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const forexResult = await forexResponse.json();
+        if (forexResult.success && forexResult.data) {
+          const myForex = forexResult.data.filter((f: any) => 
+            (f.exporterId || f.ExporterID) === currentExporterId
+          );
+          setForexStatuses(myForex.map((f: any) => ({
+            forexId: f.forexId || f.ForexID,
+            contractId: f.contractId || f.ContractID,
+            requestedAmount: f.requestedAmount || f.RequestedAmount,
+            allocatedAmount: f.allocatedAmount || f.AllocatedAmount,
+            currency: f.currency || f.Currency,
+            exchangeRate: f.exchangeRate || f.ExchangeRate,
+            retentionRate: f.retentionRate || f.RetentionRate,
+            status: f.status || f.Status,
+            expiryDate: f.expiryDate || f.ExpiryDate,
+            allocationDate: f.allocationDate || f.AllocationDate,
+            requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
+          })));
+          console.log(`Loaded ${myForex.length} forex allocations for exporter`);
+        }
+      }
+    } catch (error) {
+      console.warn('Could not load forex allocations:', error);
+    }
     
-    // Mock Shipments
-    setShipments([
-      {
-        shipmentId: 'SHIP2026001',
-        contractId: 'CONTRACT2026001',
-        quantity: 20000,
-        status: 'IN_TRANSIT',
-        billOfLading: 'BOL-2026-001',
-        vesselName: 'MV Ethiopian Star',
-        currentLocation: 'Red Sea',
-        estimatedArrival: '2026-06-15',
-      },
-      {
-        shipmentId: 'SHIP2026002',
-        contractId: 'CONTRACT2026002',
-        quantity: 15000,
-        status: 'DELIVERED',
-        billOfLading: 'BOL-2026-002',
-        vesselName: 'MV Coffee Express',
-        currentLocation: 'Seattle Port',
-        estimatedArrival: '2026-05-30',
-      },
-    ]);
-    
-    // Mock Payments
-    setPayments([
-      {
-        paymentId: 'PAY2026001',
-        contractId: 'CONTRACT2026001',
-        amount: 65000,
-        currency: 'USD',
-        retainedAmount: 26000,
-        convertedAmount: 39000,
-        amountBirr: 4504500,
-        status: 'SWIFT_RECEIVED',
-        swiftReference: 'SWIFT-MT103-2026-001',
-      },
-      {
-        paymentId: 'PAY2026002',
-        contractId: 'CONTRACT2026002',
-        amount: 87000,
-        currency: 'USD',
-        retainedAmount: 34800,
-        convertedAmount: 52200,
-        amountBirr: 6029100,
-        status: 'SETTLED',
-        swiftReference: 'SWIFT-MT103-2026-002',
-      },
-    ]);
+    // Note: Forex, LC, Shipments, and Payments are loaded from blockchain above
+    // If no data exists yet, these arrays remain empty (not using mock data)
   };
   
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
@@ -349,12 +419,121 @@ const ExporterPortal: React.FC = () => {
     setContractDialogOpen(false);
     setSelectedContract(null);
   };
+
+  const handleCreateContract = async () => {
+    setIsCreatingContract(true);
+    try {
+      console.log('Creating contract...', { profile, newContract });
+      
+      if (!profile) {
+        console.error('Profile not loaded');
+        alert('Profile not loaded. Please refresh the page.');
+        return;
+      }
+      
+      const contractId = `CONTRACT${Date.now()}`;
+      const quantity = parseFloat(newContract.quantity);
+      const pricePerKg = parseFloat(newContract.pricePerKg);
+      
+      if (isNaN(quantity) || isNaN(pricePerKg)) {
+        alert('Please enter valid numbers for quantity and price');
+        return;
+      }
+      
+      const contractData = {
+        contractID: contractId,
+        exporterID: profile.exporterId,
+        buyerID: newContract.buyerCompany.replace(/\s+/g, '_').toUpperCase(),
+        buyerCountry: newContract.buyerCountry,
+        buyerBank: newContract.buyerBank,           // Issuing bank
+        exporterBank: newContract.exporterBank,     // Advising bank
+        coffeeType: newContract.coffeeType,
+        quantity,
+        pricePerKg,
+        currency: newContract.currency,
+        eudrRequired: newContract.eudrRequired
+      };
+
+      console.log('Sending contract data:', contractData);
+
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        alert('Not authenticated. Please login again.');
+        return;
+      }
+
+      // Call API to register contract on blockchain
+      const response = await fetch('http://localhost:3001/api/v1/contracts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(contractData)
+      });
+
+      console.log('Response status:', response.status);
+      const result = await response.json();
+      console.log('Response data:', result);
+      
+      if (result.success) {
+        alert('✅ Contract registered successfully!\n\nContract ID: ' + contractId + '\n\nThe contract will be reviewed by ECTA and approved by NBE for forex allocation.');
+        setCreateContractDialogOpen(false);
+        setNewContract({
+          buyerName: '',
+          buyerCompany: '',
+          buyerCountry: '',
+          buyerBank: '',
+          exporterBank: '',
+          buyerEmail: '',
+          buyerPhone: '',
+          coffeeType: '',
+          quantity: '',
+          pricePerKg: '',
+          currency: 'USD',
+          incoterm: 'FOB',
+          portOfLoading: 'Djibouti',
+          portOfDestination: '',
+          deliveryDate: '',
+          eudrRequired: true,
+          organicCertified: false,
+          fairTradeCertified: false,
+          specialInstructions: ''
+        });
+        // Reload contracts
+        loadMockData();
+      } else {
+        console.error('Contract registration failed:', result);
+        alert('❌ Failed to register contract:\n\n' + (result.error?.message || 'Unknown error'));
+      }
+    } catch (error: any) {
+      console.error('Error creating contract:', error);
+      alert('❌ Failed to register contract:\n\n' + (error.message || 'Network error. Please check if the API server is running.'));
+    } finally {
+      setIsCreatingContract(false);
+    }
+  };
   
-  // Calculate Dashboard KPIs
-  const activeContracts = contracts.filter(c => c.status === 'ACTIVE' || c.status === 'APPROVED').length;
-  const pendingApprovals = contracts.filter(c => c.status === 'REGISTERED').length;
-  const inTransitShipments = shipments.filter(s => s.status === 'IN_TRANSIT' || s.status === 'DEPARTED').length;
-  const totalExportValue = contracts.reduce((sum, c) => sum + c.totalValue, 0);
+  // Calculate Dashboard KPIs from real blockchain data
+  const activeContracts = contracts.filter(c => 
+    c.status === 'ACTIVE' || 
+    c.status === 'APPROVED' || 
+    c.status === 'NBE_APPROVED' ||
+    c.status === 'REGISTERED'
+  ).length;
+  
+  const pendingApprovals = contracts.filter(c => 
+    c.status === 'REGISTERED' && !c.approvalDate
+  ).length;
+  
+  const inTransitShipments = shipments.filter(s => 
+    s.status === 'IN_TRANSIT' || 
+    s.status === 'DEPARTED' ||
+    s.status === 'SHIPPED'
+  ).length;
+  
+  const totalExportValue = contracts.reduce((sum, c) => sum + (c.totalValue || 0), 0);
+
   
   const contractColumns: GridColDef[] = [
     { field: 'contractId', headerName: 'Contract ID', width: 150 },
@@ -377,7 +556,7 @@ const ExporterPortal: React.FC = () => {
       field: 'status',
       headerName: 'Status',
       width: 150,
-      renderCell: (params) => <StatusChip status={params.value} />,
+      renderCell: (params) => <StatusChip status={params.value === 'NBE_APPROVED' ? 'APPROVED' : params.value} />,
     },
     {
       field: 'actions',
@@ -396,6 +575,7 @@ const ExporterPortal: React.FC = () => {
   ];
 
   return (
+    <>
     <Box sx={{ width: '100%', minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
@@ -429,6 +609,40 @@ const ExporterPortal: React.FC = () => {
         </Grid>
       </Box>
 
+      {/* KPI Cards - Always Visible */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <DashboardKPI
+            title="Active Contracts"
+            value={activeContracts}
+            icon={<CheckCircle />}
+            trend="up"
+          />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <DashboardKPI
+            title="Pending Approvals"
+            value={pendingApprovals}
+            icon={<Warning />}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <DashboardKPI
+            title="In Transit"
+            value={inTransitShipments}
+            icon={<LocalShipping />}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <DashboardKPI
+            title="Total Export Value"
+            value={`$${totalExportValue.toLocaleString()}`}
+            icon={<AttachMoney />}
+            trend="up"
+          />
+        </Grid>
+      </Grid>
+
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
         <Tabs 
@@ -450,119 +664,236 @@ const ExporterPortal: React.FC = () => {
       <TabPanel value={tabValue} index={0}>
         {/* Dashboard Tab */}
         <Grid container spacing={3}>
-          {/* KPI Cards */}
-          <Grid item xs={12} sm={6} md={3}>
-            <DashboardKPI
-              title="Active Contracts"
-              value={activeContracts}
-              icon={<CheckCircle />}
-              trend="up"
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <DashboardKPI
-              title="Pending Approvals"
-              value={pendingApprovals}
-              icon={<Warning />}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <DashboardKPI
-              title="In Transit"
-              value={inTransitShipments}
-              icon={<LocalShipping />}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <DashboardKPI
-              title="Total Export Value"
-              value={`$${totalExportValue.toLocaleString()}`}
-              icon={<AttachMoney />}
-              trend="up"
-            />
-          </Grid>
 
-          {/* Recent Activity */}
-          <Grid item xs={12} md={6}>
+          {/* Export Activity Trends Chart */}
+          <Grid item xs={12} md={8}>
             <ModernCard>
               <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Recent Activity
-                </Typography>
-                {/* Temporary: Using List until @mui/lab is installed */}
-                <List>
-                  <ListItem>
-                    <ListItemText
-                      primary="Contract #CONTRACT2026001 approved by NBE"
-                      secondary="2 hours ago"
-                      primaryTypographyProps={{ fontWeight: 'bold' }}
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                  <Box>
+                    <Typography variant="h6" fontWeight={700}>
+                      Export Activity Trends
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      Contract value and volume over time
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Chip 
+                      label="Value" 
+                      size="small" 
+                      sx={{ bgcolor: '#2196f3', color: 'white' }}
                     />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemText
-                      primary="Forex allocated: $130,000"
-                      secondary="5 hours ago"
-                      primaryTypographyProps={{ fontWeight: 'bold' }}
+                    <Chip 
+                      label="Volume" 
+                      size="small" 
+                      sx={{ bgcolor: '#4caf50', color: 'white' }}
                     />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemText
-                      primary="Shipment #SHIP2026001 departed Port of Djibouti"
-                      secondary="1 day ago"
-                      primaryTypographyProps={{ fontWeight: 'bold' }}
-                    />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemText
-                      primary="Payment settled: $87,000"
-                      secondary="2 days ago"
-                      primaryTypographyProps={{ fontWeight: 'bold' }}
-                    />
-                  </ListItem>
-                </List>
-              </CardContent>
-            </ModernCard>
-          </Grid>
-
-          {/* Action Required Alerts */}
-          <Grid item xs={12} md={6}>
-            <ModernCard>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Action Required
-                </Typography>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <Alert severity="warning" icon={<Warning />}>
-                    <Typography variant="body2" fontWeight="bold">
-                      Contract #CONTRACT2026003 needs NBE approval
+                  </Box>
+                </Box>
+                
+                {/* Line Chart */}
+                <Box sx={{ height: 350, width: '100%' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={(() => {
+                        // Generate trend data from contracts
+                        const monthlyData: Record<string, { month: string; value: number; volume: number; count: number }> = {};
+                        
+                        // Initialize last 6 months
+                        for (let i = 5; i >= 0; i--) {
+                          const date = new Date();
+                          date.setMonth(date.getMonth() - i);
+                          const monthKey = date.toISOString().slice(0, 7); // YYYY-MM
+                          const monthLabel = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                          monthlyData[monthKey] = { month: monthLabel, value: 0, volume: 0, count: 0 };
+                        }
+                        
+                        // Aggregate contract data by month
+                        contracts.forEach(contract => {
+                          if (contract.registrationDate) {
+                            const monthKey = contract.registrationDate.slice(0, 7);
+                            if (monthlyData[monthKey]) {
+                              monthlyData[monthKey].value += contract.totalValue || 0;
+                              monthlyData[monthKey].volume += contract.quantity || 0;
+                              monthlyData[monthKey].count += 1;
+                            }
+                          }
+                        });
+                        
+                        return Object.values(monthlyData);
+                      })()}
+                      margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" />
+                      <XAxis 
+                        dataKey="month" 
+                        tick={{ fontSize: 12 }}
+                        stroke="#666"
+                      />
+                      <YAxis 
+                        yAxisId="left"
+                        tick={{ fontSize: 12 }}
+                        stroke="#2196f3"
+                        tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
+                      />
+                      <YAxis 
+                        yAxisId="right"
+                        orientation="right"
+                        tick={{ fontSize: 12 }}
+                        stroke="#4caf50"
+                        tickFormatter={(value) => `${(value / 1000).toFixed(0)}T`}
+                      />
+                      <RechartsTooltip 
+                        contentStyle={{
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                          border: '1px solid #ddd',
+                          borderRadius: 8,
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                        }}
+                        formatter={(value: any, name: string) => {
+                          if (name === 'value') return [`$${value.toLocaleString()}`, 'Total Value'];
+                          if (name === 'volume') return [`${value.toLocaleString()} kg`, 'Volume'];
+                          return [value, name];
+                        }}
+                      />
+                      <Line 
+                        yAxisId="left"
+                        type="monotone" 
+                        dataKey="value" 
+                        stroke="#2196f3" 
+                        strokeWidth={3}
+                        dot={{ fill: '#2196f3', r: 4 }}
+                        activeDot={{ r: 6 }}
+                        name="Contract Value"
+                      />
+                      <Line 
+                        yAxisId="right"
+                        type="monotone" 
+                        dataKey="volume" 
+                        stroke="#4caf50" 
+                        strokeWidth={3}
+                        dot={{ fill: '#4caf50', r: 4 }}
+                        activeDot={{ r: 6 }}
+                        name="Volume (kg)"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Box>
+                
+                {/* Chart Summary Stats */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-around', mt: 3, pt: 2, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h5" fontWeight={700} color="primary">
+                      ${totalExportValue.toLocaleString()}
                     </Typography>
-                    <Typography variant="caption">
-                      Waiting for forex allocation approval
+                    <Typography variant="caption" color="textSecondary">
+                      Total Export Value
                     </Typography>
-                  </Alert>
-                  <Alert severity="info">
-                    <Typography variant="body2" fontWeight="bold">
-                      LC #LC2026001 expires in 15 days
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h5" fontWeight={700} color="success.main">
+                      {(contracts.reduce((sum, c) => sum + c.quantity, 0) / 1000).toFixed(1)}T
                     </Typography>
-                    <Typography variant="caption">
-                      Consider extending or utilizing
+                    <Typography variant="caption" color="textSecondary">
+                      Total Volume (tons)
                     </Typography>
-                  </Alert>
-                  <Alert severity="success" icon={<CheckCircle />}>
-                    <Typography variant="body2" fontWeight="bold">
-                      No critical actions required
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h5" fontWeight={700} color="secondary.main">
+                      {contracts.length}
                     </Typography>
-                    <Typography variant="caption">
-                      All active contracts are on track
+                    <Typography variant="caption" color="textSecondary">
+                      Total Contracts
                     </Typography>
-                  </Alert>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h5" fontWeight={700} sx={{ color: '#ff9800' }}>
+                      {contracts.length > 0 ? `$${(totalExportValue / contracts.length).toLocaleString()}` : '$0'}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      Avg Contract Value
+                    </Typography>
+                  </Box>
                 </Box>
               </CardContent>
             </ModernCard>
           </Grid>
+
+          {/* Quick Stats Cards */}
+          <Grid item xs={12} md={4}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <Card sx={{ bgcolor: 'primary.main', color: 'white' }}>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Box>
+                        <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                          This Month
+                        </Typography>
+                        <Typography variant="h4" fontWeight={700}>
+                          {(() => {
+                            const thisMonth = new Date().toISOString().slice(0, 7);
+                            return contracts.filter(c => c.registrationDate?.startsWith(thisMonth)).length;
+                          })()}
+                        </Typography>
+                        <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                          New Contracts
+                        </Typography>
+                      </Box>
+                      <Description sx={{ fontSize: 48, opacity: 0.3 }} />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+              
+              <Grid item xs={12}>
+                <Card sx={{ bgcolor: 'success.main', color: 'white' }}>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Box>
+                        <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                          Success Rate
+                        </Typography>
+                        <Typography variant="h4" fontWeight={700}>
+                          {contracts.length > 0 
+                            ? Math.round((contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE').length / contracts.length) * 100)
+                            : 0}%
+                        </Typography>
+                        <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                          Approval Rate
+                        </Typography>
+                      </Box>
+                      <CheckCircle sx={{ fontSize: 48, opacity: 0.3 }} />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+              
+              <Grid item xs={12}>
+                <Card sx={{ bgcolor: 'warning.main', color: 'white' }}>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Box>
+                        <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                          In Progress
+                        </Typography>
+                        <Typography variant="h4" fontWeight={700}>
+                          {inTransitShipments + pendingApprovals}
+                        </Typography>
+                        <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                          Active Items
+                        </Typography>
+                      </Box>
+                      <LocalShipping sx={{ fontSize: 48, opacity: 0.3 }} />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
+          </Grid>
+
+
         </Grid>
       </TabPanel>
 
@@ -575,7 +906,7 @@ const ExporterPortal: React.FC = () => {
               variant="contained"
               startIcon={<Add />}
               sx={{ bgcolor: brandPrimary }}
-              onClick={() => setContractDialogOpen(true)}
+              onClick={() => setCreateContractDialogOpen(true)}
             >
               Register New Contract
             </Button>
@@ -619,7 +950,7 @@ const ExporterPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <Alert severity="info">
                     <Typography variant="body2">
-                      <strong>Status:</strong> <StatusChip status={selectedContract.status} />
+                      <strong>Status:</strong> <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
                     </Typography>
                   </Alert>
                 </Grid>
@@ -687,6 +1018,379 @@ const ExporterPortal: React.FC = () => {
             <Button onClick={handleContractDialogClose}>Close</Button>
             <Button variant="contained" startIcon={<Download />}>
               Download PDF
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Create Contract Dialog */}
+        <Dialog 
+          open={createContractDialogOpen} 
+          onClose={() => setCreateContractDialogOpen(false)}
+          maxWidth="lg"
+          fullWidth
+        >
+          <DialogTitle sx={{ bgcolor: brandPrimary, color: 'white' }}>
+            <Box display="flex" alignItems="center" gap={1}>
+              <Description />
+              <Box>
+                <Typography variant="h6">Register New Sales Contract</Typography>
+                <Typography variant="caption">Complete all required fields to register your export contract</Typography>
+              </Box>
+            </Box>
+          </DialogTitle>
+          <DialogContent dividers sx={{ p: 3 }}>
+            <Grid container spacing={3}>
+              <Grid item xs={12}>
+                <Alert severity="info" icon={<Warning />}>
+                  <Typography variant="body2">
+                    <strong>Important:</strong> All contracts must comply with ECTA regulations and will be subject to NBE approval for forex allocation. Minimum FOB price: $5.00/kg
+                  </Typography>
+                </Alert>
+              </Grid>
+
+              {/* Buyer Information Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary }}>
+                  <AccountBalance /> Buyer Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Contact Person Name"
+                  value={newContract.buyerName}
+                  onChange={(e) => setNewContract({...newContract, buyerName: e.target.value})}
+                  required
+                  helperText="Full name of buyer representative"
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Company Name"
+                  value={newContract.buyerCompany}
+                  onChange={(e) => setNewContract({...newContract, buyerCompany: e.target.value})}
+                  required
+                  helperText="Registered company name"
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Buyer Country</InputLabel>
+                  <Select
+                    value={newContract.buyerCountry}
+                    label="Buyer Country"
+                    onChange={(e) => setNewContract({...newContract, buyerCountry: e.target.value})}
+                  >
+                    <MenuItem value="Germany">Germany</MenuItem>
+                    <MenuItem value="United States">United States</MenuItem>
+                    <MenuItem value="Japan">Japan</MenuItem>
+                    <MenuItem value="Saudi Arabia">Saudi Arabia</MenuItem>
+                    <MenuItem value="Belgium">Belgium</MenuItem>
+                    <MenuItem value="Italy">Italy</MenuItem>
+                    <MenuItem value="South Korea">South Korea</MenuItem>
+                    <MenuItem value="France">France</MenuItem>
+                    <MenuItem value="United Kingdom">United Kingdom</MenuItem>
+                    <MenuItem value="Netherlands">Netherlands</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <BankSelect
+                  value={newContract.buyerBank}
+                  onChange={(value) => setNewContract({...newContract, buyerBank: value})}
+                  label="Buyer's Bank (Issuing Bank)"
+                  helperText="Bank that will open the LC (must be different from exporter's bank)"
+                  type="international"
+                  excludeBank={newContract.exporterBank}
+                  required
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <BankSelect
+                  value={newContract.exporterBank}
+                  onChange={(value) => setNewContract({...newContract, exporterBank: value})}
+                  label="Exporter's Bank (Advising Bank)"
+                  helperText="Your Ethiopian bank that will receive the LC"
+                  type="ethiopian"
+                  excludeBank={newContract.buyerBank}
+                  required
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Email Address"
+                  type="email"
+                  value={newContract.buyerEmail}
+                  onChange={(e) => setNewContract({...newContract, buyerEmail: e.target.value})}
+                  required
+                  helperText="Business email for communication"
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Phone Number"
+                  value={newContract.buyerPhone}
+                  onChange={(e) => setNewContract({...newContract, buyerPhone: e.target.value})}
+                  placeholder="+1-555-123-4567"
+                  helperText="Include country code"
+                />
+              </Grid>
+
+              {/* Coffee Specification Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary, mt: 2 }}>
+                  <LocalShipping /> Coffee Specification
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Coffee Type</InputLabel>
+                  <Select
+                    value={newContract.coffeeType}
+                    label="Coffee Type"
+                    onChange={(e) => setNewContract({...newContract, coffeeType: e.target.value})}
+                  >
+                    <MenuItem value="Yirgacheffe Grade 1">Yirgacheffe Grade 1 - Washed</MenuItem>
+                    <MenuItem value="Yirgacheffe Grade 2">Yirgacheffe Grade 2 - Washed</MenuItem>
+                    <MenuItem value="Sidamo Grade 2">Sidamo Grade 2 - Washed</MenuItem>
+                    <MenuItem value="Sidamo Grade 3">Sidamo Grade 3 - Washed</MenuItem>
+                    <MenuItem value="Guji Grade 1">Guji Grade 1 - Natural</MenuItem>
+                    <MenuItem value="Guji Grade 2">Guji Grade 2 - Natural</MenuItem>
+                    <MenuItem value="Limu Grade 2">Limu Grade 2 - Washed</MenuItem>
+                    <MenuItem value="Limu Grade 3">Limu Grade 3 - Washed</MenuItem>
+                    <MenuItem value="Harrar Grade 4">Harrar Grade 4 - Natural</MenuItem>
+                    <MenuItem value="Jimma Grade 5">Jimma Grade 5 - Washed</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Quantity (kg)"
+                  type="number"
+                  value={newContract.quantity}
+                  onChange={(e) => setNewContract({...newContract, quantity: e.target.value})}
+                  required
+                  InputProps={{ inputProps: { min: 1000, step: 100 } }}
+                  helperText="Minimum: 1,000 kg"
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <TextField
+                  fullWidth
+                  label="Price per kg (USD)"
+                  type="number"
+                  value={newContract.pricePerKg}
+                  onChange={(e) => setNewContract({...newContract, pricePerKg: e.target.value})}
+                  required
+                  InputProps={{ inputProps: { min: 5.0, step: 0.01 } }}
+                  helperText="Minimum: $5.00/kg FOB"
+                  error={!!(newContract.pricePerKg && parseFloat(newContract.pricePerKg) < 5.0)}
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>Currency</InputLabel>
+                  <Select
+                    value={newContract.currency}
+                    label="Currency"
+                    onChange={(e) => setNewContract({...newContract, currency: e.target.value})}
+                  >
+                    <MenuItem value="USD">USD - US Dollar</MenuItem>
+                    <MenuItem value="EUR">EUR - Euro</MenuItem>
+                    <MenuItem value="GBP">GBP - British Pound</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>Incoterm</InputLabel>
+                  <Select
+                    value={newContract.incoterm}
+                    label="Incoterm"
+                    onChange={(e) => setNewContract({...newContract, incoterm: e.target.value})}
+                  >
+                    <MenuItem value="FOB">FOB - Free On Board</MenuItem>
+                    <MenuItem value="CIF">CIF - Cost, Insurance & Freight</MenuItem>
+                    <MenuItem value="CFR">CFR - Cost and Freight</MenuItem>
+                    <MenuItem value="EXW">EXW - Ex Works</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              {/* Shipping Details Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary, mt: 2 }}>
+                  <LocalShipping /> Shipping Details
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Port of Loading</InputLabel>
+                  <Select
+                    value={newContract.portOfLoading}
+                    label="Port of Loading"
+                    onChange={(e) => setNewContract({...newContract, portOfLoading: e.target.value})}
+                  >
+                    <MenuItem value="Djibouti">Djibouti Port</MenuItem>
+                    <MenuItem value="Berbera">Berbera Port (Somaliland)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Port of Destination"
+                  value={newContract.portOfDestination}
+                  onChange={(e) => setNewContract({...newContract, portOfDestination: e.target.value})}
+                  required
+                  placeholder="e.g., Hamburg, Rotterdam"
+                  helperText="Final destination port"
+                />
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Expected Delivery Date"
+                  type="date"
+                  value={newContract.deliveryDate}
+                  onChange={(e) => setNewContract({...newContract, deliveryDate: e.target.value})}
+                  required
+                  InputLabelProps={{ shrink: true }}
+                  helperText="Estimated shipment date"
+                />
+              </Grid>
+
+              {/* Certifications Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary, mt: 2 }}>
+                  <CheckCircle /> Certifications & Compliance
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>EUDR Required</InputLabel>
+                  <Select
+                    value={newContract.eudrRequired ? 'yes' : 'no'}
+                    label="EUDR Required"
+                    onChange={(e) => setNewContract({...newContract, eudrRequired: e.target.value === 'yes'})}
+                  >
+                    <MenuItem value="yes">Yes - EU Market (Required)</MenuItem>
+                    <MenuItem value="no">No - Non-EU Market</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth>
+                  <InputLabel>Organic Certified</InputLabel>
+                  <Select
+                    value={newContract.organicCertified ? 'yes' : 'no'}
+                    label="Organic Certified"
+                    onChange={(e) => setNewContract({...newContract, organicCertified: e.target.value === 'yes'})}
+                  >
+                    <MenuItem value="yes">Yes - Organic Certified</MenuItem>
+                    <MenuItem value="no">No</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} sm={4}>
+                <FormControl fullWidth>
+                  <InputLabel>Fair Trade Certified</InputLabel>
+                  <Select
+                    value={newContract.fairTradeCertified ? 'yes' : 'no'}
+                    label="Fair Trade Certified"
+                    onChange={(e) => setNewContract({...newContract, fairTradeCertified: e.target.value === 'yes'})}
+                  >
+                    <MenuItem value="yes">Yes - Fair Trade</MenuItem>
+                    <MenuItem value="no">No</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Special Instructions"
+                  multiline
+                  rows={3}
+                  value={newContract.specialInstructions}
+                  onChange={(e) => setNewContract({...newContract, specialInstructions: e.target.value})}
+                  placeholder="Any special packaging, quality requirements, or shipping instructions..."
+                  helperText="Optional - Additional contract terms or requirements"
+                />
+              </Grid>
+
+              {/* Contract Summary */}
+              {newContract.quantity && newContract.pricePerKg && (
+                <Grid item xs={12}>
+                  <Alert severity="success" icon={<AttachMoney />}>
+                    <Typography variant="h6" gutterBottom>Contract Summary</Typography>
+                    <Grid container spacing={2}>
+                      <Grid item xs={6} sm={3}>
+                        <Typography variant="caption" color="text.secondary">Quantity</Typography>
+                        <Typography variant="body1" fontWeight="bold">{parseFloat(newContract.quantity).toLocaleString()} kg</Typography>
+                      </Grid>
+                      <Grid item xs={6} sm={3}>
+                        <Typography variant="caption" color="text.secondary">Price/kg</Typography>
+                        <Typography variant="body1" fontWeight="bold">{newContract.currency} {parseFloat(newContract.pricePerKg).toFixed(2)}</Typography>
+                      </Grid>
+                      <Grid item xs={6} sm={3}>
+                        <Typography variant="caption" color="text.secondary">Total Value</Typography>
+                        <Typography variant="body1" fontWeight="bold" color="primary">
+                          {newContract.currency} {(parseFloat(newContract.quantity) * parseFloat(newContract.pricePerKg)).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6} sm={3}>
+                        <Typography variant="caption" color="text.secondary">Incoterm</Typography>
+                        <Typography variant="body1" fontWeight="bold">{newContract.incoterm}</Typography>
+                      </Grid>
+                    </Grid>
+                  </Alert>
+                </Grid>
+              )}
+            </Grid>
+          </DialogContent>
+          <DialogActions sx={{ p: 2, gap: 1 }}>
+            <Button onClick={() => setCreateContractDialogOpen(false)} size="large">
+              Cancel
+            </Button>
+            <Button 
+              variant="contained" 
+              onClick={handleCreateContract}
+              disabled={isCreatingContract || !newContract.buyerCompany || !newContract.buyerCountry || 
+                        !newContract.buyerBank || !newContract.exporterBank ||
+                        !newContract.buyerEmail || !newContract.coffeeType || !newContract.quantity || 
+                        !newContract.pricePerKg || !newContract.portOfDestination || !newContract.deliveryDate || 
+                        (parseFloat(newContract.pricePerKg) < 5.0)}
+              size="large"
+              sx={{ minWidth: 150 }}
+            >
+              {isCreatingContract ? 'Registering...' : 'Register Contract'}
             </Button>
           </DialogActions>
         </Dialog>
@@ -822,8 +1526,8 @@ const ExporterPortal: React.FC = () => {
                             <Typography variant="body2">{lc.issuingBank}</Typography>
                           </Grid>
                           <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Beneficiary Bank</Typography>
-                            <Typography variant="body2">{lc.beneficiaryBank}</Typography>
+                            <Typography variant="caption" color="text.secondary">Advising Bank</Typography>
+                            <Typography variant="body2">{lc.advisingBank}</Typography>
                           </Grid>
                           <Grid item xs={12} sm={6}>
                             <Typography variant="caption" color="text.secondary">Expiry Date</Typography>
@@ -1247,6 +1951,119 @@ const ExporterPortal: React.FC = () => {
         </Grid>
       </TabPanel>
     </Box>
+
+    {/* Contract Detail Dialog */}
+    <Dialog open={contractDialogOpen} onClose={handleContractDialogClose} maxWidth="md" fullWidth>
+      <DialogTitle>Contract Details</DialogTitle>
+      <DialogContent>
+        {selectedContract && (
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Contract ID</Typography>
+                <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">NBE Reference</Typography>
+                <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Buyer</Typography>
+                <Typography variant="body1">{selectedContract.buyerName}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Buyer Country</Typography>
+                <Typography variant="body1">{selectedContract.buyerCountry}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Coffee Type</Typography>
+                <Typography variant="body1">{selectedContract.coffeeType}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Quantity</Typography>
+                <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Price per Kg</Typography>
+                <Typography variant="body1">${selectedContract.pricePerKg.toFixed(2)}</Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Total Value</Typography>
+                <Typography variant="body1" color="primary" fontWeight={600}>
+                  ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
+                </Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Status</Typography>
+                <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">Registration Date</Typography>
+                <Typography variant="body1">
+                  {selectedContract.registrationDate ? new Date(selectedContract.registrationDate).toLocaleDateString() : 'N/A'}
+                </Typography>
+              </Grid>
+            </Grid>
+            
+            {/* Contract Progress Tracker */}
+            <Card sx={{ mt: 3, bgcolor: 'action.hover' }}>
+              <CardContent>
+                <Typography variant="subtitle2" gutterBottom>Contract Progress</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 2 }}>
+                  <Chip 
+                    label="Registered" 
+                    color={['REGISTERED', 'APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    size="small" 
+                  />
+                  <Typography>→</Typography>
+                  <Chip 
+                    label="NBE Approved" 
+                    color={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    size="small" 
+                  />
+                  <Typography>→</Typography>
+                  <Chip 
+                    label="LC Issued" 
+                    color={selectedContract.status === 'ACTIVE' ? 'success' : 'default'} 
+                    size="small" 
+                  />
+                  <Typography>→</Typography>
+                  <Chip 
+                    label="Export Complete" 
+                    color={selectedContract.status === 'COMPLETED' ? 'success' : 'default'} 
+                    size="small" 
+                  />
+                </Box>
+              </CardContent>
+            </Card>
+
+            {selectedContract.status === 'REGISTERED' && (
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Your contract is registered and awaiting ECTA review and NBE approval for forex allocation.
+              </Alert>
+            )}
+            {selectedContract.status === 'APPROVED' && (
+              <Alert severity="success" sx={{ mt: 2 }}>
+                Your contract has been approved by NBE. The bank can now issue a Letter of Credit.
+              </Alert>
+            )}
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleContractDialogClose}>Close</Button>
+        {selectedContract && selectedContract.status === 'ACTIVE' && (
+          <AnimatedButton
+            variant="contained"
+            brandColor={brandPrimary}
+            startIcon={<Download />}
+          >
+            Download Documents
+          </AnimatedButton>
+        )}
+      </DialogActions>
+    </Dialog>
+    </>
   );
 };
 

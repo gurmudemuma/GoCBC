@@ -587,6 +587,117 @@ const ECXPortal: React.FC = () => {
         </TabPanel>
       </ModernCard>
 
+      {/* Coffee Lot Detail Dialog */}
+      <Dialog open={!!selectedLot && !dialogOpen} onClose={() => setSelectedLot(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Coffee Lot Details</DialogTitle>
+        <DialogContent>
+          {selectedLot && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">ECX Lot Number</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedLot.ecxLotNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Lot ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedLot.lotId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body1">{selectedLot.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Origin</Typography>
+                  <Typography variant="body1">{selectedLot.origin}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                  <Typography variant="body1">{selectedLot.quantity.toLocaleString()} kg</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Grade</Typography>
+                  <Chip label={selectedLot.grade} color="primary" size="small" />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Processing Method</Typography>
+                  <Typography variant="body1">{selectedLot.processingMethod}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Harvest Season</Typography>
+                  <Typography variant="body1">{selectedLot.harvestSeason}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Quality Score</Typography>
+                  <Box display="flex" alignItems="center">
+                    <Rating value={selectedLot.qualityScore / 20} readOnly size="small" />
+                    <Typography variant="body1" sx={{ ml: 1 }} fontWeight={600}>
+                      {selectedLot.qualityScore}
+                    </Typography>
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Price per Kg</Typography>
+                  <Typography variant="body1" color="primary" fontWeight={600}>
+                    {formatCurrency(selectedLot.pricePerKg)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Total Value</Typography>
+                  <Typography variant="h6" color="primary">
+                    {formatCurrency(selectedLot.pricePerKg * selectedLot.quantity)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <Chip
+                    label={selectedLot.status}
+                    size="small"
+                    color={
+                      selectedLot.status === 'SOLD' ? 'success' :
+                      selectedLot.status === 'TRADING' ? 'primary' :
+                      selectedLot.status === 'SHIPPED' ? 'secondary' : 'default'
+                    }
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Created At</Typography>
+                  <Typography variant="body1">{formatDate(selectedLot.createdAt)}</Typography>
+                </Grid>
+              </Grid>
+              
+              <Card sx={{ mt: 2, bgcolor: 'action.hover' }}>
+                <CardContent>
+                  <Typography variant="subtitle2" gutterBottom>Market Information</Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    This lot is registered in the Ethiopia Commodity Exchange for transparent coffee trading.
+                    {selectedLot.status === 'TRADING' && ' Currently available for trading on ECX platform.'}
+                    {selectedLot.status === 'SOLD' && ' This lot has been sold and awaits shipment.'}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedLot(null)}>
+            Close
+          </AnimatedButton>
+          {selectedLot?.status === 'REGISTERED' && (
+            <AnimatedButton
+              variant="contained"
+              brandColor={BRAND_COLOR}
+              onClick={() => {
+                // TODO: Implement list for trading
+                console.log('List lot for trading:', selectedLot.lotId);
+                setSelectedLot(null);
+              }}
+            >
+              List for Trading
+            </AnimatedButton>
+          )}
+        </DialogActions>
+      </Dialog>
+
       {/* Register Coffee Lot Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Register New Coffee Lot</DialogTitle>

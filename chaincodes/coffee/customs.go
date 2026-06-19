@@ -22,7 +22,7 @@ type CustomsDeclaration struct {
 	Currency          string    `json:"currency"`
 	Destination       string    `json:"destination"`
 	PortOfExit        string    `json:"portOfExit"`
-	Status            string    `json:"status"` // SUBMITTED, UNDER_REVIEW, CLEARED, HELD, REJECTED
+	Status            string    `json:"status"` // SUBMITTED, UNDER_INSPECTION, UNDER_REVIEW, CLEARED, HELD, REJECTED
 	SubmissionDate    time.Time `json:"submissionDate"`
 	ReviewDate        string    `json:"reviewDate"`
 	ClearanceDate     string    `json:"clearanceDate"`
@@ -39,9 +39,34 @@ type CustomsDeclaration struct {
 // ==================== CUSTOMS FUNCTIONS ====================
 
 // SubmitDeclaration - Exporter submits customs declaration
+// AUTO-MAPS: Data from shipment, contract, LC, and forex allocation
 func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, contractID, exporterID, lcID, forexID, quantityStr, totalValueStr,
 	currency, destination, portOfExit string, documents []string) error {
+
+	// Fetch contract data for auto-mapping
+	fmt.Printf("SubmitDeclaration: Fetching contract %s for data mapping...\n", contractID)
+	contractJSON, err := ctx.GetStub().GetState("CONTRACT_" + contractID)
+	if err == nil && contractJSON != nil {
+		var contract SalesContract
+		if json.Unmarshal(contractJSON, &contract) == nil {
+			// AUTO-MAP: Exporter ID from contract if not provided
+			if exporterID == "" || exporterID == "AUTO" {
+				exporterID = contract.ExporterID
+				fmt.Printf("SubmitDeclaration: Auto-mapped exporterID: %s\n", exporterID)
+			}
+			// AUTO-MAP: Currency from contract if not provided
+			if currency == "" || currency == "AUTO" {
+				currency = contract.Currency
+				fmt.Printf("SubmitDeclaration: Auto-mapped currency: %s\n", currency)
+			}
+			// AUTO-MAP: Destination from contract if not provided
+			if destination == "" || destination == "AUTO" {
+				destination = contract.BuyerCountry
+				fmt.Printf("SubmitDeclaration: Auto-mapped destination: %s\n", destination)
+			}
+		}
+	}
 
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
 	if err != nil {
@@ -102,10 +127,11 @@ func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
+	fmt.Printf("SubmitDeclaration: Declaration created with auto-mapped data\n")
 	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
 }
 
-// ReviewDeclaration - Customs officer reviews declaration
+// ReviewDeclaration - Customs officer starts physical inspection
 func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, customsOfficer, inspectionNotes string) error {
 
@@ -127,10 +153,44 @@ func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("declaration cannot be reviewed, current status: %s", declaration.Status)
 	}
 
-	declaration.Status = "UNDER_REVIEW"
+	declaration.Status = "UNDER_INSPECTION"
 	declaration.CustomsOfficer = customsOfficer
 	declaration.InspectionNotes = inspectionNotes
 	declaration.ReviewDate = time.Now().Format(time.RFC3339)
+	declaration.UpdatedAt = time.Now()
+
+	declarationJSON, err = json.Marshal(declaration)
+	if err != nil {
+		return fmt.Errorf("failed to marshal declaration: %v", err)
+	}
+
+	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+}
+
+// CompleteInspection - Customs officer completes physical inspection
+func (c *CoffeeContract) CompleteInspection(ctx contractapi.TransactionContextInterface,
+	declarationID, inspectionNotes string) error {
+
+	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
+	if err != nil {
+		return fmt.Errorf("failed to read declaration: %v", err)
+	}
+	if declarationJSON == nil {
+		return fmt.Errorf("declaration %s does not exist", declarationID)
+	}
+
+	var declaration CustomsDeclaration
+	err = json.Unmarshal(declarationJSON, &declaration)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal declaration: %v", err)
+	}
+
+	if declaration.Status != "UNDER_INSPECTION" {
+		return fmt.Errorf("declaration not under inspection, current status: %s", declaration.Status)
+	}
+
+	declaration.Status = "UNDER_REVIEW"
+	declaration.InspectionNotes = inspectionNotes
 	declaration.UpdatedAt = time.Now()
 
 	declarationJSON, err = json.Marshal(declaration)

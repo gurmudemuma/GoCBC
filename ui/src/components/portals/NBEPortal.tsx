@@ -233,8 +233,27 @@ const NBEPortal: React.FC = () => {
       if (contractsRes.success) {
         setContracts(contractsRes.data || []);
       }
-      // Load mock data for v1.4 features
-      setForexAllocations(mockForex);
+      
+      // Load forex allocations from blockchain
+      try {
+        const forexRes = await fetch('http://localhost:3001/api/v1/banking/forex', {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          },
+        });
+        const forexData = await forexRes.json();
+        if (forexData.success && forexData.data) {
+          setForexAllocations(forexData.data);
+        } else {
+          // Fallback to mock data if API fails
+          setForexAllocations(mockForex);
+        }
+      } catch (err) {
+        console.error('Failed to load forex allocations:', err);
+        setForexAllocations(mockForex);
+      }
+      
+      // Load mock data for other v1.4 features
       setExchangeRates(mockRates);
       setRetentionPolicies(mockPolicies);
     } catch (error) {
@@ -962,6 +981,228 @@ const NBEPortal: React.FC = () => {
           </Grid>
         </TabPanel>
       </ModernCard>
+
+      {/* Contract Detail Dialog */}
+      <Dialog open={!!selectedContract && !approvalDialogOpen} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Contract Details</DialogTitle>
+        <DialogContent>
+          {selectedContract && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">NBE Reference</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body1">{selectedContract.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Buyer Country</Typography>
+                  <Typography variant="body1">{selectedContract.buyerCountry}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Coffee Type</Typography>
+                  <Typography variant="body1">{selectedContract.coffeeType}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                  <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Price per Kg</Typography>
+                  <Typography variant="body1">{formatCurrency(selectedContract.pricePerKg)}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Total Value</Typography>
+                  <Typography variant="body1" color="primary" fontWeight={600}>
+                    {formatCurrency(selectedContract.totalValue)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Minimum Price Compliant</Typography>
+                  <Box>
+                    {selectedContract.minimumPriceCompliant ? (
+                      <Chip label="Yes" color="success" size="small" />
+                    ) : (
+                      <Chip label="No" color="error" size="small" />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">EUDR Required</Typography>
+                  <Box>
+                    {selectedContract.eudrRequired ? (
+                      <CheckCircle color="primary" />
+                    ) : (
+                      <Cancel color="disabled" />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <StatusChip status={selectedContract.contractStatus} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
+                  <Typography variant="body1">{formatDate(selectedContract.registrationDate)}</Typography>
+                </Grid>
+              </Grid>
+              
+              {selectedContract.contractStatus === 'REGISTERED' && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  This contract is awaiting NBE approval for forex allocation. Review and approve to enable LC issuance.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedContract(null)}>
+            Close
+          </AnimatedButton>
+          {selectedContract?.contractStatus === 'REGISTERED' && (
+            <AnimatedButton
+              variant="contained"
+              brandColor="#4caf50"
+              onClick={() => {
+                setApprovalDialogOpen(true);
+              }}
+            >
+              Approve Contract
+            </AnimatedButton>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Forex Detail Dialog */}
+      <Dialog open={!!selectedForex && !forexDialogOpen} onClose={() => setSelectedForex(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Forex Allocation Details</DialogTitle>
+        <DialogContent>
+          {selectedForex && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Forex ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedForex.forexId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedForex.contractId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
+                  <Typography variant="body1">{selectedForex.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <StatusChip status={selectedForex.status} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Requested Amount</Typography>
+                  <Typography variant="body1" color="primary" fontWeight={600}>
+                    {formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}
+                  </Typography>
+                </Grid>
+                {selectedForex.allocatedAmount > 0 && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Allocated Amount</Typography>
+                    <Typography variant="body1" color="success.main" fontWeight={600}>
+                      {formatCurrency(selectedForex.allocatedAmount, selectedForex.currency)}
+                    </Typography>
+                  </Grid>
+                )}
+                {selectedForex.exchangeRate > 0 && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Exchange Rate</Typography>
+                    <Typography variant="body1">1 {selectedForex.currency} = {selectedForex.exchangeRate} ETB</Typography>
+                  </Grid>
+                )}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Retention Rate</Typography>
+                  <Typography variant="body1">{selectedForex.retentionRate}%</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Request Date</Typography>
+                  <Typography variant="body1">{formatDate(selectedForex.requestDate)}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Expiry Date</Typography>
+                  <Typography variant="body1">{formatDate(selectedForex.expiryDate)}</Typography>
+                </Grid>
+                {selectedForex.nbeApprovalRef && (
+                  <>
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="body2" color="textSecondary">NBE Approval Reference</Typography>
+                      <Typography variant="body1" fontWeight={600}>{selectedForex.nbeApprovalRef}</Typography>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="body2" color="textSecondary">Approved By</Typography>
+                      <Typography variant="body1">{selectedForex.nbeOfficer}</Typography>
+                    </Grid>
+                  </>
+                )}
+              </Grid>
+
+              {selectedForex.allocatedAmount > 0 && (
+                <Card sx={{ mt: 2, bgcolor: 'action.hover' }}>
+                  <CardContent>
+                    <Typography variant="subtitle2" gutterBottom>Forex Breakdown</Typography>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={4}>
+                        <Typography variant="caption" color="textSecondary">USD Retained ({selectedForex.retentionRate}%)</Typography>
+                        <Typography variant="h6" color="success.main">
+                          {formatCurrency(selectedForex.allocatedAmount * (selectedForex.retentionRate / 100), selectedForex.currency)}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <Typography variant="caption" color="textSecondary">USD Converted ({100 - selectedForex.retentionRate}%)</Typography>
+                        <Typography variant="h6" color="primary">
+                          {formatCurrency(selectedForex.allocatedAmount * ((100 - selectedForex.retentionRate) / 100), selectedForex.currency)}
+                        </Typography>
+                      </Grid>
+                      {selectedForex.exchangeRate > 0 && (
+                        <Grid item xs={12} md={4}>
+                          <Typography variant="caption" color="textSecondary">ETB Equivalent</Typography>
+                          <Typography variant="h6">
+                            {(selectedForex.allocatedAmount * ((100 - selectedForex.retentionRate) / 100) * selectedForex.exchangeRate).toLocaleString()} ETB
+                          </Typography>
+                        </Grid>
+                      )}
+                    </Grid>
+                  </CardContent>
+                </Card>
+              )}
+
+              {selectedForex.status === 'REQUESTED' && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  This forex allocation request is pending. Allocate forex to proceed with export financing.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedForex(null)}>
+            Close
+          </AnimatedButton>
+          {selectedForex?.status === 'REQUESTED' && (
+            <AnimatedButton
+              variant="contained"
+              brandColor="#4caf50"
+              onClick={() => {
+                setForexDialogOpen(true);
+              }}
+            >
+              Allocate Forex
+            </AnimatedButton>
+          )}
+        </DialogActions>
+      </Dialog>
 
       {/* Contract Approval Dialog */}
       <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)} maxWidth="sm" fullWidth>

@@ -1,492 +1,344 @@
 # Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 
-**Version:** 1.4  
-**Status:** Production Ready ✅  
-**Last Updated:** June 4, 2026
+Production-ready blockchain platform for transparent Ethiopian coffee export management.
 
----
+## System Architecture
 
-## 🎯 Overview
+- **Blockchain**: Hyperledger Fabric 2.5 (6 organizations, 1 channel)
+- **Smart Contracts**: Go chaincode v1.14 (CCAAS)
+- **Backend API**: Node.js/Express + TypeScript
+- **Database**: SQLite (exporter applications, user management)
+- **Frontend**: Next.js 14 + React + TypeScript + Material-UI
 
-CECBS is a comprehensive blockchain-based system for managing Ethiopian coffee exports, built on Hyperledger Fabric. It connects 6 organizations (ECTA, ECX, Banks, NBE, Customs, Shipping) in a transparent, secure, and efficient export workflow.
+## Organizations & Roles
 
-### Current Production State
-- ✅ **Chaincode v1.4** - Fully deployed and operational
-- ✅ **62+ Functions** - Complete workflow coverage
-- ✅ **6 Organizations** - All connected and endorsed
-- ✅ **Sub-2s Queries** - High performance
-- ✅ **Professional Upgrade System** - Automated deployments
+| Organization | Peers | Role |
+|-------------|-------|------|
+| **ECTA** | 2 | Exporter registration, quality inspection, export permits |
+| **NBE** | 2 | Forex allocation, contract approval, payment oversight |
+| **Banks** | 2 | Letter of Credit (LC) issuance, payment settlement |
+| **Customs** | 2 | Declaration review, physical inspection, clearance |
+| **ECX** | 1 | Market oversight, price tracking |
+| **Shipping** | 1 | Bill of Lading, vessel tracking |
 
----
+## Complete Export Workflow
 
-## 🚀 Quick Start
+### Phase 1: Contract & Approvals
+1. ✅ Exporter creates sales contract (with buyer/exporter banks)
+2. ✅ ECTA reviews contract
+3. ✅ NBE approves contract for forex eligibility
+4. ✅ Bank issues Letter of Credit (LC)
+5. ✅ NBE auto-allocates forex (with retention policy)
+
+### Phase 2: Production & Quality
+6. ✅ Exporter creates shipment
+7. ✅ ECTA performs quality inspection (cupping, grading)
+8. ✅ ECTA issues export permit (separate from quality approval)
+
+### Phase 3: Logistics & Customs
+9. ✅ Exporter books shipping
+10. ✅ Shipping company records Bill of Lading
+11. ✅ Exporter submits customs declaration
+12. ✅ Customs physical inspection (UNDER_INSPECTION status)
+13. ✅ Customs clearance
+
+### Phase 4: Payment & Settlement
+14. ✅ Exporter submits payment documents to bank
+15. ✅ Bank verifies documents against LC terms
+16. ✅ Bank initiates SWIFT payment
+17. ✅ Buyer's bank sends payment via SWIFT
+18. ✅ Exporter's bank receives payment
+19. ✅ NBE applies forex retention (40% USD retained, 60% converted to ETB)
+20. ✅ Bank settles final payment
+
+## Key Features
+
+### Smart Contract Functions (Chaincode v1.14)
+
+**Exporter Management**
+- `RegisterExporter` - Register new exporter with capital requirements
+- `UpdateExporterStatus` - Update license status (ACTIVE/SUSPENDED/REVOKED)
+- `SuspendExporter` - Suspend exporter license
+- `RevokeExporterLicense` - Permanently revoke license
+
+**Sales Contracts**
+- `RegisterSalesContract` - Create contract with bank details
+- `ApproveSalesContract` - NBE approves for forex
+- `QueryAllContracts` - Get all contracts
+- `QueryContractsByExporter` - Get exporter's contracts
+
+**Quality & Export Permits**
+- `RequestInspection` - Request quality inspection
+- `PerformInspection` - Record inspection results (cupping scores, grading)
+- `ApproveInspection` - Approve quality (certificate issued)
+- `IssueExportPermit` - Issue export permit (separate step, legally required)
+- `RejectInspection` - Reject poor quality
+
+**Banking & Finance**
+- `RequestLC` - Request Letter of Credit
+- `ApproveLC` - Bank approves LC (auto-maps banks from contract)
+- `IssueLC` - Issue LC to exporter
+- `AllocateForex` - NBE allocates foreign exchange
+- `UtilizeForex` - Mark forex as utilized
+
+**Customs**
+- `SubmitDeclaration` - Submit customs declaration (auto-maps from contract)
+- `ReviewDeclaration` - Start physical inspection (UNDER_INSPECTION)
+- `CompleteInspection` - Complete physical inspection
+- `ClearDeclaration` - Issue clearance
+- `RejectDeclaration` - Reject declaration
+
+**Payments**
+- `InitiatePayment` - Initiate payment (auto-maps from LC)
+- `SubmitPaymentDocuments` - Submit shipping documents
+- `VerifyPaymentDocuments` - Bank verifies documents
+- `InitiateSWIFT` - Send SWIFT payment
+- `ReceiveSWIFT` - Receive SWIFT payment
+- `SettlePayment` - Final settlement (auto-maps forex retention)
+
+**Shipments**
+- `CreateShipment` - Create shipment record
+- `RecordBillOfLading` - Record B/L details
+- `UpdateShipmentLocation` - GPS tracking
+- `UpdateShipmentStatus` - Update status
+
+### Auto-Mapping System
+
+The system automatically maps data between workflow steps to reduce redundant data entry:
+
+- **Contract → LC**: Banks, amount, currency, exporter
+- **LC → Forex**: Amount, currency, contract reference
+- **Contract → Shipment**: Exporter, buyer, quantity, value, EUDR
+- **Forex → Shipment**: Exchange rate
+- **Shipment → Quality**: EUDR compliance
+- **Contract → Customs**: Exporter, currency, destination
+- **LC → Payment**: All payment details
+- **Forex → Settlement**: Exchange rate, retention rate
+
+### Bank Selection System
+
+- **Buyer Bank (Issuing Bank)**: International banks (30+ options)
+- **Exporter Bank (Advising Bank)**: Ethiopian banks (15 banks)
+- Validation: Issuing ≠ Advising (UCP 600 compliance)
+- Auto-fill in LC issuance from contract data
+
+### User Management
+
+- **SQLite Database**: User accounts, roles, permissions
+- **Exporter Applications**: Complete registration workflow
+- **Password Reset**: Admin can reset passwords (default: "password123")
+- **Session Management**: JWT tokens with 24h expiry
+
+## Quick Start
 
 ### Prerequisites
 - Docker & Docker Compose
 - Node.js 18+
 - Go 1.21+
-- PowerShell (Windows) or Bash (Linux/Mac)
+- Git
 
-### Start the System
+### 1. Start Blockchain Network
+
+```powershell
+# Windows
+cd c:\CEX
+.\CLEAR-AND-RESTART.ps1
+```
+
 ```bash
-# 1. Start Fabric network
+# Linux/Mac
+cd /path/to/CEX
 ./scripts/start.sh
+```
 
-# 2. Start API server (new terminal)
+### 2. Start API Server
+
+```powershell
 cd api
 npm install
 npm start
+```
 
-# 3. Start UI (new terminal)
+API runs on `http://localhost:3001`
+
+### 3. Start UI
+
+```powershell
 cd ui
 npm install
 npm run dev
 ```
 
-### Access Points
-- **UI:** http://localhost:3000
-- **API:** http://localhost:3001
-- **API Health:** http://localhost:3001/health
+UI runs on `http://localhost:3000`
 
----
+### 4. Default Logins
 
-## 📦 System Architecture
+| Role | Username | Password | Portal URL |
+|------|----------|----------|-----------|
+| ECTA Admin | `ecta_admin` | `password123` | `/portals/ecta` |
+| NBE Officer | `nbe_admin` | `password123` | `/portals/nbe` |
+| Bank Officer | `bank_admin` | `password123` | `/portals/banks` |
+| Customs Officer | `customs_admin` | `password123` | `/portals/customs` |
+| Exporter | `EXP1087072` | `password123` | `/portals/exporter` |
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     User Interface (Next.js)                 │
-│  ECTA │ ECX │ Banks │ NBE │ Customs │ Shipping │ Exporters │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│              REST API Gateway (Node.js/Express)              │
-│         Auth │ Validation │ Blockchain Service               │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│           Hyperledger Fabric Network (6 Orgs)                │
-│                                                               │
-│  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐│
-│  │ ECTA │  │ ECX  │  │Banks │  │ NBE  │  │Customs│ │Ship  ││
-│  │Peer0 │  │Peer0 │  │Peer0 │  │Peer0 │  │Peer0  │ │Peer0 ││
-│  └──────┘  └──────┘  └──────┘  └──────┘  └──────┘  └──────┘│
-│                                                               │
-│         Chaincode v1.4 (62+ Functions, 6 Modules)            │
-│  ECTA │ Banking │ Forex │ Customs │ Payment │ ECX            │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Data Layer                               │
-│         Blockchain Ledger │ SQLite Database                  │
-└─────────────────────────────────────────────────────────────┘
-```
+## Project Structure
 
----
-
-## 🏢 Organizations & Roles
-
-| Organization | Role | Functions |
-|--------------|------|-----------|
-| **ECTA** | Ethiopian Coffee & Tea Authority | Exporter licensing, contract registration, compliance |
-| **ECX** | Ethiopian Commodity Exchange | Lot registration, price management, trading |
-| **Banks** | Commercial Banks | Letter of Credit (LC) issuance, payment processing |
-| **NBE** | National Bank of Ethiopia | Forex allocation, exchange rates, retention policy |
-| **Customs** | Ethiopian Customs Commission | Export declarations, clearance, compliance |
-| **Shipping** | Shipping Lines | Bill of Lading, vessel tracking, GPS traceability |
-
----
-
-## 💼 Key Features
-
-### ✅ 2026 Compliance
-- Lab certification requirements
-- Professional coffee taster validation
-- 40% forex retention policy
-- EUDR (EU Deforestation Regulation) compliance
-- GPS-based traceability
-
-### ✅ Complete Workflow
-1. **Exporter Registration** - ECTA licenses with full compliance checks
-2. **Sales Contract** - ECTA registers, NBE approves for forex
-3. **ECX Lot Management** - Coffee lot registration and trading
-4. **Forex Allocation** - NBE allocates foreign currency with retention
-5. **LC Processing** - Banks issue and manage Letters of Credit
-6. **Customs Declaration** - Export declaration and clearance
-7. **SWIFT Payments** - International payment processing (MT103/MT700)
-8. **Bill of Lading** - Shipping documentation and tracking
-9. **Payment Settlement** - Final settlement with retention calculation
-
-### ✅ Advanced Features
-- License suspension/revocation
-- Multi-peer endorsement
-- Real-time notifications via WebSocket
-- Comprehensive audit trail
-- Role-based access control (RBAC)
-- Export analytics and reporting
-
----
-
-## 🔧 Chaincode v1.4
-
-### Modules & Functions (62+ total)
-
-#### 1. ECTA Module (main.go) - 8 functions
-- RegisterExporter (9 params with lab cert)
-- UpdateExporterStatus
-- SuspendExporter
-- RevokeExporterLicense
-- RegisterSalesContract
-- ApproveSalesContract
-- CreateShipment
-- RecordBillOfLading
-
-#### 2. Banking Module (banking.go) - 18 functions
-- LC Management (8 functions)
-- Payment Settlement (10 functions)
-
-#### 3. Forex Module (forex.go) - 16 functions
-- Forex Allocation (7 functions)
-- Exchange Rates (3 functions)
-- Retention Policy (2 functions)
-- Oversight (4 functions)
-
-#### 4. Customs Module (customs.go) - 8 functions
-- Declaration management and clearance
-
-#### 5. Payment Module (payment.go) - 11 functions
-- SWIFT payment processing and tracking
-
-#### 6. ECX Module (ecx.go) - 6 functions
-- Commodity lot management
-
-**Performance:** < 2 second query response time
-
----
-
-## 📚 Documentation
-
-| Document | Purpose |
-|----------|---------|
-| **[QUICK-REFERENCE.md](QUICK-REFERENCE.md)** | Quick commands and tips |
-| **[Docs/UPGRADE-SYSTEM-GUIDE.md](Docs/UPGRADE-SYSTEM-GUIDE.md)** | Complete upgrade guide |
-| **[Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md)** | System architecture |
-| **[Docs/API-DOCUMENTATION.md](Docs/API-DOCUMENTATION.md)** | API reference |
-| **[Docs/CHAINCODE-V1.4-DEPLOYED-SUCCESS.md](Docs/CHAINCODE-V1.4-DEPLOYED-SUCCESS.md)** | Deployment details |
-| **[Docs/CODEBASE-CLEANUP-REPORT.md](Docs/CODEBASE-CLEANUP-REPORT.md)** | Cleanup report |
-
----
-
-## 🔄 Upgrading to New Version
-
-When you add new features to the chaincode:
-
-```powershell
-# 1. Modify chaincode source files in chaincodes/coffee/
-
-# 2. Run automated upgrade (dry-run first)
-.\scripts\upgrade-chaincode-version.ps1 -NewVersion "1.5" -DryRun
-
-# 3. Execute actual upgrade
-.\scripts\upgrade-chaincode-version.ps1 -NewVersion "1.5"
-```
-
-The upgrade script automatically:
-- ✅ Validates version
-- ✅ Creates backup
-- ✅ Builds chaincode
-- ✅ Creates Docker image
-- ✅ Generates external package
-- ✅ Installs on all 6 peers
-- ✅ Approves for all organizations
-- ✅ Commits to channel
-- ✅ Restarts container
-- ✅ Verifies deployment
-
-See [UPGRADE-SYSTEM-GUIDE.md](Docs/UPGRADE-SYSTEM-GUIDE.md) for complete details.
-
----
-
-## 🛠️ Development
-
-### Project Structure
 ```
 CEX/
-├── api/                    # REST API (Node.js/Express)
+├── blockchain/          # Fabric network configuration
+│   ├── crypto-config.yaml
+│   ├── configtx.yaml
+│   └── organizations/   # MSP & certificates
+├── chaincodes/
+│   └── coffee/         # Smart contract (Go)
+│       ├── main.go     # Core functions
+│       ├── banking.go  # LC & forex
+│       ├── quality.go  # Inspections & permits
+│       ├── customs.go  # Declarations
+│       └── payment.go  # SWIFT payments
+├── api/                # Backend API
 │   ├── src/
-│   │   ├── routes/        # API endpoints
-│   │   ├── services/      # Business logic
-│   │   ├── middleware/    # Auth, validation
-│   │   └── utils/         # Utilities
-│   └── package.json
-│
-├── ui/                     # Frontend (Next.js/React)
+│   │   ├── routes/     # REST endpoints
+│   │   ├── services/   # Fabric connection
+│   │   └── middleware/ # Auth, validation
+│   └── cecbs.db        # SQLite database
+├── ui/                 # Frontend
 │   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── pages/         # Page routes
-│   │   └── types/         # TypeScript types
-│   └── package.json
-│
-├── blockchain/             # Fabric network config
-│   ├── organizations/     # Crypto materials
-│   ├── channel-artifacts/ # Channel config
-│   ├── configtx.yaml      # Channel configuration
-│   └── crypto-config.yaml # Crypto configuration
-│
-├── chaincodes/coffee/      # Smart contracts (Go)
-│   ├── main.go            # ECTA functions
-│   ├── banking.go         # Banking functions
-│   ├── forex.go           # Forex functions
-│   ├── customs.go         # Customs functions
-│   ├── payment.go         # Payment functions
-│   ├── ecx.go             # ECX functions
-│   └── Dockerfile         # Container build
-│
-└── scripts/                # Automation scripts
-    ├── upgrade-chaincode-version.ps1  # Upgrade system
-    ├── cleanup-codebase.ps1           # Cleanup tool
-    ├── install-v1.4-now.ps1           # Current deploy
-    └── [network scripts]
+│   │   ├── components/
+│   │   │   ├── portals/  # Organization portals
+│   │   │   ├── modern/   # 2026 UI components
+│   │   │   └── common/   # Reusable components
+│   │   ├── pages/        # Next.js pages
+│   │   └── utils/        # API client, helpers
+│   └── public/           # Static assets
+└── scripts/            # Deployment scripts
 ```
 
-### Technology Stack
-- **Blockchain:** Hyperledger Fabric 2.5
-- **Chaincode:** Go 1.21
-- **API:** Node.js 18, Express, TypeScript
-- **Frontend:** Next.js 14, React 18, TypeScript
-- **Database:** SQLite (offchain data)
-- **Container:** Docker, Docker Compose
+## API Endpoints
 
----
+### Contracts
+- `POST /api/v1/contracts` - Register contract
+- `GET /api/v1/contracts` - Query contracts
+- `POST /api/v1/contracts/:id/approve` - NBE approval
 
-## 🧪 Testing
+### Quality
+- `POST /api/v1/quality/inspections` - Request inspection
+- `POST /api/v1/quality/inspections/:id/perform` - Perform inspection
+- `POST /api/v1/quality/inspections/:id/approve` - Approve quality
+- `POST /api/v1/quality/inspections/:id/issue-permit` - Issue export permit
 
-### Test Chaincode
-```bash
-# Query from peer
-docker exec peer0.ecta.cecbs.et peer chaincode query \
-  -C coffeechannel -n coffee \
-  -c '{"function":"QueryAllExporters","Args":[]}'
-```
+### Banking
+- `POST /api/v1/banking/lc/request` - Request LC
+- `POST /api/v1/banking/lc/:id/approve` - Approve LC
+- `POST /api/v1/banking/payment/:id/submit-documents` - Submit docs
+- `POST /api/v1/banking/payment/:id/verify-documents` - Verify docs
 
-### Test API
-```bash
-curl http://localhost:3001/health
-curl http://localhost:3001/api/v1/exporters
-```
+### Customs
+- `POST /api/v1/customs/declaration/submit` - Submit declaration
+- `POST /api/v1/customs/declaration/:id/review` - Start inspection
+- `POST /api/v1/customs/declaration/:id/complete-inspection` - Complete inspection
+- `POST /api/v1/customs/declaration/:id/clear` - Issue clearance
 
-### Check System Status
+### Forex
+- `POST /api/v1/forex/allocate` - Allocate forex
+- `GET /api/v1/forex` - Query allocations
+
+## Technical Specifications
+
+### Blockchain Network
+- **Consensus**: Raft (3 orderers)
+- **Channel**: `coffeechannel`
+- **Chaincode**: CCAAS (Chaincode as a Service)
+- **Endorsement Policy**: Majority (4 of 6 organizations)
+
+### Smart Contract Persistence
+- **State DB**: LevelDB
+- **Composite Keys**: Prefix-based (CONTRACT_, EXPORTER_, LC_, etc.)
+- **Rich Queries**: CouchDB-style selectors
+- **History**: Full transaction history via GetHistoryForKey
+
+### Security
+- **TLS**: Enabled for all peer-to-peer communication
+- **MSP**: X.509 certificates for identity
+- **JWT**: API authentication with role-based access
+- **Password Hashing**: bcrypt for user credentials
+
+### Performance
+- **Block Time**: ~2 seconds
+- **TPS**: ~300 transactions/second
+- **Latency**: <500ms for queries, <2s for transactions
+
+## Status Codes
+
+### Contract Status
+- `DRAFT` - Created but not submitted
+- `REGISTERED` - Submitted to ECTA
+- `APPROVED` - NBE approved for forex
+- `ACTIVE` - LC issued, forex allocated
+- `COMPLETED` - Fully executed
+
+### Inspection Status
+- `PENDING` - Awaiting inspection
+- `INSPECTED` - Results recorded
+- `APPROVED` - Quality approved
+- `REJECTED` - Failed quality
+- Shipment: `QUALITY_APPROVED` - Permit pending
+- Shipment: `PERMIT_ISSUED` - Ready for export
+
+### Customs Status
+- `SUBMITTED` - Declaration submitted
+- `UNDER_INSPECTION` - Physical inspection ongoing
+- `UNDER_REVIEW` - Inspection complete, review pending
+- `CLEARED` - Approved for export
+- `HELD` - Issues found
+- `REJECTED` - Cannot export
+
+### Payment Status
+- `PENDING` - Payment initiated
+- `DOCUMENTS_SUBMITTED` - Docs sent to bank
+- `VERIFIED` - Bank verified documents
+- `SWIFT_INITIATED` - SWIFT sent
+- `SWIFT_RECEIVED` - Payment received
+- `SETTLED` - Final settlement with retention
+
+## Troubleshooting
+
+### Blockchain Issues
 ```powershell
-# Container status
-docker ps
+# Check peer status
+docker ps | findstr peer
 
-# Chaincode logs
-docker logs coffee-chaincode -f
+# View peer logs
+docker logs peer0.ecta.cecbs.et
 
-# Peer logs
-docker logs peer0.ecta.cecbs.et -f
-
-# API logs
-cd api && tail -f logs/combined.log
+# Restart network
+.\CLEAR-AND-RESTART.ps1
 ```
 
----
+### API Issues
+```powershell
+# Check API logs
+cd api
+npm start
 
-## 🐛 Troubleshooting
+# Test Fabric connection
+curl http://localhost:3001/api/v1/contracts
+```
 
 ### Chaincode Issues
 ```powershell
-# Check container
-docker logs coffee-chaincode
+# Rebuild chaincode
+cd chaincodes/coffee
+go build -o chaincode.exe
 
-# Restart container
-docker stop coffee-chaincode
-docker rm coffee-chaincode
-# See QUICK-REFERENCE.md for restart command
+# Restart chaincode container
+docker restart coffee-chaincode
 ```
 
-### Network Issues
-```bash
-# Check all containers
-docker ps
+## License
 
-# Restart network
-./scripts/stop.sh
-./scripts/start.sh
-```
+Proprietary - Ethiopian Coffee & Tea Authority (ECTA)
 
-### See Full Troubleshooting Guide
-[UPGRADE-SYSTEM-GUIDE.md - Troubleshooting](Docs/UPGRADE-SYSTEM-GUIDE.md#troubleshooting)
+## Support
 
----
-
-## 🔐 Security Features
-
-- **TLS Encryption** - All peer-to-peer communication
-- **MSP Authentication** - Organization-based identity
-- **Role-Based Access Control** - Permission-based operations
-- **Digital Signatures** - Transaction non-repudiation
-- **Audit Trail** - Complete transaction history
-- **API Authentication** - JWT-based auth
-- **Input Validation** - All API endpoints
-- **Rate Limiting** - DDoS protection
-
----
-
-## 📊 System Requirements
-
-### Development
-- **CPU:** 4+ cores
-- **RAM:** 8GB minimum, 16GB recommended
-- **Disk:** 20GB free space
-- **OS:** Windows 10/11, Ubuntu 20.04+, macOS 12+
-
-### Production
-- **CPU:** 8+ cores
-- **RAM:** 16GB minimum, 32GB recommended  
-- **Disk:** 100GB SSD
-- **Network:** 100Mbps minimum
-- **OS:** Ubuntu Server 20.04 LTS or RHEL 8+
-
----
-
-## 🤝 Contributing
-
-### Code Style
-- Go: `gofmt` formatting
-- TypeScript: ESLint + Prettier
-- Git: Conventional commits
-
-### Before Committing
-1. Test locally
-2. Run linters
-3. Update documentation
-4. Write clear commit messages
-
----
-
-## 📄 License
-
-This project is proprietary software developed for the Ethiopian Coffee Export Consortium.
-
----
-
-## 🆘 Support
-
-### Documentation
-- [Quick Reference](QUICK-REFERENCE.md)
-- [Upgrade Guide](Docs/UPGRADE-SYSTEM-GUIDE.md)
-- [Architecture](Docs/ARCHITECTURE.md)
-- [API Docs](Docs/API-DOCUMENTATION.md)
-
-### Common Issues
-- See [Troubleshooting](#-troubleshooting) section above
-- Check logs: `docker logs coffee-chaincode`
-- Review error messages carefully
-
----
-
-## 🎉 Acknowledgments
-
-Built with:
-- Hyperledger Fabric
-- Go Programming Language
-- Node.js & Express
-- React & Next.js
-- Docker
-
----
-
-## 📈 Version History
-
-| Version | Date | Status | Notes |
-|---------|------|--------|-------|
-| **1.4** | 2026-06-04 | ✅ Production | 62+ functions, 6 organizations, professional upgrade system |
-| 1.3 | 2026-06-03 | Deprecated | External chaincode, limited functions |
-| 1.2 | 2026-05 | Deprecated | Basic functions |
-| 1.1 | 2026-04 | Deprecated | Initial CaaS attempt |
-| 1.0 | 2026-03 | Deprecated | Initial version |
-
----
-
-**CECBS** | Ethiopian Coffee Export Consortium Blockchain System  
-**Version 1.4** | Production Ready ✅ | Last Updated: June 4, 2026
-
-## Overview
-National digital infrastructure for Ethiopian coffee exports using Hyperledger Fabric blockchain consortium.
-
-## Architecture
-- **Blockchain**: Hyperledger Fabric v2.x with Raft consensus
-- **Backend**: Go microservices (replacing Node.js)
-- **Database**: PostgreSQL + CouchDB (world state)
-- **Cache**: Redis
-- **Events**: Apache Kafka
-- **Frontend**: React (Vite)
-
-## Consortium Members (6 Organizations + Clients)
-
-### Network Members (with Blockchain Peers):
-1. ECTA (Ethiopian Coffee & Tea Authority) - Regulatory Authority - Port 3003
-2. ECX (Ethiopian Commodity Exchange) - Trading Platform - Port 3006
-3. Commercial Banks (CBE) - Financial Services - Port 3002
-4. National Bank of Ethiopia (NBE) - Central Bank - Port 3004
-5. Ethiopian Customs Commission - Import/Export Control - Port 3005
-6. Shipping Lines - Logistics - Port 3007
-
-### Client Applications (SDK Access via Gateway):
-- **Licensed Exporters** (300+ companies) - Connect via ECTA gateway (Port 3010)
-  - Submit export applications
-  - Track shipment status
-  - Access via Fabric SDK
-- **International Buyers** - Connect via public API gateway (Port 3009)
-  - Verify shipment authenticity
-  - Confirm receipt
-  - Track delivery status
-- **Farmers/Cooperatives** - Connect via ECTA gateway
-- **Warehouses** - Connect via ECX gateway
-
-## Quick Start
-
-### Prerequisites
-- Docker & Docker Compose 2.0+
-- Go 1.21+
-- 16GB RAM (32GB recommended)
-- 8 CPU cores minimum
-
-### Start System
-```bash
-./scripts/start.sh
-```
-
-### Access
-- Frontend: http://localhost:5173
-- Gateway API: http://localhost:3000
-
-### Test Credentials (Dev Only)
-- admin / admin123
-- exporter1 / password123
-
-## Project Structure
-```
-├── blockchain/          # Hyperledger Fabric network config
-├── chaincodes/         # Smart contracts (Go)
-├── services/           # Microservices (Go)
-├── frontend/           # React UI
-├── scripts/            # Deployment scripts
-└── docker/             # Docker configurations
-```
-
-## Key Features
-- End-to-end traceability (farm to port)
-- Real-time forex reporting to NBE
-- EUDR compliance (EU Deforestation Regulation)
-- Dual-channel support (ECX + DSL)
-- Immutable audit trail
-- 15-25 day export cycle (vs 30-60 legacy)
-
-## Documentation
-See `docs/` for detailed technical documentation.
-
-**Confidential** | Ethiopian Coffee Export Consortium | v2.0 | May 2026
+For technical support, contact the development team or refer to `/Docs/` for detailed documentation.

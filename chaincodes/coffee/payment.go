@@ -61,9 +61,51 @@ type SWIFTMessage struct {
 // ==================== PAYMENT FUNCTIONS ====================
 
 // InitiatePayment - Exporter initiates payment process with SWIFT details
+// AUTO-MAPS: Amount, currency, beneficiary details from LC and exporter data
 func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInterface,
 	paymentID, contractID, exporterID, lcID, amountStr, currency, receivingBank, 
 	receivingBankBIC, beneficiaryName, beneficiaryAccount, paymentMethod string) error {
+
+	// Fetch LC data for auto-mapping
+	fmt.Printf("InitiatePayment: Fetching LC %s for data mapping...\n", lcID)
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err == nil && lcJSON != nil {
+		var lc LetterOfCredit
+		if json.Unmarshal(lcJSON, &lc) == nil {
+			// AUTO-MAP: Amount from LC if not provided
+			amount, parseErr := strconv.ParseFloat(amountStr, 64)
+			if parseErr != nil || amount == 0 || amount == 1 {
+				amount = lc.Amount
+				amountStr = fmt.Sprintf("%f", amount)
+				fmt.Printf("InitiatePayment: Auto-mapped amount from LC: %f\n", amount)
+			}
+			// AUTO-MAP: Currency from LC if not provided
+			if currency == "" || currency == "AUTO" {
+				currency = lc.Currency
+				fmt.Printf("InitiatePayment: Auto-mapped currency from LC: %s\n", currency)
+			}
+			// AUTO-MAP: Exporter ID from LC if not provided
+			if exporterID == "" || exporterID == "AUTO" {
+				exporterID = lc.ExporterID
+				fmt.Printf("InitiatePayment: Auto-mapped exporterID from LC: %s\n", exporterID)
+			}
+			// AUTO-MAP: Contract ID from LC if not provided
+			if contractID == "" || contractID == "AUTO" {
+				contractID = lc.ContractID
+				fmt.Printf("InitiatePayment: Auto-mapped contractID from LC: %s\n", contractID)
+			}
+			// AUTO-MAP: Beneficiary name from LC if not provided
+			if beneficiaryName == "" || beneficiaryName == "AUTO" {
+				beneficiaryName = lc.Beneficiary
+				fmt.Printf("InitiatePayment: Auto-mapped beneficiaryName from LC: %s\n", beneficiaryName)
+			}
+			// AUTO-MAP: Beneficiary bank from LC if not provided
+			if receivingBank == "" || receivingBank == "AUTO" {
+				receivingBank = lc.AdvisingBank
+				fmt.Printf("InitiatePayment: Auto-mapped receivingBank from LC: %s\n", receivingBank)
+			}
+		}
+	}
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
@@ -127,6 +169,7 @@ func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInter
 		return fmt.Errorf("failed to marshal payment: %v", err)
 	}
 
+	fmt.Printf("InitiatePayment: Payment created with auto-mapped data from LC\n")
 	return ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON)
 }
 
@@ -200,23 +243,10 @@ func (c *CoffeeContract) VerifyPaymentDocuments(ctx contractapi.TransactionConte
 }
 
 // SettlePayment - Bank records SWIFT payment settlement with NBE retention
+// AUTO-MAPS: Retention rate from forex allocation, exchange rate from forex
 func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterface,
 	paymentID, exchangeRateStr, retentionRateStr, payingBank, payingBankBIC, 
 	swiftReference, nbeApprovalRef string) error {
-
-	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
-	if err != nil {
-		return fmt.Errorf("invalid exchange rate: %v", err)
-	}
-
-	retentionRate, err := strconv.ParseFloat(retentionRateStr, 64)
-	if err != nil {
-		return fmt.Errorf("invalid retention rate: %v", err)
-	}
-
-	if retentionRate < 0 || retentionRate > 100 {
-		return fmt.Errorf("retention rate must be between 0 and 100")
-	}
 
 	paymentJSON, err := ctx.GetStub().GetState("PAYMENT_" + paymentID)
 	if err != nil {
@@ -234,6 +264,43 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 
 	if payment.Status != "SWIFT_RECEIVED" && payment.Status != "VERIFIED" {
 		return fmt.Errorf("payment cannot be settled, current status: %s", payment.Status)
+	}
+
+	// AUTO-MAP: Fetch forex allocation for exchange rate and retention rate
+	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
+	retentionRate, err2 := strconv.ParseFloat(retentionRateStr, 64)
+	
+	if err != nil || err2 != nil || exchangeRate == 0 || retentionRate == 0 {
+		fmt.Printf("SettlePayment: Searching for forex allocation linked to LC %s...\n", payment.LCID)
+		forexID := "FOREX_" + payment.LCID
+		forexJSON, err := ctx.GetStub().GetState(forexID)
+		if err == nil && forexJSON != nil {
+			var forex ForexAllocation
+			if json.Unmarshal(forexJSON, &forex) == nil {
+				if exchangeRate == 0 {
+					exchangeRate = forex.ExchangeRate
+					fmt.Printf("SettlePayment: Auto-mapped exchange rate from forex: %f\n", exchangeRate)
+				}
+				if retentionRate == 0 {
+					retentionRate = forex.RetentionRate
+					fmt.Printf("SettlePayment: Auto-mapped retention rate from forex: %f%%\n", retentionRate)
+				}
+			}
+		}
+		
+		// Fallback defaults if still not found
+		if exchangeRate == 0 {
+			exchangeRate = 120.0
+			fmt.Printf("SettlePayment: Using default exchange rate: %f\n", exchangeRate)
+		}
+		if retentionRate == 0 {
+			retentionRate = 40.0
+			fmt.Printf("SettlePayment: Using default retention rate: %f%%\n", retentionRate)
+		}
+	}
+
+	if retentionRate < 0 || retentionRate > 100 {
+		return fmt.Errorf("retention rate must be between 0 and 100")
 	}
 
 	// Calculate retention and conversion
@@ -261,6 +328,7 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("failed to marshal payment: %v", err)
 	}
 
+	fmt.Printf("SettlePayment: Payment settled with auto-mapped forex data\n")
 	return ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON)
 }
 

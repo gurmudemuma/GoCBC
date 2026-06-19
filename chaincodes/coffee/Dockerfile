@@ -1,9 +1,10 @@
 # Multi-stage build for Linux chaincode
 FROM golang:1.21-alpine AS builder
 WORKDIR /build
-COPY go.mod go.sum main.go ./
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -o chaincode main.go
+COPY go.mod go.sum ./
+COPY *.go ./
+COPY vendor ./vendor
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o chaincode
 
 # Final stage
 FROM alpine:3.18

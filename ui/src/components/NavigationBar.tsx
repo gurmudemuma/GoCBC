@@ -43,6 +43,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
 import NextLink from 'next/link';
+import NotificationCenter from '@/components/NotificationCenter';
 
 interface HideOnScrollProps {
   children: React.ReactElement;
@@ -61,7 +62,6 @@ const NavigationBar: React.FC = () => {
   const { user, logout } = useAuth();
   const router = useRouter();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [notifAnchorEl, setNotifAnchorEl] = useState<null | HTMLElement>(null);
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
@@ -69,14 +69,6 @@ const NavigationBar: React.FC = () => {
 
   const handleMenuClose = () => {
     setAnchorEl(null);
-  };
-
-  const handleNotifOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setNotifAnchorEl(event.currentTarget);
-  };
-
-  const handleNotifClose = () => {
-    setNotifAnchorEl(null);
   };
 
   const handleLogout = () => {
@@ -428,20 +420,7 @@ const NavigationBar: React.FC = () => {
             </Tooltip>
 
             {/* Notifications */}
-            <Tooltip title="Notifications">
-              <IconButton 
-                color="inherit" 
-                size="small"
-                onClick={handleNotifOpen}
-                sx={{ 
-                  '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' },
-                }}
-              >
-                <Badge badgeContent={3} color="error">
-                  <Notifications fontSize="small" />
-                </Badge>
-              </IconButton>
-            </Tooltip>
+            <NotificationCenter userRole={user.role} />
 
             {/* User Info - Desktop Only */}
             <Box sx={{ display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'flex-end', mx: 1 }}>
@@ -613,119 +592,6 @@ const NavigationBar: React.FC = () => {
                 primary="Logout" 
                 primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600 }}
               />
-            </MenuItem>
-          </Menu>
-
-          {/* Notifications Menu */}
-          <Menu
-            anchorEl={notifAnchorEl}
-            open={Boolean(notifAnchorEl)}
-            onClose={handleNotifClose}
-            transformOrigin={{ horizontal: 'right', vertical: 'top' }}
-            anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-            PaperProps={{
-              elevation: 8,
-              sx: {
-                mt: 1.5,
-                minWidth: 360,
-                maxWidth: 400,
-                borderRadius: 2,
-                overflow: 'visible',
-                '&:before': {
-                  content: '""',
-                  display: 'block',
-                  position: 'absolute',
-                  top: 0,
-                  right: 14,
-                  width: 10,
-                  height: 10,
-                  bgcolor: 'background.paper',
-                  transform: 'translateY(-50%) rotate(45deg)',
-                  zIndex: 0,
-                },
-              },
-            }}
-          >
-            <Box sx={{ px: 2.5, py: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
-              <Typography variant="h6" fontWeight={700} sx={{ fontSize: '1rem' }}>
-                Notifications
-              </Typography>
-              <Typography variant="caption" color="textSecondary">
-                You have 3 unread notifications
-              </Typography>
-            </Box>
-            <Divider />
-            
-            <MenuItem onClick={handleNotifClose} sx={{ py: 2, alignItems: 'flex-start' }}>
-              <ListItemIcon>
-                <Badge color="success" variant="dot">
-                  <VerifiedUser fontSize="small" color="success" />
-                </Badge>
-              </ListItemIcon>
-              <ListItemText
-                primary="New shipment approved"
-                secondary="Shipment #SHP0001234 has been approved for export"
-                primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600 }}
-                secondaryTypographyProps={{ fontSize: '0.75rem' }}
-              />
-              <Typography variant="caption" color="textSecondary" sx={{ ml: 1, whiteSpace: 'nowrap' }}>
-                2m ago
-              </Typography>
-            </MenuItem>
-            
-            <Divider />
-            
-            <MenuItem onClick={handleNotifClose} sx={{ py: 2, alignItems: 'flex-start' }}>
-              <ListItemIcon>
-                <Badge color="warning" variant="dot">
-                  <Description fontSize="small" color="warning" />
-                </Badge>
-              </ListItemIcon>
-              <ListItemText
-                primary="Contract requires approval"
-                secondary="Sales contract #CNT0005678 is pending your review"
-                primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600 }}
-                secondaryTypographyProps={{ fontSize: '0.75rem' }}
-              />
-              <Typography variant="caption" color="textSecondary" sx={{ ml: 1, whiteSpace: 'nowrap' }}>
-                1h ago
-              </Typography>
-            </MenuItem>
-            
-            <Divider />
-            
-            <MenuItem onClick={handleNotifClose} sx={{ py: 2, alignItems: 'flex-start' }}>
-              <ListItemIcon>
-                <Badge color="info" variant="dot">
-                  <Assessment fontSize="small" color="info" />
-                </Badge>
-              </ListItemIcon>
-              <ListItemText
-                primary="EUDR compliance verified"
-                secondary="All shipments passed deforestation-free verification"
-                primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600 }}
-                secondaryTypographyProps={{ fontSize: '0.75rem' }}
-              />
-              <Typography variant="caption" color="textSecondary" sx={{ ml: 1, whiteSpace: 'nowrap' }}>
-                3h ago
-              </Typography>
-            </MenuItem>
-            
-            <Divider />
-            
-            <MenuItem 
-              onClick={handleNotifClose} 
-              sx={{ 
-                justifyContent: 'center', 
-                py: 1.5,
-                '&:hover': {
-                  backgroundColor: 'primary.lighter',
-                },
-              }}
-            >
-              <Typography variant="body2" color="primary" fontWeight={600}>
-                View All Notifications
-              </Typography>
             </MenuItem>
           </Menu>
         </Toolbar>

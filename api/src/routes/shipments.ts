@@ -71,6 +71,7 @@ const fabricService = new FabricService();
 router.post('/',
   [
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
     body('buyerID').notEmpty().withMessage('Buyer ID is required'),
     body('origin').notEmpty().withMessage('Origin is required'),
@@ -88,6 +89,7 @@ router.post('/',
     try {
       const {
         shipmentID,
+        contractID,
         exporterID,
         buyerID,
         origin,
@@ -103,6 +105,7 @@ router.post('/',
 
       const result = await fabricService.createShipment(
         shipmentID,
+        contractID,
         exporterID,
         buyerID,
         origin,

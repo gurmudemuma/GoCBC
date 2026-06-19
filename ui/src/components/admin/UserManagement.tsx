@@ -93,6 +93,8 @@ const UserManagement: React.FC = () => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [resetPasswordDialogOpen, setResetPasswordDialogOpen] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   
   // Snackbar
   const [snackbar, setSnackbar] = useState<{
@@ -132,8 +134,12 @@ const UserManagement: React.FC = () => {
         }));
         setUsers(parsedUsers);
         setTotalUsers(response.data.pagination.total);
+        
+        console.log('Loaded users:', parsedUsers.length, 'Total:', response.data.pagination.total);
+        console.log('User IDs:', parsedUsers.map((u: any) => ({ id: u.id, username: u.username })));
       }
     } catch (error) {
+      console.error('Failed to load users:', error);
       showSnackbar('Failed to load users', 'error');
     } finally {
       setLoading(false);
@@ -217,7 +223,7 @@ const UserManagement: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 200,
+      width: 250,
       sortable: false,
       renderCell: (params) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -229,6 +235,11 @@ const UserManagement: React.FC = () => {
           <Tooltip title="Edit User">
             <IconButton size="small" color="info" onClick={() => handleEditClick(params.row)}>
               <Edit fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Reset Password">
+            <IconButton size="small" color="secondary" onClick={() => handleResetPasswordClick(params.row)}>
+              <Lock fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title={params.row.status === 'active' ? 'Suspend User' : 'Activate User'}>
@@ -366,6 +377,49 @@ const UserManagement: React.FC = () => {
     setDeleteDialogOpen(true);
   };
 
+  const handleResetPasswordClick = (user: User) => {
+    setSelectedUser(user);
+    setResetPasswordDialogOpen(true);
+  };
+
+  const handleResetPassword = async () => {
+    if (!selectedUser) {
+      console.error('No user selected for password reset');
+      return;
+    }
+
+    console.log('Resetting password for user:', selectedUser.id, selectedUser.username);
+    setResettingPassword(true);
+
+    try {
+      const response = await api.post(`/users/${selectedUser.id}/reset-password`, {});
+      
+      console.log('Password reset response:', response.data);
+      
+      if (response.data.success) {
+        const newPassword = response.data.data.newPassword;
+        showSnackbar(`✅ Password reset to: ${newPassword} - User: ${selectedUser.username}`, 'success');
+        setResetPasswordDialogOpen(false);
+        setSelectedUser(null);
+      }
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      console.error('Error response:', error.response?.data);
+      console.error('Error status:', error.response?.status);
+      console.error('Error message:', error.message);
+      console.error('Request URL:', error.config?.url);
+      
+      const errorData = error.response?.data;
+      const errorMessage = errorData?.error?.message || 
+                          errorData?.message ||
+                          `Failed to reset password. Status: ${error.response?.status}. User may not exist.`;
+      
+      showSnackbar(`❌ ${errorMessage} (User ID: ${selectedUser.id} - ${selectedUser.username})`, 'error');
+    } finally {
+      setResettingPassword(false);
+    }
+  };
+
   return (
     <Box sx={{ width: '100%', p: 3 }}>
       {/* Header */}
@@ -500,11 +554,16 @@ const UserManagement: React.FC = () => {
       {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={6000}
+        autoHideDuration={10000}
         onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
-        <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} variant="filled">
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity} 
+          variant="filled"
+          sx={{ minWidth: 400, fontSize: '1rem' }}
+        >
           {snackbar.message}
         </Alert>
       </Snackbar>
@@ -1104,6 +1163,57 @@ const UserManagement: React.FC = () => {
             variant="contained"
           >
             Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog 
+        open={resetPasswordDialogOpen} 
+        onClose={() => setResetPasswordDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Lock />
+            <Typography variant="h6">Reset Password</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {selectedUser && (
+            <Box sx={{ mt: 2 }}>
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                Reset password for user: <strong>{selectedUser.username}</strong>
+              </Alert>
+              
+              <Alert severity="info">
+                The password will be reset to the default: <strong>password123</strong>
+                <br /><br />
+                Please inform the user to change their password after logging in.
+              </Alert>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => {
+              setResetPasswordDialogOpen(false);
+              setSelectedUser(null);
+            }}
+            startIcon={<Cancel />}
+            disabled={resettingPassword}
+          >
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleResetPassword}
+            variant="contained"
+            color="secondary"
+            startIcon={<Lock />}
+            disabled={resettingPassword}
+          >
+            {resettingPassword ? <CircularProgress size={20} /> : 'Reset Password'}
           </Button>
         </DialogActions>
       </Dialog>

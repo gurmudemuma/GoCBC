@@ -31,6 +31,9 @@ export type StatusType =
   | 'REVOKED'
   | 'SUBMITTED'
   | 'UNDER_REVIEW'
+  | 'UNDER_INSPECTION'
+  | 'QUALITY_APPROVED'
+  | 'PERMIT_ISSUED'
   | 'CLEARED'
   | 'HELD'
   | 'REGISTERED'
@@ -251,6 +254,21 @@ const StyledChip = styled(Chip, {
       text: '#1565c0',
       border: '#2196f3',
     },
+    UNDER_INSPECTION: {
+      bg: alpha('#ff9800', 0.15),
+      text: '#e65100',
+      border: '#ff9800',
+    },
+    QUALITY_APPROVED: {
+      bg: alpha('#8bc34a', 0.15),
+      text: '#558b2f',
+      border: '#8bc34a',
+    },
+    PERMIT_ISSUED: {
+      bg: alpha('#4caf50', 0.15),
+      text: '#2e7d32',
+      border: '#4caf50',
+    },
     TRADING: {
       bg: alpha('#2196f3', 0.15),
       text: '#1565c0',
@@ -394,8 +412,13 @@ const getStatusIcon = (status: StatusType): React.ReactElement => {
   }
   
   // Processing/In-Progress states
-  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'TRADING', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED'].includes(upperStatus)) {
+  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'UNDER_INSPECTION', 'TRADING', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED'].includes(upperStatus)) {
     return <HourglassEmptyIcon />;
+  }
+  
+  // Intermediate success states
+  if (['QUALITY_APPROVED', 'PERMIT_ISSUED'].includes(upperStatus)) {
+    return <CheckCircleIcon />;
   }
   
   // Default

@@ -102,12 +102,40 @@ router.post('/utilize', async (req, res) => {
   }
 });
 
+// Get all forex allocations
+router.get('/', async (req, res) => {
+  try {
+    const { gateway, contract } = await connectToNetwork('NBE');
+    
+    const result = await contract.evaluateTransaction('QueryAllForex');
+    const forexList = JSON.parse(result.toString());
+    
+    await gateway.disconnect();
+    
+    res.json({
+      success: true,
+      data: forexList,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: { 
+        code: 'QUERY_FAILED', 
+        message: error.message 
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 // Get forex details
 router.get('/:forexId', async (req, res) => {
   try {
     const { forexId } = req.params;
     
     const { gateway, contract } = await connectToNetwork('NBE');
+
     
     const result = await contract.evaluateTransaction('ReadForex', forexId);
     const forex = JSON.parse(result.toString());

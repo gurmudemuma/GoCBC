@@ -34,6 +34,7 @@ import bankingRoutes from './routes/banking';
 import forexRoutes from './routes/forex';
 import customsRoutes from './routes/customs';
 import ecxRoutes from './routes/ecx';
+import qualityRoutes from './routes/quality';
 
 // Load environment variables
 dotenv.config();
@@ -44,7 +45,7 @@ class CECBSServer {
   private wsServer!: WebSocketServer;
   private fabricService: FabricService;
   private databaseService: DatabaseService;
-  private wsService!: WebSocketService;
+  // private wsService!: WebSocketService; // Not used yet
 
   constructor() {
     this.app = express();
@@ -129,6 +130,7 @@ class CECBSServer {
     // Protected routes (authentication required)
     apiV1.use('/users', authMiddleware, usersRoutes); // User management routes
     apiV1.use('/contracts', authMiddleware, contractRoutes);
+    apiV1.use('/banking', authMiddleware, bankingRoutes);
     apiV1.use('/shipments', authMiddleware, shipmentRoutes);
     apiV1.use('/analytics', authMiddleware, analyticsRoutes);
     apiV1.use('/blockchain', authMiddleware, blockchainRoutes);
@@ -139,6 +141,7 @@ class CECBSServer {
     apiV1.use('/forex', authMiddleware, forexRoutes);
     apiV1.use('/customs', authMiddleware, customsRoutes);
     apiV1.use('/ecx', authMiddleware, ecxRoutes);
+    apiV1.use('/quality', authMiddleware, qualityRoutes);
 
     this.app.use('/api/v1', apiV1);
 

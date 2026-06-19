@@ -1,386 +1,430 @@
+// Ethiopian Coffee Export Consortium Blockchain System (CECBS)
+// Banking API Routes - Letter of Credit, Forex & Export Permits
+
 import express from 'express';
-import { Gateway, Wallets } from 'fabric-network';
-import * as path from 'path';
-import * as fs from 'fs';
+import { FabricService } from '../services/fabricService';
+import { logger } from '../utils/logger';
+import { validateRequest } from '../middleware/validation';
+import { authMiddleware } from '../middleware/auth';
+import { body, param } from 'express-validator';
 
 const router = express.Router();
+const fabricService = new FabricService();
 
-// Helper function to connect to Fabric network
-async function connectToNetwork(orgName: string) {
-  const ccpPath = path.resolve(__dirname, '..', '..', '..', 'blockchain', 'organizations', 
-    'peerOrganizations', `${orgName.toLowerCase()}.et`, `connection-${orgName.toLowerCase()}.json`);
-  const ccp = JSON.parse(fs.readFileSync(ccpPath, 'utf8'));
+/**
+ * @swagger
+ * /api/v1/banking/lc/request:
+ *   post:
+ *     summary: Request Letter of Credit
+ *     tags: [Banking]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - lcID
+ *               - contractID
+ *               - exporterID
+ *               - bankName
+ *               - amount
+ *               - currency
+ *               - expiryDate
+ *             properties:
+ *               lcID:
+ *                 type: string
+ *               contractID:
+ *                 type: string
+ *               exporterID:
+ *                 type: string
+ *               bankName:
+ *                 type: string
+ *               amount:
+ *                 type: string
+ *               currency:
+ *                 type: string
+ *               expiryDate:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: LC requested successfully
+ */
+router.post('/lc/request',
+  [
+    body('lcID').notEmpty().withMessage('LC ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('bankName').notEmpty().withMessage('Bank name is required'),
+    body('amount').notEmpty().withMessage('Amount is required'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+    body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        lcID,
+        contractID,
+        exporterID,
+        bankName,
+        amount,
+        currency,
+        expiryDate,
+      } = req.body;
 
-  const walletPath = path.join(process.cwd(), 'wallet');
-  const wallet = await Wallets.newFileSystemWallet(walletPath);
+      const result = await fabricService.requestLC(
+        lcID,
+        contractID,
+        exporterID,
+        bankName,
+        amount,
+        currency,
+        expiryDate
+      );
 
-  const identity = await wallet.get('admin');
-  if (!identity) {
-    throw new Error('Admin identity not found in wallet');
+      if (result.success) {
+        logger.info(`LC requested successfully: ${lcID}`);
+        res.status(201).json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_REQUEST_FAILED',
+            message: result.error || 'Failed to request LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error requesting LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
+);
 
-  const gateway = new Gateway();
-  await gateway.connect(ccp, {
-    wallet,
-    identity: 'admin',
-    discovery: { enabled: true, asLocalhost: true }
-  });
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/approve:
+ *   post:
+ *     summary: Approve Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/approve',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { lcID } = req.params;
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-  const network = await gateway.getNetwork('coffeechannel');
-  const contract = network.getContract('coffee');
+      const issuingBank = user.org; // e.g., "Commercial Bank of Ethiopia"
+      const advisingBank = issuingBank; // Same bank for now
+      const beneficiary = req.body.beneficiary || 'Exporter'; // Get from exporter if available
 
-  return { gateway, contract };
-}
+      const result = await fabricService.approveLC(
+        lcID,
+        issuingBank,
+        advisingBank,
+        beneficiary
+      );
 
-// ==================== LETTER OF CREDIT ROUTES ====================
+      if (result.success) {
+        logger.info(`LC approved successfully: ${lcID} by ${issuingBank}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_APPROVAL_FAILED',
+            message: result.error || 'Failed to approve LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error approving LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
 
-// Request LC
-router.post('/lc/request', async (req, res) => {
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/issue:
+ *   post:
+ *     summary: Issue Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/issue',
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('terms').notEmpty().withMessage('LC terms are required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { lcID } = req.params;
+      const { terms } = req.body;
+
+      const result = await fabricService.issueLC(lcID, terms);
+
+      if (result.success) {
+        logger.info(`LC issued successfully: ${lcID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_ISSUE_FAILED',
+            message: result.error || 'Failed to issue LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error issuing LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc:
+ *   get:
+ *     summary: Get all Letters of Credit
+ *     tags: [Banking]
+ */
+router.get('/lc', async (req, res) => {
   try {
-    const { lcId, contractId, exporterId, bankName, amount, currency, expiryDate } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'RequestLC',
-      lcId,
-      contractId,
-      exporterId,
-      bankName,
-      amount.toString(),
-      currency,
-      expiryDate
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'LC requested successfully', lcId });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    const result = await fabricService.queryAllLCs();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data || [],
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_FAILED',
+          message: result.error || 'Failed to retrieve LCs',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 });
 
-// Approve LC
-router.post('/lc/approve', async (req, res) => {
+/**
+ * @swagger
+ * /api/v1/forex:
+ *   get:
+ *     summary: Get all forex allocations
+ *     tags: [Forex]
+ */
+router.get('/forex', async (req, res) => {
   try {
-    const { lcId, issuingBank, beneficiaryBank, beneficiary } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'ApproveLC',
-      lcId,
-      issuingBank,
-      beneficiaryBank,
-      beneficiary
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'LC approved successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    const result = await fabricService.queryAllForex();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data || [],
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_FAILED',
+          message: result.error || 'Failed to retrieve forex allocations',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving forex:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 });
 
-// Issue LC
-router.post('/lc/issue', async (req, res) => {
-  try {
-    const { lcId, terms } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction('IssueLC', lcId, terms);
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'LC issued successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+// ==================== PAYMENT DOCUMENT SUBMISSION ====================
 
-// Get LC details
-router.get('/lc/:lcId', async (req, res) => {
-  try {
-    const { lcId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('ReadLC', lcId);
-    const lc = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, lc });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+/**
+ * POST /api/v1/banking/payment/:paymentID/submit-documents
+ * Exporter submits shipping documents for LC compliance
+ */
+router.post('/payment/:paymentID/submit-documents',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('documents').isArray().withMessage('Documents array is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { documents } = req.body;
 
-// Update LC status
-router.put('/lc/:lcId/status', async (req, res) => {
-  try {
-    const { lcId } = req.params;
-    const { status } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction('UpdateLCStatus', lcId, status);
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'LC status updated successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+      const result = await fabricService.submitPaymentDocuments(paymentID, documents);
 
-// Query LCs by exporter
-router.get('/lc/exporter/:exporterId', async (req, res) => {
-  try {
-    const { exporterId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('QueryLCsByExporter', exporterId);
-    const lcs = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, lcs });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+      if (result.success) {
+        logger.info(`Payment documents submitted: ${paymentID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_SUBMISSION_FAILED',
+            message: result.error || 'Failed to submit documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error submitting payment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
-});
+);
 
-// Query LCs by status
-router.get('/lc/status/:status', async (req, res) => {
-  try {
-    const { status } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('QueryLCsByStatus', status);
-    const lcs = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, lcs });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/v1/banking/payment/:paymentID/verify-documents
+ * Bank verifies submitted documents against LC terms
+ */
+router.post('/payment/:paymentID/verify-documents',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('verifiedBy').notEmpty().withMessage('Verified by is required'),
+    body('comments').optional().isString(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { verifiedBy, comments } = req.body;
+
+      const result = await fabricService.verifyPaymentDocuments(
+        paymentID,
+        verifiedBy,
+        comments || 'Documents verified against LC terms'
+      );
+
+      if (result.success) {
+        logger.info(`Payment documents verified: ${paymentID} by ${verifiedBy}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_VERIFICATION_FAILED',
+            message: result.error || 'Failed to verify documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error verifying payment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
-});
-
-// ==================== PAYMENT & SWIFT ROUTES ====================
-
-// Initiate payment
-router.post('/payment/initiate', async (req, res) => {
-  try {
-    const { 
-      paymentId, contractId, exporterId, lcId, amount, currency, 
-      receivingBank, receivingBankBIC, beneficiaryName, beneficiaryAccount, paymentMethod 
-    } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'InitiatePayment',
-      paymentId,
-      contractId,
-      exporterId,
-      lcId,
-      amount.toString(),
-      currency,
-      receivingBank,
-      receivingBankBIC,
-      beneficiaryName,
-      beneficiaryAccount,
-      paymentMethod
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Payment initiated successfully', paymentId });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Submit payment documents
-router.post('/payment/:paymentId/documents', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { documents } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'SubmitPaymentDocuments',
-      paymentId,
-      JSON.stringify(documents)
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Documents submitted successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Verify payment documents
-router.post('/payment/:paymentId/verify', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { verifiedBy, comments } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'VerifyPaymentDocuments',
-      paymentId,
-      verifiedBy,
-      comments
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Documents verified successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Initiate SWIFT transfer
-router.post('/payment/:paymentId/swift/initiate', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { 
-      swiftReference, senderBIC, messageType, valueDate, 
-      intermediary1, intermediary2, charges, remittanceInfo 
-    } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'InitiateSWIFTTransfer',
-      paymentId,
-      swiftReference,
-      senderBIC,
-      messageType,
-      valueDate,
-      intermediary1 || '',
-      intermediary2 || '',
-      charges,
-      remittanceInfo
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'SWIFT transfer initiated successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Confirm SWIFT receipt
-router.post('/payment/:paymentId/swift/confirm', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { receivedBy } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction('ConfirmSWIFTReceipt', paymentId, receivedBy);
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'SWIFT receipt confirmed successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Settle payment
-router.post('/payment/:paymentId/settle', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { exchangeRate, retentionRate, payingBank, payingBankBIC, swiftReference, nbeApprovalRef } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    await contract.submitTransaction(
-      'SettlePayment',
-      paymentId,
-      exchangeRate.toString(),
-      retentionRate.toString(),
-      payingBank,
-      payingBankBIC,
-      swiftReference,
-      nbeApprovalRef
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Payment settled successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get payment details
-router.get('/payment/:paymentId', async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('ReadPayment', paymentId);
-    const payment = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, payment });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Query payments by exporter
-router.get('/payment/exporter/:exporterId', async (req, res) => {
-  try {
-    const { exporterId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('QueryPaymentsByExporter', exporterId);
-    const payments = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, payments });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Query payments by SWIFT reference
-router.get('/payment/swift/:swiftReference', async (req, res) => {
-  try {
-    const { swiftReference } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('Banks');
-    
-    const result = await contract.evaluateTransaction('QueryPaymentsBySWIFTReference', swiftReference);
-    const payments = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, payments });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+);
 
 export default router;

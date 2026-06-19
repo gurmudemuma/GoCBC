@@ -19,6 +19,7 @@ type CoffeeContract struct {
 // Basic CoffeeShipment structure that works
 type CoffeeShipment struct {
 	ShipmentID       string    `json:"shipmentId"`
+	ContractID       string    `json:"contractId"`          // Link to sales contract
 	ExporterID       string    `json:"exporterId"`
 	BuyerID          string    `json:"buyerId"`
 	Origin           string    `json:"origin"`
@@ -66,6 +67,8 @@ type SalesContract struct {
 	ExporterID            string    `json:"exporterId"`
 	BuyerID               string    `json:"buyerId"`
 	BuyerCountry          string    `json:"buyerCountry"`
+	BuyerBank             string    `json:"buyerBank"`             // Issuing bank (buyer's bank)
+	ExporterBank          string    `json:"exporterBank"`          // Advising/Beneficiary bank (exporter's bank)
 	CoffeeType            string    `json:"coffeeType"`
 	Quantity              float64   `json:"quantity"`
 	PricePerKg            float64   `json:"pricePerKg"`
@@ -175,7 +178,9 @@ func (c *CoffeeContract) ExporterExists(ctx contractapi.TransactionContextInterf
 
 func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContextInterface,
 	contractID, exporterID, buyerID, buyerCountry, coffeeType, quantityStr, 
-	pricePerKgStr, currency, eudrRequiredStr string) error {
+	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank string) error {
+	
+	log.Printf("=== RegisterSalesContract called: contractID=%s, exporterID=%s ===", contractID, exporterID)
 	
 	// Convert parameters
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
@@ -221,6 +226,8 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		ExporterID:            exporterID,
 		BuyerID:               buyerID,
 		BuyerCountry:          buyerCountry,
+		BuyerBank:             buyerBank,
+		ExporterBank:          exporterBank,
 		CoffeeType:            coffeeType,
 		Quantity:              quantity,
 		PricePerKg:            pricePerKg,
@@ -240,7 +247,16 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		return err
 	}
 	
-	return ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON)
+	key := "CONTRACT_" + contractID
+	log.Printf("Storing contract with key: %s", key)
+	err = ctx.GetStub().PutState(key, contractJSON)
+	if err != nil {
+		log.Printf("ERROR: PutState failed for key %s: %v", key, err)
+		return err
+	}
+	
+	log.Printf("=== RegisterSalesContract completed successfully: %s ===", key)
+	return nil
 }
 
 func (c *CoffeeContract) ReadSalesContract(ctx contractapi.TransactionContextInterface, contractID string) (*SalesContract, error) {
@@ -419,28 +435,94 @@ func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContex
 // ==================== SHIPMENT MANAGEMENT ====================
 
 func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterface, 
-	shipmentID, exporterID, buyerID, origin, quantityStr, grade, icoNumber, 
+	shipmentID, contractID, exporterID, buyerID, origin, quantityStr, grade, icoNumber, 
 	ecxLotNumber, channel, forexRateStr, valueUSDStr, eudrCompliantStr string) error {
 	
-	// Convert string parameters to appropriate types
+	fmt.Printf("=== CreateShipment called: shipmentID=%s, contractID=%s ===\n", shipmentID, contractID)
+
+	// Fetch contract data for auto-mapping
+	fmt.Printf("CreateShipment: Fetching contract %s for data mapping...\n", contractID)
+	contractJSON, err := ctx.GetStub().GetState("CONTRACT_" + contractID)
+	if err != nil {
+		return fmt.Errorf("failed to read contract: %v", err)
+	}
+	if contractJSON == nil {
+		return fmt.Errorf("contract %s does not exist", contractID)
+	}
+
+	var contract SalesContract
+	err = json.Unmarshal(contractJSON, &contract)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal contract: %v", err)
+	}
+	fmt.Printf("CreateShipment: Contract data loaded for mapping\n")
+
+	// AUTO-MAP: Exporter ID from contract if not provided
+	mappedExporterID := exporterID
+	if mappedExporterID == "" || mappedExporterID == "AUTO" {
+		mappedExporterID = contract.ExporterID
+		fmt.Printf("CreateShipment: Auto-mapped exporterID: %s\n", mappedExporterID)
+	}
+
+	// AUTO-MAP: Buyer ID from contract if not provided
+	mappedBuyerID := buyerID
+	if mappedBuyerID == "" || mappedBuyerID == "AUTO" {
+		mappedBuyerID = contract.BuyerID
+		fmt.Printf("CreateShipment: Auto-mapped buyerID: %s\n", mappedBuyerID)
+	}
+
+	// AUTO-MAP: Quantity from contract if not provided or zero
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
-	if err != nil {
-		return fmt.Errorf("invalid quantity: %v", err)
+	if err != nil || quantity == 0 || quantity == 1 {
+		quantity = contract.Quantity
+		fmt.Printf("CreateShipment: Auto-mapped quantity: %f kg\n", quantity)
 	}
-	
+
+	// Try to find forex allocation for this contract to get exchange rate
 	forexRate, err := strconv.ParseFloat(forexRateStr, 64)
-	if err != nil {
-		return fmt.Errorf("invalid forex rate: %v", err)
+	if err != nil || forexRate == 0 || forexRate == 1 {
+		// Search for forex allocation linked to this contract
+		fmt.Printf("CreateShipment: Searching for forex allocation...\n")
+		forexIterator, err := ctx.GetStub().GetStateByRange("FOREX_", "FOREX_~")
+		if err == nil {
+			defer forexIterator.Close()
+			for forexIterator.HasNext() {
+				response, err := forexIterator.Next()
+				if err == nil {
+					var forex ForexAllocation
+					if json.Unmarshal(response.Value, &forex) == nil {
+						if forex.ContractID == contractID && forex.Status == "ALLOCATED" {
+							forexRate = forex.ExchangeRate
+							fmt.Printf("CreateShipment: Auto-mapped forexRate from allocation: %f\n", forexRate)
+							break
+						}
+					}
+				}
+			}
+		}
+		if forexRate == 0 || forexRate == 1 {
+			forexRate = 120.0 // Default fallback
+			fmt.Printf("CreateShipment: Using default forexRate: %f\n", forexRate)
+		}
 	}
-	
+
+	// AUTO-MAP: Value USD from contract if not provided
 	valueUSD, err := strconv.ParseFloat(valueUSDStr, 64)
-	if err != nil {
-		return fmt.Errorf("invalid value USD: %v", err)
+	if err != nil || valueUSD == 0 || valueUSD == 1 {
+		valueUSD = contract.TotalValue
+		fmt.Printf("CreateShipment: Auto-mapped valueUSD: %f\n", valueUSD)
 	}
 	
-	eudrCompliant, err := strconv.ParseBool(eudrCompliantStr)
-	if err != nil {
-		return fmt.Errorf("invalid EUDR compliant flag: %v", err)
+	// AUTO-MAP: EUDR compliance from contract if not provided
+	eudrCompliant := false
+	if eudrCompliantStr == "" || eudrCompliantStr == "AUTO" {
+		eudrCompliant = contract.EUDRRequired
+		fmt.Printf("CreateShipment: Auto-mapped eudrCompliant: %v\n", eudrCompliant)
+	} else {
+		eudrCompliant, err = strconv.ParseBool(eudrCompliantStr)
+		if err != nil {
+			return fmt.Errorf("invalid EUDR compliant flag: %v", err)
+		}
 	}
 	
 	exists, err := c.ShipmentExists(ctx, shipmentID)
@@ -460,8 +542,9 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 
 	shipment := CoffeeShipment{
 		ShipmentID:    shipmentID,
-		ExporterID:    exporterID,
-		BuyerID:       buyerID,
+		ContractID:    contractID,
+		ExporterID:    mappedExporterID,
+		BuyerID:       mappedBuyerID,
 		Origin:        origin,
 		Quantity:      quantity,
 		Grade:         grade,
@@ -481,7 +564,42 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	err = ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("CreateShipment: Shipment created with auto-mapped data, requesting quality inspection...\n")
+
+	// AUTO-TRIGGER: Request ECTA quality inspection
+	// AUTO-MAPS: Shipment ID, Contract ID, Exporter ID
+	inspectionID := "INSPECTION_" + shipmentID
+	
+	inspection := QualityInspection{
+		InspectionID:   inspectionID,
+		ShipmentID:     shipmentID,
+		ContractID:     contractID,       // AUTO-MAPPED from shipment
+		ExporterID:     mappedExporterID, // AUTO-MAPPED from contract/shipment
+		Status:         "PENDING",
+		CreatedAt:      timestamp,
+		UpdatedAt:      timestamp,
+	}
+
+	inspectionJSON, err := json.Marshal(inspection)
+	if err != nil {
+		fmt.Printf("CreateShipment WARNING: failed to marshal inspection: %v\n", err)
+		// Don't fail shipment creation if inspection creation fails
+	} else {
+		err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+		if err != nil {
+			fmt.Printf("CreateShipment WARNING: failed to save inspection: %v\n", err)
+		} else {
+			fmt.Printf("CreateShipment: Inspection %s auto-created with mapped data\n", inspectionID)
+		}
+	}
+
+	fmt.Printf("=== CreateShipment completed successfully with data auto-mapping ===\n")
+	return nil
 }
 
 func (c *CoffeeContract) ReadShipment(ctx contractapi.TransactionContextInterface, shipmentID string) (*CoffeeShipment, error) {
@@ -695,27 +813,36 @@ func (c *CoffeeContract) QueryAllExporters(ctx contractapi.TransactionContextInt
 }
 
 func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInterface) ([]*SalesContract, error) {
+	log.Println("=== QueryAllContracts called ===")
 	resultsIterator, err := ctx.GetStub().GetStateByRange("CONTRACT_", "CONTRACT_~")
 	if err != nil {
+		log.Printf("ERROR: GetStateByRange failed: %v", err)
 		return nil, err
 	}
 	defer resultsIterator.Close()
 
 	var contracts []*SalesContract
+	count := 0
 	for resultsIterator.HasNext() {
 		queryResponse, err := resultsIterator.Next()
 		if err != nil {
+			log.Printf("ERROR: Iterator.Next() failed: %v", err)
 			return nil, err
 		}
+		
+		count++
+		log.Printf("Found contract key: %s", queryResponse.Key)
 
 		var contract SalesContract
 		err = json.Unmarshal(queryResponse.Value, &contract)
 		if err != nil {
+			log.Printf("ERROR: Failed to unmarshal contract %s: %v", queryResponse.Key, err)
 			return nil, err
 		}
 		contracts = append(contracts, &contract)
 	}
 
+	log.Printf("=== QueryAllContracts completed: Found %d contracts ===", count)
 	return contracts, nil
 }
 

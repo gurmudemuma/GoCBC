@@ -44,6 +44,7 @@ import {
   Coffee,
   Download,
   Upload,
+  Cancel,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
@@ -128,6 +129,7 @@ const ECTAPortal: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [shipments, setShipments] = useState<CoffeeShipment[]>([]);
+  const [contracts, setContracts] = useState<any[]>([]);
   const [applications, setApplications] = useState<ExporterApplication[]>([]);
   const [approvedApplications, setApprovedApplications] = useState<ExporterApplication[]>([]);
   const [loading, setLoading] = useState(false);
@@ -159,17 +161,18 @@ const ECTAPortal: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Load each data source independently so one failure doesn't affect others
+      // Load blockchain exporters (may be empty if blockchain not connected)
       const exportersPromise = api.getExporters().catch(err => {
-        console.error('Failed to load exporters:', err);
+        console.warn('Blockchain query failed, using database records:', err.message);
         return { success: false, data: [] };
       });
       
       const shipmentsPromise = api.getShipments({ limit: 100 }).catch(err => {
-        console.error('Failed to load shipments:', err);
+        console.warn('Shipments query failed:', err.message);
         return { success: false, data: [] };
       });
       
+      // Load database applications
       const applicationsPromise = api.get('/exporters/exporter-applications?status=pending').catch(err => {
         console.error('Failed to load applications:', err);
         return { data: { success: false, data: [] } };
@@ -187,35 +190,40 @@ const ECTAPortal: React.FC = () => {
         approvedApplicationsPromise,
       ]);
 
-      console.log('Applications Response:', applicationsRes);
-      console.log('Applications Data:', applicationsRes.data);
-      console.log('Applications Array:', applicationsRes.data?.data);
-
+      // Set blockchain data (if available)
       if (exportersRes.success) setExporters(exportersRes.data || []);
       if (shipmentsRes.success) setShipments(shipmentsRes.data || []);
       
-      // Handle applications response - applicationsRes is AxiosResponse
+      // Load contracts
+      try {
+        const contractsRes = await api.getContracts();
+        if (contractsRes.success) setContracts(contractsRes.data || []);
+      } catch (err) {
+        console.warn('Failed to load contracts:', err);
+        setContracts([]);
+      }
+      
+      // Set database applications
       const appsData = applicationsRes.data?.data;
       if (appsData && Array.isArray(appsData)) {
-        console.log('Setting applications:', appsData);
         setApplications(appsData);
       } else {
-        console.log('Applications condition failed:', {
-          hasResponseData: !!applicationsRes.data,
-          hasDataArray: !!appsData,
-          isArray: Array.isArray(appsData),
-          appsData: appsData,
-        });
         setApplications([]);
       }
 
-      // Handle approved applications
+      // Set approved applications (source of truth for exporter count)
       const approvedAppsData = approvedApplicationsRes.data?.data;
       if (approvedAppsData && Array.isArray(approvedAppsData)) {
-        console.log('Setting approved applications:', approvedAppsData);
         setApprovedApplications(approvedAppsData);
       } else {
         setApprovedApplications([]);
+      }
+
+      // Log data sync status
+      const blockchainCount = exportersRes.data?.length || 0;
+      const approvedCount = approvedAppsData?.length || 0;
+      if (blockchainCount !== approvedCount) {
+        console.warn(`⚠️ Data sync issue: ${approvedCount} approved in DB, ${blockchainCount} on blockchain`);
       }
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -524,14 +532,24 @@ The exporter can reapply once all requirements are met.`,
   ];
 
   const getExporterStats = () => {
-    const total = exporters.length;
-    const active = exporters.filter(e => e.laboratoryCertified).length;
-    const expiringSoon = exporters.filter(e => {
-      const expiryDate = new Date(e.licenseExpiryDate);
+    // Use approved applications as the source of truth for total exporters
+    // since approval creates both database record AND blockchain registration
+    const total = approvedApplications.length;
+    
+    // Calculate lab-certified exporters from approved applications
+    const active = approvedApplications.filter(app => 
+      app.laboratory_facility === 'yes' || app.laboratory_facility === 'contracted'
+    ).length;
+    
+    // Calculate expiring licenses from approved applications
+    const expiringSoon = approvedApplications.filter(app => {
+      if (!app.license_expiry_date) return false;
+      const expiryDate = new Date(app.license_expiry_date);
       const threeMonthsFromNow = new Date();
       threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
       return expiryDate <= threeMonthsFromNow;
     }).length;
+    
     const pendingApplications = applications.filter(a => a.status === 'pending').length;
     const approvedCount = approvedApplications.length;
 
@@ -573,13 +591,14 @@ The exporter can reapply once all requirements are met.`,
       <Grid container spacing={3} mb={3}>
         <Grid item xs={12} md={3}>
           <DashboardKPI
-            title="Total Exporters"
+            title="Licensed Exporters"
             value={stats.total}
             icon={<Coffee />}
-            trend="up"
-            trendValue="+5.2%"
+            trend={stats.total > 0 ? 'up' : 'flat'}
+            trendValue={stats.total > 0 ? `${stats.total} active` : 'None yet'}
             brandColor={BRAND_COLOR}
-            onClick={() => setTabValue(2)}
+            onClick={() => setTabValue(1)}
+            subtitle="Approved & active"
           />
         </Grid>
         <Grid item xs={12} md={3}>
@@ -596,14 +615,14 @@ The exporter can reapply once all requirements are met.`,
         </Grid>
         <Grid item xs={12} md={3}>
           <DashboardKPI
-            title="Approved Exporters"
-            value={stats.approvedCount}
-            icon={<CheckCircle />}
-            trend="up"
-            trendValue="+12%"
+            title="Lab Certified"
+            value={stats.active}
+            icon={<Science />}
+            trend={stats.active > 0 ? 'up' : 'flat'}
+            trendValue={stats.total > 0 ? `${Math.round((stats.active / stats.total) * 100)}% certified` : 'N/A'}
             brandColor="#4caf50"
-            onClick={() => setTabValue(1)}
-            subtitle="Active licenses"
+            onClick={() => setTabValue(3)}
+            subtitle="Quality compliant"
           />
         </Grid>
         <Grid item xs={12} md={3}>
@@ -637,6 +656,7 @@ The exporter can reapply once all requirements are met.`,
           <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
             <Tab label="Pending Applications" />
             <Tab label="Approved Exporters" />
+            <Tab label="Sales Contracts" />
             <Tab label="Exporters Management" />
             <Tab label="Quality Control" />
             <Tab label="License Renewals" />
@@ -807,6 +827,62 @@ The exporter can reapply once all requirements are met.`,
         </TabPanel>
 
         <TabPanel value={tabValue} index={2}>
+          <Typography variant="h6" gutterBottom>
+            Sales Contracts
+          </Typography>
+          {contracts.length === 0 ? (
+            <Alert severity="info">No contracts registered yet.</Alert>
+          ) : (
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Contract ID</TableCell>
+                    <TableCell>Exporter</TableCell>
+                    <TableCell>Buyer</TableCell>
+                    <TableCell>Coffee Type</TableCell>
+                    <TableCell>Quantity (kg)</TableCell>
+                    <TableCell>Value</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>EUDR</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {contracts.map((contract) => (
+                    <TableRow key={contract.contractId}>
+                      <TableCell>{contract.contractId}</TableCell>
+                      <TableCell>{contract.exporterId}</TableCell>
+                      <TableCell>{contract.buyerId}</TableCell>
+                      <TableCell>{contract.coffeeType}</TableCell>
+                      <TableCell>{contract.quantity.toLocaleString()}</TableCell>
+                      <TableCell>{contract.currency} {(contract.quantity * contract.pricePerKg).toLocaleString()}</TableCell>
+                      <TableCell>
+                        <StatusChip 
+                          status={contract.contractStatus === 'REGISTERED' ? 'pending' : contract.contractStatus === 'APPROVED' ? 'approved' : 'rejected'}
+                          label={contract.contractStatus}
+                          brandColor={BRAND_COLOR}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {contract.eudrRequired ? (
+                          <Chip icon={<CheckCircle />} label="Required" size="small" color="success" />
+                        ) : (
+                          <Chip label="Not Required" size="small" color="default" />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
+          {/* Exporters Management Tab */}
+          <Typography variant="h6" gutterBottom>
+            Exporters Management
+          </Typography>
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
               rows={exporters}
@@ -823,7 +899,8 @@ The exporter can reapply once all requirements are met.`,
           </Box>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <TabPanel value={tabValue} index={4}>
+          {/* Quality Control Tab */}
           <Typography variant="h6" gutterBottom>
             Quality Control Dashboard
           </Typography>
@@ -896,7 +973,8 @@ The exporter can reapply once all requirements are met.`,
           </Grid>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={4}>
+        <TabPanel value={tabValue} index={5}>
+          {/* License Renewals Tab */}
           <Typography variant="h6" gutterBottom>
             License Renewals
           </Typography>
@@ -955,12 +1033,13 @@ The exporter can reapply once all requirements are met.`,
           </TableContainer>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <TabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={7}>
+          {/* Reports Tab */}
           <Typography variant="h6" gutterBottom>
             ECTA Reports & Analytics
           </Typography>
@@ -1340,6 +1419,107 @@ The exporter can reapply once all requirements are met.`,
           >
             Reject Application
           </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* Exporter Detail Dialog */}
+      <Dialog 
+        open={!!selectedExporter && !qualityDialogOpen} 
+        onClose={() => setSelectedExporter(null)} 
+        maxWidth="md" 
+        fullWidth
+      >
+        <DialogTitle>Exporter Details</DialogTitle>
+        <DialogContent>
+          {selectedExporter && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedExporter.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Company Name</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedExporter.companyName}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Number</Typography>
+                  <Typography variant="body1">{selectedExporter.ectaLicenseNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Status</Typography>
+                  <StatusChip status={selectedExporter.licenseStatus} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Capital Requirement</Typography>
+                  <Typography variant="body1">${selectedExporter.capitalRequirement.toLocaleString()}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Laboratory Certified</Typography>
+                  <Box>
+                    {selectedExporter.laboratoryCertified ? (
+                      <Chip label="Yes" color="success" size="small" icon={<CheckCircle />} />
+                    ) : (
+                      <Chip label="No" color="error" size="small" icon={<Cancel />} />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
+                  <Typography variant="body1">{new Date(selectedExporter.createdAt).toLocaleDateString()}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Expiry</Typography>
+                  <Typography variant="body1">{new Date(selectedExporter.licenseExpiryDate).toLocaleDateString()}</Typography>
+                </Grid>
+              </Grid>
+
+              {selectedExporter.licenseStatus === 'ACTIVE' && (
+                <Alert severity="success" sx={{ mt: 2 }}>
+                  This exporter has an active license and is authorized to export coffee.
+                </Alert>
+              )}
+              {selectedExporter.licenseStatus === 'SUSPENDED' && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  This exporter's license is currently suspended. Export activities are not allowed.
+                </Alert>
+              )}
+              {selectedExporter.licenseStatus === 'EXPIRED' && (
+                <Alert severity="error" sx={{ mt: 2 }}>
+                  This exporter's license has expired. Please renew the license to continue export activities.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <AnimatedButton onClick={() => setSelectedExporter(null)} variant="outlined">
+            Close
+          </AnimatedButton>
+          {selectedExporter?.licenseStatus === 'ACTIVE' && (
+            <AnimatedButton 
+              variant="contained"
+              brandColor={BRAND_COLOR}
+              onClick={() => {
+                setQualityDialogOpen(true);
+              }}
+            >
+              Request Quality Inspection
+            </AnimatedButton>
+          )}
+          {selectedExporter?.licenseStatus === 'ACTIVE' && (
+            <AnimatedButton 
+              variant="outlined"
+              brandColor="#f57c00"
+              onClick={() => {
+                // TODO: Implement suspend license
+                console.log('Suspend license for:', selectedExporter.exporterId);
+                setSelectedExporter(null);
+              }}
+            >
+              Suspend License
+            </AnimatedButton>
+          )}
         </DialogActions>
       </Dialog>
 

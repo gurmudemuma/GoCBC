@@ -345,18 +345,48 @@ export class FabricService {
 
       logger.info(`Invoking chaincode function: ${functionName}`, { args });
 
-      // Create transaction and submit
-      const transaction = this.contract.createTransaction(functionName);
-      const result = await transaction.submit(...args);
-      const txId = transaction.getTransactionId();
+      // Create transaction and submit with retry logic for endorsement mismatches
+      const maxRetries = 3;
+      const retryDelay = 2000; // 2 seconds
+      let lastError: any = null;
 
-      logger.info(`✅ Chaincode invoke successful: ${functionName}`, { txId });
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const transaction = this.contract.createTransaction(functionName);
+          const result = await transaction.submit(...args);
+          const txId = transaction.getTransactionId();
 
-      return {
-        success: true,
-        data: result.toString() ? JSON.parse(result.toString()) : null,
-        txId,
-      };
+          logger.info(`✅ Chaincode invoke successful: ${functionName}`, { txId, attempt });
+
+          return {
+            success: true,
+            data: result.toString() ? JSON.parse(result.toString()) : null,
+            txId,
+          };
+        } catch (error: any) {
+          lastError = error;
+          
+          // Check if error is due to endorsement mismatch
+          if (error.message && error.message.includes('Peer endorsements do not match')) {
+            logger.warn(`⚠️ Endorsement mismatch on attempt ${attempt}/${maxRetries}. Peers may be out of sync. Retrying in ${retryDelay}ms...`);
+            
+            if (attempt < maxRetries) {
+              // Wait before retry
+              await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+              continue;
+            } else {
+              logger.error(`❌ All ${maxRetries} attempts failed due to endorsement mismatch. Peers are not synchronized.`);
+              throw new Error('Blockchain peers are not synchronized. Please wait a few moments and try again.');
+            }
+          }
+          
+          // For other errors, throw immediately
+          throw error;
+        }
+      }
+
+      // If we get here, all retries failed
+      throw lastError || new Error('Transaction failed after all retries');
 
     } catch (error) {
       logger.error(`Failed to invoke chaincode function ${functionName}:`, error);
@@ -451,7 +481,9 @@ export class FabricService {
     quantity: string,
     pricePerKg: string,
     currency: string,
-    eudrRequired: string
+    eudrRequired: string,
+    buyerBank?: string,
+    exporterBank?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('RegisterSalesContract', [
       contractId,
@@ -463,6 +495,8 @@ export class FabricService {
       pricePerKg,
       currency,
       eudrRequired,
+      buyerBank || '',
+      exporterBank || '',
     ]);
   }
 
@@ -478,9 +512,108 @@ export class FabricService {
     return this.invokeChaincode('ApproveSalesContract', [contractId]);
   }
 
+  // Letter of Credit operations
+  public async requestLC(
+    lcId: string,
+    contractId: string,
+    exporterId: string,
+    bankName: string,
+    amount: string,
+    currency: string,
+    expiryDate: string
+  ): Promise<ChaincodeResponse> {
+    // First verify the exporter exists on blockchain
+    logger.info(`Verifying exporter ${exporterId} exists before LC request...`);
+    const exporterCheck = await this.getExporter(exporterId);
+    
+    if (!exporterCheck.success) {
+      logger.error(`❌ Exporter ${exporterId} does not exist on blockchain`);
+      return {
+        success: false,
+        error: `Exporter ${exporterId} is not registered on the blockchain. Please contact ECTA admin to register this exporter first.`,
+      };
+    }
+    
+    logger.info(`✅ Exporter ${exporterId} verified on blockchain, proceeding with LC request...`);
+    
+    return this.invokeChaincode('RequestLC', [
+      lcId,
+      contractId,
+      exporterId,
+      bankName,
+      amount,
+      currency,
+      expiryDate,
+    ]);
+  }
+
+  public async approveLC(
+    lcId: string,
+    issuingBank: string,
+    advisingBank: string,
+    beneficiary: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ApproveLC', [
+      lcId,
+      issuingBank,
+      advisingBank,
+      beneficiary,
+    ]);
+  }
+
+  public async issueLC(lcId: string, terms: string): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('IssueLC', [lcId, terms]);
+  }
+
+  public async queryAllLCs(): Promise<ChaincodeResponse> {
+    // Try QueryAllLCs if available, otherwise use status-based query as workaround
+    const allStatuses = ['REQUESTED', 'APPROVED', 'ISSUED', 'UTILIZED', 'EXPIRED'];
+    
+    try {
+      // First try the proper function
+      return await this.queryChaincode('QueryAllLCs', []);
+    } catch (error: any) {
+      // If function doesn't exist, query by all statuses and combine results
+      logger.warn('QueryAllLCs not available, using workaround with status queries');
+      
+      const allLCs: any[] = [];
+      
+      for (const status of allStatuses) {
+        try {
+          const result = await this.queryChaincode('QueryLCsByStatus', [status]);
+          if (result.success && result.data && Array.isArray(result.data)) {
+            allLCs.push(...result.data);
+          }
+        } catch (statusError) {
+          // Continue with other statuses
+          logger.warn(`Failed to query LCs with status ${status}`);
+        }
+      }
+      
+      return {
+        success: true,
+        data: allLCs,
+      };
+    }
+  }
+
+  public async getLC(lcId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadLC', [lcId]);
+  }
+
+  // Forex operations
+  public async queryAllForex(): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryAllForex', []);
+  }
+
+  public async getForex(forexId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadForex', [forexId]);
+  }
+
   // Shipment operations
   public async createShipment(
     shipmentId: string,
+    contractId: string,
     exporterId: string,
     buyerId: string,
     origin: string,
@@ -495,6 +628,7 @@ export class FabricService {
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('CreateShipment', [
       shipmentId,
+      contractId,
       exporterId,
       buyerId,
       origin,
@@ -565,6 +699,28 @@ export class FabricService {
 
   public async getPaymentsByContract(contractId: string): Promise<ChaincodeResponse> {
     return this.queryChaincode('QueryPaymentsByContract', [contractId]);
+  }
+
+  public async submitPaymentDocuments(
+    paymentId: string,
+    documents: string[]
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('SubmitPaymentDocuments', [
+      paymentId,
+      JSON.stringify(documents),
+    ]);
+  }
+
+  public async verifyPaymentDocuments(
+    paymentId: string,
+    verifiedBy: string,
+    comments: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('VerifyPaymentDocuments', [
+      paymentId,
+      verifiedBy,
+      comments,
+    ]);
   }
 
   public async getShipmentsByContract(contractId: string): Promise<ChaincodeResponse> {
@@ -655,6 +811,129 @@ export class FabricService {
   public async queryShipments(params: { exporterId: string }): Promise<ChaincodeResponse> {
     return this.getShipmentsByExporter(params.exporterId);
   }
+
+  // ==================== QUALITY INSPECTION OPERATIONS ====================
+
+  public async requestInspection(
+    inspectionId: string,
+    shipmentId: string,
+    contractId: string,
+    exporterId: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RequestInspection', [
+      inspectionId,
+      shipmentId,
+      contractId,
+      exporterId,
+    ]);
+  }
+
+  public async performInspection(
+    inspectionId: string,
+    inspectorId: string,
+    inspectorName: string,
+    sampleSize: string,
+    moistureContent: string,
+    defectCount: string,
+    beanSize: string,
+    color: string,
+    odor: string,
+    fragrance: string,
+    flavor: string,
+    aftertaste: string,
+    acidity: string,
+    body: string,
+    balance: string,
+    uniformity: string,
+    cleanCup: string,
+    sweetness: string,
+    overall: string,
+    classification: string,
+    pesticideTest: string,
+    heavyMetalTest: string,
+    mycotoxinTest: string,
+    remarks: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('PerformInspection', [
+      inspectionId,
+      inspectorId,
+      inspectorName,
+      sampleSize,
+      moistureContent,
+      defectCount,
+      beanSize,
+      color,
+      odor,
+      fragrance,
+      flavor,
+      aftertaste,
+      acidity,
+      body,
+      balance,
+      uniformity,
+      cleanCup,
+      sweetness,
+      overall,
+      classification,
+      pesticideTest,
+      heavyMetalTest,
+      mycotoxinTest,
+      remarks,
+    ]);
+  }
+
+  public async approveInspection(
+    inspectionId: string,
+    approvedBy: string,
+    certificateNo: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ApproveInspection', [
+      inspectionId,
+      approvedBy,
+      certificateNo,
+    ]);
+  }
+
+  public async issueExportPermit(
+    inspectionId: string,
+    exportPermitNo: string,
+    issuedBy: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('IssueExportPermit', [
+      inspectionId,
+      exportPermitNo,
+      issuedBy,
+    ]);
+  }
+
+  public async rejectInspection(
+    inspectionId: string,
+    rejectedBy: string,
+    rejectionReason: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RejectInspection', [
+      inspectionId,
+      rejectedBy,
+      rejectionReason,
+    ]);
+  }
+
+  public async getInspection(inspectionId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadInspection', [inspectionId]);
+  }
+
+  public async getAllInspections(): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryAllInspections', []);
+  }
+
+  public async getInspectionsByExporter(exporterId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryInspectionsByExporter', [exporterId]);
+  }
+
+  public async getInspectionsByStatus(status: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryInspectionsByStatus', [status]);
+  }
 }
 
 export default FabricService;
+

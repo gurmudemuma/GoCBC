@@ -285,7 +285,9 @@ router.post('/exporter-applications/:applicationId/approve',
         return;
       }
 
-      // Step 1: Register exporter on blockchain
+      // Step 1: Register exporter on blockchain (CRITICAL - must succeed)
+      logger.info(`Attempting to register exporter ${exporterId} on blockchain...`);
+      
       const result = await fabricService.registerExporter(
         exporterId,
         application.company_name,
@@ -299,38 +301,99 @@ router.post('/exporter-applications/:applicationId/approve',
       );
       
       if (!result.success) {
-        res.status(400).json({ success: false, error: { code: 'BLOCKCHAIN_ERROR', message: result.error }, timestamp: new Date().toISOString() });
+        logger.error(`❌ Blockchain registration failed for ${exporterId}:`, result.error);
+        res.status(400).json({ 
+          success: false, 
+          error: { 
+            code: 'BLOCKCHAIN_ERROR', 
+            message: `Cannot approve exporter: Blockchain registration failed. ${result.error || 'Network may be down or peers not responding.'}\n\nPlease ensure:\n• Fabric network is running\n• All peer nodes are healthy\n• Chaincode is deployed\n\nTry again or contact system administrator.`
+          }, 
+          timestamp: new Date().toISOString() 
+        });
         return;
       }
+      
+      logger.info(`✅ Exporter ${exporterId} successfully registered on blockchain (TxID: ${result.txId})`);
 
       // Step 2: Generate new password for the user
       const bcrypt = require('bcrypt');
       const newPassword = `${exporterId}@${Math.random().toString(36).slice(-6)}`;
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-      // Step 3: Update user account - change username to exporterId, activate, and set new password
-      await new Promise((resolve, reject) => {
-        db.run(
-          `UPDATE users 
-           SET username = ?,
-               status = 'active',
-               exporter_id = ?,
-               ecta_license = ?,
-               password_hash = ?,
-               organization = ?,
-               updated_at = datetime('now')
-           WHERE email = ? AND role = 'EXPORTER'`,
-          [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, application.email],
-          (err: any) => { 
-            if (err) {
-              logger.error('Failed to activate user account:', err);
-              reject(err);
-            } else {
-              resolve(true);
-            }
+      // Step 3: Update or create user account - change username to exporterId, activate, and set new password
+      const existingUser = await new Promise<any>((resolve, reject) => {
+        db.get(
+          `SELECT id FROM users WHERE email = ? AND role = 'EXPORTER'`,
+          [application.email],
+          (err: any, row: any) => {
+            if (err) reject(err);
+            else resolve(row);
           }
         );
       });
+
+      if (existingUser) {
+        // Update existing user account
+        await new Promise((resolve, reject) => {
+          db.run(
+            `UPDATE users 
+             SET username = ?,
+                 status = 'active',
+                 exporter_id = ?,
+                 ecta_license = ?,
+                 password_hash = ?,
+                 organization = ?,
+                 updated_at = datetime('now')
+             WHERE email = ? AND role = 'EXPORTER'`,
+            [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, application.email],
+            (err: any) => { 
+              if (err) {
+                logger.error('Failed to activate user account:', err);
+                reject(err);
+              } else {
+                resolve(true);
+              }
+            }
+          );
+        });
+      } else {
+        // Create new user account if it doesn't exist
+        const defaultPermissions = JSON.stringify([
+          'contract.create', 'contract.view', 
+          'shipment.view', 'shipment.create',
+          'payment.view', 'document.upload', 
+          'document.view', 'report.generate'
+        ]);
+
+        await new Promise((resolve, reject) => {
+          db.run(
+            `INSERT INTO users (
+              username, email, password_hash, full_name, role, organization,
+              phone, permissions, status, exporter_id, ecta_license, created_at
+            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, datetime('now'))`,
+            [
+              exporterId,
+              application.email,
+              hashedPassword,
+              application.contact_person,
+              application.company_name,
+              application.phone,
+              defaultPermissions,
+              exporterId,
+              ectaLicenseNumber
+            ],
+            (err: any) => { 
+              if (err) {
+                logger.error('Failed to create user account:', err);
+                reject(err);
+              } else {
+                logger.info(`✅ Created new user account for ${exporterId}`);
+                resolve(true);
+              }
+            }
+          );
+        });
+      }
       
       // Step 4: Update application status
       await new Promise((resolve, reject) => {

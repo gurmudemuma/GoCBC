@@ -775,6 +775,272 @@ router.put('/:userId/status',
 
 /**
  * @swagger
+ * /api/v1/users/{userId}/reset-password:
+ *   post:
+ *     summary: Reset user password to default (Admin only - Development/Testing)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *       403:
+ *         description: Forbidden - Admin only
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:userId/reset-password',
+  authMiddleware,
+  [param('userId').notEmpty().withMessage('User ID is required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const requestingUser = (req as any).user;
+
+      // Only admins can reset passwords
+      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only administrators can reset user passwords',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get user details
+      const user = await db.get(
+        'SELECT id, username, email, full_name FROM users WHERE id = ?',
+        [userId]
+      );
+
+      if (!user) {
+        // User doesn't exist - check if there's an approved exporter application
+        logger.warn(`User ID ${userId} not found. Checking for approved exporter application...`);
+        
+        // Try to find approved exporter by matching the user ID pattern
+        const exporterApp = await db.get(
+          `SELECT * FROM exporter_applications 
+           WHERE status = 'approved' 
+           AND id = ?
+           LIMIT 1`,
+          [userId]
+        );
+
+        if (exporterApp && exporterApp.exporter_id) {
+          // Found an approved exporter without a user account - create one!
+          logger.info(`Creating missing user account for approved exporter: ${exporterApp.exporter_id}`);
+          
+          const defaultPassword = 'password123';
+          const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+          
+          const defaultPermissions = JSON.stringify([
+            'contract.create', 'contract.view', 
+            'shipment.view', 'shipment.create',
+            'payment.view', 'document.upload', 
+            'document.view', 'report.generate'
+          ]);
+
+          await db.run(
+            `INSERT INTO users (
+              username, email, password_hash, full_name, role, organization,
+              phone, permissions, status, exporter_id, ecta_license, created_at
+            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, datetime('now'))`,
+            [
+              exporterApp.exporter_id,
+              exporterApp.email,
+              hashedPassword,
+              exporterApp.contact_person,
+              exporterApp.company_name,
+              exporterApp.phone,
+              defaultPermissions,
+              exporterApp.exporter_id,
+              exporterApp.ecta_license_number
+            ]
+          );
+
+          logger.info(`✅ User account created and password reset for: ${exporterApp.exporter_id}`);
+
+          return res.json({
+            success: true,
+            data: {
+              message: 'User account created and password reset successfully',
+              userId: exporterApp.exporter_id,
+              username: exporterApp.exporter_id,
+              email: exporterApp.email,
+              newPassword: defaultPassword,
+              note: 'User account was missing and has been created. Password set to default.',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        // No approved exporter found either
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'User not found and no approved exporter application exists',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // User exists - reset password to "password123"
+      const defaultPassword = 'password123';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+      // Update password
+      await db.run(
+        'UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE id = ?',
+        [hashedPassword, userId]
+      );
+
+      logger.info(`Password reset to default for user: ${user.username} (${userId}) by admin: ${requestingUser.username}`);
+
+      res.json({
+        success: true,
+        data: {
+          message: 'Password reset successfully',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          newPassword: defaultPassword,
+          note: 'Please inform the user to change their password after logging in',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error resetting password:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to reset password',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/users/bulk-reset-passwords:
+ *   post:
+ *     summary: Reset all user passwords to default (Admin only - Development/Testing)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               confirmReset:
+ *                 type: boolean
+ *                 description: Must be true to confirm bulk reset
+ *     responses:
+ *       200:
+ *         description: Passwords reset successfully
+ *       400:
+ *         description: Confirmation required
+ *       403:
+ *         description: Forbidden - Admin only
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/bulk-reset-passwords',
+  authMiddleware,
+  [body('confirmReset').isBoolean().withMessage('Confirmation required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const requestingUser = (req as any).user;
+      const { confirmReset } = req.body;
+
+      // Only admins can perform bulk reset
+      if (requestingUser.role !== 'ADMIN') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only system administrators can perform bulk password reset',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Require explicit confirmation
+      if (!confirmReset) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONFIRMATION_REQUIRED',
+            message: 'Set confirmReset to true to proceed with bulk password reset',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Reset password to "password123" for all users
+      const defaultPassword = 'password123';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+      // Get all users
+      const users = await db.all(
+        'SELECT id, username, email FROM users WHERE status = "active"'
+      );
+
+      // Update all passwords
+      await db.run(
+        'UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE status = "active"',
+        [hashedPassword]
+      );
+
+      logger.warn(`⚠️ BULK PASSWORD RESET performed by admin: ${requestingUser.username} - ${users.length} users affected`);
+
+      res.json({
+        success: true,
+        data: {
+          message: 'All user passwords reset successfully',
+          usersAffected: users.length,
+          newPassword: defaultPassword,
+          users: users.map(u => ({ id: u.id, username: u.username, email: u.email })),
+          warning: 'All users should be notified to change their passwords after logging in',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error performing bulk password reset:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to reset passwords',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /api/v1/users/{userId}:
  *   delete:
  *     summary: Delete user (Admin only)

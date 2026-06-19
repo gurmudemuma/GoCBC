@@ -242,6 +242,54 @@ class CECBSApi {
     });
     return response.data;
   }
+
+  // Quality Inspection Operations
+  async requestInspection(data: {
+    inspectionID: string;
+    shipmentID: string;
+    contractID: string;
+    exporterID: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post('/quality/inspections', data);
+    return response.data;
+  }
+
+  async performInspection(inspectionID: string, data: any): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/quality/inspections/${inspectionID}/perform`, data);
+    return response.data;
+  }
+
+  async approveInspection(inspectionID: string, data: {
+    approvedBy: string;
+    certificateNo: string;
+    exportPermitNo: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/quality/inspections/${inspectionID}/approve`, data);
+    return response.data;
+  }
+
+  async rejectInspection(inspectionID: string, data: {
+    rejectedBy: string;
+    rejectionReason: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/quality/inspections/${inspectionID}/reject`, data);
+    return response.data;
+  }
+
+  async getInspections(params?: {
+    status?: string;
+    exporterID?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<any>> {
+    const response = await this.client.get('/quality/inspections', { params });
+    return response.data;
+  }
+
+  async getInspection(inspectionID: string): Promise<ApiResponse<any>> {
+    const response = await this.client.get(`/quality/inspections/${inspectionID}`);
+    return response.data;
+  }
 }
 
 // Create singleton instance

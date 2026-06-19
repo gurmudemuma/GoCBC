@@ -177,7 +177,14 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("failed to marshal forex: %v", err)
 	}
 
-	return ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
+	err = ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save forex: %v", err)
+	}
+
+	// Note: Exporter will need to create shipment manually
+	// ECTA quality inspection will be triggered when shipment is created
+	return nil
 }
 
 // UtilizeForex - Mark forex as utilized
@@ -251,6 +258,32 @@ func (c *CoffeeContract) QueryForexByExporter(ctx contractapi.TransactionContext
 
 	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
 	return c.queryForex(ctx, queryString)
+}
+
+// QueryAllForex - Get all forex allocations
+func (c *CoffeeContract) QueryAllForex(ctx contractapi.TransactionContextInterface) ([]*ForexAllocation, error) {
+	resultsIterator, err := ctx.GetStub().GetStateByRange("FOREX_", "FOREX_~")
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var allocations []*ForexAllocation
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var allocation ForexAllocation
+		err = json.Unmarshal(queryResponse.Value, &allocation)
+		if err != nil {
+			return nil, err
+		}
+		allocations = append(allocations, &allocation)
+	}
+
+	return allocations, nil
 }
 
 // QueryForexByStatus - Get all forex allocations with specific status
