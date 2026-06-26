@@ -68,6 +68,8 @@ export class FabricService {
         region TEXT,
         bank_name TEXT,
         bank_account_number TEXT,
+        bank_branch_name TEXT,
+        bank_branch_code TEXT,
         comments TEXT,
         status TEXT DEFAULT 'pending',
         submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -720,6 +722,98 @@ export class FabricService {
       paymentId,
       verifiedBy,
       comments,
+    ]);
+  }
+
+  // ==================== PAYMENT METHOD-SPECIFIC FUNCTIONS ====================
+  // Added June 26, 2026 for payment method differentiation
+
+  public async initiatePayment(
+    paymentId: string,
+    contractId: string,
+    exporterId: string,
+    lcId: string,
+    amount: string,
+    currency: string,
+    receivingBank: string,
+    receivingBankBIC: string,
+    beneficiaryName: string,
+    beneficiaryAccount: string,
+    paymentMethod: string // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('InitiatePayment', [
+      paymentId,
+      contractId,
+      exporterId,
+      lcId,
+      amount,
+      currency,
+      receivingBank,
+      receivingBankBIC,
+      beneficiaryName,
+      beneficiaryAccount,
+      paymentMethod,
+    ]);
+  }
+
+  public async releaseDocumentsToBuyer(
+    paymentId: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ReleaseDocumentsToBuyer', [paymentId]);
+  }
+
+  public async receiveAdvancePayment(
+    paymentId: string,
+    advancePercentage: string,
+    amountReceived: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ReceiveAdvancePayment', [
+      paymentId,
+      advancePercentage,
+      amountReceived,
+    ]);
+  }
+
+  public async receiveBalancePayment(
+    paymentId: string,
+    amountReceived: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ReceiveBalancePayment', [
+      paymentId,
+      amountReceived,
+    ]);
+  }
+
+  public async updatePaymentStatus(
+    paymentId: string,
+    newStatus: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('UpdatePaymentStatus', [paymentId, newStatus]);
+  }
+
+  public async getPaymentsByMethod(
+    paymentMethod: string
+  ): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryPaymentsByMethod', [paymentMethod]);
+  }
+
+  public async settlePayment(
+    paymentId: string,
+    exchangeRate: string,
+    retentionRate: string,
+    payingBank: string,
+    payingBankBIC: string,
+    swiftReference: string,
+    nbeApprovalRef: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('SettlePayment', [
+      paymentId,
+      exchangeRate,
+      retentionRate,
+      payingBank,
+      payingBankBIC,
+      swiftReference,
+      nbeApprovalRef,
     ]);
   }
 

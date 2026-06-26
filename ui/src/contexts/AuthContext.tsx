@@ -97,7 +97,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       };
 
       // Always redirect to specific portal, never to home
-      router.push(portalRoutes[userData.role] || '/portals/ecta');
+      const roleRoute = portalRoutes[userData.role as keyof typeof portalRoutes];
+      router.push(roleRoute || '/portals/ecta');
     } catch (error: any) {
       throw new Error(error.response?.data?.message || 'Login failed');
     }

@@ -28,6 +28,9 @@ import {
   Fade,
   Zoom,
   Slide,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import {
   Visibility,
@@ -44,6 +47,7 @@ import {
   DarkMode,
   LightMode,
   FaceRetouchingNatural,
+  AccountCircle,
 } from '@mui/icons-material';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
@@ -76,7 +80,11 @@ const LoginPage2026: React.FC = () => {
       setUsername(savedUsername);
       setRememberMe(true);
     }
-  }, []);
+    // Check for session expiry or authentication errors from URL
+    if (router.query.error === 'session_expired') {
+      setError('⚠️ Your session has expired. Please log in again.');
+    }
+  }, [router.query]);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -128,9 +136,9 @@ const LoginPage2026: React.FC = () => {
     }
   };
 
-  const quickLogin = (user: string) => {
+  const quickLogin = (user: string, pass: string) => {
     setUsername(user);
-    setPassword('password123');
+    setPassword(pass);
   };
 
   const features = [
@@ -140,13 +148,13 @@ const LoginPage2026: React.FC = () => {
   ];
 
   const organizations = [
-    { name: 'ECTA', user: 'ecta_admin', color: '#078930', icon: <Coffee /> },
-    { name: 'ECX', user: 'ecx_admin', color: '#0F47AF', icon: <Store /> },
-    { name: 'NBE', user: 'nbe_admin', color: '#8B6F47', icon: <AccountBalance /> },
-    { name: 'Banks', user: 'bank_admin', color: '#9b30b7', icon: <AccountBalance /> },
-    { name: 'Customs', user: 'customs_admin', color: '#0F47AF', icon: <Security /> },
-    { name: 'Shipping', user: 'shipping_admin', color: '#006064', icon: <LocalShipping /> },
-    { name: 'Exporter', user: 'ethiopianpremium', color: '#2E7D32', icon: <Coffee /> },
+    { name: 'ECTA Admin', user: 'ecta_admin', password: 'password123', color: '#078930', icon: <Coffee />, role: 'Coffee & Tea Authority' },
+    { name: 'ECX Admin', user: 'ecx_admin', password: 'password123', color: '#0F47AF', icon: <Store />, role: 'Commodity Exchange' },
+    { name: 'NBE Admin', user: 'nbe_admin', password: 'password123', color: '#8B6F47', icon: <AccountBalance />, role: 'National Bank' },
+    { name: 'Bank Admin', user: 'bank_admin', password: 'password123', color: '#9b30b7', icon: <AccountBalance />, role: 'Commercial Banks' },
+    { name: 'Customs Admin', user: 'customs_admin', password: 'password123', color: '#0F47AF', icon: <Security />, role: 'Customs Authority' },
+    { name: 'Shipping Admin', user: 'shipping_admin', password: 'password123', color: '#006064', icon: <LocalShipping />, role: 'Logistics Companies' },
+    { name: 'Exporter Demo', user: 'ethiopianpremium', password: 'password123', color: '#2E7D32', icon: <Coffee />, role: 'Coffee Exporters' },
   ];
 
   const getPasswordStrengthColor = () => {
@@ -210,8 +218,8 @@ const LoginPage2026: React.FC = () => {
     : 'linear-gradient(135deg, #8b2ca8 0%, #7a2596 50%, #6d1f8a 100%)';
 
   const cardBg = darkMode
-    ? 'rgba(30, 30, 46, 0.85)'
-    : 'rgba(255, 255, 255, 0.85)';
+    ? 'rgba(30, 30, 46, 0.95)'
+    : 'rgba(255, 255, 255, 0.95)';
 
   return (
     <Fade in={mounted} timeout={800}>
@@ -285,18 +293,14 @@ const LoginPage2026: React.FC = () => {
                     </Box>
                     <Box>
                       <Typography variant="h3" fontWeight="700" letterSpacing="-0.5px">
-                        CECBS
+                        Ethiopian Coffee Export Consortium
                       </Typography>
-                      <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
-                        Blockchain-Powered Coffee Export
-                      </Typography>
+                      
                     </Box>
                   </Stack>
 
                   {/* Main Description */}
-                  <Typography variant="h5" fontWeight="600" mb={2} sx={{ lineHeight: 1.4 }}>
-                    Ethiopian Coffee Export Consortium
-                  </Typography>
+              
                   <Typography variant="body1" sx={{ opacity: 0.85, mb: 4, lineHeight: 1.7 }}>
                     Unified platform connecting all stakeholders in the Ethiopian coffee export ecosystem
                     with blockchain-powered traceability, EUDR compliance, and seamless collaboration.
@@ -420,11 +424,17 @@ const LoginPage2026: React.FC = () => {
                         variant="h4"
                         fontWeight="700"
                         gutterBottom
-                        sx={{ color: darkMode ? '#ffffff' : 'inherit' }}
+                        sx={{ color: darkMode ? '#ffffff' : '#1a1a1a' }}
                       >
-                        Welcome Back
+                        LOGIN
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography 
+                        variant="body2" 
+                        sx={{ 
+                          color: darkMode ? 'rgba(255, 255, 255, 0.85)' : 'text.secondary',
+                          fontSize: '0.95rem'
+                        }}
+                      >
                         Sign in to access your organization portal
                       </Typography>
 
@@ -434,15 +444,23 @@ const LoginPage2026: React.FC = () => {
                         spacing={1}
                         justifyContent="center"
                         mt={2}
-                        sx={{ opacity: 0.6 }}
+                        sx={{ opacity: darkMode ? 0.5 : 0.6 }}
                       >
                         <Tooltip title="Face ID (Coming Soon)">
-                          <IconButton size="small" disabled>
+                          <IconButton 
+                            size="small" 
+                            disabled
+                            sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
+                          >
                             <FaceRetouchingNatural />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="Fingerprint (Coming Soon)">
-                          <IconButton size="small" disabled>
+                          <IconButton 
+                            size="small" 
+                            disabled
+                            sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
+                          >
                             <Fingerprint />
                           </IconButton>
                         </Tooltip>
@@ -472,6 +490,82 @@ const LoginPage2026: React.FC = () => {
                     {/* Login Form */}
                     <form onSubmit={handleSubmit}>
                       <Stack spacing={2.5}>
+                        {/* Demo Accounts Dropdown */}
+                        <TextField
+                          fullWidth
+                          select
+                          label="Demo Accounts (Quick Login)"
+                          value=""
+                          onChange={(e) => {
+                            const selected = organizations.find(org => org.user === e.target.value);
+                            if (selected) {
+                              quickLogin(selected.user, selected.password);
+                            }
+                          }}
+                          InputProps={{
+                            startAdornment: (
+                              <InputAdornment position="start">
+                                <AccountCircle color="action" />
+                              </InputAdornment>
+                            ),
+                          }}
+                          InputLabelProps={{
+                            sx: { color: darkMode ? 'rgba(255, 255, 255, 0.7)' : undefined }
+                          }}
+                          sx={{
+                            '& .MuiOutlinedInput-root': {
+                              borderRadius: 2,
+                              background: darkMode ? alpha('#9b30b7', 0.1) : alpha('#9b30b7', 0.05),
+                              borderColor: darkMode ? alpha('#9b30b7', 0.3) : alpha('#9b30b7', 0.2),
+                              color: darkMode ? '#ffffff' : undefined,
+                              transition: 'all 0.3s ease',
+                              '&:hover': {
+                                background: darkMode ? alpha('#9b30b7', 0.15) : alpha('#9b30b7', 0.08),
+                                transform: 'translateY(-2px)',
+                              },
+                              '&.Mui-focused': {
+                                background: darkMode ? alpha('#9b30b7', 0.15) : alpha('#9b30b7', 0.08),
+                                transform: 'translateY(-2px)',
+                                boxShadow: `0 4px 12px ${alpha('#9b30b7', 0.3)}`,
+                              },
+                            },
+                            '& .MuiInputLabel-root': {
+                              color: darkMode ? 'rgba(255, 255, 255, 0.7)' : undefined,
+                            },
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: darkMode ? alpha('#9b30b7', 0.3) : alpha('#9b30b7', 0.2),
+                            },
+                          }}
+                        >
+                          <MenuItem value="" disabled>
+                            <em>Select a demo account to auto-fill credentials</em>
+                          </MenuItem>
+                          {organizations.map((org) => (
+                            <MenuItem key={org.user} value={org.user}>
+                              <ListItemIcon sx={{ color: org.color }}>
+                                {org.icon}
+                              </ListItemIcon>
+                              <ListItemText 
+                                primary={org.name}
+                                secondary={`${org.role} • ${org.user}`}
+                                primaryTypographyProps={{ fontWeight: 600 }}
+                                secondaryTypographyProps={{ fontSize: '0.75rem' }}
+                              />
+                            </MenuItem>
+                          ))}
+                        </TextField>
+
+                        <Divider sx={{ my: 1, borderColor: darkMode ? 'rgba(255, 255, 255, 0.1)' : undefined }}>
+                          <Chip 
+                            label="Or enter manually" 
+                            size="small"
+                            sx={{
+                              background: darkMode ? 'rgba(255, 215, 0, 0.1)' : undefined,
+                              color: darkMode ? 'rgba(255, 255, 255, 0.9)' : undefined,
+                            }}
+                          />
+                        </Divider>
+
                         <TextField
                           fullWidth
                           label="Username"
@@ -486,9 +580,13 @@ const LoginPage2026: React.FC = () => {
                               </InputAdornment>
                             ),
                           }}
+                          InputLabelProps={{
+                            sx: { color: darkMode ? 'rgba(255, 255, 255, 0.7)' : undefined }
+                          }}
                           sx={{
                             '& .MuiOutlinedInput-root': {
                               borderRadius: 2,
+                              color: darkMode ? '#ffffff' : undefined,
                               transition: 'all 0.3s ease',
                               '&:hover': {
                                 transform: 'translateY(-2px)',
@@ -497,6 +595,9 @@ const LoginPage2026: React.FC = () => {
                                 transform: 'translateY(-2px)',
                                 boxShadow: `0 4px 12px ${alpha('#9b30b7', 0.2)}`,
                               },
+                            },
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: darkMode ? 'rgba(255, 255, 255, 0.23)' : undefined,
                             },
                           }}
                         />
@@ -521,15 +622,20 @@ const LoginPage2026: React.FC = () => {
                                     onClick={() => setShowPassword(!showPassword)}
                                     edge="end"
                                     size="small"
+                                    sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.7)' : undefined }}
                                   >
                                     {showPassword ? <VisibilityOff /> : <Visibility />}
                                   </IconButton>
                                 </InputAdornment>
                               ),
                             }}
+                            InputLabelProps={{
+                              sx: { color: darkMode ? 'rgba(255, 255, 255, 0.7)' : undefined }
+                            }}
                             sx={{
                               '& .MuiOutlinedInput-root': {
                                 borderRadius: 2,
+                                color: darkMode ? '#ffffff' : undefined,
                                 transition: 'all 0.3s ease',
                                 '&:hover': {
                                   transform: 'translateY(-2px)',
@@ -538,6 +644,9 @@ const LoginPage2026: React.FC = () => {
                                   transform: 'translateY(-2px)',
                                   boxShadow: `0 4px 12px ${alpha('#9b30b7', 0.2)}`,
                                 },
+                              },
+                              '& .MuiOutlinedInput-notchedOutline': {
+                                borderColor: darkMode ? 'rgba(255, 255, 255, 0.23)' : undefined,
                               },
                             }}
                           />
@@ -585,15 +694,18 @@ const LoginPage2026: React.FC = () => {
                               checked={rememberMe}
                               onChange={(e) => setRememberMe(e.target.checked)}
                               sx={{
-                                color: '#9b30b7',
+                                color: darkMode ? 'rgba(255, 215, 0, 0.5)' : '#9b30b7',
                                 '&.Mui-checked': {
-                                  color: '#9b30b7',
+                                  color: darkMode ? '#FFD700' : '#9b30b7',
                                 },
                               }}
                             />
                           }
                           label={
-                            <Typography variant="body2" color="text.secondary">
+                            <Typography 
+                              variant="body2" 
+                              sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.7)' : 'text.secondary' }}
+                            >
                               Remember me on this device
                             </Typography>
                           }
@@ -640,60 +752,14 @@ const LoginPage2026: React.FC = () => {
                       </Stack>
                     </form>
 
-                    <Divider sx={{ my: 3 }}>
-                      <Chip
-                        label="Quick Access"
-                        size="small"
-                        sx={{
-                          fontWeight: 600,
-                          background: darkMode ? 'rgba(255, 215, 0, 0.1)' : undefined,
-                        }}
-                      />
-                    </Divider>
-
-                    {/* Quick Login Buttons */}
-                    <Grid container spacing={1.5}>
-                      {organizations.map((org, index) => (
-                        <Grid item xs={6} sm={4} key={org.name}>
-                          <Fade in={mounted} timeout={1500 + index * 100}>
-                            <Button
-                              fullWidth
-                              variant="outlined"
-                              size="small"
-                              onClick={() => quickLogin(org.user)}
-                              sx={{
-                                py: 1.5,
-                                borderRadius: 2,
-                                textTransform: 'none',
-                                borderColor: alpha(org.color, 0.3),
-                                color: org.color,
-                                transition: 'all 0.3s ease',
-                                '&:hover': {
-                                  borderColor: org.color,
-                                  background: alpha(org.color, 0.1),
-                                  transform: 'scale(1.05)',
-                                },
-                              }}
-                            >
-                              <Stack alignItems="center" spacing={0.5}>
-                                <Box sx={{ fontSize: 20 }}>{org.icon}</Box>
-                                <Typography variant="caption" fontWeight="600">
-                                  {org.name}
-                                </Typography>
-                              </Stack>
-                            </Button>
-                          </Fade>
-                        </Grid>
-                      ))}
-                    </Grid>
-
-                    <Divider sx={{ my: 3 }}>
+                    <Divider sx={{ my: 3, borderColor: darkMode ? 'rgba(255, 255, 255, 0.12)' : undefined }}>
                       <Chip
                         label="New Exporter?"
                         size="small"
                         sx={{
                           fontWeight: 600,
-                          background: darkMode ? 'rgba(255, 215, 0, 0.1)' : undefined,
+                          background: darkMode ? 'rgba(255, 215, 0, 0.15)' : undefined,
+                          color: darkMode ? 'rgba(255, 255, 255, 0.9)' : undefined,
                         }}
                       />
                     </Divider>
@@ -711,16 +777,16 @@ const LoginPage2026: React.FC = () => {
                         textTransform: 'none',
                         fontSize: '1rem',
                         fontWeight: 600,
-                        borderColor: '#078930',
-                        color: '#078930',
+                        borderColor: darkMode ? '#4caf50' : '#078930',
+                        color: darkMode ? '#4caf50' : '#078930',
                         borderWidth: 2,
                         transition: 'all 0.3s ease',
                         '&:hover': {
                           borderWidth: 2,
-                          borderColor: '#078930',
-                          background: alpha('#078930', 0.1),
+                          borderColor: darkMode ? '#66bb6a' : '#078930',
+                          background: alpha(darkMode ? '#4caf50' : '#078930', 0.1),
                           transform: 'translateY(-2px)',
-                          boxShadow: `0 4px 12px ${alpha('#078930', 0.3)}`,
+                          boxShadow: `0 4px 12px ${alpha(darkMode ? '#4caf50' : '#078930', 0.3)}`,
                         },
                       }}
                     >
@@ -732,14 +798,19 @@ const LoginPage2026: React.FC = () => {
                         mt: 3,
                         p: 2,
                         borderRadius: 2,
-                        background: alpha(darkMode ? '#FFD700' : theme.palette.info.main, 0.1),
+                        background: alpha(darkMode ? '#FFD700' : theme.palette.info.main, darkMode ? 0.15 : 0.1),
                         border: `1px solid ${alpha(
                           darkMode ? '#FFD700' : theme.palette.info.main,
-                          0.2
+                          darkMode ? 0.3 : 0.2
                         )}`,
                       }}
                     >
-                      <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                      <Typography 
+                        variant="caption" 
+                        display="block" 
+                        gutterBottom
+                        sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.9)' : 'text.secondary' }}
+                      >
                         <strong>Demo Password:</strong> password123
                       </Typography>
                       <Typography variant="caption" color="text.secondary">

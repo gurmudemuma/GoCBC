@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -89,14 +90,21 @@ func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("inspection %s already exists", inspectionID)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	inspection := QualityInspection{
 		InspectionID:   inspectionID,
 		ShipmentID:     shipmentID,
 		ContractID:     contractID,
 		ExporterID:     exporterID,
 		Status:         "PENDING",
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		CreatedAt:      txTime,
+		UpdatedAt:      txTime,
 	}
 
 	inspectionJSON, err := json.Marshal(inspection)
@@ -170,10 +178,17 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 	qualityGrade := c.determineQualityGrade(defectCount, totalScore, moistureContent)
 	cuppingGrade := c.determineCuppingGrade(totalScore)
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	// Update inspection
 	inspection.InspectorID = inspectorID
 	inspection.InspectorName = inspectorName
-	inspection.InspectionDate = time.Now()
+	inspection.InspectionDate = txTime
 	inspection.SampleSize = sampleSize
 	inspection.MoistureContent = moistureContent
 	inspection.DefectCount = defectCount
@@ -199,19 +214,58 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 	inspection.MycotoxinTest = mycotoxinTest
 	inspection.Remarks = remarks
 	inspection.Status = "INSPECTED"
-	inspection.UpdatedAt = time.Now()
+	inspection.UpdatedAt = txTime
 
 	inspectionJSON, err = json.Marshal(inspection)
 	if err != nil {
 		return fmt.Errorf("failed to marshal inspection: %v", err)
 	}
 
-	return ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "PENDING", NewValue: "INSPECTED", DataType: "string"},
+		{FieldName: "qualityGrade", OldValue: "", NewValue: qualityGrade, DataType: "string"},
+		{FieldName: "cuppingGrade", OldValue: "", NewValue: cuppingGrade, DataType: "string"},
+		{FieldName: "totalScore", OldValue: "", NewValue: fmt.Sprintf("%.2f", totalScore), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: inspection.EUDRCompliant,
+		ICOCompliance:  true, // ICO quality standards applied
+		ComplianceNote: fmt.Sprintf("Quality inspection performed, grade: %s, cupping score: %.2f", qualityGrade, totalScore),
+	}
+
+	err = c.CreateAuditLog(ctx, "INSPECT", "INSPECTION", inspectionID, "PENDING", "INSPECTED",
+		changes, "Quality inspection performed by ECTA", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	return nil
 }
 
 // ApproveInspection - ECTA officer approves inspection (quality only, permit issued separately)
 func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID, approvedBy, certificateNo string) error {
+
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only ECTA can approve inspections
+	if mspID != "ECTAMSP" {
+		return fmt.Errorf("unauthorized: only ECTA can approve inspections (caller: %s)", mspID)
+	}
 
 	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
 	if err != nil {
@@ -237,15 +291,50 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("coffee grade %s does not meet export quality standards", inspection.QualityGrade)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	inspection.Status = "APPROVED"
 	inspection.ApprovedBy = approvedBy
-	inspection.ApprovedDate = time.Now().Format(time.RFC3339)
+	inspection.ApprovedDate = txTime.Format(time.RFC3339)
 	inspection.CertificateNo = certificateNo
-	inspection.UpdatedAt = time.Now()
+	inspection.UpdatedAt = txTime
 
 	inspectionJSON, err = json.Marshal(inspection)
 	if err != nil {
 		return fmt.Errorf("failed to marshal inspection: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "INSPECTED", NewValue: "APPROVED", DataType: "string"},
+		{FieldName: "approvedBy", OldValue: "", NewValue: approvedBy, DataType: "string"},
+		{FieldName: "certificateNo", OldValue: "", NewValue: certificateNo, DataType: "string"},
+		{FieldName: "approvedDate", OldValue: "", NewValue: txTime.Format(time.RFC3339), DataType: "date"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // ECTA quality standards met
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: inspection.EUDRCompliant,
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("Quality approved: %s, Grade: %s, ready for export permit", inspection.CuppingGrade, inspection.QualityGrade),
+	}
+
+	err = c.CreateAuditLog(ctx, "APPROVE", "INSPECTION", inspectionID, "INSPECTED", "APPROVED",
+		changes, "Quality inspection approved by ECTA", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
 	}
 
 	// Update shipment status to QUALITY_APPROVED (awaiting export permit)
@@ -254,7 +343,20 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to update shipment status: %v", err)
 	}
 
-	return ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":     "InspectionApproved",
+		"inspectionID":  inspectionID,
+		"shipmentID":    inspection.ShipmentID,
+		"qualityGrade":  inspection.QualityGrade,
+		"cuppingGrade":  inspection.CuppingGrade,
+		"timestamp":     txTime.Format(time.RFC3339),
+		"approvedBy":    mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("InspectionApproved", eventJSON)
+
+	return nil
 }
 
 // IssueExportPermit - ECTA issues export permit after quality approval (legally required)
@@ -283,12 +385,44 @@ func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("export permit already issued: %s", inspection.ExportPermitNo)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	inspection.ExportPermitNo = exportPermitNo
-	inspection.UpdatedAt = time.Now()
+	inspection.UpdatedAt = txTime
 
 	inspectionJSON, err = json.Marshal(inspection)
 	if err != nil {
 		return fmt.Errorf("failed to marshal inspection: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "exportPermitNo", OldValue: "", NewValue: exportPermitNo, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // ECTA export permit issued
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: inspection.EUDRCompliant,
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("ECTA export permit issued: %s, Grade: %s", exportPermitNo, inspection.QualityGrade),
+	}
+
+	err = c.CreateAuditLog(ctx, "ISSUE", "INSPECTION", inspectionID, "APPROVED", "PERMIT_ISSUED",
+		changes, "ECTA export permit issued, ready for customs clearance", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
 	}
 
 	// Update shipment status to PERMIT_ISSUED (ready for customs)
@@ -297,7 +431,7 @@ func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to update shipment status: %v", err)
 	}
 
-	return ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	return nil
 }
 
 // RejectInspection - ECTA officer rejects inspection
@@ -322,11 +456,18 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("inspection must be completed before rejection, current status: %s", inspection.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	inspection.Status = "REJECTED"
 	inspection.ApprovedBy = rejectedBy
-	inspection.ApprovedDate = time.Now().Format(time.RFC3339)
+	inspection.ApprovedDate = txTime.Format(time.RFC3339)
 	inspection.RejectionReason = rejectionReason
-	inspection.UpdatedAt = time.Now()
+	inspection.UpdatedAt = txTime
 
 	inspectionJSON, err = json.Marshal(inspection)
 	if err != nil {

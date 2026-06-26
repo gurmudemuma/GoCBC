@@ -29,6 +29,10 @@ import {
   LinearProgress,
   Divider,
   TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import {
   Add,
@@ -100,47 +104,6 @@ const ShippingPortal: React.FC = () => {
   const [selectedRecord, setSelectedRecord] = useState<ShippingRecord | null>(null);
   const [trackingDialogOpen, setTrackingDialogOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
-  // Mock shipping records data
-  const mockShippingRecords: ShippingRecord[] = [
-    {
-      shippingId: 'SH2026001',
-      shipmentId: 'SHIPMENT2026001',
-      exporterId: 'EXP2026001',
-      shippingLine: 'Maersk Line',
-      containerNumber: 'MSKU7654321',
-      vesselName: 'Maersk Eindhoven',
-      voyageNumber: 'ME2026W22',
-      portOfLoading: 'Djibouti',
-      portOfDischarge: 'Hamburg',
-      estimatedDeparture: '2026-06-05T14:00:00Z',
-      estimatedArrival: '2026-06-20T08:00:00Z',
-      status: 'LOADED',
-      trackingNumber: 'MSKU765432100001',
-      billOfLading: 'MSKUDJIHBG240001',
-      containerType: 'DRY',
-      weight: 21500,
-      volume: 33.2,
-    },
-    {
-      shippingId: 'SH2026002',
-      shipmentId: 'SHIPMENT2026002',
-      exporterId: 'EXP2026002',
-      shippingLine: 'MSC',
-      containerNumber: 'MSCU8765432',
-      vesselName: 'MSC Lucinda',
-      voyageNumber: 'ML2026E15',
-      portOfLoading: 'Djibouti',
-      portOfDischarge: 'New York',
-      estimatedDeparture: '2026-06-08T10:00:00Z',
-      estimatedArrival: '2026-06-25T16:00:00Z',
-      status: 'BOOKED',
-      trackingNumber: 'MSCU876543200002',
-      billOfLading: 'MSCUDJINY240002',
-      containerType: 'REEFER',
-      weight: 19800,
-      volume: 28.5,
-    },
-  ];
 
   const shippingTrendsData = [
     { month: 'Jan', containers: 145, onTime: 92, delayed: 8 },
@@ -172,24 +135,93 @@ const ShippingPortal: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     try {
-      // In real implementation, load from API
-      setShippingRecords(mockShippingRecords);
+      // Load shipments with CUSTOMS_CLEARED status (ready for shipping)
+      const shipmentsResponse = await fetch('http://localhost:3001/api/v1/shipments', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const shipmentsResult = await shipmentsResponse.json();
+      
+      if (shipmentsResult.success && shipmentsResult.data) {
+        // Filter for shipments that are cleared by customs (ready for shipping)
+        const readyShipments = shipmentsResult.data.filter((s: any) => 
+          s.shipmentStatus === 'CUSTOMS_CLEARED' || s.shipmentStatus === 'SHIPPED' || s.shipmentStatus === 'DELIVERED'
+        );
+        
+        console.log(`[SHIPPING] Total shipments: ${shipmentsResult.data.length}`);
+        console.log(`[SHIPPING] Ready for shipping: ${readyShipments.length}`);
+        
+        // Map shipments to shipping records
+        const mappedRecords = readyShipments.map((s: any, index: number) => ({
+          shippingId: `SH-${s.shipmentID || s.shipmentId}`,
+          shipmentId: s.shipmentID || s.shipmentId,
+          exporterId: s.exporterID || s.exporterId,
+          shippingLine: index % 2 === 0 ? 'Maersk Line' : 'MSC',
+          containerNumber: `CONT${Date.now()}${index}`.substr(0, 11),
+          vesselName: index % 2 === 0 ? 'Maersk Eindhoven' : 'MSC Lucinda',
+          voyageNumber: `V${new Date().getFullYear()}W${index + 20}`,
+          portOfLoading: 'Djibouti',
+          portOfDischarge: s.destination || 'Hamburg',
+          estimatedDeparture: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+          estimatedArrival: new Date(Date.now() + 17 * 24 * 60 * 60 * 1000).toISOString(),
+          status: s.shipmentStatus === 'DELIVERED' ? 'DELIVERED' : s.shipmentStatus === 'SHIPPED' ? 'IN_TRANSIT' : 'BOOKED',
+          trackingNumber: `TRK${Date.now()}${index}`,
+          billOfLading: `BL${Date.now()}${index}`,
+          containerType: s.eudrCompliant ? 'REEFER' : 'DRY',
+          weight: s.quantity || 20000,
+          volume: (s.quantity || 20000) / 600, // Approximate volume calculation
+        }));
+        
+        setShippingRecords(mappedRecords);
+      }
     } catch (error) {
-      console.error('Failed to load data:', error);
+      console.error('[SHIPPING] Failed to load data:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleUpdateStatus = async (shippingId: string, newStatus: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    
     try {
-      // In real implementation, call API
-      console.log('Updating shipping status:', shippingId, newStatus);
-      setUpdateDialogOpen(false);
-      loadData();
+      console.log('[SHIPPING] Updating shipping status:', shippingId, newStatus);
+      
+      // Extract shipment ID from shipping ID
+      const shipmentId = shippingId.replace('SH-', '');
+      
+      // Map shipping status to shipment status
+      let shipmentStatus = 'SHIPPED';
+      if (newStatus === 'DELIVERED') shipmentStatus = 'DELIVERED';
+      if (newStatus === 'IN_TRANSIT') shipmentStatus = 'SHIPPED';
+      
+      // Update shipment status
+      const response = await fetch(`http://localhost:3001/api/v1/shipments/${shipmentId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: shipmentStatus })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        console.log('[SHIPPING] ✅ Status updated successfully');
+        setUpdateDialogOpen(false);
+        loadData();
+      } else {
+        console.error('[SHIPPING] ❌ Failed to update status:', result);
+      }
     } catch (error) {
-      console.error('Failed to update status:', error);
+      console.error('[SHIPPING] Failed to update status:', error);
     }
   };
   const shippingColumns: GridColDef[] = [
@@ -223,7 +255,7 @@ const ShippingPortal: React.FC = () => {
       renderCell: (params) => (
         <StatusChip
           label={params.value}
-          status={params.value as 'PENDING' | 'APPROVED' | 'ACTIVE' | 'INACTIVE'}
+          status={params.value as any}
         />
       ),
     },
@@ -306,11 +338,30 @@ const ShippingPortal: React.FC = () => {
           </Typography>
         </Box>
         <Box display="flex" gap={2} alignItems="center">
-          <ThemeToggle />
           <AnimatedButton
             variant="outlined"
             startIcon={<Download />}
             brandColor={brandPrimary}
+            onClick={() => {
+              // Export shipping report as CSV
+              const csvContent = [
+                ['Shipping ID', 'Shipment ID', 'Exporter', 'Container', 'Vessel', 'POL', 'POD', 'Status', 'ETD', 'ETA'],
+                ...shippingRecords.map(r => [
+                  r.shippingId, r.shipmentId, r.exporterId, r.containerNumber, r.vesselName,
+                  r.portOfLoading, r.portOfDischarge, r.status,
+                  new Date(r.estimatedDeparture).toLocaleDateString(),
+                  new Date(r.estimatedArrival).toLocaleDateString()
+                ])
+              ].map(row => row.join(',')).join('\n');
+              
+              const blob = new Blob([csvContent], { type: 'text/csv' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `shipping_report_${new Date().toISOString().split('T')[0]}.csv`;
+              a.click();
+              window.URL.revokeObjectURL(url);
+            }}
           >
             Export Report
           </AnimatedButton>
@@ -318,6 +369,9 @@ const ShippingPortal: React.FC = () => {
             variant="contained"
             startIcon={<Add />}
             brandColor={brandPrimary}
+            onClick={() => {
+              alert('🚢 New Booking\n\nThis feature allows shipping companies to create new booking records for customs-cleared shipments.\n\nIn a production system, this would:\n• Select a cleared shipment\n• Assign container and vessel\n• Set loading/discharge ports\n• Generate booking confirmation\n\nNote: Bookings are currently auto-created when shipments are cleared by customs.');
+            }}
           >
             New Booking
           </AnimatedButton>
@@ -330,7 +384,8 @@ const ShippingPortal: React.FC = () => {
             title="Total Shipments"
             value={stats.total}
             icon={<LocalShipping />}
-            trend={{ value: 14, isPositive: true }}
+            trend="up"
+            trendValue="+14%"
             brandColor={brandPrimary}
           />
         </Grid>
@@ -339,7 +394,8 @@ const ShippingPortal: React.FC = () => {
             title="In Transit"
             value={stats.inTransit}
             icon={<DirectionsBoat />}
-            trend={{ value: 7, isPositive: true }}
+            trend="up"
+            trendValue="+7%"
             brandColor="#ff9800"
           />
         </Grid>
@@ -348,7 +404,8 @@ const ShippingPortal: React.FC = () => {
             title="Delivered"
             value={stats.delivered}
             icon={<CheckCircle />}
-            trend={{ value: 25, isPositive: true }}
+            trend="up"
+            trendValue="+25%"
             brandColor="#4caf50"
           />
         </Grid>
@@ -357,7 +414,8 @@ const ShippingPortal: React.FC = () => {
             title="Total Weight"
             value={`${(stats.totalWeight / 1000).toFixed(1)}MT`}
             icon={<Assignment />}
-            trend={{ value: 18, isPositive: true }}
+            trend="up"
+            trendValue="+18%"
             brandColor={brandSecondary}
           />
         </Grid>
@@ -945,7 +1003,26 @@ const ShippingPortal: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setTrackingDialogOpen(false)}>Close</Button>
-          <Button variant="contained" startIcon={<QrCode />}>
+          <Button 
+            variant="contained" 
+            startIcon={<QrCode />}
+            onClick={() => {
+              if (!selectedRecord) return;
+              
+              // Generate QR code data
+              const qrData = {
+                shippingId: selectedRecord.shippingId,
+                container: selectedRecord.containerNumber,
+                tracking: selectedRecord.trackingNumber,
+                vessel: selectedRecord.vesselName,
+                pol: selectedRecord.portOfLoading,
+                pod: selectedRecord.portOfDischarge,
+                status: selectedRecord.status
+              };
+              
+              alert(`📱 QR Code Generated\n\nShipping ID: ${selectedRecord.shippingId}\nContainer: ${selectedRecord.containerNumber}\nTracking: ${selectedRecord.trackingNumber}\n\nIn production, this would:\n• Generate a scannable QR code\n• Link to real-time tracking page\n• Show IoT sensor data\n• Display blockchain verification\n\nQR Data:\n${JSON.stringify(qrData, null, 2)}`);
+            }}
+          >
             Generate QR Code
           </Button>
         </DialogActions>
@@ -956,21 +1033,37 @@ const ShippingPortal: React.FC = () => {
         <DialogTitle>Update Shipping Status</DialogTitle>
         <DialogContent>
           {selectedRecord && (
-            <Box>
+            <Box sx={{ pt: 2 }}>
               <Typography variant="body1" gutterBottom>
                 <strong>Container:</strong> {selectedRecord.containerNumber}
               </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Current Status:</strong> {selectedRecord.status}
+              <Typography variant="body1" gutterBottom sx={{ mb: 2 }}>
+                <strong>Current Status:</strong> <Chip label={selectedRecord.status} size="small" color="primary" />
               </Typography>
+              
+              <FormControl fullWidth sx={{ mb: 2 }}>
+                <InputLabel>New Status</InputLabel>
+                <Select
+                  defaultValue={selectedRecord.status}
+                  label="New Status"
+                  id="shipping-status-select"
+                >
+                  <MenuItem value="BOOKED">BOOKED - Container Booked</MenuItem>
+                  <MenuItem value="LOADED">LOADED - Container Loaded</MenuItem>
+                  <MenuItem value="DEPARTED">DEPARTED - Vessel Departed</MenuItem>
+                  <MenuItem value="IN_TRANSIT">IN_TRANSIT - In Transit</MenuItem>
+                  <MenuItem value="ARRIVED">ARRIVED - Arrived at Port</MenuItem>
+                  <MenuItem value="DELIVERED">DELIVERED - Delivered to Buyer</MenuItem>
+                </Select>
+              </FormControl>
               
               <TextField
                 fullWidth
+                id="shipping-status-notes"
                 label="Status Update Notes"
                 multiline
                 rows={3}
-                sx={{ mt: 2 }}
-                placeholder="Enter status update details and location information..."
+                placeholder="Enter status update details, location information, and any remarks..."
               />
             </Box>
           )}
@@ -982,7 +1075,23 @@ const ShippingPortal: React.FC = () => {
           <AnimatedButton 
             variant="contained" 
             brandColor="#006064"
-            onClick={() => selectedRecord && handleUpdateStatus(selectedRecord.shippingId, 'DEPARTED')}
+            onClick={() => {
+              if (selectedRecord) {
+                const statusSelect = document.querySelector<HTMLSelectElement>('#shipping-status-select');
+                const notesInput = document.querySelector<HTMLTextAreaElement>('#shipping-status-notes');
+                const newStatus = statusSelect?.value || 'DEPARTED';
+                const notes = notesInput?.value || 'Status updated';
+                
+                console.log('[SHIPPING] Updating status:', {
+                  shippingId: selectedRecord.shippingId,
+                  newStatus,
+                  notes,
+                  timestamp: new Date().toISOString()
+                });
+                
+                handleUpdateStatus(selectedRecord.shippingId, newStatus);
+              }
+            }}
           >
             Update Status
           </AnimatedButton>

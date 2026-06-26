@@ -22,7 +22,7 @@ type ForexAllocation struct {
 	ExchangeRate      float64   `json:"exchangeRate"`
 	OfficialRate      float64   `json:"officialRate"`      // NBE official rate
 	MarketRate        float64   `json:"marketRate"`        // Parallel market rate (if tracked)
-	RetentionRate     float64   `json:"retentionRate"`     // Percentage to be retained (e.g., 40%)
+	RetentionRate     float64   `json:"retentionRate"`     // Percentage to be retained (NBE FXD/01/2024: 100% allowed)
 	Status            string    `json:"status"`            // REQUESTED, APPROVED, ALLOCATED, UTILIZED, EXPIRED
 	RequestDate       time.Time `json:"requestDate"`
 	ApprovalDate      string    `json:"approvalDate"`
@@ -55,7 +55,7 @@ type ExchangeRate struct {
 type RetentionPolicy struct {
 	PolicyID        string    `json:"policyId"`
 	CommodityType   string    `json:"commodityType"`   // COFFEE, GOLD, etc.
-	RetentionRate   float64   `json:"retentionRate"`   // Percentage (e.g., 40%)
+	RetentionRate   float64   `json:"retentionRate"`   // Percentage (NBE FXD/01/2024: 100% default)
 	SurrenderRate   float64   `json:"surrenderRate"`   // Percentage to convert to Birr
 	EffectiveDate   time.Time `json:"effectiveDate"`
 	ExpiryDate      string    `json:"expiryDate"`
@@ -124,6 +124,17 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterface,
 	forexID, amountStr, exchangeRateStr, retentionRateStr, nbeOfficer, nbeApprovalRef, expiryDate string) error {
 
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only NBE can allocate forex
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("unauthorized: only NBE can allocate forex (caller: %s)", mspID)
+	}
+
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid amount: %v", err)
@@ -161,6 +172,13 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("forex cannot be allocated, current status: %s", forex.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	forex.Status = "ALLOCATED"
 	forex.AllocatedAmount = amount
 	forex.ExchangeRate = exchangeRate
@@ -169,13 +187,25 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	forex.NBEOfficer = nbeOfficer
 	forex.NBEApprovalRef = nbeApprovalRef
 	forex.ExpiryDate = expiryDate
-	forex.AllocationDate = time.Now().Format(time.RFC3339)
-	forex.UpdatedAt = time.Now()
+	forex.AllocationDate = txTime.Format(time.RFC3339)
+	forex.UpdatedAt = txTime
 
 	forexJSON, err = json.Marshal(forex)
 	if err != nil {
 		return fmt.Errorf("failed to marshal forex: %v", err)
 	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":       "ForexAllocated",
+		"forexID":         forexID,
+		"exporterID":      forex.ExporterID,
+		"allocatedAmount": amount,
+		"currency":        forex.Currency,
+		"timestamp":       txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ForexAllocated", eventJSON)
 
 	err = ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
 	if err != nil {
@@ -218,10 +248,17 @@ func (c *CoffeeContract) UtilizeForex(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("utilized amount exceeds allocated amount")
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	forex.Status = "UTILIZED"
 	forex.UtilizedAmount = utilizedAmount
-	forex.UtilizationDate = time.Now().Format(time.RFC3339)
-	forex.UpdatedAt = time.Now()
+	forex.UtilizationDate = txTime.Format(time.RFC3339)
+	forex.UpdatedAt = txTime
 
 	forexJSON, err = json.Marshal(forex)
 	if err != nil {
@@ -339,6 +376,17 @@ func (c *CoffeeContract) queryForex(ctx contractapi.TransactionContextInterface,
 func (c *CoffeeContract) SetExchangeRate(ctx contractapi.TransactionContextInterface,
 	rateID, currency, buyingRateStr, sellingRateStr, setBy string) error {
 
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only NBE can set exchange rates
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("unauthorized: only NBE can set exchange rates (caller: %s)", mspID)
+	}
+
 	buyingRate, err := strconv.ParseFloat(buyingRateStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid buying rate: %v", err)
@@ -359,6 +407,13 @@ func (c *CoffeeContract) SetExchangeRate(ctx contractapi.TransactionContextInter
 
 	midRate := (buyingRate + sellingRate) / 2
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	// Mark previous rate as superseded
 	queryString := fmt.Sprintf(`{"selector":{"currency":"%s","status":"ACTIVE"}}`, currency)
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
@@ -370,7 +425,7 @@ func (c *CoffeeContract) SetExchangeRate(ctx contractapi.TransactionContextInter
 				var oldRate ExchangeRate
 				json.Unmarshal(queryResponse.Value, &oldRate)
 				oldRate.Status = "SUPERSEDED"
-				oldRate.UpdatedAt = time.Now()
+				oldRate.UpdatedAt = txTime
 				oldRateJSON, _ := json.Marshal(oldRate)
 				ctx.GetStub().PutState(queryResponse.Key, oldRateJSON)
 			}
@@ -383,11 +438,11 @@ func (c *CoffeeContract) SetExchangeRate(ctx contractapi.TransactionContextInter
 		BuyingRate:    buyingRate,
 		SellingRate:   sellingRate,
 		MidRate:       midRate,
-		EffectiveDate: time.Now(),
+		EffectiveDate: txTime,
 		SetBy:         setBy,
 		Status:        "ACTIVE",
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:     txTime,
+		UpdatedAt:     txTime,
 	}
 
 	rateJSON, err := json.Marshal(rate)
@@ -461,6 +516,17 @@ func (c *CoffeeContract) QueryExchangeRateHistory(ctx contractapi.TransactionCon
 func (c *CoffeeContract) SetRetentionPolicy(ctx contractapi.TransactionContextInterface,
 	policyID, commodityType, retentionRateStr, setBy, justification string) error {
 
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only NBE can set retention policies
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("unauthorized: only NBE can set retention policies (caller: %s)", mspID)
+	}
+
 	retentionRate, err := strconv.ParseFloat(retentionRateStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid retention rate: %v", err)
@@ -471,6 +537,13 @@ func (c *CoffeeContract) SetRetentionPolicy(ctx contractapi.TransactionContextIn
 	}
 
 	surrenderRate := 100 - retentionRate
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	// Mark previous policy as inactive
 	queryString := fmt.Sprintf(`{"selector":{"commodityType":"%s","status":"ACTIVE"}}`, commodityType)
@@ -483,8 +556,8 @@ func (c *CoffeeContract) SetRetentionPolicy(ctx contractapi.TransactionContextIn
 				var oldPolicy RetentionPolicy
 				json.Unmarshal(queryResponse.Value, &oldPolicy)
 				oldPolicy.Status = "INACTIVE"
-				oldPolicy.ExpiryDate = time.Now().Format(time.RFC3339)
-				oldPolicy.UpdatedAt = time.Now()
+				oldPolicy.ExpiryDate = txTime.Format(time.RFC3339)
+				oldPolicy.UpdatedAt = txTime
 				oldPolicyJSON, _ := json.Marshal(oldPolicy)
 				ctx.GetStub().PutState(queryResponse.Key, oldPolicyJSON)
 			}
@@ -496,12 +569,12 @@ func (c *CoffeeContract) SetRetentionPolicy(ctx contractapi.TransactionContextIn
 		CommodityType: commodityType,
 		RetentionRate: retentionRate,
 		SurrenderRate: surrenderRate,
-		EffectiveDate: time.Now(),
+		EffectiveDate: txTime,
 		SetBy:         setBy,
 		Justification: justification,
 		Status:        "ACTIVE",
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:     txTime,
+		UpdatedAt:     txTime,
 	}
 
 	policyJSON, err := json.Marshal(policy)
@@ -623,10 +696,17 @@ func (c *CoffeeContract) VerifyForexUtilization(ctx contractapi.TransactionConte
 		forex.Comments = "Forex utilization verified by NBE"
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	forex.Status = "UTILIZED"
 	forex.UtilizedAmount = payment.Amount
-	forex.UtilizationDate = time.Now().Format(time.RFC3339)
-	forex.UpdatedAt = time.Now()
+	forex.UtilizationDate = txTime.Format(time.RFC3339)
+	forex.UpdatedAt = txTime
 
 	forexJSON, err = json.Marshal(forex)
 	if err != nil {

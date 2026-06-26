@@ -243,7 +243,7 @@ const NavigationBar: React.FC = () => {
       crumbs.push({
         label,
         path: currentPath,
-        icon: index === 0 ? <Dashboard fontSize="small" /> : undefined,
+        icon: index === 0 ? <Dashboard fontSize="small" /> : <Home fontSize="small" />,
       });
     });
 
@@ -297,7 +297,7 @@ const NavigationBar: React.FC = () => {
       >
         <Toolbar sx={{ minHeight: { xs: 56, sm: 64 }, justifyContent: 'space-between', px: { xs: 1, sm: 2, md: 3 } }}>
           {/* Organization Logo - Left */}
-          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: { xs: '80px', sm: '100px', md: '120px' }, flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: { xs: '80px', sm: '100px', md: '120px' }, flexShrink: 0, position: 'relative', zIndex: 10 }}>
             {getOrganizationLogo(user.role)}
           </Box>
 
@@ -312,34 +312,32 @@ const NavigationBar: React.FC = () => {
               left: '50%',
               transform: 'translateX(-50%)',
               textAlign: 'center',
-              zIndex: 1,
-              maxWidth: { xs: '50%', sm: '55%', md: '45%', lg: '40%' },
+              zIndex: 0, // Behind other elements to avoid overlap
+              maxWidth: { xs: '40%', sm: '45%', md: '35%', lg: '30%' },
               pointerEvents: 'none',
-              backgroundColor: 'rgba(0, 0, 0, 0.25)', // Semi-transparent background
-              backdropFilter: 'blur(8px)', // Blur effect for modern look
+              backgroundColor: 'rgba(0, 0, 0, 0.2)', // Lighter semi-transparent background
+              backdropFilter: 'blur(6px)', // Subtle blur effect
               borderRadius: 2,
-              px: { xs: 2, sm: 3, md: 4 },
-              py: { xs: 0.5, sm: 1 },
-              border: '1px solid rgba(255, 255, 255, 0.1)', // Subtle border
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)', // Depth shadow
+              px: { xs: 1.5, sm: 2, md: 3 },
+              py: { xs: 0.5, sm: 0.75 },
+              border: '1px solid rgba(255, 255, 255, 0.08)', // More subtle border
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)', // Lighter shadow
             }}
           >
             <Typography 
               variant="h4" 
               component="div" 
               sx={{ 
-                fontWeight: 800,
-                letterSpacing: { xs: '1px', sm: '1.5px', md: '2px' },
+                fontWeight: 700,
+                letterSpacing: { xs: '0.5px', sm: '1px', md: '1.5px' },
                 lineHeight: 1.2,
-                fontSize: { xs: '1rem', sm: '1.2rem', md: '1.4rem', lg: '1.6rem' },
+                fontSize: { xs: '0.75rem', sm: '0.9rem', md: '1.1rem', lg: '1.3rem' },
                 textTransform: 'uppercase',
-                color: '#FFFFFF', // Pure white for maximum contrast
+                color: '#FFFFFF',
                 textShadow: `
-                  0 0 10px rgba(255, 255, 255, 0.3),
-                  0 0 20px rgba(255, 255, 255, 0.2),
-                  2px 2px 4px rgba(0, 0, 0, 0.8),
-                  4px 4px 8px rgba(0, 0, 0, 0.6)
-                `, // Multiple shadows for glow and depth
+                  0 0 8px rgba(255, 255, 255, 0.2),
+                  2px 2px 4px rgba(0, 0, 0, 0.7)
+                `,
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -350,15 +348,15 @@ const NavigationBar: React.FC = () => {
             <Typography 
               variant="subtitle2" 
               sx={{ 
-                color: 'rgba(255, 255, 255, 0.95)', // Almost pure white
-                fontSize: { xs: '0.65rem', sm: '0.7rem', md: '0.75rem' },
-                letterSpacing: '0.5px',
-                fontWeight: 600,
+                color: 'rgba(255, 255, 255, 0.85)',
+                fontSize: { xs: '0.55rem', sm: '0.65rem', md: '0.7rem' },
+                letterSpacing: '0.3px',
+                fontWeight: 500,
                 display: { xs: 'none', sm: 'block' },
                 textShadow: `
-                  0 0 8px rgba(255, 255, 255, 0.2),
-                  2px 2px 4px rgba(0, 0, 0, 0.7)
-                `, // Glow and depth
+                  0 0 6px rgba(255, 255, 255, 0.15),
+                  1px 1px 3px rgba(0, 0, 0, 0.6)
+                `,
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -377,45 +375,19 @@ const NavigationBar: React.FC = () => {
             minWidth: { xs: '80px', sm: '100px', md: '120px' },
             flexShrink: 0,
             position: 'relative',
-            zIndex: 2,
+            zIndex: 10, // Higher z-index to stay on top
           }}>
-            {/* Quick Actions - Desktop Only */}
-            <Box sx={{ display: { xs: 'none', lg: 'flex' }, gap: 1, mr: 1 }}>
-              {quickActions.slice(0, 2).map((action, index) => (
-                <Tooltip key={index} title={action.label}>
-                  <Button
-                    size="small"
-                    startIcon={action.icon}
-                    onClick={() => router.push(action.path)}
-                    sx={{
-                      color: 'white',
-                      textTransform: 'none',
-                      fontSize: '0.75rem',
-                      px: 1.5,
-                      py: 0.5,
-                      minWidth: 'auto',
-                      whiteSpace: 'nowrap',
-                      '&:hover': {
-                        backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                      },
-                    }}
-                  >
-                    {action.label}
-                  </Button>
-                </Tooltip>
-              ))}
-            </Box>
-
-            {/* Search Icon */}
+            {/* Quick Actions - REMOVED to prevent overlap with title */}
+            
+            {/* Search - Desktop Only */}
             <Tooltip title="Search">
               <IconButton 
-                color="inherit" 
-                size="small"
                 sx={{ 
-                  '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' },
+                  color: 'white',
+                  display: { xs: 'none', md: 'inline-flex' },
                 }}
               >
-                <Search fontSize="small" />
+                <Search />
               </IconButton>
             </Tooltip>
 

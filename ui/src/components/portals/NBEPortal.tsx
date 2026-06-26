@@ -231,7 +231,10 @@ const NBEPortal: React.FC = () => {
     try {
       const contractsRes = await api.getContracts();
       if (contractsRes.success) {
-        setContracts(contractsRes.data || []);
+        const allContracts = contractsRes.data || [];
+        console.log(`[NBE] Loaded ${allContracts.length} total contracts`);
+        console.log(`[NBE] Contract statuses:`, allContracts.map(c => ({ id: c.contractId, status: c.contractStatus })));
+        setContracts(allContracts);
       }
       
       // Load forex allocations from blockchain
@@ -265,13 +268,17 @@ const NBEPortal: React.FC = () => {
 
   const handleApproveContract = async (contractId: string) => {
     try {
+      console.log(`[NBE] Approving contract: ${contractId}`);
       const response = await api.approveContract(contractId);
       if (response.success) {
+        console.log(`[NBE] ✅ Contract approved: ${contractId}, new status should be APPROVED`);
         setApprovalDialogOpen(false);
         loadData();
+      } else {
+        console.error(`[NBE] ❌ Failed to approve contract: ${contractId}`, response);
       }
     } catch (error) {
-      console.error('Failed to approve contract:', error);
+      console.error('[NBE] Failed to approve contract:', error);
     }
   };
 
@@ -1364,17 +1371,112 @@ const NBEPortal: React.FC = () => {
           <AnimatedButton 
             variant="contained"
             brandColor={BRAND_COLOR}
-            onClick={() => {
-              // TODO: Connect to API - POST /api/v1/forex/allocate
-              console.log('Allocating forex:', selectedForex);
-              setForexDialogOpen(false);
-              loadData();
-            }}
+            onClick={handleForexAllocation}
           >
             Allocate Forex
           </AnimatedButton>
         </DialogActions>
       </Dialog>
+
+  const handleForexAllocation = async () => {
+    if (!selectedForex) return;
+    
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      // Get form values using more reliable selectors
+      const allocatedAmountInput = document.querySelector<HTMLInputElement>('input[placeholder="e.g., 50000"]');
+      const exchangeRateInputs = document.querySelectorAll<HTMLSelectElement>('select');
+      const expiryDateInput = document.querySelector<HTMLInputElement>('input[type="date"]');
+      const nbeApprovalRefInput = document.querySelector<HTMLInputElement>('input[placeholder="NBE/FX/2026/XXXXXX"]');
+      const nbeOfficerInput = document.querySelector<HTMLInputElement>('input[placeholder="Officer name"]');
+
+      const payload = {
+        forexId: selectedForex.forexId,
+        contractId: selectedForex.contractId,
+        exporterId: selectedForex.exporterId,
+        amount: parseFloat(allocatedAmountInput?.value || selectedForex.requestedAmount.toString()),
+        currency: selectedForex.currency,
+        exchangeRate: parseFloat(exchangeRateInputs[0]?.value || '115.5'),
+        retentionRate: parseInt(exchangeRateInputs[1]?.value || '40'),
+        nbeOfficer: nbeOfficerInput?.value || 'NBE Officer',
+        nbeApprovalRef: nbeApprovalRefInput?.value || `NBE/FX/${new Date().getFullYear()}/${Date.now()}`,
+        expiryDate: expiryDateInput?.value || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      };
+
+      console.log('[NBE] Allocating forex:', payload);
+
+      const response = await fetch('http://localhost:3001/api/v1/forex/allocate', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        alert(`✅ Forex Allocated Successfully!\n\nForex ID: ${selectedForex.forexId}\nAmount: ${payload.currency}${payload.amount.toLocaleString()}\nRate: ${payload.exchangeRate} ETB/${payload.currency}\nRetention: ${payload.retentionRate}%\n\nThe exporter can now proceed with export preparation.`);
+        setForexDialogOpen(false);
+        setSelectedForex(null);
+        loadData();
+      } else {
+        alert(`❌ Forex Allocation Failed\n\n${result.error || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      console.error('[NBE] Error allocating forex:', error);
+      alert(`❌ Network Error\n\nFailed to allocate forex: ${error.message}`);
+    }
+  };
+
+  const handleSetExchangeRate = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      // Get form values
+      const currencySelect = document.querySelector<HTMLSelectElement>('select');
+      const textFields = document.querySelectorAll<HTMLInputElement>('input[type="number"]');
+      const dateInput = document.querySelector<HTMLInputElement>('input[type="date"]');
+      const justificationInput = document.querySelector<HTMLTextAreaElement>('textarea');
+
+      const payload = {
+        currency: currencySelect?.value || 'USD',
+        buyingRate: parseFloat(textFields[0]?.value || '115.0'),
+        sellingRate: parseFloat(textFields[1]?.value || '116.0'),
+        effectiveDate: dateInput?.value || new Date().toISOString().split('T')[0],
+        justification: justificationInput?.value || 'Exchange rate update per NBE policy',
+        setBy: 'NBE Officer', // Could be from user context
+      };
+
+      console.log('[NBE] Setting exchange rate:', payload);
+
+      const response = await fetch('http://localhost:3001/api/v1/forex/rate/set', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        alert(`✅ Exchange Rate Set Successfully!\n\nCurrency: ${payload.currency}\nBuying Rate: ${payload.buyingRate} ETB\nSelling Rate: ${payload.sellingRate} ETB\nEffective: ${payload.effectiveDate}\n\nPrevious rate has been superseded.`);
+        setRateDialogOpen(false);
+        loadData();
+      } else {
+        alert(`❌ Failed to Set Exchange Rate\n\n${result.error || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      console.error('[NBE] Error setting exchange rate:', error);
+      alert(`❌ Network Error\n\nFailed to set exchange rate: ${error.message}`);
+    }
+  };
 
       {/* Exchange Rate Setting Dialog */}
       <Dialog open={rateDialogOpen} onClose={() => setRateDialogOpen(false)} maxWidth="sm" fullWidth>
@@ -1445,12 +1547,7 @@ const NBEPortal: React.FC = () => {
           <AnimatedButton 
             variant="contained"
             brandColor={BRAND_COLOR}
-            onClick={() => {
-              // TODO: Connect to API - POST /api/v1/forex/rate/set
-              console.log('Setting exchange rate');
-              setRateDialogOpen(false);
-              loadData();
-            }}
+            onClick={handleSetExchangeRate}
           >
             Set Rate
           </AnimatedButton>

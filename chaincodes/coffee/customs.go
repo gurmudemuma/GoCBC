@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -104,6 +105,13 @@ func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("declaration %s already exists", declarationID)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	declaration := CustomsDeclaration{
 		DeclarationID:  declarationID,
 		ContractID:     contractID,
@@ -116,10 +124,10 @@ func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInt
 		Destination:    destination,
 		PortOfExit:     portOfExit,
 		Status:         "SUBMITTED",
-		SubmissionDate: time.Now(),
+		SubmissionDate: txTime,
 		Documents:      documents,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		CreatedAt:      txTime,
+		UpdatedAt:      txTime,
 	}
 
 	declarationJSON, err := json.Marshal(declaration)
@@ -153,11 +161,18 @@ func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("declaration cannot be reviewed, current status: %s", declaration.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	declaration.Status = "UNDER_INSPECTION"
 	declaration.CustomsOfficer = customsOfficer
 	declaration.InspectionNotes = inspectionNotes
-	declaration.ReviewDate = time.Now().Format(time.RFC3339)
-	declaration.UpdatedAt = time.Now()
+	declaration.ReviewDate = txTime.Format(time.RFC3339)
+	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
 	if err != nil {
@@ -189,9 +204,16 @@ func (c *CoffeeContract) CompleteInspection(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("declaration not under inspection, current status: %s", declaration.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	declaration.Status = "UNDER_REVIEW"
 	declaration.InspectionNotes = inspectionNotes
-	declaration.UpdatedAt = time.Now()
+	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
 	if err != nil {
@@ -228,18 +250,53 @@ func (c *CoffeeContract) ClearDeclaration(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("declaration cannot be cleared, current status: %s", declaration.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	declaration.Status = "CLEARED"
 	declaration.ClearanceNumber = clearanceNumber
 	declaration.DutiesAmount = dutiesAmount
-	declaration.ClearanceDate = time.Now().Format(time.RFC3339)
-	declaration.UpdatedAt = time.Now()
+	declaration.ClearanceDate = txTime.Format(time.RFC3339)
+	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
 	if err != nil {
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	err = ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "UNDER_REVIEW", NewValue: "CLEARED", DataType: "string"},
+		{FieldName: "clearanceNumber", OldValue: "", NewValue: clearanceNumber, DataType: "string"},
+		{FieldName: "dutiesAmount", OldValue: "", NewValue: fmt.Sprintf("%.2f", dutiesAmount), DataType: "number"},
+		{FieldName: "clearanceDate", OldValue: "", NewValue: txTime.Format(time.RFC3339), DataType: "date"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: false, // EUDR tracked at shipment level
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("Customs cleared: %s, duties: %.2f ETB", clearanceNumber, dutiesAmount),
+	}
+
+	err = c.CreateAuditLog(ctx, "CLEAR", "DECLARATION", declarationID, "UNDER_REVIEW", "CLEARED",
+		changes, fmt.Sprintf("Customs clearance granted: %s", clearanceNumber), compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	return nil
 }
 
 // RejectDeclaration - Customs rejects the declaration
@@ -264,9 +321,16 @@ func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("cannot reject cleared declaration")
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	declaration.Status = "REJECTED"
 	declaration.RejectionReason = reason
-	declaration.UpdatedAt = time.Now()
+	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
 	if err != nil {

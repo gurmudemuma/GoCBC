@@ -145,7 +145,37 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		return err
 	}
 	
-	return ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	// Save exporter to ledger
+	err = ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "exporterId", OldValue: "", NewValue: exporterID, DataType: "string"},
+		{FieldName: "companyName", OldValue: "", NewValue: companyName, DataType: "string"},
+		{FieldName: "licenseStatus", OldValue: "", NewValue: "ACTIVE", DataType: "string"},
+		{FieldName: "capitalRequirement", OldValue: "", NewValue: capitalRequirementStr, DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  false, // Not yet approved by NBE
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: "Exporter registered, pending NBE approval for contracts",
+	}
+
+	err = c.CreateAuditLog(ctx, "CREATE", "EXPORTER", exporterID, "", "ACTIVE", changes, 
+		"New exporter registration by ECTA", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+		// Don't fail the transaction if audit log fails
+	}
+
+	return nil
 }
 
 func (c *CoffeeContract) ReadExporter(ctx contractapi.TransactionContextInterface, exporterID string) (*Exporter, error) {
@@ -287,10 +317,24 @@ func (c *CoffeeContract) SalesContractExists(ctx contractapi.TransactionContextI
 }
 
 func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContextInterface, contractID string) error {
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only NBE can approve sales contracts
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("unauthorized: only NBE can approve sales contracts (caller: %s)", mspID)
+	}
+
 	contract, err := c.ReadSalesContract(ctx, contractID)
 	if err != nil {
 		return err
 	}
+	
+	// Capture previous status for audit
+	previousStatus := contract.ContractStatus
 	
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
@@ -307,8 +351,47 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	if err != nil {
 		return err
 	}
+
+	// Save contract
+	err = ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: "APPROVED", DataType: "string"},
+		{FieldName: "approvalDate", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "date"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true, // NBE approved
+		UCP600Check:    false,
+		EUDRCompliance: contract.EUDRRequired,
+		ICOCompliance:  true,
+		ComplianceNote: "Contract approved by NBE, ready for forex allocation and LC issuance",
+	}
+
+	err = c.CreateAuditLog(ctx, "APPROVE", "CONTRACT", contractID, previousStatus, "APPROVED", changes,
+		"Contract approved by NBE for forex and export", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":   "ContractApproved",
+		"contractID":  contractID,
+		"exporterID":  contract.ExporterID,
+		"totalValue":  contract.TotalValue,
+		"timestamp":   timestamp.Format(time.RFC3339),
+		"approvedBy":  mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractApproved", eventJSON)
 	
-	return ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON)
+	return nil
 }
 
 func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionContextInterface, exporterID string, certifiedStr string) error {
@@ -380,6 +463,17 @@ func (c *CoffeeContract) UpdateExporterStatus(ctx contractapi.TransactionContext
 func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInterface, 
 	exporterID, reason string) error {
 	
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only ECTA can suspend exporters
+	if mspID != "ECTAMSP" {
+		return fmt.Errorf("unauthorized: only ECTA can suspend exporter licenses (caller: %s)", mspID)
+	}
+
 	exporter, err := c.ReadExporter(ctx, exporterID)
 	if err != nil {
 		return err
@@ -388,6 +482,9 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	if exporter.LicenseStatus == "REVOKED" {
 		return fmt.Errorf("cannot suspend revoked license")
 	}
+	
+	// Capture previous status
+	previousStatus := exporter.LicenseStatus
 	
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -402,18 +499,69 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	if err != nil {
 		return err
 	}
+
+	// Save exporter
+	err = ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "licenseStatus", OldValue: previousStatus, NewValue: "SUSPENDED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false, // Non-compliant, hence suspended
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: "License suspended by ECTA: " + reason,
+	}
+
+	err = c.CreateAuditLog(ctx, "SUSPEND", "EXPORTER", exporterID, previousStatus, "SUSPENDED", changes,
+		reason, compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":   "ExporterSuspended",
+		"exporterID":  exporterID,
+		"reason":      reason,
+		"timestamp":   timestamp.Format(time.RFC3339),
+		"suspendedBy": mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ExporterSuspended", eventJSON)
 	
-	return ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	return nil
 }
 
 // RevokeExporterLicense - ECTA permanently revokes exporter license
 func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContextInterface, 
 	exporterID, reason string) error {
 	
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only ECTA can revoke exporters
+	if mspID != "ECTAMSP" {
+		return fmt.Errorf("unauthorized: only ECTA can revoke exporter licenses (caller: %s)", mspID)
+	}
+
 	exporter, err := c.ReadExporter(ctx, exporterID)
 	if err != nil {
 		return err
 	}
+	
+	// Capture previous status for audit
+	previousStatus := exporter.LicenseStatus
 	
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -428,8 +576,44 @@ func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContex
 	if err != nil {
 		return err
 	}
+
+	err = ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "licenseStatus", OldValue: previousStatus, NewValue: "REVOKED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false, // Non-compliant, permanently revoked
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: "License permanently revoked by ECTA: " + reason,
+	}
+
+	err = c.CreateAuditLog(ctx, "REVOKE", "EXPORTER", exporterID, previousStatus, "REVOKED", 
+		changes, reason, compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":   "ExporterRevoked",
+		"exporterID":  exporterID,
+		"reason":      reason,
+		"timestamp":   timestamp.Format(time.RFC3339),
+		"revokedBy":   mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ExporterRevoked", eventJSON)
 	
-	return ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
+	return nil
 }
 
 // ==================== SHIPMENT MANAGEMENT ====================

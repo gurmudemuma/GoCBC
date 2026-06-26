@@ -686,10 +686,39 @@ const ECXPortal: React.FC = () => {
             <AnimatedButton
               variant="contained"
               brandColor={BRAND_COLOR}
-              onClick={() => {
-                // TODO: Implement list for trading
-                console.log('List lot for trading:', selectedLot.lotId);
-                setSelectedLot(null);
+              onClick={async () => {
+                if (!selectedLot) return;
+                
+                const token = localStorage.getItem('authToken');
+                if (!token) return;
+                
+                try {
+                  console.log('[ECX] Listing lot for trading:', selectedLot.lotId);
+                  
+                  const response = await fetch(`http://localhost:3001/api/v1/ecx/lot/${selectedLot.lotId}/list`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${token}`,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      reservePrice: selectedLot.pricePerKg,
+                      tradingStatus: 'LISTED',
+                    })
+                  });
+                  
+                  const result = await response.json();
+                  if (result.success) {
+                    alert(`✅ Lot Listed for Trading\n\nLot ID: ${selectedLot.lotId}\nReserve Price: $${selectedLot.pricePerKg}/kg\n\nThe lot is now available for buyers on ECX trading platform`);
+                    setSelectedLot(null);
+                    loadData();
+                  } else {
+                    alert(`❌ Failed to list lot\n\n${result.error || 'Unknown error'}`);
+                  }
+                } catch (error) {
+                  console.error('[ECX] Error listing lot:', error);
+                  alert(`❌ Network Error\n\nFailed to list lot for trading: ${error}`);
+                }
               }}
             >
               List for Trading

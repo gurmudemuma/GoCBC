@@ -37,6 +37,17 @@ func (c *CoffeeContract) RegisterLot(ctx contractapi.TransactionContextInterface
 	lotID, exporterID, coffeeType, origin, quantityStr, qualityGrade, qualityScoreStr,
 	warehouseLocation, pricePerKgStr string) error {
 
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Only ECX can register lots
+	if mspID != "ECXMSP" {
+		return fmt.Errorf("unauthorized: only ECX can register lots (caller: %s)", mspID)
+	}
+
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid quantity: %v", err)
@@ -70,6 +81,13 @@ func (c *CoffeeContract) RegisterLot(ctx contractapi.TransactionContextInterface
 		return fmt.Errorf("lot %s already exists", lotID)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	lot := ECXLot{
 		LotID:             lotID,
 		ExporterID:        exporterID,
@@ -81,15 +99,27 @@ func (c *CoffeeContract) RegisterLot(ctx contractapi.TransactionContextInterface
 		WarehouseLocation: warehouseLocation,
 		PricePerKg:        pricePerKg,
 		Status:            "REGISTERED",
-		RegistrationDate:  time.Now(),
-		CreatedAt:         time.Now(),
-		UpdatedAt:         time.Now(),
+		RegistrationDate:  txTime,
+		CreatedAt:         txTime,
+		UpdatedAt:         txTime,
 	}
 
 	lotJSON, err := json.Marshal(lot)
 	if err != nil {
 		return fmt.Errorf("failed to marshal lot: %v", err)
 	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":    "LotRegistered",
+		"lotID":        lotID,
+		"exporterID":   exporterID,
+		"quantity":     quantity,
+		"qualityGrade": qualityGrade,
+		"timestamp":    txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("LotRegistered", eventJSON)
 
 	return ctx.GetStub().PutState("LOT_"+lotID, lotJSON)
 }
@@ -125,8 +155,15 @@ func (c *CoffeeContract) UpdateLotPrice(ctx contractapi.TransactionContextInterf
 		return fmt.Errorf("cannot update price for lot with status: %s", lot.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	lot.PricePerKg = pricePerKg
-	lot.UpdatedAt = time.Now()
+	lot.UpdatedAt = txTime
 
 	lotJSON, err = json.Marshal(lot)
 	if err != nil {
@@ -161,13 +198,20 @@ func (c *CoffeeContract) UpdateLotStatus(ctx contractapi.TransactionContextInter
 		return fmt.Errorf("failed to unmarshal lot: %v", err)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	lot.Status = newStatus
 	if newStatus == "SOLD" {
-		lot.SoldDate = time.Now().Format(time.RFC3339)
+		lot.SoldDate = txTime.Format(time.RFC3339)
 		lot.BuyerID = buyerID
 		lot.ContractID = contractID
 	}
-	lot.UpdatedAt = time.Now()
+	lot.UpdatedAt = txTime
 
 	lotJSON, err = json.Marshal(lot)
 	if err != nil {

@@ -53,6 +53,10 @@ import {
   DashboardKPI,
   StatusChip,
 } from '@/components/modern';
+import { PaymentDocuments } from './PaymentDocuments';
+import { PaymentMethodForms } from './PaymentMethodForms';
+import { NotificationDialog } from '@/components/common/NotificationDialog';
+import { useNotification } from '@/hooks/useNotification';
 
 interface SalesContract {
   contractId: string;
@@ -101,13 +105,19 @@ interface ForexAllocation {
 }
 
 const BanksPortal: React.FC = () => {
+  const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
+  const [exportPermits, setExportPermits] = useState<any[]>([]);
+  const [documentaryCollections, setDocumentaryCollections] = useState<any[]>([]);
+  const [advancePayments, setAdvancePayments] = useState<any[]>([]);
+  const [consignments, setConsignments] = useState<any[]>([]);
   const [selectedContract, setSelectedContract] = useState<SalesContract | null>(null);
+  const [selectedLC, setSelectedLC] = useState<LetterOfCredit | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | null>(null);
+  const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | 'lcDetails' | 'cad' | 'advance' | 'consignment' | null>(null);
   
   // LC Form
   const [lcForm, setLcForm] = useState({
@@ -126,6 +136,48 @@ const BanksPortal: React.FC = () => {
     expiryDays: '180',
     nbeOfficer: '',
     nbeApprovalRef: '',
+  });
+
+  // Export Permit Form
+  const [permitForm, setPermitForm] = useState({
+    permitNumber: '',
+    paymentMethod: 'LC',
+    amount: '',
+    description: '',
+    destination: '',
+    commercialInvoice: '',
+  });
+
+  // Documentary Collection Form
+  const [cadForm, setCadForm] = useState({
+    drawerName: '',
+    draweeName: '',
+    draweeAddress: '',
+    paymentTerm: 'SIGHT',
+    acceptanceDays: '',
+    collectingBank: '',
+    collectingBankBIC: '',
+    remittingBank: '',
+    remittingBankBIC: '',
+    instructions: '',
+  });
+
+  // Advance Payment Form
+  const [advanceForm, setAdvanceForm] = useState({
+    creditAdviceNumber: '',
+    payingBank: '',
+    payingBankBIC: '',
+    swiftReference: '',
+    beneficiaryAccount: '',
+  });
+
+  // Consignment Form
+  const [consignmentForm, setConsignmentForm] = useState({
+    commodityType: 'FRUITS',
+    description: '',
+    buyerName: '',
+    buyerAddress: '',
+    permitAmount: '',
   });
 
   useEffect(() => {
@@ -150,6 +202,13 @@ const BanksPortal: React.FC = () => {
         nbeApprovedContracts = contractsResult.data.filter((c: any) => 
           c.contractStatus === 'NBE_APPROVED' || c.contractStatus === 'APPROVED'
         );
+        
+        console.log(`[BANKS] Total contracts: ${contractsResult.data.length}`);
+        console.log(`[BANKS] Contract statuses:`, contractsResult.data.map((c: any) => ({ 
+          id: c.contractID || c.contractId, 
+          status: c.contractStatus 
+        })));
+        console.log(`[BANKS] ✅ Approved contracts available: ${nbeApprovedContracts.length}`);
         
         setContracts(nbeApprovedContracts.map((c: any) => {
           const mappedContract = {
@@ -229,6 +288,58 @@ const BanksPortal: React.FC = () => {
         console.warn('Could not load forex allocations:', err);
       }
 
+      // Load Export Permits
+      try {
+        const permitsResponse = await fetch('http://localhost:3001/api/v1/permits', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const permitsResult = await permitsResponse.json();
+        if (permitsResult.success) {
+          setExportPermits(Array.isArray(permitsResult.data) ? permitsResult.data : []);
+        }
+      } catch (err) {
+        console.warn('Could not load export permits:', err);
+      }
+
+      // Load Documentary Collections
+      try {
+        const collectionsResponse = await fetch('http://localhost:3001/api/v1/collections', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const collectionsResult = await collectionsResponse.json();
+        if (collectionsResult.success) {
+          setDocumentaryCollections(Array.isArray(collectionsResult.data) ? collectionsResult.data : []);
+        }
+      } catch (err) {
+        console.warn('Could not load documentary collections:', err);
+      }
+
+      // Load Advance Payments
+      try {
+        const advanceResponse = await fetch('http://localhost:3001/api/v1/advance', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const advanceResult = await advanceResponse.json();
+        if (advanceResult.success) {
+          setAdvancePayments(Array.isArray(advanceResult.data) ? advanceResult.data : []);
+        }
+      } catch (err) {
+        console.warn('Could not load advance payments:', err);
+      }
+
+      // Load Consignments
+      try {
+        const consignmentsResponse = await fetch('http://localhost:3001/api/v1/consignment', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const consignmentsResult = await consignmentsResponse.json();
+        if (consignmentsResult.success) {
+          setConsignments(Array.isArray(consignmentsResult.data) ? consignmentsResult.data : []);
+        }
+      } catch (err) {
+        console.warn('Could not load consignments:', err);
+      }
+
       console.log(`Loaded ${nbeApprovedContracts?.length || 0} NBE-approved contracts for bank processing`);
       
       // Summary of bank data availability
@@ -293,6 +404,7 @@ const BanksPortal: React.FC = () => {
   const handleCloseDialog = () => {
     setDialogOpen(false);
     setSelectedContract(null);
+    setSelectedLC(null);
     setDialogType(null);
     setLcForm({
       issuingBank: '',
@@ -301,6 +413,12 @@ const BanksPortal: React.FC = () => {
       terms: 'Payment against shipping documents as per UCP 600',
       expiryDays: '90',
     });
+  };
+
+  const handleViewLCDetails = (lc: LetterOfCredit) => {
+    setSelectedLC(lc);
+    setDialogType('lcDetails');
+    setDialogOpen(true);
   };
 
   const handleIssueLc = async () => {
@@ -366,7 +484,11 @@ const BanksPortal: React.FC = () => {
           }),
         });
 
-        alert(`✅ Letter of Credit ${lcId} issued successfully!\n\nNext Steps:\n1. NBE will allocate forex based on this LC\n2. Export permit will be issued\n3. Exporter can proceed with shipment`);
+        showSuccess(
+          'Letter of Credit Issued Successfully',
+          `LC ${lcId} has been issued and registered on the blockchain`,
+          `Next Steps:\n1. NBE will allocate forex based on this LC\n2. Export permit will be issued\n3. Exporter can proceed with shipment`
+        );
         handleCloseDialog();
         loadBankingData();
       } else {
@@ -374,37 +496,40 @@ const BanksPortal: React.FC = () => {
         const errorMsg = requestResult.error?.message || 'Unknown error';
         
         if (errorMsg.includes('does not exist') || errorMsg.includes('not registered')) {
-          alert(`❌ Cannot issue LC: Exporter ${selectedContract.exporterId} is not registered on the blockchain.\n\n` +
-                `This can happen if:\n` +
-                `• The exporter was recently approved but blockchain hasn't synchronized yet\n` +
-                `• The approval process failed to register the exporter\n\n` +
-                `Solution:\n` +
-                `1. Wait 30 seconds and try again (blockchain may be syncing)\n` +
-                `2. Contact ECTA admin to re-register exporter: ${selectedContract.exporterId}\n` +
-                `3. ECTA can run: node register-missing-exporters.js in the api folder`);
+          showError(
+            'Exporter Not Registered',
+            `Cannot issue LC: Exporter ${selectedContract.exporterId} is not registered on the blockchain`,
+            `This can happen if:\n• The exporter was recently approved but blockchain hasn't synchronized yet\n• The approval process failed to register the exporter\n\nSolution:\n1. Wait 30 seconds and try again (blockchain may be syncing)\n2. Contact ECTA admin to re-register exporter\n3. ECTA can run: node register-missing-exporters.js`
+          );
         } else if (errorMsg.includes('Peer endorsements do not match') || errorMsg.includes('not synchronized')) {
-          alert(`⚠️ Blockchain Synchronization Issue\n\n` +
-                `The blockchain peers are not fully synchronized yet. This usually happens when:\n` +
-                `• An exporter was just registered (wait 30 seconds)\n` +
-                `• Network is processing other transactions\n\n` +
-                `Solution: Wait 30 seconds and try again.\n\n` +
-                `If the issue persists, check that all peer containers are running:\n` +
-                `docker ps | grep peer`);
+          showWarning(
+            'Blockchain Synchronization Issue',
+            'The blockchain peers are not fully synchronized yet',
+            `This usually happens when:\n• An exporter was just registered (wait 30 seconds)\n• Network is processing other transactions\n\nSolution: Wait 30 seconds and try again.\n\nIf the issue persists, check that all peer containers are running: docker ps | grep peer`
+          );
         } else {
-          alert(`❌ Failed to issue LC: ${errorMsg}\n\nPlease contact system administrator.`);
+          showError(
+            'LC Issuance Failed',
+            errorMsg,
+            'Please contact system administrator if this persists'
+          );
         }
       }
     } catch (error: any) {
       console.error('Error issuing LC:', error);
       const errorMsg = error.message || 'Network error';
-      alert(`❌ Failed to issue Letter of Credit\n\nError: ${errorMsg}\n\nPlease check:\n• API server is running\n• Blockchain network is connected\n• All peer nodes are healthy`);
+      showError(
+        'Network Error',
+        'Failed to issue Letter of Credit',
+        `Error: ${errorMsg}\n\nPlease check:\n• API server is running\n• Blockchain network is connected\n• All peer nodes are healthy`
+      );
     }
   };
 
   const handleApproveLC = async (lcId: string, exporterId: string) => {
     const token = localStorage.getItem('authToken');
     if (!token) {
-      alert('❌ Authentication required');
+      showError('Authentication Required', 'You are not authenticated', 'Please login again to continue');
       return;
     }
 
@@ -424,15 +549,111 @@ const BanksPortal: React.FC = () => {
       const result = await response.json();
 
       if (result.success) {
-        alert(`✅ Letter of Credit ${lcId} approved successfully!\n\nThe LC is now approved and ready for issuance.`);
+        showSuccess(
+          'Letter of Credit Approved',
+          `LC ${lcId} has been approved successfully`,
+          'The LC is now approved and ready for issuance'
+        );
         loadBankingData(); // Reload to show updated status
       } else {
         const errorMsg = result.error?.message || 'Unknown error';
-        alert(`❌ Failed to approve LC\n\nError: ${errorMsg}`);
+        showError('LC Approval Failed', errorMsg, 'Please try again or contact support');
       }
     } catch (error: any) {
       console.error('Error approving LC:', error);
-      alert(`❌ Network error: ${error.message}`);
+      showError('Network Error', 'Failed to approve LC', error.message);
+    }
+  };
+
+  const handlePaymentMethodSubmit = async (type: string, data: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token || !selectedContract) return;
+
+    try {
+      if (type === 'cad') {
+        const collectionId = `CAD${Date.now()}`;
+        const permitId = `PERMIT${Date.now()}`;
+        
+        const response = await fetch('http://localhost:3001/api/v1/collections/send', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            collectionId,
+            contractId: selectedContract.contractId,
+            exporterId: selectedContract.exporterId,
+            permitId,
+            ...data,
+            amount: selectedContract.totalValue,
+            currency: selectedContract.currency,
+            documents: ['Bill of Lading', 'Commercial Invoice', 'Packing List'],
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          showSuccess('Documentary Collection Sent', `Collection ${collectionId} registered successfully`);
+          handleCloseDialog();
+          loadBankingData();
+        } else {
+          showError('Collection Failed', result.error?.message || 'Unknown error');
+        }
+      } else if (type === 'advance') {
+        const paymentId = `ADV${Date.now()}`;
+        
+        const response = await fetch('http://localhost:3001/api/v1/advance/record', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentId,
+            contractId: selectedContract.contractId,
+            exporterId: selectedContract.exporterId,
+            amount: data.amount,
+            currency: selectedContract.currency,
+            receivingBank: selectedContract.exporterBank || 'Commercial Bank of Ethiopia',
+            receivingBankBIC: 'CBETETAA',
+            beneficiaryName: selectedContract.exporterId,
+            ...data,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          showSuccess('Advance Payment Recorded', `Payment ${paymentId} recorded. Permit will be issued.`);
+          handleCloseDialog();
+          loadBankingData();
+        } else {
+          showError('Recording Failed', result.error?.message || 'Unknown error');
+        }
+      } else if (type === 'consignment') {
+        const consignmentId = `CONSIGN${Date.now()}`;
+        const permitId = `PERMIT${Date.now()}`;
+        
+        const response = await fetch('http://localhost:3001/api/v1/consignment/issue-permit', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            consignmentId,
+            permitId,
+            permitNumber: `CP-${Date.now()}`,
+            exporterId: selectedContract.exporterId,
+            currency: selectedContract.currency,
+            bankBranch: selectedContract.exporterBank || 'CBE Main Branch',
+            destination: selectedContract.buyerCountry,
+            ...data,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          showSuccess('Consignment Permit Issued', `Permit ${permitId} issued for ${data.commodityType}`);
+          handleCloseDialog();
+          loadBankingData();
+        } else {
+          showError('Permit Failed', result.error?.message || 'Unknown error');
+        }
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
     }
   };
 
@@ -632,7 +853,11 @@ const BanksPortal: React.FC = () => {
                           </Tooltip>
                         ) : (
                           <Tooltip title="View Details">
-                            <IconButton size="small">
+                            <IconButton 
+                              size="small" 
+                              color="primary"
+                              onClick={() => handleViewLCDetails(lc)}
+                            >
                               <Visibility />
                             </IconButton>
                           </Tooltip>
@@ -741,55 +966,344 @@ const BanksPortal: React.FC = () => {
       {activeTab === 3 && (
         <ModernCard>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Payment & Document Processing
+            CBE Payment Methods Management
           </Typography>
+          
           <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>Document Verification & SWIFT Payment:</strong><br />
-            1. Exporter submits shipping documents (Bill of Lading, Certificate of Origin, Invoice)<br />
-            2. Bank verifies documents against LC terms (UCP 600)<br />
-            3. Bank initiates SWIFT payment (MT700/MT103)<br />
-            4. Payment settled with 40/60 forex retention
+            <strong>CBE Approved Payment Methods (Section 3.2):</strong><br />
+            i. Letter of Credit (LC) - Primary method, bank guarantee<br />
+            ii. Documentary Collection (CAD) - Cash Against Documents<br />
+            iii. Advance Payment - Payment before shipment<br />
+            iv. Consignment - Limited to Fruits, Flowers, Meat only
           </Alert>
 
+          {/* Action Buttons */}
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<Description />}
+              onClick={() => {
+                const contract = contracts[0];
+                if (contract) {
+                  setSelectedContract(contract);
+                  setDialogType('cad');
+                  setDialogOpen(true);
+                }
+              }}
+              disabled={contracts.length === 0}
+            >
+              Documentary Collection (CAD)
+            </Button>
+            <Button
+              variant="contained"
+              color="secondary"
+              startIcon={<AttachMoney />}
+              onClick={() => {
+                const contract = contracts[0];
+                if (contract) {
+                  setSelectedContract(contract);
+                  setDialogType('advance');
+                  setDialogOpen(true);
+                }
+              }}
+              disabled={contracts.length === 0}
+            >
+              Record Advance Payment
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              startIcon={<Assignment />}
+              onClick={() => {
+                const contract = contracts[0];
+                if (contract) {
+                  setSelectedContract(contract);
+                  setDialogType('consignment');
+                  setDialogOpen(true);
+                }
+              }}
+              disabled={contracts.length === 0}
+            >
+              Consignment Permit
+            </Button>
+          </Box>
+
+          {contracts.length === 0 && (
+            <Alert severity="warning" sx={{ mb: 3 }}>
+              No NBE-approved contracts available. Please wait for contracts to be approved before processing payments.
+            </Alert>
+          )}
+
+          {/* Documentary Collections Table */}
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+              <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
+              Documentary Collections (CAD)
+            </Typography>
+            {documentaryCollections.length === 0 ? (
+              <Alert severity="info">No documentary collections registered</Alert>
+            ) : (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Collection ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Drawee</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Payment Term</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {documentaryCollections.map((collection: any) => (
+                      <TableRow key={collection.collectionId}>
+                        <TableCell>{collection.collectionId}</TableCell>
+                        <TableCell>{collection.exporterId}</TableCell>
+                        <TableCell>{collection.draweeName}</TableCell>
+                        <TableCell>${collection.amount?.toLocaleString()} {collection.currency}</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={collection.paymentTerm} 
+                            size="small" 
+                            color={collection.paymentTerm === 'SIGHT' ? 'success' : 'warning'}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip label={collection.status} status={collection.status === 'PAID' ? 'approved' : 'pending'} />
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title="View Details">
+                            <IconButton size="small" color="primary">
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* Advance Payments Table */}
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+              <AttachMoney sx={{ mr: 1, verticalAlign: 'middle' }} />
+              Advance Payments
+            </Typography>
+            {advancePayments.length === 0 ? (
+              <Alert severity="info">No advance payments recorded</Alert>
+            ) : (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Payment ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>SWIFT Ref</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Received Date</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {advancePayments.map((payment: any) => (
+                      <TableRow key={payment.paymentId}>
+                        <TableCell>{payment.paymentId}</TableCell>
+                        <TableCell>{payment.exporterId}</TableCell>
+                        <TableCell>${payment.amount?.toLocaleString()} {payment.currency}</TableCell>
+                        <TableCell>{payment.swiftReference}</TableCell>
+                        <TableCell>
+                          <StatusChip 
+                            label={payment.status} 
+                            status={payment.status === 'SETTLED' ? 'approved' : 'pending'} 
+                          />
+                        </TableCell>
+                        <TableCell>{new Date(payment.receivedDate).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          <Tooltip title="View Details">
+                            <IconButton size="small" color="primary">
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* Consignments Table */}
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+              <Assignment sx={{ mr: 1, verticalAlign: 'middle' }} />
+              Consignment Sales (Fruits, Flowers, Meat)
+            </Typography>
+            {consignments.length === 0 ? (
+              <Alert severity="info">No consignment permits issued</Alert>
+            ) : (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Consignment ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Commodity</strong></TableCell>
+                      <TableCell><strong>Permit Amount</strong></TableCell>
+                      <TableCell><strong>Settled</strong></TableCell>
+                      <TableCell><strong>Outstanding</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {consignments.map((consignment: any) => (
+                      <TableRow key={consignment.consignmentId}>
+                        <TableCell>{consignment.consignmentId}</TableCell>
+                        <TableCell>{consignment.exporterId}</TableCell>
+                        <TableCell>
+                          <Chip label={consignment.commodityType} size="small" color="info" />
+                        </TableCell>
+                        <TableCell>${consignment.permitAmount?.toLocaleString()}</TableCell>
+                        <TableCell>${consignment.settledAmount?.toLocaleString()}</TableCell>
+                        <TableCell>
+                          <Typography 
+                            color={consignment.outstandingAmount > 0 ? 'error' : 'success'}
+                            fontWeight={600}
+                          >
+                            ${consignment.outstandingAmount?.toLocaleString()}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip 
+                            label={consignment.status} 
+                            status={consignment.status === 'SETTLED' ? 'approved' : 'pending'} 
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title="View Details">
+                            <IconButton size="small" color="primary">
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* Export Permits Table */}
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+              <Assignment sx={{ mr: 1, verticalAlign: 'middle' }} />
+              Export Permits (All Payment Methods)
+            </Typography>
+            {exportPermits.length === 0 ? (
+              <Alert severity="info">No export permits issued yet</Alert>
+            ) : (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Permit ID</strong></TableCell>
+                      <TableCell><strong>Permit Number</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Payment Method</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Destination</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Outstanding</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {exportPermits.map((permit: any) => (
+                      <TableRow key={permit.permitId}>
+                        <TableCell>{permit.permitId}</TableCell>
+                        <TableCell>{permit.permitNumber}</TableCell>
+                        <TableCell>{permit.exporterId}</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={permit.paymentMethod} 
+                            size="small" 
+                            color={
+                              permit.paymentMethod === 'LC' ? 'primary' :
+                              permit.paymentMethod === 'CAD' ? 'secondary' :
+                              permit.paymentMethod === 'ADVANCE' ? 'success' : 'warning'
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>${permit.amount?.toLocaleString()} {permit.currency}</TableCell>
+                        <TableCell>{permit.destination}</TableCell>
+                        <TableCell>
+                          <StatusChip 
+                            label={permit.status} 
+                            status={permit.status === 'SETTLED' ? 'approved' : 'pending'} 
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {permit.outstanding ? (
+                            <Chip label="Outstanding" size="small" color="error" />
+                          ) : (
+                            <Chip label="Settled" size="small" color="success" />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title="View Details">
+                            <IconButton size="small" color="primary">
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+
+          {/* Summary Box */}
           <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
             <Typography variant="subtitle1" gutterBottom>
               <Payment sx={{ mr: 1, verticalAlign: 'middle' }} />
-              SWIFT Payment Workflow
+              Payment Methods Summary
             </Typography>
-            
-            <Stepper activeStep={-1} sx={{ mt: 2 }}>
-              <Step>
-                <StepLabel>Documents Submitted</StepLabel>
-              </Step>
-              <Step>
-                <StepLabel>Bank Verification</StepLabel>
-              </Step>
-              <Step>
-                <StepLabel>SWIFT Initiation</StepLabel>
-              </Step>
-              <Step>
-                <StepLabel>Payment Settlement</StepLabel>
-              </Step>
-            </Stepper>
-
-            <Alert severity="warning" sx={{ mt: 3 }}>
-              <strong>Compliance Checks Performed:</strong><br />
-              ✓ Sanctions screening (OFAC, UN, EU lists)<br />
-              ✓ Anti-Money Laundering (AML) verification<br />
-              ✓ Know Your Customer (KYC) validation<br />
-              ✓ EUDR traceability compliance<br />
-              ✓ Export permit validation
-            </Alert>
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} sm={3}>
+                <Typography variant="body2" color="text.secondary">Documentary Collections</Typography>
+                <Typography variant="h6">{documentaryCollections.length}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <Typography variant="body2" color="text.secondary">Advance Payments</Typography>
+                <Typography variant="h6">{advancePayments.length}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <Typography variant="body2" color="text.secondary">Consignments</Typography>
+                <Typography variant="h6">{consignments.length}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <Typography variant="body2" color="text.secondary">Total Permits</Typography>
+                <Typography variant="h6">{exportPermits.length}</Typography>
+              </Grid>
+            </Grid>
           </Paper>
-
-          <Box sx={{ mt: 3 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Recent Payment Transactions
-            </Typography>
-            <Alert severity="info">
-              Payment transaction history will appear here once documents are submitted and verified.
-            </Alert>
-          </Box>
         </ModernCard>
       )}
 
@@ -863,6 +1377,174 @@ const BanksPortal: React.FC = () => {
           >
             Issue LC
           </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* LC Details Dialog */}
+      <Dialog open={dialogOpen && dialogType === 'lcDetails'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Letter of Credit Details
+        </DialogTitle>
+        <DialogContent>
+          {selectedLC && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={3}>
+                {/* LC Information */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    LC Information
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">LC ID</Typography>
+                        <Typography variant="body1" fontWeight={600}>{selectedLC.lcId}</Typography>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Status</Typography>
+                        <StatusChip 
+                          label={selectedLC.status} 
+                          status={selectedLC.status === 'ISSUED' ? 'APPROVED' : selectedLC.status === 'REQUESTED' ? 'PENDING' : 'ACTIVE'} 
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Contract Reference</Typography>
+                        <Typography variant="body1">{selectedLC.contractId}</Typography>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
+                        <Typography variant="body1">{selectedLC.exporterId}</Typography>
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Grid>
+
+                {/* Banking Details */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Banking Details
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Issuing Bank (Buyer's Bank)</Typography>
+                        <Typography variant="body1" fontWeight={600}>
+                          {selectedLC.issuingBank || 'N/A'}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Advising Bank (Exporter's Bank)</Typography>
+                        <Typography variant="body1" fontWeight={600}>
+                          {selectedLC.advisingBank || selectedLC.bankName || 'N/A'}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Grid>
+
+                {/* Financial Details */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Financial Details
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">LC Amount</Typography>
+                        <Typography variant="h6" color="primary" fontWeight={600}>
+                          ${selectedLC.amount.toLocaleString()} {selectedLC.currency}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Currency</Typography>
+                        <Typography variant="body1">{selectedLC.currency}</Typography>
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Grid>
+
+                {/* Timeline */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Timeline
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Request Date</Typography>
+                        <Typography variant="body1">
+                          {new Date(selectedLC.requestDate).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="textSecondary">Expiry Date</Typography>
+                        <Typography variant="body1" fontWeight={600}>
+                          {new Date(selectedLC.expiryDate).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <Typography variant="body2" color="textSecondary">Days Remaining</Typography>
+                        <Typography variant="body1">
+                          {Math.max(0, Math.ceil((new Date(selectedLC.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} days
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Grid>
+
+                {/* Workflow Status */}
+                <Grid item xs={12}>
+                  <Alert severity={selectedLC.status === 'ISSUED' ? 'success' : 'info'}>
+                    {selectedLC.status === 'ISSUED' ? (
+                      <>
+                        <strong>LC Active:</strong> This Letter of Credit has been issued and is active. 
+                        The exporter can proceed with shipment preparation. NBE will allocate forex based on this LC.
+                      </>
+                    ) : selectedLC.status === 'APPROVED' ? (
+                      <>
+                        <strong>LC Approved:</strong> This Letter of Credit has been approved and is ready for issuance.
+                      </>
+                    ) : (
+                      <>
+                        <strong>LC Pending:</strong> This Letter of Credit is awaiting approval from the issuing bank.
+                      </>
+                    )}
+                  </Alert>
+                </Grid>
+
+                {/* Next Steps */}
+                {selectedLC.status === 'ISSUED' && (
+                  <Grid item xs={12}>
+                    <Paper sx={{ p: 2, bgcolor: 'primary.50', border: '1px solid', borderColor: 'primary.200' }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        <TrendingUp sx={{ mr: 1, verticalAlign: 'middle' }} />
+                        Next Steps in Export Process:
+                      </Typography>
+                      <Typography variant="body2" component="div">
+                        1. <strong>NBE Forex Allocation:</strong> NBE will allocate foreign exchange (40/60 retention policy)<br />
+                        2. <strong>Quality Inspection:</strong> ECTA conducts quality inspection and issues export permit<br />
+                        3. <strong>Shipment Preparation:</strong> Exporter prepares shipment with required documents<br />
+                        4. <strong>Document Submission:</strong> Exporter submits shipping documents to bank<br />
+                        5. <strong>Payment Release:</strong> Bank verifies documents and releases payment via SWIFT
+                      </Typography>
+                    </Paper>
+                  </Grid>
+                )}
+              </Grid>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDialog}>Close</Button>
         </DialogActions>
       </Dialog>
 
@@ -974,6 +1656,24 @@ const BanksPortal: React.FC = () => {
           </AnimatedButton>
         </DialogActions>
       </Dialog>
+
+      {/* Payment Method Forms Dialog */}
+      <PaymentMethodForms
+        open={dialogOpen && (dialogType === 'cad' || dialogType === 'advance' || dialogType === 'consignment')}
+        type={dialogType as 'cad' | 'advance' | 'consignment' | null}
+        selectedContract={selectedContract}
+        onClose={handleCloseDialog}
+        onSubmit={handlePaymentMethodSubmit}
+      />
+
+      <NotificationDialog
+        open={notification.open}
+        onClose={closeNotification}
+        type={notification.type}
+        title={notification.title}
+        message={notification.message}
+        details={notification.details}
+      />
     </Box>
   );
 };

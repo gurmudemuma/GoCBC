@@ -56,6 +56,7 @@ import {
   StatusChip,
   ThemeToggle,
 } from '@/components/modern';
+import { CustomsInspection } from './CustomsInspection';
 
 interface CustomsDeclaration {
   declarationId: string;
@@ -94,42 +95,6 @@ const CustomsPortal: React.FC = () => {
   const [selectedDeclaration, setSelectedDeclaration] = useState<CustomsDeclaration | null>(null);
   const [clearanceDialogOpen, setClearanceDialogOpen] = useState(false);
   const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
-  // Mock customs declarations data
-  const mockDeclarations: CustomsDeclaration[] = [
-    {
-      declarationId: 'CD2026001',
-      shipmentId: 'SHIPMENT2026001',
-      exporterId: 'EXP2026001',
-      declarationType: 'EUDR_ENHANCED',
-      hsCode: '090111',
-      quantity: 2000,
-      value: 18500,
-      currency: 'USD',
-      destination: 'Germany',
-      status: 'UNDER_REVIEW',
-      submissionDate: '2026-05-31T10:00:00Z',
-      customsOfficer: 'Officer Alemayehu T.',
-      inspectionRequired: true,
-      eudrCompliant: true,
-    },
-    {
-      declarationId: 'CD2026002',
-      shipmentId: 'SHIPMENT2026002',
-      exporterId: 'EXP2026002',
-      declarationType: 'STANDARD',
-      hsCode: '090111',
-      quantity: 1500,
-      value: 12750,
-      currency: 'USD',
-      destination: 'USA',
-      status: 'CLEARED',
-      submissionDate: '2026-05-30T14:30:00Z',
-      clearanceDate: '2026-05-31T09:15:00Z',
-      customsOfficer: 'Officer Meron K.',
-      inspectionRequired: false,
-      eudrCompliant: false,
-    },
-  ];
 
   const clearanceData = [
     { month: 'Jan', standard: 145, simplified: 89, eudr: 23 },
@@ -159,24 +124,162 @@ const CustomsPortal: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     try {
-      // In real implementation, load from API
-      setDeclarations(mockDeclarations);
+      // Load shipments with PERMIT_ISSUED status (ready for customs)
+      const shipmentsResponse = await fetch('http://localhost:3001/api/v1/shipments', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const shipmentsResult = await shipmentsResponse.json();
+      
+      if (shipmentsResult.success && shipmentsResult.data) {
+        // Filter for shipments with export permit (ready for customs declaration)
+        const readyShipments = shipmentsResult.data.filter((s: any) => 
+          s.shipmentStatus === 'PERMIT_ISSUED' || s.shipmentStatus === 'CUSTOMS_CLEARED'
+        );
+        
+        console.log(`[CUSTOMS] Total shipments: ${shipmentsResult.data.length}`);
+        console.log(`[CUSTOMS] Ready for customs: ${readyShipments.length}`);
+        
+        // Map shipments to declarations (in real system, these would be separate)
+        const mappedDeclarations = readyShipments.map((s: any) => ({
+          declarationId: `CD-${s.shipmentID || s.shipmentId}`,
+          shipmentId: s.shipmentID || s.shipmentId,
+          exporterId: s.exporterID || s.exporterId,
+          declarationType: s.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD',
+          hsCode: '090111', // Coffee HS code
+          quantity: s.quantity,
+          value: s.quantity * 9.25, // Approximate value
+          currency: 'USD',
+          destination: s.destination || 'Unknown',
+          status: s.shipmentStatus === 'CUSTOMS_CLEARED' ? 'CLEARED' : 'SUBMITTED',
+          submissionDate: s.shipmentDate || s.registrationDate || new Date().toISOString(),
+          customsOfficer: 'Officer Alemayehu T.',
+          inspectionRequired: true,
+          eudrCompliant: s.eudrCompliant || false,
+          clearanceDate: s.shipmentStatus === 'CUSTOMS_CLEARED' ? new Date().toISOString() : undefined,
+        }));
+        
+        setDeclarations(mappedDeclarations);
+      }
     } catch (error) {
-      console.error('Failed to load data:', error);
+      console.error('[CUSTOMS] Failed to load data:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleClearDeclaration = async (declarationId: string) => {
+  const handleScheduleInspection = async (declarationId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    
     try {
-      // In real implementation, call API
-      console.log('Clearing declaration:', declarationId);
-      setClearanceDialogOpen(false);
-      loadData();
+      console.log('[CUSTOMS] Scheduling inspection for:', declarationId);
+      
+      // Get inspector notes from the form
+      const notesInput = document.querySelector<HTMLTextAreaElement>('textarea[placeholder*="inspection requirements"]');
+      const inspectorNotes = notesInput?.value || 'Standard inspection scheduled';
+      
+      // Call customs review API to schedule inspection
+      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/review`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          inspectorNotes,
+          inspectionType: selectedDeclaration?.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD',
+          scheduledDate: new Date().toISOString(),
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        console.log('[CUSTOMS] ✅ Inspection scheduled successfully');
+        alert(`✅ Inspection Scheduled\n\nDeclaration: ${declarationId}\nType: ${selectedDeclaration?.eudrCompliant ? 'EUDR Enhanced' : 'Standard Physical'}\nNotes: ${inspectorNotes}\n\nStatus updated to UNDER_INSPECTION`);
+        setInspectionDialogOpen(false);
+        loadData();
+      } else {
+        console.error('[CUSTOMS] ❌ Failed to schedule inspection:', result);
+        alert(`❌ Failed to schedule inspection\n\n${result.error || 'Unknown error'}`);
+      }
     } catch (error) {
-      console.error('Failed to clear declaration:', error);
+      console.error('[CUSTOMS] Failed to schedule inspection:', error);
+      alert(`❌ Network Error\n\nFailed to schedule inspection: ${error}`);
+    }
+  };
+
+  const handleCompleteInspection = async (declarationId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    
+    try {
+      console.log('[CUSTOMS] Completing inspection for:', declarationId);
+      
+      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/complete-inspection`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          inspectionResult: 'PASSED',
+          inspectorComments: 'All requirements met',
+          completedDate: new Date().toISOString(),
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        console.log('[CUSTOMS] ✅ Inspection completed successfully');
+        alert(`✅ Inspection Completed\n\nDeclaration: ${declarationId}\nResult: PASSED\n\nStatus updated to UNDER_REVIEW for final clearance`);
+        loadData();
+      } else {
+        console.error('[CUSTOMS] ❌ Failed to complete inspection:', result);
+        alert(`❌ Failed to complete inspection\n\n${result.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[CUSTOMS] Failed to complete inspection:', error);
+      alert(`❌ Network Error\n\nFailed to complete inspection: ${error}`);
+    }
+  };
+
+  const handleClearDeclaration = async (declarationId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    
+    try {
+      console.log('[CUSTOMS] Clearing declaration:', declarationId);
+      
+      // Call customs clearance API
+      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/clear`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          clearanceNumber: `CLR-${Date.now()}`,
+          dutiesAmount: '0', // Can be calculated based on value
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        console.log('[CUSTOMS] ✅ Declaration cleared successfully');
+        setClearanceDialogOpen(false);
+        loadData();
+      } else {
+        console.error('[CUSTOMS] ❌ Failed to clear declaration:', result);
+      }
+    } catch (error) {
+      console.error('[CUSTOMS] Failed to clear declaration:', error);
     }
   };
   const declarationColumns: GridColDef[] = [
@@ -265,7 +368,7 @@ const CustomsPortal: React.FC = () => {
               </IconButton>
             </Tooltip>
           )}
-          {params.row.inspectionRequired && (
+          {params.row.inspectionRequired && params.row.status === 'SUBMITTED' && (
             <Tooltip title="Schedule Inspection">
               <IconButton 
                 size="small" 
@@ -276,6 +379,20 @@ const CustomsPortal: React.FC = () => {
                 }}
               >
                 <Security />
+              </IconButton>
+            </Tooltip>
+          )}
+          {params.row.status === 'UNDER_INSPECTION' && (
+            <Tooltip title="Complete Inspection">
+              <IconButton 
+                size="small" 
+                color="success"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCompleteInspection(params.row.declarationId);
+                }}
+              >
+                <CheckCircle />
               </IconButton>
             </Tooltip>
           )}
@@ -414,6 +531,11 @@ const CustomsPortal: React.FC = () => {
           <Typography variant="h6" gutterBottom>
             Inspection Management
           </Typography>
+          
+          <Box sx={{ mb: 3 }}>
+            <CustomsInspection />
+          </Box>
+
           <Grid container spacing={3} mb={3}>
             <Grid item xs={12} md={6}>
               <Card>
@@ -922,7 +1044,11 @@ const CustomsPortal: React.FC = () => {
           <AnimatedButton 
             variant="contained" 
             brandColor="#0F47AF"
-            onClick={() => setInspectionDialogOpen(false)}
+            onClick={() => {
+              if (selectedDeclaration) {
+                handleScheduleInspection(selectedDeclaration.declarationId);
+              }
+            }}
           >
             Schedule Inspection
           </AnimatedButton>

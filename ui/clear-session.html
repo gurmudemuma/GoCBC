@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear CECBS Session</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            max-width: 500px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        p {
+            color: #666;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        button {
+            background: #078930;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(7, 137, 48, 0.3);
+        }
+        button:hover {
+            background: #065d23;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(7, 137, 48, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .success {
+            background: #4caf50;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+        .info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        .icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🔐</div>
+        <h1>Clear CECBS Session</h1>
+        <p>If you're experiencing authentication issues like "jwt malformed" errors, click the button below to clear your session and reset your login state.</p>
+        
+        <div class="info">
+            <strong>⚠️ This will clear:</strong>
+            <ul style="text-align: left; margin-top: 10px;">
+                <li>Authentication token</li>
+                <li>User information</li>
+                <li>Theme preference</li>
+                <li>Remembered username</li>
+            </ul>
+        </div>
+
+        <button onclick="clearSession()">Clear Session & Logout</button>
+        
+        <div id="success" class="success">
+            ✅ Session cleared successfully! Redirecting to login page...
+        </div>
+    </div>
+
+    <script>
+        function clearSession() {
+            // Clear all CECBS-related localStorage items
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+            localStorage.removeItem('theme');
+            localStorage.removeItem('rememberedUsername');
+            
+            // Also clear any other auth-related items
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (key.includes('auth') || key.includes('token') || key.includes('session'))) {
+                    keysToRemove.push(key);
+                }
+            }
+            keysToRemove.forEach(key => localStorage.removeItem(key));
+            
+            // Show success message
+            document.getElementById('success').style.display = 'block';
+            
+            // Redirect to login after 2 seconds
+            setTimeout(() => {
+                window.location.href = 'http://localhost:3000/login';
+            }, 2000);
+        }
+    </script>
+</body>
+</html>

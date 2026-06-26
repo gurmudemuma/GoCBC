@@ -260,12 +260,15 @@ router.post('/exporter-applications/:applicationId/approve',
     body('exporterId').notEmpty(),
     body('ectaLicenseNumber').notEmpty(),
     body('licenseExpiryDate').isISO8601(),
+    body('bankName').optional(),
+    body('bankBranch').optional(),
+    body('bankBranchCode').optional(),
   ],
   validateRequest,
   async (req, res) => {
     try {
       const { applicationId } = req.params;
-      const { exporterId, ectaLicenseNumber, licenseExpiryDate } = req.body;
+      const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankBranch, bankBranchCode } = req.body;
       const db = fabricService['db'];
       
       if (!db) {
@@ -333,7 +336,7 @@ router.post('/exporter-applications/:applicationId/approve',
       });
 
       if (existingUser) {
-        // Update existing user account
+        // Update existing user account with bank information
         await new Promise((resolve, reject) => {
           db.run(
             `UPDATE users 
@@ -343,9 +346,13 @@ router.post('/exporter-applications/:applicationId/approve',
                  ecta_license = ?,
                  password_hash = ?,
                  organization = ?,
+                 bank_name = ?,
+                 bank_branch = ?,
+                 bank_branch_code = ?,
                  updated_at = datetime('now')
              WHERE email = ? AND role = 'EXPORTER'`,
-            [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, application.email],
+            [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, 
+             bankName || null, bankBranch || null, bankBranchCode || null, application.email],
             (err: any) => { 
               if (err) {
                 logger.error('Failed to activate user account:', err);
@@ -369,8 +376,9 @@ router.post('/exporter-applications/:applicationId/approve',
           db.run(
             `INSERT INTO users (
               username, email, password_hash, full_name, role, organization,
-              phone, permissions, status, exporter_id, ecta_license, created_at
-            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, datetime('now'))`,
+              phone, permissions, status, exporter_id, ecta_license, 
+              bank_name, bank_branch, bank_branch_code, created_at
+            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, ?, ?, ?, datetime('now'))`,
             [
               exporterId,
               application.email,
@@ -380,7 +388,10 @@ router.post('/exporter-applications/:applicationId/approve',
               application.phone,
               defaultPermissions,
               exporterId,
-              ectaLicenseNumber
+              ectaLicenseNumber,
+              bankName || null,
+              bankBranch || null,
+              bankBranchCode || null
             ],
             (err: any) => { 
               if (err) {
@@ -395,7 +406,7 @@ router.post('/exporter-applications/:applicationId/approve',
         });
       }
       
-      // Step 4: Update application status
+      // Step 4: Update application status with bank information
       await new Promise((resolve, reject) => {
         db.run(
           `UPDATE exporter_applications 
@@ -403,14 +414,18 @@ router.post('/exporter-applications/:applicationId/approve',
                approved_at = ?, 
                exporter_id = ?,
                ecta_license_number = ?,
-               license_expiry_date = ?
+               license_expiry_date = ?,
+               bank_name = ?,
+               bank_branch_name = ?,
+               bank_branch_code = ?
            WHERE application_id = ?`,
-          ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate, applicationId],
+          ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate,
+           bankName || null, bankBranch || null, bankBranchCode || null, applicationId],
           (err: any) => { if (err) reject(err); else resolve(true); }
         );
       });
       
-      logger.info(`✅ Application approved: ${applicationId} -> ${exporterId} (User activated: ${exporterId})`);
+      logger.info(`✅ Application approved: ${applicationId} -> ${exporterId} (User activated: ${exporterId}, Bank: ${bankName}, Branch: ${bankBranch})`);
       
       // Return credentials to ECTA admin (to be sent to exporter via email)
       res.json({ 
@@ -420,6 +435,9 @@ router.post('/exporter-applications/:applicationId/approve',
           exporterId, 
           status: 'approved', 
           txId: result.txId,
+          bankName: bankName || null,
+          bankBranch: bankBranch || null,
+          bankBranchCode: bankBranchCode || null,
           credentials: {
             username: exporterId,
             temporaryPassword: newPassword,
@@ -747,7 +765,33 @@ router.get('/me/profile', authMiddleware, async (req, res) => {
       });
     }
 
+    // Get exporter data from blockchain
     const result = await fabricService.getExporter(exporterId);
+    
+    // Enrich with bank information from database
+    const db = fabricService['db'];
+    if (db && result.success && result.data) {
+      try {
+        const userBankInfo = await new Promise<any>((resolve, reject) => {
+          db.get(
+            'SELECT bank_name, bank_branch, bank_branch_code FROM users WHERE exporter_id = ? OR username = ?',
+            [exporterId, exporterId],
+            (err: any, row: any) => {
+              if (err) reject(err);
+              else resolve(row);
+            }
+          );
+        });
+
+        if (userBankInfo) {
+          result.data.bankName = userBankInfo.bank_name;
+          result.data.bankBranch = userBankInfo.bank_branch;
+          result.data.bankBranchCode = userBankInfo.bank_branch_code;
+        }
+      } catch (dbError) {
+        logger.warn('Failed to fetch bank information from database:', dbError);
+      }
+    }
 
     res.json({
       success: result.success,

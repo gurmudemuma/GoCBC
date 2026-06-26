@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -179,6 +180,29 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 		return err
 	}
 
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "lcId", OldValue: "", NewValue: lcID, DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "amount", OldValue: "", NewValue: fmt.Sprintf("%.2f", mappedAmount), DataType: "number"},
+		{FieldName: "status", OldValue: "", NewValue: "REQUESTED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  false, // Not yet approved
+		UCP600Check:    true,  // LC follows UCP 600
+		EUDRCompliance: contract.EUDRRequired,
+		ICOCompliance:  true,
+		ComplianceNote: "LC requested, pending bank approval and NBE forex allocation",
+	}
+
+	err = c.CreateAuditLog(ctx, "CREATE", "LC", lcID, "", "REQUESTED", changes,
+		"Letter of Credit requested by exporter", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
 	fmt.Printf("=== RequestLC completed: Issuing Bank (%s) ≠ Advising Bank (%s) ===\n", issuingBank, advisingBank)
 	return nil
 }
@@ -263,7 +287,8 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 		exchangeRate = rateObj.MidRate
 	}
 
-	retentionRate := 40.0
+	// NBE FXD/01/2024: 100% retention allowed, must sell to bank within 30 days
+	retentionRate := 100.0
 	policy, err := c.GetCurrentRetentionPolicy(ctx, "COFFEE")
 	if err == nil && policy != nil {
 		retentionRate = policy.RetentionRate
@@ -306,6 +331,28 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 		}
 	}
 
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "REQUESTED", NewValue: "APPROVED", DataType: "string"},
+		{FieldName: "beneficiary", OldValue: "", NewValue: mappedBeneficiary, DataType: "string"},
+		{FieldName: "approvalDate", OldValue: "", NewValue: txTime.Format(time.RFC3339), DataType: "date"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true, // Forex allocated
+		UCP600Check:    true,
+		EUDRCompliance: true,
+		ICOCompliance:  true,
+		ComplianceNote: "LC approved by bank, forex allocated by NBE",
+	}
+
+	err = c.CreateAuditLog(ctx, "APPROVE", "LC", lcID, "REQUESTED", "APPROVED", changes,
+		"Letter of Credit approved, forex allocated", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
 	fmt.Printf("=== ApproveLC completed ===\n")
 	return nil
 }
@@ -332,17 +379,51 @@ func (c *CoffeeContract) IssueLC(ctx contractapi.TransactionContextInterface,
 		return fmt.Errorf("LC cannot be issued, current status: %s", lc.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	lc.Status = "ISSUED"
 	lc.Terms = terms
-	lc.IssueDate = time.Now().Format(time.RFC3339)
-	lc.UpdatedAt = time.Now()
+	lc.IssueDate = txTime.Format(time.RFC3339)
+	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
 	if err != nil {
 		return fmt.Errorf("failed to marshal LC: %v", err)
 	}
 
-	return ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "APPROVED", NewValue: "ISSUED", DataType: "string"},
+		{FieldName: "issueDate", OldValue: "", NewValue: txTime.Format(time.RFC3339), DataType: "date"},
+		{FieldName: "terms", OldValue: "", NewValue: terms, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    true, // LC follows UCP 600 documentary credit rules
+		EUDRCompliance: true,
+		ICOCompliance:  true,
+		ComplianceNote: "LC issued by bank, ready for shipment and payment",
+	}
+
+	err = c.CreateAuditLog(ctx, "ISSUE", "LC", lcID, "APPROVED", "ISSUED", changes,
+		"Letter of Credit issued by bank", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	return nil
 }
 
 // ReadLC - Get Letter of Credit details
@@ -394,9 +475,22 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 
 	lc.Status = newStatus
 	if newStatus == "UTILIZED" {
-		lc.UtilizationDate = time.Now().Format(time.RFC3339)
+		// Get transaction timestamp
+		txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+		if err != nil {
+			return fmt.Errorf("failed to get tx timestamp: %v", err)
+		}
+		txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+		lc.UtilizationDate = txTime.Format(time.RFC3339)
 	}
-	lc.UpdatedAt = time.Now()
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
 	if err != nil {

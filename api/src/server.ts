@@ -35,6 +35,11 @@ import forexRoutes from './routes/forex';
 import customsRoutes from './routes/customs';
 import ecxRoutes from './routes/ecx';
 import qualityRoutes from './routes/quality';
+import permitsRoutes from './routes/permits';
+import collectionsRoutes from './routes/collections';
+import advanceRoutes from './routes/advance';
+import consignmentRoutes from './routes/consignment';
+import auditRoutes from './routes/audit';
 
 // Load environment variables
 dotenv.config();
@@ -142,6 +147,15 @@ class CECBSServer {
     apiV1.use('/customs', authMiddleware, customsRoutes);
     apiV1.use('/ecx', authMiddleware, ecxRoutes);
     apiV1.use('/quality', authMiddleware, qualityRoutes);
+    
+    // V1.5 CBE Payment Methods
+    apiV1.use('/permits', authMiddleware, permitsRoutes);
+    apiV1.use('/collections', authMiddleware, collectionsRoutes);
+    apiV1.use('/advance', authMiddleware, advanceRoutes);
+    apiV1.use('/consignment', authMiddleware, consignmentRoutes);
+
+    // V2.0 Cryptographic Audit Trail
+    apiV1.use('/audit', authMiddleware, auditRoutes);
 
     this.app.use('/api/v1', apiV1);
 

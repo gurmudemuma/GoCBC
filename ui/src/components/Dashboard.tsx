@@ -59,7 +59,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-interface DashboardStats {
+interface ExtendedDashboardStats {
   totalExporters: number;
   activeShipments: number;
   totalValue: number;
@@ -93,7 +93,7 @@ interface DashboardStats {
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const theme = useTheme();
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [stats, setStats] = useState<ExtendedDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -108,8 +108,8 @@ const Dashboard: React.FC = () => {
     try {
       setRefreshing(true);
       const response = await api.getDashboardStats();
-      if (response.success) {
-        setStats(response.data);
+      if (response.success && response.data) {
+        setStats(response.data as unknown as ExtendedDashboardStats);
       }
     } catch (error) {
       console.error('Failed to load dashboard data:', error);

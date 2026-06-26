@@ -1,11 +1,11 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Sales Contracts API Routes
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { body, param, query } from 'express-validator';
+import { body, param } from 'express-validator';
 
 const router = express.Router();
 const fabricService = new FabricService();
@@ -332,13 +332,22 @@ router.get('/:contractID',
 router.post('/:contractID/approve',
   [param('contractID').notEmpty().withMessage('Contract ID is required')],
   validateRequest,
-  async (req, res) => {
+  async (req: Request, res: Response) => {
     try {
       const { contractID } = req.params;
+      const user = (req as any).user; // Get authenticated user info
+      
+      // Log which organization is approving
+      logger.info(`[${user?.org || 'UNKNOWN'}] Approving contract: ${contractID}`, {
+        userId: user?.sub,
+        organization: user?.org,
+        role: user?.role,
+      });
+      
       const result = await fabricService.approveSalesContract(contractID);
 
       if (result.success) {
-        logger.info(`Sales contract approved successfully: ${contractID}`);
+        logger.info(`[${user?.org}] ✅ Sales contract approved: ${contractID}`);
         res.json({
           success: true,
           data: result.data,

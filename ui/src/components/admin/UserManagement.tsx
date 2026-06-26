@@ -531,14 +531,14 @@ const UserManagement: React.FC = () => {
               rows={filteredUsers}
               columns={columns}
               loading={loading}
-              pagination
-              paginationMode="server"
-              page={page}
-              pageSize={pageSize}
-              rowCount={totalUsers}
-              onPageChange={(newPage) => setPage(newPage)}
-              onPageSizeChange={(newPageSize) => setPageSize(newPageSize)}
+              paginationModel={{ page, pageSize }}
+              onPaginationModelChange={(model) => {
+                setPage(model.page);
+                setPageSize(model.pageSize);
+              }}
               pageSizeOptions={[10, 25, 50, 100]}
+              rowCount={totalUsers}
+              paginationMode="server"
               autoHeight
               disableRowSelectionOnClick
               sx={{

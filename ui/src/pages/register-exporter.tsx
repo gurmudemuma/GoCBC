@@ -22,6 +22,7 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
+  MenuItem,
   alpha,
   useTheme,
 } from '@mui/material';
@@ -43,8 +44,110 @@ import {
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import api from '@/utils/api';
+import { ETHIOPIAN_BANKS } from '@/utils/banks';
 
 const steps = ['Company Information', 'Requirements', 'Contact Details', 'Review & Submit'];
+
+// Ethiopian Regions
+const ETHIOPIAN_REGIONS = [
+  'Addis Ababa',
+  'Afar',
+  'Amhara',
+  'Benishangul-Gumuz',
+  'Dire Dawa',
+  'Gambela',
+  'Harari',
+  'Oromia',
+  'Sidama',
+  'SNNPR',
+  'Somali',
+  'Tigray',
+];
+
+// Cities mapped to their regions
+const CITIES_BY_REGION: Record<string, string[]> = {
+  'Addis Ababa': [
+    'Addis Ababa',
+  ],
+  'Afar': [
+    'Semera',
+    'Awash',
+    'Asayita',
+    'Dubti',
+  ],
+  'Amhara': [
+    'Bahir Dar',
+    'Gondar',
+    'Dessie',
+    'Debre Birhan',
+    'Debre Markos',
+    'Kombolcha',
+    'Woldia',
+    'Debre Tabor',
+    'Lalibela',
+  ],
+  'Benishangul-Gumuz': [
+    'Asosa',
+    'Metekel',
+    'Pawe',
+  ],
+  'Dire Dawa': [
+    'Dire Dawa',
+  ],
+  'Gambela': [
+    'Gambela',
+    'Itang',
+    'Abobo',
+  ],
+  'Harari': [
+    'Harar',
+  ],
+  'Oromia': [
+    'Adama (Nazret)',
+    'Jimma',
+    'Bishoftu (Debre Zeit)',
+    'Shashamane',
+    'Nekemte',
+    'Asella',
+    'Ambo',
+    'Bale Robe',
+    'Gimbi',
+    'Dera',
+    'Burayu',
+    'Sebeta',
+    'Holeta',
+    'Ziway',
+  ],
+  'Sidama': [
+    'Hawassa',
+    'Yirgalem',
+    'Wondo Genet',
+  ],
+  'SNNPR': [
+    'Arba Minch',
+    'Dilla',
+    'Sodo',
+    'Hosaena',
+    'Jinka',
+    'Bonga',
+    'Mizan Teferi',
+    'Sawla',
+  ],
+  'Somali': [
+    'Jijiga',
+    'Gode',
+    'Kebri Dahar',
+    'Degahbur',
+  ],
+  'Tigray': [
+    'Mekele',
+    'Adigrat',
+    'Axum',
+    'Shire',
+    'Adwa',
+    'Wukro',
+  ],
+};
 
 const RegisterExporterPage: React.FC = () => {
   const theme = useTheme();
@@ -85,7 +188,22 @@ const RegisterExporterPage: React.FC = () => {
   });
 
   const handleChange = (field: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [field]: event.target.value });
+    const newValue = event.target.value;
+    
+    // If region changes, clear the city selection
+    if (field === 'region') {
+      setFormData({ ...formData, [field]: newValue, city: '' });
+    } else {
+      setFormData({ ...formData, [field]: newValue });
+    }
+  };
+
+  // Get available cities based on selected region
+  const getAvailableCities = () => {
+    if (!formData.region) {
+      return [];
+    }
+    return CITIES_BY_REGION[formData.region] || [];
   };
 
   const handleNext = () => {
@@ -226,13 +344,13 @@ const RegisterExporterPage: React.FC = () => {
                 label="Exporter Type"
                 value={formData.exporterType}
                 onChange={handleChange('exporterType')}
-                SelectProps={{ native: true }}
                 helperText="Select your business structure"
+                sx={{ mt: 0 }}
               >
-                <option value="">Select Type</option>
-                <option value="private">Private Exporter (15M ETB minimum)</option>
-                <option value="company">Trade Association/Company (20M ETB minimum)</option>
-                <option value="individual">Individual with Competency Certificate (10M ETB minimum)</option>
+                <MenuItem value="">Select Type</MenuItem>
+                <MenuItem value="private">Private Exporter (15M ETB minimum)</MenuItem>
+                <MenuItem value="company">Trade Association/Company (20M ETB minimum)</MenuItem>
+                <MenuItem value="individual">Individual with Competency Certificate (10M ETB minimum)</MenuItem>
               </TextField>
             </Grid>
 
@@ -304,13 +422,13 @@ const RegisterExporterPage: React.FC = () => {
                 label="ECTA-Certified Laboratory"
                 value={formData.laboratoryFacility}
                 onChange={handleChange('laboratoryFacility')}
-                SelectProps={{ native: true }}
                 helperText="Mandatory for basic quality testing"
+                sx={{ mt: 0 }}
               >
-                <option value="">Select</option>
-                <option value="yes">Yes - Own Laboratory</option>
-                <option value="contracted">Yes - Contracted Laboratory</option>
-                <option value="farmer">N/A - Farmer Exporter (Exempt)</option>
+                <MenuItem value="">Select</MenuItem>
+                <MenuItem value="yes">Yes - Own Laboratory</MenuItem>
+                <MenuItem value="contracted">Yes - Contracted Laboratory</MenuItem>
+                <MenuItem value="farmer">N/A - Farmer Exporter (Exempt)</MenuItem>
               </TextField>
             </Grid>
 
@@ -391,25 +509,16 @@ const RegisterExporterPage: React.FC = () => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                required
-                label="City"
-                value={formData.city}
-                onChange={handleChange('city')}
-              />
-            </Grid>
-
             <Grid item xs={12}>
               <TextField
                 fullWidth
                 required
-                label="Address"
-                value={formData.address}
-                onChange={handleChange('address')}
-                multiline
-                rows={2}
+                select
+                label="Region"
+                value={formData.region}
+                onChange={handleChange('region')}
+                helperText="Select your region/state first"
+                sx={{ mt: 0 }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -417,15 +526,57 @@ const RegisterExporterPage: React.FC = () => {
                     </InputAdornment>
                   ),
                 }}
+              >
+                <MenuItem value="">Select Region</MenuItem>
+                {ETHIOPIAN_REGIONS.map((region) => (
+                  <MenuItem key={region} value={region}>
+                    {region}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                required
+                select
+                label="City"
+                value={formData.city}
+                onChange={handleChange('city')}
+                disabled={!formData.region}
+                helperText={formData.region ? `Select city in ${formData.region}` : 'Select region first'}
+                sx={{ mt: 0 }}
+              >
+                <MenuItem value="">Select City</MenuItem>
+                {getAvailableCities().map((city) => (
+                  <MenuItem key={city} value={city}>
+                    {city}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                required
+                label="Street Address"
+                value={formData.address}
+                onChange={handleChange('address')}
+                placeholder="e.g., Bole Road, near Edna Mall"
+                helperText="Provide detailed street address"
               />
             </Grid>
 
             <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
+                select
                 label="Bank Name"
                 value={formData.bankName}
                 onChange={handleChange('bankName')}
+                sx={{ mt: 0 }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -433,7 +584,14 @@ const RegisterExporterPage: React.FC = () => {
                     </InputAdornment>
                   ),
                 }}
-              />
+              >
+                <MenuItem value="">Select Bank</MenuItem>
+                {ETHIOPIAN_BANKS.map((bank) => (
+                  <MenuItem key={bank.id} value={bank.name}>
+                    {bank.name}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Grid>
 
             <Grid item xs={12} md={6}>

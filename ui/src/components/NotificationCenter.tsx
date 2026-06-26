@@ -30,6 +30,7 @@ import {
   Science,
   Visibility,
   Close,
+  Description,
 } from '@mui/icons-material';
 import api, { formatDate } from '@/utils/api';
 

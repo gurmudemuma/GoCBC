@@ -11,6 +11,9 @@ export interface Exporter {
   professionalTaster: string;
   tasterCertificate: string;
   licenseExpiryDate: string;
+  bankName?: string;
+  bankBranch?: string;
+  bankBranchCode?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +89,121 @@ export interface DashboardStats {
     country: string;
     percentage: number;
   }>;
+}
+
+// CBE Payment Methods
+export interface ExportPermit {
+  permitId: string;
+  permitNumber: string;
+  contractId: string;
+  exporterId: string;
+  lcId?: string;
+  paymentMethod: 'LC' | 'CAD' | 'ADVANCE' | 'CONSIGNMENT';
+  amount: number;
+  currency: string;
+  description: string;
+  destination: string;
+  status: 'ISSUED' | 'UTILIZED' | 'EXPIRED' | 'CANCELLED' | 'SETTLED';
+  outstanding: boolean;
+  approvalLevel: 'STANDARD' | 'BRANCH_MANAGER' | 'NBE';
+  approvedBy: string;
+  issueDate: string;
+  expiryDate: string;
+  repatriatedAmount?: number;
+  bankBranch: string;
+  remarks?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentaryCollection {
+  collectionId: string;
+  contractId: string;
+  exporterId: string;
+  permitId: string;
+  drawerName: string;
+  draweeName: string;
+  draweeAddress: string;
+  paymentTerm: 'SIGHT' | 'ACCEPTANCE';
+  acceptanceDays?: number;
+  amount: number;
+  currency: string;
+  collectingBank: string;
+  collectingBankBIC: string;
+  remittingBank: string;
+  remittingBankBIC: string;
+  documents: string[];
+  status: 'SENT' | 'PRESENTED' | 'ACCEPTED' | 'PAID' | 'UNPAID' | 'RETURNED';
+  sentDate: string;
+  presentationDate?: string;
+  acceptanceDate?: string;
+  dueDate?: string;
+  paymentDate?: string;
+  followUpDays: number;
+  remindersCount: number;
+  lastReminderDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdvancePayment {
+  paymentId: string;
+  contractId: string;
+  exporterId: string;
+  permitId?: string;
+  amount: number;
+  currency: string;
+  creditAdviceNumber: string;
+  receivingBank: string;
+  receivingBankBIC: string;
+  payingBank: string;
+  payingBankBIC: string;
+  swiftReference: string;
+  beneficiaryName: string;
+  beneficiaryAccount: string;
+  status: 'RECEIVED' | 'PERMIT_ISSUED' | 'SHIPPED' | 'SETTLED';
+  receivedDate: string;
+  permitIssueDate?: string;
+  shipmentDate?: string;
+  settlementDate?: string;
+  shipmentId?: string;
+  shippedQuantity?: number;
+  shippedValue?: number;
+  balanceAmount?: number;
+  remarks?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PartialPayment {
+  paymentDate: string;
+  amount: number;
+  currency: string;
+  swiftReference: string;
+  receivedBy: string;
+}
+
+export interface ConsignmentPayment {
+  consignmentId: string;
+  exporterId: string;
+  permitId: string;
+  commodityType: 'FRUITS' | 'FLOWERS' | 'MEAT';
+  description: string;
+  destination: string;
+  buyerName: string;
+  buyerAddress: string;
+  permitAmount: number;
+  currency: string;
+  shippedValue: number;
+  settledAmount: number;
+  outstandingAmount: number;
+  status: 'PERMIT_ISSUED' | 'SHIPPED' | 'PARTIAL' | 'SETTLED';
+  shippedDate?: string;
+  partialPayments: PartialPayment[];
+  bankBranch: string;
+  remarks?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ApiResponse<T> {
@@ -224,27 +342,3 @@ export interface WebSocketMessage {
   data: any;
   timestamp: string;
 }
-
-// Export all types
-export type {
-  Exporter,
-  SalesContract,
-  CoffeeShipment,
-  TraceabilityData,
-  User,
-  DashboardStats,
-  ApiResponse,
-  PaginatedResponse,
-  ChaincodeFunctionCall,
-  BlockchainTransaction,
-  ExporterFormData,
-  ContractFormData,
-  ShipmentFormData,
-  ExporterFilters,
-  ContractFilters,
-  ShipmentFilters,
-  NavigationItem,
-  ThemeConfig,
-  Notification,
-  WebSocketMessage,
-};

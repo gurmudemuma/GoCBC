@@ -32,7 +32,19 @@ class CECBSApi {
       (config) => {
         const token = localStorage.getItem('authToken');
         if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
+          // Basic token validation - ensure it has 3 parts (header.payload.signature)
+          const tokenParts = token.split('.');
+          if (tokenParts.length === 3) {
+            config.headers.Authorization = `Bearer ${token}`;
+          } else {
+            // Token is malformed, remove it
+            console.warn('Malformed token detected, removing from localStorage');
+            localStorage.removeItem('authToken');
+            // Redirect to login if not already there
+            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+              window.location.href = '/login';
+            }
+          }
         }
         return config;
       },
@@ -43,12 +55,14 @@ class CECBSApi {
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
-        // Only redirect to login on 401 Unauthorized, not on 404
+        // Handle authentication errors (401 Unauthorized)
         if (error.response?.status === 401) {
+          console.warn('Authentication failed - clearing token and redirecting to login');
           localStorage.removeItem('authToken');
+          localStorage.removeItem('user');
           // Only redirect if not already on login page
           if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-            window.location.href = '/login';
+            window.location.href = '/login?error=session_expired';
           }
         }
         return Promise.reject(error);

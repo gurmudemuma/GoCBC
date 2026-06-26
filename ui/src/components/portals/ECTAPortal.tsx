@@ -48,10 +48,15 @@ import {
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
+import { InspectionManagement } from './InspectionManagement';
+import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { Exporter, CoffeeShipment, ExporterFormData } from '@/types';
+import BankSelect from '@/components/common/BankSelect';
+import BankBranchSelect from '@/components/common/BankBranchSelect';
+import { BankBranch } from '@/utils/bankBranches';
 
 // Modern Components - 2026 Design
 import {
@@ -66,6 +71,8 @@ import {
   ThemeToggle,
 } from '@/components/modern';
 import UserManagement from '@/components/admin/UserManagement';
+import { NotificationDialog } from '@/components/common/NotificationDialog';
+import { useNotification } from '@/hooks/useNotification';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -126,6 +133,7 @@ const ECTAPortal: React.FC = () => {
   const BRAND_COLOR = '#078930';  // ECTA Green
   const SECONDARY_COLOR = '#6d4c41';  // Coffee Brown
   
+  const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [tabValue, setTabValue] = useState(0);
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [shipments, setShipments] = useState<CoffeeShipment[]>([]);
@@ -135,6 +143,8 @@ const ECTAPortal: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedExporter, setSelectedExporter] = useState<Exporter | null>(null);
+  const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
+  const [selectedShipmentForInspection, setSelectedShipmentForInspection] = useState<any>(null);
   const [qualityDialogOpen, setQualityDialogOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<ExporterApplication | null>(null);
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
@@ -143,6 +153,9 @@ const ECTAPortal: React.FC = () => {
     exporterId: '',
     ectaLicenseNumber: '',
     licenseExpiryDate: '',
+    bankName: '',
+    bankBranch: '',
+    bankBranchCode: '',
   });
   const [rejectionReason, setRejectionReason] = useState('');
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
@@ -284,7 +297,7 @@ ${action === 'suspend' ?
       }
     } catch (error) {
       console.error('Failed to update license status:', error);
-      alert('Failed to update license status. Please try again.');
+      showError('Update Failed', 'Failed to update license status', 'Please try again or contact support');
     }
   };
 
@@ -294,7 +307,12 @@ ${action === 'suspend' ?
     try {
       const response = await api.post(
         `/exporters/exporter-applications/${selectedApplication.application_id}/approve`,
-        approvalData
+        {
+          ...approvalData,
+          bankName: approvalData.bankName,
+          bankBranch: approvalData.bankBranch,
+          bankBranchCode: approvalData.bankBranchCode,
+        }
       );
       
       if (response.data?.success) {
@@ -307,6 +325,12 @@ ${action === 'suspend' ?
 Exporter ID: ${approvalData.exporterId}
 License Number: ${approvalData.ectaLicenseNumber}
 Email: ${selectedApplication.email}
+
+🏦 Banking Details:
+• Bank: ${approvalData.bankName}
+• Branch: ${approvalData.bankBranch}
+• Branch Code: ${approvalData.bankBranchCode}
+• LC Processing: This branch will approve Letters of Credit
 
 📧 Email Notification Sent
 
@@ -322,6 +346,11 @@ Next Steps for Exporter:
    • Track exports and compliance
    • Generate export documentation
 
+4. For LC Processing:
+   • Contact ${approvalData.bankBranch}
+   • All Letters of Credit will be processed through this branch
+   • Branch Code: ${approvalData.bankBranchCode}
+
 The exporter account is now active and can start using the system.`,
           type: 'success'
         });
@@ -332,6 +361,9 @@ The exporter account is now active and can start using the system.`,
           exporterId: '',
           ectaLicenseNumber: '',
           licenseExpiryDate: '',
+          bankName: '',
+          bankBranch: '',
+          bankBranchCode: '',
         });
         loadData();
       }
@@ -904,6 +936,11 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="h6" gutterBottom>
             Quality Control Dashboard
           </Typography>
+          
+          <Box sx={{ mb: 3 }}>
+            <InspectionManagement />
+          </Box>
+
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <ModernCard brandColor={BRAND_COLOR}>
@@ -928,6 +965,10 @@ The exporter can reapply once all requirements are met.`,
                             variant="outlined" 
                             startIcon={<Assignment />}
                             brandColor={BRAND_COLOR}
+                            onClick={() => {
+                              setSelectedShipmentForInspection(shipment);
+                              setInspectionDialogOpen(true);
+                            }}
                           >
                             Start Inspection
                           </AnimatedButton>
@@ -1021,6 +1062,37 @@ The exporter can reapply once all requirements are met.`,
                             size="small" 
                             variant="outlined"
                             brandColor={BRAND_COLOR}
+                            onClick={() => {
+                              const newExpiryDate = new Date(exporter.licenseExpiryDate);
+                              newExpiryDate.setFullYear(newExpiryDate.getFullYear() + 1);
+                              
+                              if (window.confirm(`Process License Renewal?\n\nExporter: ${exporter.companyName}\nLicense: ${exporter.ectaLicenseNumber}\nCurrent Expiry: ${formatDate(exporter.licenseExpiryDate)}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nThis will extend the license for 1 year.`)) {
+                                fetch(`http://localhost:3001/api/v1/exporters/${exporter.exporterId}/renew-license`, {
+                                  method: 'POST',
+                                  headers: {
+                                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+                                    'Content-Type': 'application/json'
+                                  },
+                                  body: JSON.stringify({
+                                    newExpiryDate: newExpiryDate.toISOString(),
+                                    renewedBy: 'ECTA Officer',
+                                    renewalDate: new Date().toISOString(),
+                                  })
+                                })
+                                .then(res => res.json())
+                                .then(result => {
+                                  if (result.success) {
+                                    alert(`✅ License Renewed Successfully\n\nExporter: ${exporter.companyName}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nLicense extended for 1 year`);
+                                    loadData();
+                                  } else {
+                                    alert(`❌ Renewal Failed\n\n${result.error || 'Unknown error'}`);
+                                  }
+                                })
+                                .catch(error => {
+                                  alert(`❌ Network Error\n\n${error}`);
+                                });
+                              }
+                            }}
                           >
                             Process Renewal
                           </AnimatedButton>
@@ -1324,14 +1396,23 @@ The exporter can reapply once all requirements are met.`,
       </Dialog>
 
       {/* Approve Application Dialog */}
-      <Dialog open={approveDialogOpen} onClose={() => setApproveDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={approveDialogOpen} onClose={() => setApproveDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Approve Exporter Application</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="textSecondary" paragraph>
-            Assign exporter ID and license number to approve this application.
-          </Typography>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight="bold" gutterBottom>
+              Approval Process
+            </Typography>
+            <Typography variant="caption" component="div">
+              1. Assign Exporter ID and License Number<br />
+              2. Select Primary Bank for LC Processing<br />
+              3. Select Bank Branch (LC Approval Authority)
+            </Typography>
+          </Alert>
+          
           <Grid container spacing={3} sx={{ mt: 1 }}>
-            <Grid item xs={12}>
+            {/* Exporter ID */}
+            <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 required
@@ -1342,7 +1423,9 @@ The exporter can reapply once all requirements are met.`,
                 helperText="Format: EXP followed by 7 digits"
               />
             </Grid>
-            <Grid item xs={12}>
+            
+            {/* License Number */}
+            <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 required
@@ -1353,7 +1436,9 @@ The exporter can reapply once all requirements are met.`,
                 helperText="Format: ECTA-LIC-YYYY-XXX"
               />
             </Grid>
-            <Grid item xs={12}>
+            
+            {/* License Expiry */}
+            <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 required
@@ -1365,12 +1450,66 @@ The exporter can reapply once all requirements are met.`,
                 helperText="Typically 1 year from approval date"
               />
             </Grid>
+
+            {/* Divider */}
+            <Grid item xs={12}>
+              <Divider sx={{ my: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Banking Information for LC Processing
+                </Typography>
+              </Divider>
+            </Grid>
+            
+            {/* Bank Selection */}
+            <Grid item xs={12}>
+              <BankSelect
+                value={approvalData.bankName}
+                onChange={(value) => {
+                  setApprovalData({ 
+                    ...approvalData, 
+                    bankName: value,
+                    bankBranch: '', // Reset branch when bank changes
+                    bankBranchCode: '',
+                  });
+                }}
+                label="Primary Bank *"
+                helperText="Bank where exporter holds account for LC transactions"
+                type="ethiopian"
+                required
+              />
+            </Grid>
+            
+            {/* Branch Selection - Cascades from Bank */}
+            <Grid item xs={12}>
+              <BankBranchSelect
+                bankName={approvalData.bankName}
+                value={approvalData.bankBranch}
+                onChange={(branchName, branch) => {
+                  setApprovalData({
+                    ...approvalData,
+                    bankBranch: branchName,
+                    bankBranchCode: branch?.branchCode || '',
+                  });
+                }}
+                label="LC Processing Branch *"
+                helperText="This branch will approve Letters of Credit for this exporter"
+                required
+                showDetails
+              />
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
           <AnimatedButton onClick={() => {
             setApproveDialogOpen(false);
-            setApprovalData({ exporterId: '', ectaLicenseNumber: '', licenseExpiryDate: '' });
+            setApprovalData({ 
+              exporterId: '', 
+              ectaLicenseNumber: '', 
+              licenseExpiryDate: '',
+              bankName: '',
+              bankBranch: '',
+              bankBranchCode: '',
+            });
           }} variant="outlined">
             Cancel
           </AnimatedButton>
@@ -1378,7 +1517,13 @@ The exporter can reapply once all requirements are met.`,
             variant="contained"
             brandColor="#4caf50"
             onClick={handleApproveApplication}
-            disabled={!approvalData.exporterId || !approvalData.ectaLicenseNumber || !approvalData.licenseExpiryDate}
+            disabled={
+              !approvalData.exporterId || 
+              !approvalData.ectaLicenseNumber || 
+              !approvalData.licenseExpiryDate ||
+              !approvalData.bankName ||
+              !approvalData.bankBranch
+            }
           >
             Approve & Register
           </AnimatedButton>
@@ -1511,10 +1656,43 @@ The exporter can reapply once all requirements are met.`,
             <AnimatedButton 
               variant="outlined"
               brandColor="#f57c00"
-              onClick={() => {
-                // TODO: Implement suspend license
-                console.log('Suspend license for:', selectedExporter.exporterId);
-                setSelectedExporter(null);
+              onClick={async () => {
+                if (!selectedExporter) return;
+                
+                const token = localStorage.getItem('authToken');
+                if (!token) return;
+                
+                try {
+                  console.log('[ECTA] Suspending license for:', selectedExporter.exporterId);
+                  
+                  const reason = prompt('Enter suspension reason:');
+                  if (!reason) return;
+                  
+                  const response = await fetch(`http://localhost:3001/api/v1/exporters/${selectedExporter.exporterId}/suspend`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${token}`,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      suspensionReason: reason,
+                      suspendedBy: 'ECTA Officer',
+                      suspensionDate: new Date().toISOString(),
+                    })
+                  });
+                  
+                  const result = await response.json();
+                  if (result.success) {
+                    alert(`✅ License Suspended\n\nExporter: ${selectedExporter.exporterId}\nReason: ${reason}\n\nThe exporter's license has been suspended and they cannot conduct export activities until reinstated.`);
+                    setSelectedExporter(null);
+                    loadData();
+                  } else {
+                    alert(`❌ Failed to suspend license\n\n${result.error || 'Unknown error'}`);
+                  }
+                } catch (error) {
+                  console.error('[ECTA] Error suspending license:', error);
+                  alert(`❌ Network Error\n\nFailed to suspend license: ${error}`);
+                }
               }}
             >
               Suspend License
@@ -1563,6 +1741,34 @@ The exporter can reapply once all requirements are met.`,
           </AnimatedButton>
         </DialogActions>
       </Dialog>
+
+      {/* Quality Inspection Workflow Dialog */}
+      {inspectionDialogOpen && selectedShipmentForInspection && (
+        <QualityInspectionWorkflow
+          shipment={selectedShipmentForInspection}
+          onClose={() => {
+            setInspectionDialogOpen(false);
+            setSelectedShipmentForInspection(null);
+          }}
+          onSuccess={() => {
+            // Refresh shipments list
+            api.getShipments({ limit: 100 }).then(res => {
+              if (res.success && res.data) {
+                setShipments(res.data);
+              }
+            });
+          }}
+        />
+      )}
+
+      <NotificationDialog
+        open={notification.open}
+        onClose={closeNotification}
+        type={notification.type}
+        title={notification.title}
+        message={notification.message}
+        details={notification.details}
+      />
     </Box>
   );
 };
