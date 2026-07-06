@@ -1,84 +1,55 @@
-// Fix laboratory certification status for old approved applications
-// Run from api directory: node fix-lab-certification.js
+// Quick script to fix laboratory certification status for exporters
+// Run with: node fix-lab-certification.js
 
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const axios = require('axios');
 
-const DB_PATH = path.join(__dirname, 'cecbs.db');
+const API_URL = 'http://localhost:3001/api/v1';
 
-console.log('🔄 Fixing Laboratory Certification Status');
-console.log('📁 Path:', DB_PATH);
-console.log('');
+// Login as admin to get token
+async function login() {
+  try {
+    const response = await axios.post(`${API_URL}/auth/login`, {
+      username: 'ecta_admin',
+      password: 'password123'
+    });
+    console.log('Login response:', response.data);
+    return response.data.data?.token || response.data.token;
+  } catch (error) {
+    console.error('Login failed:', error.response?.data || error.message);
+    process.exit(1);
+  }
+}
 
-const db = new sqlite3.Database(DB_PATH);
+// Update exporter laboratory certification
+async function updateLabCertification(token, exporterId, certified) {
+  try {
+    const response = await axios.put(
+      `${API_URL}/exporters/${exporterId}/laboratory`,
+      { certified },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    console.log(`✓ Updated ${exporterId}: laboratoryCertified = ${certified}`);
+    return response.data;
+  } catch (error) {
+    console.error(`✗ Failed to update ${exporterId}:`, error.response?.data || error.message);
+  }
+}
 
-db.serialize(() => {
-  // Check current status
-  console.log('📊 Current Laboratory Status:');
-  db.all(
-    `SELECT company_name, laboratory_facility, status 
-     FROM exporter_applications 
-     WHERE status = 'approved'`,
-    [],
-    (err, rows) => {
-      if (err) {
-        console.error('❌ Error:', err.message);
-        db.close();
-        return;
-      }
+async function main() {
+  console.log('Fixing laboratory certification status...\n');
+  
+  const token = await login();
+  console.log('✓ Logged in successfully\n');
+  
+  // Update EXP6896621 to certified = true
+  // This exporter has professionalTaster and tasterCertificate, so should be certified
+  await updateLabCertification(token, 'EXP6896621', true);
+  
+  console.log('\n✓ Laboratory certification status updated successfully!');
+  console.log('\nYou can verify by downloading the compliance report again.');
+}
 
-      console.log('');
-      rows.forEach((row, i) => {
-        console.log(`${i+1}. ${row.company_name}: lab=${row.laboratory_facility || '(empty)'}`);
-      });
-      console.log('');
-
-      // Update approved applications with 'no' or empty lab status to 'yes'
-      // Since they were approved, they must have met the requirement
-      const updateSQL = `
-        UPDATE exporter_applications 
-        SET laboratory_facility = 'yes'
-        WHERE status = 'approved'
-        AND (laboratory_facility = 'no' OR laboratory_facility IS NULL OR laboratory_facility = '')
-      `;
-
-      db.run(updateSQL, function(err) {
-        if (err) {
-          console.error('❌ Error updating:', err.message);
-          db.close();
-          return;
-        }
-
-        console.log(`✅ Updated ${this.changes} applications to lab certified`);
-        console.log('');
-
-        // Verify the update
-        db.all(
-          `SELECT company_name, laboratory_facility, exporter_type
-           FROM exporter_applications 
-           WHERE status = 'approved'
-           ORDER BY approved_at DESC`,
-          [],
-          (err, updatedRows) => {
-            if (err) {
-              console.error('❌ Error reading:', err.message);
-            } else {
-              console.log('📋 Updated Status:');
-              console.log('');
-              updatedRows.forEach((row, i) => {
-                console.log(`${i+1}. ${row.company_name}`);
-                console.log(`   Lab: ${row.laboratory_facility}`);
-                console.log(`   Type: ${row.exporter_type}`);
-                console.log('');
-              });
-            }
-            
-            db.close(() => {
-              console.log('✅ Done! Refresh the browser to see changes.');
-            });
-          }
-        );
-      });
-    }
-  );
+main().catch(error => {
+  console.error('Error:', error);
+  process.exit(1);
 });

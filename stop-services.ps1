@@ -13,7 +13,8 @@ Write-Host "✓ Node processes stopped" -ForegroundColor Green
 
 # Stop Docker containers
 Write-Host "Stopping blockchain network..." -ForegroundColor Yellow
-Set-Location "C:\CEX"
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $ScriptDir
 docker-compose -f docker-compose-fabric.yml down
 Write-Host "✓ Blockchain network stopped" -ForegroundColor Green
 

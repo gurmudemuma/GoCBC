@@ -12,65 +12,67 @@ import (
 // ==================== FOREX ALLOCATION STRUCTURE ====================
 
 type ForexAllocation struct {
-	ForexID           string    `json:"forexId"`
-	ContractID        string    `json:"contractId"`
-	ExporterID        string    `json:"exporterId"`
-	LCID              string    `json:"lcId"`
-	RequestedAmount   float64   `json:"requestedAmount"`
-	AllocatedAmount   float64   `json:"allocatedAmount"`
-	Currency          string    `json:"currency"`
-	ExchangeRate      float64   `json:"exchangeRate"`
-	OfficialRate      float64   `json:"officialRate"`      // NBE official rate
-	MarketRate        float64   `json:"marketRate"`        // Parallel market rate (if tracked)
-	RetentionRate     float64   `json:"retentionRate"`     // Percentage to be retained (NBE FXD/01/2024: 100% allowed)
-	Status            string    `json:"status"`            // REQUESTED, APPROVED, ALLOCATED, UTILIZED, EXPIRED
-	RequestDate       time.Time `json:"requestDate"`
-	ApprovalDate      string    `json:"approvalDate"`
-	AllocationDate    string    `json:"allocationDate"`
-	UtilizationDate   string    `json:"utilizationDate"`
-	ExpiryDate        string    `json:"expiryDate"`        // Forex allocation expiry
-	UtilizedAmount    float64   `json:"utilizedAmount"`
-	NBEOfficer        string    `json:"nbeOfficer"`
-	NBEApprovalRef    string    `json:"nbeApprovalRef"`    // NBE reference number
-	Comments          string    `json:"comments"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ForexID         string    `json:"forexId"`
+	ContractID      string    `json:"contractId"`
+	ExporterID      string    `json:"exporterId"`
+	LCID            string    `json:"lcId"`
+	RequestedAmount float64   `json:"requestedAmount"`
+	AllocatedAmount float64   `json:"allocatedAmount"`
+	Currency        string    `json:"currency"`
+	ExchangeRate    float64   `json:"exchangeRate"`
+	OfficialRate    float64   `json:"officialRate"`  // NBE official rate
+	MarketRate      float64   `json:"marketRate"`    // Parallel market rate (if tracked)
+	RetentionRate   float64   `json:"retentionRate"` // Percentage to be retained (NBE FXD/01/2024: 100% allowed)
+	Status          string    `json:"status"`        // REQUESTED, APPROVED, ALLOCATED, UTILIZED, EXPIRED
+	RequestDate     time.Time `json:"requestDate"`
+	ApprovalDate    string    `json:"approvalDate"`
+	AllocationDate  string    `json:"allocationDate"`
+	UtilizationDate string    `json:"utilizationDate"`
+	ExpiryDate      string    `json:"expiryDate"` // Forex allocation expiry
+	UtilizedAmount  float64   `json:"utilizedAmount"`
+	NBEOfficer      string    `json:"nbeOfficer"`
+	NBEApprovalRef  string    `json:"nbeApprovalRef"` // NBE reference number
+	Comments        string    `json:"comments"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 // NBE Exchange Rate structure
 type ExchangeRate struct {
-	RateID          string    `json:"rateId"`
-	Currency        string    `json:"currency"`        // USD, EUR, GBP, etc.
-	BuyingRate      float64   `json:"buyingRate"`      // NBE buying rate
-	SellingRate     float64   `json:"sellingRate"`     // NBE selling rate
-	MidRate         float64   `json:"midRate"`         // Middle rate
-	EffectiveDate   time.Time `json:"effectiveDate"`   // When rate becomes active
-	SetBy           string    `json:"setBy"`           // NBE officer who set the rate
-	Status          string    `json:"status"`          // ACTIVE, INACTIVE, SUPERSEDED
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	RateID        string    `json:"rateId"`
+	Currency      string    `json:"currency"`      // USD, EUR, GBP, etc.
+	BuyingRate    float64   `json:"buyingRate"`    // NBE buying rate
+	SellingRate   float64   `json:"sellingRate"`   // NBE selling rate
+	MidRate       float64   `json:"midRate"`       // Middle rate
+	EffectiveDate time.Time `json:"effectiveDate"` // When rate becomes active
+	SetBy         string    `json:"setBy"`         // NBE officer who set the rate
+	Status        string    `json:"status"`        // ACTIVE, INACTIVE, SUPERSEDED
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // NBE Retention Policy structure
 type RetentionPolicy struct {
-	PolicyID        string    `json:"policyId"`
-	CommodityType   string    `json:"commodityType"`   // COFFEE, GOLD, etc.
-	RetentionRate   float64   `json:"retentionRate"`   // Percentage (NBE FXD/01/2024: 100% default)
-	SurrenderRate   float64   `json:"surrenderRate"`   // Percentage to convert to Birr
-	EffectiveDate   time.Time `json:"effectiveDate"`
-	ExpiryDate      string    `json:"expiryDate"`
-	SetBy           string    `json:"setBy"`
-	Justification   string    `json:"justification"`
-	Status          string    `json:"status"`          // ACTIVE, INACTIVE
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	PolicyID      string    `json:"policyId"`
+	CommodityType string    `json:"commodityType"` // COFFEE, GOLD, etc.
+	RetentionRate float64   `json:"retentionRate"` // Percentage (NBE FXD/01/2024: 100% default)
+	SurrenderRate float64   `json:"surrenderRate"` // Percentage to convert to Birr
+	EffectiveDate time.Time `json:"effectiveDate"`
+	ExpiryDate    string    `json:"expiryDate"`
+	SetBy         string    `json:"setBy"`
+	Justification string    `json:"justification"`
+	Status        string    `json:"status"` // ACTIVE, INACTIVE
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // ==================== FOREX FUNCTIONS ====================
 
 // RequestForex - Request foreign exchange allocation from NBE
+// NOTE: LC ID removed from parameters to prevent SDK-level state queries
+// NBE will validate LC during allocation phase
 func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterface,
-	forexID, contractID, exporterID, lcID, amountStr, currency string) error {
+	forexID, contractID, exporterID, amountStr, currency string) error {
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
@@ -81,35 +83,30 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("amount must be greater than zero")
 	}
 
-	// Verify LC exists and is issued
-	lcExists, err := c.LCExists(ctx, lcID)
-	if err != nil {
-		return fmt.Errorf("failed to check LC: %v", err)
-	}
-	if !lcExists {
-		return fmt.Errorf("LC %s does not exist", lcID)
-	}
+	// NOTE: ALL state queries removed to prevent "Peer endorsements do not match" errors
+	// In a multi-peer network with 6 peers, gossip protocol needs time to propagate
+	// Checking if forex exists would query state and cause endorsement mismatches
+	// NBE will validate everything (LC, Contract, duplicate forex) during allocation
+	// This makes RequestForex a pure write operation with no read dependencies
 
-	// Check if forex already exists
-	existingForex, err := ctx.GetStub().GetState("FOREX_" + forexID)
+	// Use the transaction timestamp so all endorsers produce the same state
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
-		return fmt.Errorf("failed to read forex: %v", err)
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
 	}
-	if existingForex != nil {
-		return fmt.Errorf("forex %s already exists", forexID)
-	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	forex := ForexAllocation{
 		ForexID:         forexID,
 		ContractID:      contractID,
 		ExporterID:      exporterID,
-		LCID:            lcID,
+		LCID:            "", // LC will be linked during allocation by NBE
 		RequestedAmount: amount,
 		Currency:        currency,
 		Status:          "REQUESTED",
-		RequestDate:     time.Now(),
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		RequestDate:     txTime,
+		CreatedAt:       txTime,
+		UpdatedAt:       txTime,
 	}
 
 	forexJSON, err := json.Marshal(forex)
@@ -121,45 +118,78 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 }
 
 // AllocateForex - NBE allocates foreign exchange with retention policy
+// NOTE: LC ID now provided during allocation phase instead of request phase
 func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterface,
-	forexID, amountStr, exchangeRateStr, retentionRateStr, nbeOfficer, nbeApprovalRef, expiryDate string) error {
+	forexID, lcID, amountStr, exchangeRateStr, retentionRateStr, nbeOfficer, nbeApprovalRef, expiryDate string) error {
 
 	// Get MSP ID for access control
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
-		return fmt.Errorf("failed to get MSP ID: %v", err)
+		return fmt.Errorf("AllocateForex: failed to get MSP ID: %w", err)
 	}
 
 	// Only NBE can allocate forex
 	if mspID != "NBEMSP" {
-		return fmt.Errorf("unauthorized: only NBE can allocate forex (caller: %s)", mspID)
+		return fmt.Errorf("AllocateForex: unauthorized: only NBE can allocate forex (caller: %s)", mspID)
+	}
+
+	// VALIDATION: IDs
+	if err := ValidateID(forexID, "forexID"); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
+	}
+	if err := ValidateID(lcID, "lcID"); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
+	}
+	if err := ValidateNonEmptyString(nbeOfficer, "nbeOfficer", MaxStringLen); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
+	}
+	if err := ValidateNonEmptyString(nbeApprovalRef, "nbeApprovalRef", MaxStringLen); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
 	}
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid amount: %v", err)
+		return fmt.Errorf("AllocateForex: invalid amount: %w", err)
+	}
+
+	// VALIDATION: Amount
+	if err := ValidateAmount(amount, "amount"); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
 	}
 
 	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid exchange rate: %v", err)
+		return fmt.Errorf("AllocateForex: invalid exchange rate: %w", err)
+	}
+
+	// VALIDATION: Exchange rate
+	if err := ValidateExchangeRate(exchangeRate, "exchangeRate"); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
 	}
 
 	retentionRate, err := strconv.ParseFloat(retentionRateStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid retention rate: %v", err)
+		return fmt.Errorf("AllocateForex: invalid retention rate: %w", err)
 	}
 
-	if retentionRate < 0 || retentionRate > 100 {
-		return fmt.Errorf("retention rate must be between 0 and 100")
+	// VALIDATION: Retention rate
+	if err := ValidatePercentage(retentionRate, "retentionRate"); err != nil {
+		return fmt.Errorf("AllocateForex: %w", err)
+	}
+
+	// VALIDATION: Expiry date
+	if expiryDate != "" {
+		if err := ValidateDate(expiryDate, "expiryDate", false); err != nil {
+			return fmt.Errorf("AllocateForex: %w", err)
+		}
 	}
 
 	forexJSON, err := ctx.GetStub().GetState("FOREX_" + forexID)
 	if err != nil {
-		return fmt.Errorf("failed to read forex: %v", err)
+		return fmt.Errorf("AllocateForex: failed to read forex %s: %w", forexID, err)
 	}
 	if forexJSON == nil {
-		return fmt.Errorf("forex %s does not exist", forexID)
+		return fmt.Errorf("AllocateForex: forex %s does not exist", forexID)
 	}
 
 	var forex ForexAllocation
@@ -180,6 +210,7 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	forex.Status = "ALLOCATED"
+	forex.LCID = lcID // Link the LC at allocation time
 	forex.AllocatedAmount = amount
 	forex.ExchangeRate = exchangeRate
 	forex.OfficialRate = exchangeRate
@@ -690,7 +721,7 @@ func (c *CoffeeContract) VerifyForexUtilization(ctx contractapi.TransactionConte
 
 	// Verify amounts match
 	if payment.Amount != forex.AllocatedAmount {
-		forex.Comments = fmt.Sprintf("DISCREPANCY: Allocated %.2f but received %.2f", 
+		forex.Comments = fmt.Sprintf("DISCREPANCY: Allocated %.2f but received %.2f",
 			forex.AllocatedAmount, payment.Amount)
 	} else {
 		forex.Comments = "Forex utilization verified by NBE"

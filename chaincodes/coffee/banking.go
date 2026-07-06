@@ -13,24 +13,25 @@ import (
 // ==================== LETTER OF CREDIT STRUCTURE ====================
 
 type LetterOfCredit struct {
-	LCID              string    `json:"lcId"`
-	ContractID        string    `json:"contractId"`
-	ExporterID        string    `json:"exporterId"`
-	IssuingBank       string    `json:"issuingBank"`       // Buyer's bank (opens LC)
-	AdvisingBank      string    `json:"advisingBank"`      // Exporter's bank (receives LC)
-	Beneficiary       string    `json:"beneficiary"`       // Exporter company name
-	Amount            float64   `json:"amount"`
-	Currency          string    `json:"currency"`
-	Status            string    `json:"status"` // REQUESTED, APPROVED, ISSUED, UTILIZED, EXPIRED
-	ExpiryDate        string    `json:"expiryDate"`
-	RequestDate       time.Time `json:"requestDate"`
-	ApprovalDate      string    `json:"approvalDate"`
-	IssueDate         string    `json:"issueDate"`
-	UtilizationDate   string    `json:"utilizationDate"`
-	Documents         []string  `json:"documents"` // Required documents
-	Terms             string    `json:"terms"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	LCID            string                   `json:"lcId"`
+	ContractID      string                   `json:"contractId"`
+	ExporterID      string                   `json:"exporterId"`
+	IssuingBank     string                   `json:"issuingBank"`  // Buyer's bank (opens LC)
+	AdvisingBank    string                   `json:"advisingBank"` // Exporter's bank (receives LC)
+	Beneficiary     string                   `json:"beneficiary"`  // Exporter company name
+	Amount          float64                  `json:"amount"`
+	Currency        string                   `json:"currency"`
+	Status          string                   `json:"status"` // REQUESTED, APPROVED, ISSUED, UTILIZED, EXPIRED
+	ExpiryDate      string                   `json:"expiryDate"`
+	RequestDate     time.Time                `json:"requestDate"`
+	ApprovalDate    string                   `json:"approvalDate"`
+	IssueDate       string                   `json:"issueDate"`
+	UtilizationDate string                   `json:"utilizationDate"`
+	Documents       []string                 `json:"documents"` // Required documents
+	Terms           string                   `json:"terms"`
+	Amendments      []map[string]interface{} `json:"amendments"` // Amendment history
+	CreatedAt       time.Time                `json:"createdAt"`
+	UpdatedAt       time.Time                `json:"updatedAt"`
 }
 
 // ==================== LC FUNCTIONS ====================
@@ -42,17 +43,37 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 
 	fmt.Printf("=== RequestLC called: lcID=%s, contractID=%s ===\n", lcID, contractID)
 
+	// VALIDATION: IDs
+	if err := ValidateID(lcID, "lcID"); err != nil {
+		return fmt.Errorf("RequestLC: %w", err)
+	}
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("RequestLC: %w", err)
+	}
+
 	// Parse amount
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
 		fmt.Printf("RequestLC ERROR: invalid amount: %v\n", err)
-		return fmt.Errorf("invalid amount: %v", err)
+		return fmt.Errorf("RequestLC: invalid amount: %w", err)
 	}
 
-	// Validate amount
-	if amount <= 0 {
-		fmt.Printf("RequestLC ERROR: amount must be greater than zero\n")
-		return fmt.Errorf("amount must be greater than zero")
+	// VALIDATION: Amount
+	if err := ValidateAmount(amount, "amount"); err != nil {
+		fmt.Printf("RequestLC ERROR: %v\n", err)
+		return fmt.Errorf("RequestLC: %w", err)
+	}
+
+	// VALIDATION: Currency
+	if err := ValidateCurrency(currency); err != nil {
+		return fmt.Errorf("RequestLC: %w", err)
+	}
+
+	// VALIDATION: Expiry date
+	if expiryDate != "" {
+		if err := ValidateDate(expiryDate, "expiryDate", false); err != nil {
+			return fmt.Errorf("RequestLC: %w", err)
+		}
 	}
 
 	// Fetch contract data for auto-mapping
@@ -60,11 +81,11 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	contractJSON, err := ctx.GetStub().GetState("CONTRACT_" + contractID)
 	if err != nil {
 		fmt.Printf("RequestLC ERROR: failed to read contract: %v\n", err)
-		return fmt.Errorf("failed to read contract: %v", err)
+		return fmt.Errorf("RequestLC: failed to read contract %s: %w", contractID, err)
 	}
 	if contractJSON == nil {
 		fmt.Printf("RequestLC ERROR: contract %s does not exist\n", contractID)
-		return fmt.Errorf("contract %s does not exist", contractID)
+		return fmt.Errorf("RequestLC: contract %s does not exist", contractID)
 	}
 
 	var contract SalesContract
@@ -92,9 +113,9 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	}
 
 	// AUTO-MAP: Issuing bank (buyer's bank) and Advising bank (exporter's bank) from contract
-	issuingBank := contract.BuyerBank    // Buyer's bank opens the LC
+	issuingBank := contract.BuyerBank     // Buyer's bank opens the LC
 	advisingBank := contract.ExporterBank // Exporter's bank receives/advises the LC
-	
+
 	// Fallback if banks not set in contract
 	if issuingBank == "" {
 		issuingBank = "Foreign Bank - " + contract.BuyerCountry
@@ -102,7 +123,7 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	} else {
 		fmt.Printf("RequestLC: Auto-mapped issuing bank from contract: %s\n", issuingBank)
 	}
-	
+
 	if advisingBank == "" {
 		advisingBank = bankName // Use the bank name provided (Ethiopian bank)
 		if advisingBank == "" {
@@ -149,14 +170,14 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 		return fmt.Errorf("failed to get tx timestamp: %v", err)
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	// Create LC with properly mapped banks
 	lc := LetterOfCredit{
 		LCID:         lcID,
 		ContractID:   contractID,
 		ExporterID:   mappedExporterID,
-		IssuingBank:  issuingBank,    // Buyer's bank
-		AdvisingBank: advisingBank,   // Exporter's bank
+		IssuingBank:  issuingBank,  // Buyer's bank
+		AdvisingBank: advisingBank, // Exporter's bank
 		Amount:       mappedAmount,
 		Currency:     mappedCurrency,
 		Status:       "REQUESTED",
@@ -252,7 +273,7 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 
 	// Banks are already set in LC from RequestLC, keep them
 	// Issuing bank and advising bank should remain as set during LC request
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -280,7 +301,7 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 
 	// AUTO-TRIGGER: Create forex allocation
 	forexID := "FOREX_" + lcID
-	
+
 	exchangeRate := 120.0
 	rateObj, err := c.GetCurrentExchangeRate(ctx, lc.Currency)
 	if err == nil && rateObj != nil {
@@ -298,25 +319,25 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 	expiryDate := txTime.AddDate(0, 0, expiryDays).Format(time.RFC3339)
 
 	forex := ForexAllocation{
-		ForexID:           forexID,
-		ContractID:        lc.ContractID,
-		ExporterID:        lc.ExporterID,
-		LCID:              lcID,
-		RequestedAmount:   lc.Amount,
-		AllocatedAmount:   lc.Amount,
-		Currency:          lc.Currency,
-		ExchangeRate:      exchangeRate,
-		OfficialRate:      exchangeRate,
-		RetentionRate:     retentionRate,
-		Status:            "ALLOCATED",
-		RequestDate:       txTime,
-		AllocationDate:    txTime.Format(time.RFC3339),
-		ExpiryDate:        expiryDate,
-		NBEOfficer:        "AUTO_SYSTEM",
-		NBEApprovalRef:    "LC_AUTO_" + lcID,
-		Comments:          fmt.Sprintf("Auto-allocated for LC with Issuing Bank: %s, Advising Bank: %s", lc.IssuingBank, lc.AdvisingBank),
-		CreatedAt:         txTime,
-		UpdatedAt:         txTime,
+		ForexID:         forexID,
+		ContractID:      lc.ContractID,
+		ExporterID:      lc.ExporterID,
+		LCID:            lcID,
+		RequestedAmount: lc.Amount,
+		AllocatedAmount: lc.Amount,
+		Currency:        lc.Currency,
+		ExchangeRate:    exchangeRate,
+		OfficialRate:    exchangeRate,
+		RetentionRate:   retentionRate,
+		Status:          "ALLOCATED",
+		RequestDate:     txTime,
+		AllocationDate:  txTime.Format(time.RFC3339),
+		ExpiryDate:      expiryDate,
+		NBEOfficer:      "AUTO_SYSTEM",
+		NBEApprovalRef:  "LC_AUTO_" + lcID,
+		Comments:        fmt.Sprintf("Auto-allocated for LC with Issuing Bank: %s, Advising Bank: %s", lc.IssuingBank, lc.AdvisingBank),
+		CreatedAt:       txTime,
+		UpdatedAt:       txTime,
 	}
 
 	forexJSON, err := json.Marshal(forex)
@@ -444,6 +465,15 @@ func (c *CoffeeContract) ReadLC(ctx contractapi.TransactionContextInterface,
 		return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
 	}
 
+	// Ensure Amendments is never nil (backward compatibility)
+	if lc.Amendments == nil {
+		lc.Amendments = []map[string]interface{}{}
+	}
+	// Ensure Documents is never nil (backward compatibility)
+	if lc.Documents == nil {
+		lc.Documents = []string{}
+	}
+
 	return &lc, nil
 }
 
@@ -500,6 +530,117 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 	return ctx.GetStub().PutState("LC_"+lcID, lcJSON)
 }
 
+// AmendLC - Amend Letter of Credit (amount, expiry date, terms)
+// Common amendments per UCP 600 Article 10
+func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
+	lcID, amendmentReason, newAmountStr, newExpiryDate, newTerms, amendedBy string) error {
+
+	// Read existing LC
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %v", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %v", err)
+	}
+
+	// Can only amend LCs in ISSUED status
+	if lc.Status != "ISSUED" {
+		return fmt.Errorf("cannot amend LC in status %s - must be ISSUED", lc.Status)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Store amendment history
+	amendment := map[string]interface{}{
+		"amendmentNumber": len(lc.Amendments) + 1,
+		"amendmentDate":   txTime.Format(time.RFC3339),
+		"amendedBy":       amendedBy,
+		"reason":          amendmentReason,
+		"changes":         make(map[string]interface{}),
+	}
+
+	// Update amount if provided
+	if newAmountStr != "" {
+		newAmount, err := strconv.ParseFloat(newAmountStr, 64)
+		if err != nil {
+			return fmt.Errorf("invalid amount: %v", err)
+		}
+		if newAmount <= 0 {
+			return fmt.Errorf("amount must be positive")
+		}
+		amendment["changes"].(map[string]interface{})["amount"] = map[string]interface{}{
+			"from": lc.Amount,
+			"to":   newAmount,
+		}
+		lc.Amount = newAmount
+	}
+
+	// Update expiry date if provided
+	if newExpiryDate != "" {
+		// Validate date format
+		_, err := time.Parse("2006-01-02", newExpiryDate)
+		if err != nil {
+			return fmt.Errorf("invalid expiry date format (use YYYY-MM-DD): %v", err)
+		}
+		amendment["changes"].(map[string]interface{})["expiryDate"] = map[string]interface{}{
+			"from": lc.ExpiryDate,
+			"to":   newExpiryDate,
+		}
+		lc.ExpiryDate = newExpiryDate
+	}
+
+	// Update terms if provided
+	if newTerms != "" {
+		amendment["changes"].(map[string]interface{})["terms"] = map[string]interface{}{
+			"from": lc.Terms,
+			"to":   newTerms,
+		}
+		lc.Terms = newTerms
+	}
+
+	// Add amendment to history
+	lc.Amendments = append(lc.Amendments, amendment)
+	lc.UpdatedAt = txTime
+
+	// Save amended LC
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save amended LC: %v", err)
+	}
+
+	// Create audit log entry
+	auditEntry := map[string]interface{}{
+		"action":       "LC_AMENDED",
+		"lcID":         lcID,
+		"amendedBy":    amendedBy,
+		"reason":       amendmentReason,
+		"amendmentNum": len(lc.Amendments),
+		"timestamp":    txTime.Format(time.RFC3339),
+	}
+
+	auditJSON, _ := json.Marshal(auditEntry)
+	fmt.Printf("LC Amendment: %s\n", string(auditJSON))
+
+	return nil
+}
+
 // QueryLCsByExporter - Get all LCs for an exporter
 func (c *CoffeeContract) QueryLCsByExporter(ctx contractapi.TransactionContextInterface,
 	exporterID string) ([]*LetterOfCredit, error) {
@@ -529,6 +670,16 @@ func (c *CoffeeContract) QueryAllLCs(ctx contractapi.TransactionContextInterface
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
 		}
+		
+		// Ensure Amendments is never nil (backward compatibility)
+		if lc.Amendments == nil {
+			lc.Amendments = []map[string]interface{}{}
+		}
+		// Ensure Documents is never nil (backward compatibility)
+		if lc.Documents == nil {
+			lc.Documents = []string{}
+		}
+		
 		lcs = append(lcs, &lc)
 	}
 

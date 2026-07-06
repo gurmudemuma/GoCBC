@@ -9,3 +9,7 @@ export { default as CustomsPortal } from './CustomsPortal';
 export { InspectionManagement } from './InspectionManagement';
 export { CustomsInspection } from './CustomsInspection';
 export { PaymentDocuments } from './PaymentDocuments';
+
+// Gap Closure Components (NEW - June 2026)
+export { PhytosanitaryCertificates } from './PhytosanitaryCertificates';
+export { InsuranceCertificates } from './InsuranceCertificates';

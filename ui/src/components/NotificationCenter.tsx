@@ -313,10 +313,16 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userRole }) => 
           onClick={handleOpen}
           sx={{
             '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' },
+            ...(userRole === 'BANKS' && {
+              color: '#FFD700', // Golden for Banks
+            }),
           }}
         >
           <Badge badgeContent={unreadCount} color="error" max={99}>
-            <Notifications fontSize="small" />
+            <Notifications 
+              fontSize="small" 
+              sx={userRole === 'BANKS' ? { color: '#FFD700' } : undefined}
+            />
           </Badge>
         </IconButton>
       </Tooltip>

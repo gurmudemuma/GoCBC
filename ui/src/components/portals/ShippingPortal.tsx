@@ -53,6 +53,7 @@ import {
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+import AuditTrailViewer from './AuditTrailViewer';
 
 // Modern Components - 2026 Design
 import {
@@ -104,6 +105,34 @@ const ShippingPortal: React.FC = () => {
   const [selectedRecord, setSelectedRecord] = useState<ShippingRecord | null>(null);
   const [trackingDialogOpen, setTrackingDialogOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [billOfLadingDialogOpen, setBillOfLadingDialogOpen] = useState(false);
+
+  // Audit Trail State
+  const [showAuditTrail, setShowAuditTrail] = useState(false);
+  const [auditEntityType, setAuditEntityType] = useState<'SHIPMENT' | 'BOOKING' | 'CONTAINER'>('SHIPMENT');
+  const [auditEntityId, setAuditEntityId] = useState<string>('');
+
+  // Bill of Lading Form State
+  const [bolForm, setBolForm] = useState({
+    shipmentId: '',
+    billOfLadingNo: '',
+    vesselName: '',
+    voyageNumber: '',
+    shippingLine: '',
+    containerNumber: '',
+    containerType: 'DRY',
+    departurePort: 'Djibouti',
+    destinationPort: '',
+    estimatedDeparture: '',
+    estimatedArrival: '',
+    trackingNumber: '',
+    weight: '',
+    volume: '',
+    consignee: '',
+    notify: '',
+    freightTerms: 'PREPAID',
+    specialInstructions: '',
+  });
 
   const shippingTrendsData = [
     { month: 'Jan', containers: 145, onTime: 92, delayed: 8 },
@@ -184,6 +213,196 @@ const ShippingPortal: React.FC = () => {
       console.error('[SHIPPING] Failed to load data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // AUTO-MAPPING: Populate B/L form from clearance data
+  const autoMapBOLData = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      console.log('[SHIPPING] Auto-mapping B/L data for shipment:', shipmentId);
+
+      // Fetch shipment data
+      const shipmentResponse = await fetch(`http://localhost:3001/api/v1/shipments/${shipmentId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const shipmentResult = await shipmentResponse.json();
+
+      if (shipmentResult.success && shipmentResult.data) {
+        const shipment = shipmentResult.data;
+        const exporterId = shipment.exporterID || shipment.exporterId;
+
+        // Fetch exporter data
+        let exporterData: any = {};
+        if (exporterId) {
+          const exporterResponse = await fetch(`http://localhost:3001/api/v1/users/${exporterId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const exporterResult = await exporterResponse.json();
+          if (exporterResult.success) {
+            exporterData = exporterResult.data;
+          }
+        }
+
+        // Fetch customs clearance data
+        let clearanceData: any = {};
+        try {
+          const clearanceResponse = await fetch('http://localhost:3001/api/v1/customs/declarations', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const clearanceResult = await clearanceResponse.json();
+          if (clearanceResult.success && clearanceResult.data) {
+            clearanceData = clearanceResult.data.find((d: any) => 
+              d.shipmentId === shipmentId && d.status === 'CLEARED'
+            ) || {};
+          }
+        } catch (error) {
+          console.warn('[SHIPPING] Could not fetch clearance data:', error);
+        }
+
+        // Auto-generate B/L number
+        const timestamp = Date.now();
+        const bolNumber = `BL${timestamp}`;
+        const trackingNumber = `TRK${timestamp}`;
+        const containerNumber = `${shipment.eudrCompliant ? 'REEFER' : 'DRY'}${timestamp}`.substr(0, 11).toUpperCase();
+
+        // Calculate dates
+        const now = new Date();
+        const departureDate = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000); // +2 days
+        const arrivalDate = new Date(now.getTime() + 17 * 24 * 60 * 60 * 1000); // +17 days
+
+        const autoMappedData = {
+          shipmentId: shipmentId,
+          billOfLadingNo: bolNumber,
+          vesselName: 'Maersk Eindhoven', // Could come from shipping line selection
+          voyageNumber: `V${new Date().getFullYear()}W${Math.floor(Math.random() * 52) + 1}`,
+          shippingLine: 'Maersk Line',
+          containerNumber: containerNumber,
+          containerType: shipment.eudrCompliant ? 'REEFER' : 'DRY',
+          departurePort: clearanceData.portOfExit || 'Djibouti',
+          destinationPort: shipment.destination || clearanceData.destination || '',
+          estimatedDeparture: departureDate.toISOString().split('T')[0],
+          estimatedArrival: arrivalDate.toISOString().split('T')[0],
+          trackingNumber: trackingNumber,
+          weight: shipment.quantity?.toString() || '',
+          volume: shipment.quantity ? (shipment.quantity / 600).toFixed(2) : '',
+          consignee: shipment.buyer || shipment.buyerID || '',
+          notify: exporterData.email || '',
+          freightTerms: 'PREPAID',
+          specialInstructions: shipment.eudrCompliant ? 'EUDR Compliant - Maintain temperature control' : '',
+        };
+
+        setBolForm(autoMappedData);
+
+        alert(
+          `✅ Auto-Mapped Bill of Lading Data\n\n` +
+          `📦 Container: ${containerNumber}\n` +
+          `🚢 Vessel: ${autoMappedData.vesselName}\n` +
+          `📍 Route: ${autoMappedData.departurePort} → ${autoMappedData.destinationPort}\n` +
+          `⚖️ Weight: ${autoMappedData.weight} kg\n` +
+          `📅 ETD: ${new Date(autoMappedData.estimatedDeparture).toLocaleDateString()}\n` +
+          `📅 ETA: ${new Date(autoMappedData.estimatedArrival).toLocaleDateString()}\n\n` +
+          `Please review and submit.`
+        );
+
+        console.log('[SHIPPING] ✅ Auto-mapped B/L data:', autoMappedData);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to auto-map B/L data:', error);
+      alert('⚠️ Could not auto-map all fields. Please fill manually.');
+    }
+  };
+
+  const handleSubmitBOL = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    // Validation
+    const validationErrors: string[] = [];
+    
+    if (!bolForm.shipmentId) validationErrors.push('• Shipment ID is required');
+    if (!bolForm.billOfLadingNo) validationErrors.push('• B/L Number is required');
+    if (!bolForm.vesselName) validationErrors.push('• Vessel Name is required');
+    if (!bolForm.departurePort) validationErrors.push('• Departure Port is required');
+    if (!bolForm.destinationPort) validationErrors.push('• Destination Port is required');
+    if (!bolForm.estimatedArrival) validationErrors.push('• Estimated Arrival is required');
+    if (!bolForm.weight || parseFloat(bolForm.weight) <= 0) validationErrors.push('• Weight must be greater than 0');
+
+    if (validationErrors.length > 0) {
+      alert(
+        '❌ Validation Failed\n\n' +
+        'Please complete the following required fields:\n\n' +
+        validationErrors.join('\n')
+      );
+      return;
+    }
+
+    try {
+      console.log('[SHIPPING] Submitting B/L:', bolForm);
+
+      const response = await fetch(`http://localhost:3001/api/v1/shipments/${bolForm.shipmentId}/bill-of-lading`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          billOfLadingNo: bolForm.billOfLadingNo,
+          vesselName: bolForm.vesselName,
+          departurePort: bolForm.departurePort,
+          destinationPort: bolForm.destinationPort,
+          estimatedArrival: bolForm.estimatedArrival,
+          trackingNumber: bolForm.trackingNumber,
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(
+          `✅ Bill of Lading Recorded Successfully\n\n` +
+          `B/L Number: ${bolForm.billOfLadingNo}\n` +
+          `Vessel: ${bolForm.vesselName}\n` +
+          `Container: ${bolForm.containerNumber}\n` +
+          `Route: ${bolForm.departurePort} → ${bolForm.destinationPort}\n` +
+          `ETD: ${new Date(bolForm.estimatedDeparture).toLocaleDateString()}\n` +
+          `ETA: ${new Date(bolForm.estimatedArrival).toLocaleDateString()}\n` +
+          `Tracking: ${bolForm.trackingNumber}\n\n` +
+          `Status: Shipment ready for loading`
+        );
+        setBillOfLadingDialogOpen(false);
+        
+        // Reset form
+        setBolForm({
+          shipmentId: '',
+          billOfLadingNo: '',
+          vesselName: '',
+          voyageNumber: '',
+          shippingLine: '',
+          containerNumber: '',
+          containerType: 'DRY',
+          departurePort: 'Djibouti',
+          destinationPort: '',
+          estimatedDeparture: '',
+          estimatedArrival: '',
+          trackingNumber: '',
+          weight: '',
+          volume: '',
+          consignee: '',
+          notify: '',
+          freightTerms: 'PREPAID',
+          specialInstructions: '',
+        });
+        
+        loadData(); // Reload shipping records
+      } else {
+        alert(`❌ Failed to record B/L\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to submit B/L:', error);
+      alert(`❌ Network Error\n\n${error}`);
     }
   };
 
@@ -370,10 +589,11 @@ const ShippingPortal: React.FC = () => {
             startIcon={<Add />}
             brandColor={brandPrimary}
             onClick={() => {
-              alert('🚢 New Booking\n\nThis feature allows shipping companies to create new booking records for customs-cleared shipments.\n\nIn a production system, this would:\n• Select a cleared shipment\n• Assign container and vessel\n• Set loading/discharge ports\n• Generate booking confirmation\n\nNote: Bookings are currently auto-created when shipments are cleared by customs.');
+              // Open B/L dialog
+              setBillOfLadingDialogOpen(true);
             }}
           >
-            New Booking
+            Record B/L
           </AnimatedButton>
         </Box>
       </Box>
@@ -816,14 +1036,16 @@ const ShippingPortal: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="textSecondary">Container Type</Typography>
-                  <Chip
-                    label={selectedRecord.containerType}
-                    size="small"
-                    color={
-                      selectedRecord.containerType === 'DRY' ? 'primary' :
-                      selectedRecord.containerType === 'REEFER' ? 'secondary' : 'success'
-                    }
-                  />
+                  <Box sx={{ mt: 0.5 }}>
+                    <Chip
+                      label={selectedRecord.containerType}
+                      size="small"
+                      color={
+                        selectedRecord.containerType === 'DRY' ? 'primary' :
+                        selectedRecord.containerType === 'REEFER' ? 'secondary' : 'success'
+                      }
+                    />
+                  </Box>
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="textSecondary">Vessel Name</Typography>
@@ -843,7 +1065,7 @@ const ShippingPortal: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="textSecondary">Weight</Typography>
-                  <Typography variant="body1">{selectedRecord.weight.toLocaleString()} kg</Typography>
+                  <Typography variant="body1">{selectedRecord.weight ? Number(selectedRecord.weight).toLocaleString() : '0'} kg</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="textSecondary">Volume</Typography>
@@ -966,7 +1188,7 @@ const ShippingPortal: React.FC = () => {
                     <strong>ETA:</strong> {formatDate(selectedRecord.estimatedArrival)}
                   </Typography>
                   <Typography variant="body1" gutterBottom>
-                    <strong>Weight:</strong> {selectedRecord.weight.toLocaleString()} kg
+                    <strong>Weight:</strong> {selectedRecord.weight ? Number(selectedRecord.weight).toLocaleString() : '0'} kg
                   </Typography>
                   <Typography variant="body1" gutterBottom>
                     <strong>Volume:</strong> {selectedRecord.volume} CBM
@@ -1002,6 +1224,19 @@ const ShippingPortal: React.FC = () => {
           )}
         </DialogContent>
         <DialogActions>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Assignment />}
+            onClick={() => {
+              setAuditEntityType('SHIPMENT');
+              setAuditEntityId(selectedRecord?.shipmentId || '');
+              setShowAuditTrail(true);
+            }}
+            sx={{ textTransform: 'none', mr: 'auto' }}
+          >
+            Audit Trail
+          </Button>
           <Button onClick={() => setTrackingDialogOpen(false)}>Close</Button>
           <Button 
             variant="contained" 
@@ -1037,7 +1272,7 @@ const ShippingPortal: React.FC = () => {
               <Typography variant="body1" gutterBottom>
                 <strong>Container:</strong> {selectedRecord.containerNumber}
               </Typography>
-              <Typography variant="body1" gutterBottom sx={{ mb: 2 }}>
+              <Typography variant="body1" gutterBottom sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <strong>Current Status:</strong> <Chip label={selectedRecord.status} size="small" color="primary" />
               </Typography>
               
@@ -1094,6 +1329,399 @@ const ShippingPortal: React.FC = () => {
             }}
           >
             Update Status
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* Audit Trail Viewer */}
+      {showAuditTrail && auditEntityType && (
+        <AuditTrailViewer
+          open={showAuditTrail}
+          entityType={auditEntityType as 'SHIPMENT' | 'BOOKING' | 'CONTAINER'}
+          entityId={auditEntityId}
+          onClose={() => setShowAuditTrail(false)}
+        />
+      )}
+
+      {/* Professional Bill of Lading Recording Dialog */}
+      <Dialog open={billOfLadingDialogOpen} onClose={() => setBillOfLadingDialogOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Box>
+              <Typography variant="h5" component="span" fontWeight={600}>
+                📋 Record Bill of Lading
+              </Typography>
+              <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
+                International Maritime Transport Document - Following COGSA & Hague-Visby Rules
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                <strong>📦 Auto-Mapping Available:</strong> Enter a Shipment ID to automatically populate container details, 
+                route information, weight, and destination from customs clearance records.
+              </Typography>
+            </Alert>
+
+            <Grid container spacing={3}>
+              {/* Section 1: Shipment Identification */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <DirectionsBoat /> Shipment Identification
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Shipment ID"
+                  required
+                  value={bolForm.shipmentId}
+                  onChange={(e) => setBolForm({ ...bolForm, shipmentId: e.target.value })}
+                  onBlur={() => {
+                    if (bolForm.shipmentId) {
+                      autoMapBOLData(bolForm.shipmentId);
+                    }
+                  }}
+                  placeholder="SHIP1782819513441"
+                  helperText="Enter shipment ID and press Tab to auto-fill"
+                  sx={{ 
+                    '& .MuiOutlinedInput-root': { 
+                      backgroundColor: bolForm.shipmentId && !bolForm.billOfLadingNo ? '#e8f5e9' : 'inherit' 
+                    }
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Bill of Lading Number"
+                  required
+                  value={bolForm.billOfLadingNo}
+                  onChange={(e) => setBolForm({ ...bolForm, billOfLadingNo: e.target.value })}
+                  placeholder="BL1720000000000"
+                  helperText="Auto-generated B/L number"
+                  InputProps={{ readOnly: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: '#e3f2fd' } }}
+                />
+              </Grid>
+
+              {/* Section 2: Vessel & Voyage Details */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  <FlightTakeoff /> Vessel & Voyage Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Shipping Line</InputLabel>
+                  <Select
+                    value={bolForm.shippingLine}
+                    onChange={(e) => setBolForm({ ...bolForm, shippingLine: e.target.value })}
+                    label="Shipping Line"
+                  >
+                    <MenuItem value="Maersk Line">Maersk Line</MenuItem>
+                    <MenuItem value="MSC">MSC (Mediterranean Shipping Company)</MenuItem>
+                    <MenuItem value="CMA CGM">CMA CGM</MenuItem>
+                    <MenuItem value="COSCO Shipping">COSCO Shipping</MenuItem>
+                    <MenuItem value="Hapag-Lloyd">Hapag-Lloyd</MenuItem>
+                    <MenuItem value="ONE">Ocean Network Express (ONE)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Vessel Name"
+                  required
+                  value={bolForm.vesselName}
+                  onChange={(e) => setBolForm({ ...bolForm, vesselName: e.target.value })}
+                  placeholder="Maersk Eindhoven"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.vesselName ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Voyage Number"
+                  required
+                  value={bolForm.voyageNumber}
+                  onChange={(e) => setBolForm({ ...bolForm, voyageNumber: e.target.value })}
+                  placeholder="V2026W25"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.voyageNumber ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Container Number"
+                  required
+                  value={bolForm.containerNumber}
+                  onChange={(e) => setBolForm({ ...bolForm, containerNumber: e.target.value })}
+                  placeholder="REEFER172000000"
+                  helperText="Auto-generated container number"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.containerNumber ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 3: Route Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  <LocationOn /> Route & Schedule
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Port of Loading"
+                  required
+                  value={bolForm.departurePort}
+                  onChange={(e) => setBolForm({ ...bolForm, departurePort: e.target.value })}
+                  placeholder="Djibouti"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.departurePort ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Port of Discharge"
+                  required
+                  value={bolForm.destinationPort}
+                  onChange={(e) => setBolForm({ ...bolForm, destinationPort: e.target.value })}
+                  placeholder="Hamburg"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.destinationPort ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  type="date"
+                  label="Estimated Time of Departure (ETD)"
+                  required
+                  value={bolForm.estimatedDeparture}
+                  onChange={(e) => setBolForm({ ...bolForm, estimatedDeparture: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedDeparture ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  type="date"
+                  label="Estimated Time of Arrival (ETA)"
+                  required
+                  value={bolForm.estimatedArrival}
+                  onChange={(e) => setBolForm({ ...bolForm, estimatedArrival: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedArrival ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 4: Cargo Details */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  <Assignment /> Cargo Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>Container Type</InputLabel>
+                  <Select
+                    value={bolForm.containerType}
+                    onChange={(e) => setBolForm({ ...bolForm, containerType: e.target.value })}
+                    label="Container Type"
+                    sx={{ backgroundColor: bolForm.containerType ? '#e3f2fd' : 'inherit' }}
+                  >
+                    <MenuItem value="DRY">DRY - Standard 20/40ft Container</MenuItem>
+                    <MenuItem value="REEFER">REEFER - Refrigerated Container</MenuItem>
+                    <MenuItem value="OPEN_TOP">OPEN TOP - Open Top Container</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Weight (kg)"
+                  required
+                  value={bolForm.weight}
+                  onChange={(e) => setBolForm({ ...bolForm, weight: e.target.value })}
+                  placeholder="1908"
+                  helperText="Total cargo weight"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.weight ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Volume (CBM)"
+                  value={bolForm.volume}
+                  onChange={(e) => setBolForm({ ...bolForm, volume: e.target.value })}
+                  placeholder="3.18"
+                  helperText="Cubic meters"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.volume ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 5: Parties Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  👥 Parties Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Consignee (Buyer)"
+                  value={bolForm.consignee}
+                  onChange={(e) => setBolForm({ ...bolForm, consignee: e.target.value })}
+                  placeholder="TOLAWAQ"
+                  helperText="Auto-filled from shipment"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.consignee ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Notify Party"
+                  value={bolForm.notify}
+                  onChange={(e) => setBolForm({ ...bolForm, notify: e.target.value })}
+                  placeholder="exporter@email.com"
+                  helperText="Email or contact details"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.notify ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 6: Additional Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  📝 Additional Details
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Tracking Number"
+                  value={bolForm.trackingNumber}
+                  onChange={(e) => setBolForm({ ...bolForm, trackingNumber: e.target.value })}
+                  placeholder="TRK1720000000000"
+                  helperText="Auto-generated tracking number"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.trackingNumber ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Freight Terms</InputLabel>
+                  <Select
+                    value={bolForm.freightTerms}
+                    onChange={(e) => setBolForm({ ...bolForm, freightTerms: e.target.value })}
+                    label="Freight Terms"
+                  >
+                    <MenuItem value="PREPAID">PREPAID</MenuItem>
+                    <MenuItem value="COLLECT">COLLECT</MenuItem>
+                    <MenuItem value="FOB">FOB (Free on Board)</MenuItem>
+                    <MenuItem value="CIF">CIF (Cost, Insurance, Freight)</MenuItem>
+                    <MenuItem value="CFR">CFR (Cost and Freight)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  label="Special Instructions"
+                  value={bolForm.specialInstructions}
+                  onChange={(e) => setBolForm({ ...bolForm, specialInstructions: e.target.value })}
+                  placeholder="Enter special handling instructions, temperature requirements, or other remarks..."
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.specialInstructions ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+            </Grid>
+
+            {/* Validation Summary */}
+            <Alert severity="warning" sx={{ mt: 3 }}>
+              <Typography variant="body2">
+                <strong>⚠️ Required Fields:</strong> Shipment ID, B/L Number, Vessel Name, Departure Port, Destination Port, 
+                ETA, and Weight must be completed before submission.
+              </Typography>
+            </Alert>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <AnimatedButton onClick={() => {
+            setBillOfLadingDialogOpen(false);
+            // Reset form
+            setBolForm({
+              shipmentId: '',
+              billOfLadingNo: '',
+              vesselName: '',
+              voyageNumber: '',
+              shippingLine: '',
+              containerNumber: '',
+              containerType: 'DRY',
+              departurePort: 'Djibouti',
+              destinationPort: '',
+              estimatedDeparture: '',
+              estimatedArrival: '',
+              trackingNumber: '',
+              weight: '',
+              volume: '',
+              consignee: '',
+              notify: '',
+              freightTerms: 'PREPAID',
+              specialInstructions: '',
+            });
+          }}>
+            Cancel
+          </AnimatedButton>
+          <AnimatedButton
+            variant="outlined"
+            brandColor="#006064"
+            onClick={() => {
+              if (bolForm.shipmentId) {
+                autoMapBOLData(bolForm.shipmentId);
+              } else {
+                alert('⚠️ Please enter a Shipment ID first');
+              }
+            }}
+          >
+            Auto-Fill from Shipment
+          </AnimatedButton>
+          <AnimatedButton
+            variant="contained"
+            brandColor="#006064"
+            startIcon={<CheckCircle />}
+            onClick={handleSubmitBOL}
+          >
+            Record Bill of Lading
           </AnimatedButton>
         </DialogActions>
       </Dialog>

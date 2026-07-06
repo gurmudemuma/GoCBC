@@ -5,10 +5,11 @@ import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
+import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
-const fabricService = new FabricService();
+const fabricService = FabricService.getInstance();
 
 /**
  * @swagger
@@ -72,6 +73,7 @@ router.post('/',
     body('pricePerKg').isNumeric().withMessage('Price per kg must be a number'),
     body('currency').notEmpty().withMessage('Currency is required'),
     body('eudrRequired').isBoolean().withMessage('EUDR required must be a boolean'),
+    body('documents').optional().isArray(),
   ],
   validateRequest,
   async (req, res) => {
@@ -88,7 +90,15 @@ router.post('/',
         pricePerKg,
         currency,
         eudrRequired,
+        documents,
       } = req.body;
+
+      // Extract document IDs for blockchain storage
+      let documentIDs: string[] = [];
+      if (documents && Array.isArray(documents)) {
+        documentIDs = documents.map((doc: any) => doc.documentId || doc.id).filter(Boolean);
+        logger.info(`Contract ${contractID}: Linking ${documentIDs.length} documents to blockchain`);
+      }
 
       const result = await fabricService.registerSalesContract(
         contractID,
@@ -101,11 +111,12 @@ router.post('/',
         currency,
         eudrRequired.toString(),
         buyerBank || '',
-        exporterBank || ''
+        exporterBank || '',
+        JSON.stringify(documentIDs)
       );
 
       if (result.success) {
-        logger.info(`Sales contract registered successfully: ${contractID}, txId: ${result.txId}`);
+        logger.info(`Sales contract registered successfully: ${contractID}, txId: ${result.txId}, documents: ${documentIDs.length}`);
         
         // Try to read back the contract immediately to verify
         setTimeout(async () => {
@@ -117,6 +128,7 @@ router.post('/',
           success: true,
           data: result.data,
           txId: result.txId,
+          documentsLinked: documentIDs.length,
           timestamp: new Date().toISOString(),
         });
       } else {
@@ -308,6 +320,54 @@ router.get('/:contractID',
 );
 /**
  * @swagger
+ * /api/v1/contracts/approve:
+ *   post:
+ *     summary: Approve a sales contract (body data)
+ *     tags: [Contracts]
+ */
+router.post('/approve',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { contractId, approvedBy, comments } = req.body;
+      
+      if (!contractId) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'contractId is required' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info('[CONTRACTS] Approving contract:', { contractId, approvedBy });
+
+      const result = await fabricService.submitTransaction(
+        'ApproveContract',
+        contractId,
+        approvedBy || 'NBE Admin',
+        comments || 'Approved'
+      );
+
+      logger.info('[CONTRACTS] Contract approved successfully:', contractId);
+      
+      res.json({
+        success: true,
+        message: 'Contract approved successfully',
+        data: { contractId },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CONTRACTS] Error approving contract:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'APPROVAL_FAILED', message: error.message || 'Failed to approve contract' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+/**
+ * @swagger
  * /api/v1/contracts/{contractID}/approve:
  *   post:
  *     summary: Approve a sales contract
@@ -330,20 +390,37 @@ router.get('/:contractID',
  *         description: Internal server error
  */
 router.post('/:contractID/approve',
+  authMiddleware,
   [param('contractID').notEmpty().withMessage('Contract ID is required')],
   validateRequest,
   async (req: Request, res: Response) => {
     try {
       const { contractID } = req.params;
       const user = (req as any).user; // Get authenticated user info
-      
+      const userOrg = String(user?.org || '').toUpperCase();
+      const userRole = String(user?.role || '').toUpperCase();
+
+      // Only NBE can approve sales contracts
+      if (userOrg !== 'NBEMSP' && userRole !== 'NBE') {
+        logger.warn(`Unauthorized sales contract approval attempt by ${user?.org || 'UNKNOWN'}: ${contractID}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only NBE users can approve sales contracts',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // Log which organization is approving
-      logger.info(`[${user?.org || 'UNKNOWN'}] Approving contract: ${contractID}`, {
+      logger.info(`[${user.org}] Approving contract: ${contractID}`, {
         userId: user?.sub,
         organization: user?.org,
         role: user?.role,
       });
       
+      await fabricService.connectAsOrg('NBEMSP');
       const result = await fabricService.approveSalesContract(contractID);
 
       if (result.success) {
@@ -366,6 +443,76 @@ router.post('/:contractID/approve',
       }
     } catch (error) {
       logger.error('Error approving contract:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/contracts/:contractID/nbe-approve
+ * NBE approves contract for forex allocation eligibility
+ */
+router.post('/:contractID/nbe-approve',
+  authMiddleware,
+  [
+    param('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('approvedBy').notEmpty().withMessage('Approving officer is required'),
+    body('approvalType').optional().isString(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { contractID } = req.params;
+      const { approvedBy, approvalType, comments } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[NBE] Approving contract ${contractID} for forex allocation`, {
+        userId: user?.sub,
+        organization: user?.org,
+        approvedBy,
+      });
+
+      // Update contract status to APPROVED in blockchain
+      const result = await fabricService.invokeChaincode('ApproveContract', [
+        contractID,
+        approvedBy,
+        'NBE_FOREX_APPROVAL',
+        comments || 'Approved for foreign exchange allocation by NBE',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Contract ${contractID} approved for forex by NBE`);
+        res.json({
+          success: true,
+          data: {
+            contractID,
+            approvedBy,
+            approvalType: 'NBE_FOREX_APPROVAL',
+            approvalDate: new Date().toISOString(),
+          },
+          txId: result.txId,
+          message: 'Contract approved for forex allocation',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'NBE_APPROVAL_FAILED',
+            message: result.error || 'Failed to approve contract for forex',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error in NBE contract approval:', error);
       res.status(500).json({
         success: false,
         error: {

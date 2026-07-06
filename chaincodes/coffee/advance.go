@@ -12,33 +12,33 @@ import (
 // ==================== ADVANCE PAYMENT STRUCTURE ====================
 
 type AdvancePayment struct {
-	PaymentID            string    `json:"paymentId"`
-	ContractID           string    `json:"contractId"`
-	ExporterID           string    `json:"exporterId"`
-	PermitID             string    `json:"permitId"`
-	Amount               float64   `json:"amount"`
-	Currency             string    `json:"currency"`
-	CreditAdviceNumber   string    `json:"creditAdviceNumber"`   // Bank credit advice reference
-	ReceivingBank        string    `json:"receivingBank"`        // Ethiopian bank
-	ReceivingBankBIC     string    `json:"receivingBankBic"`
-	PayingBank           string    `json:"payingBank"`           // Foreign bank
-	PayingBankBIC        string    `json:"payingBankBic"`
-	SWIFTReference       string    `json:"swiftReference"`
-	BeneficiaryName      string    `json:"beneficiaryName"`      // Exporter
-	BeneficiaryAccount   string    `json:"beneficiaryAccount"`
-	Status               string    `json:"status"`               // RECEIVED, PERMIT_ISSUED, SHIPPED, SETTLED
-	ReceivedDate         time.Time `json:"receivedDate"`
-	PermitIssueDate      string    `json:"permitIssueDate"`
-	ShipmentDate         string    `json:"shipmentDate"`
-	SettlementDate       string    `json:"settlementDate"`
-	ShipmentID           string    `json:"shipmentId"`           // Link to actual shipment
-	ShippedQuantity      float64   `json:"shippedQuantity"`
-	ShippedValue         float64   `json:"shippedValue"`
-	BalanceAmount        float64   `json:"balanceAmount"`        // If shipment < advance
-	RefundAmount         float64   `json:"refundAmount"`         // Amount to refund if over-payment
-	Remarks              string    `json:"remarks"`
-	CreatedAt            time.Time `json:"createdAt"`
-	UpdatedAt            time.Time `json:"updatedAt"`
+	PaymentID          string    `json:"paymentId"`
+	ContractID         string    `json:"contractId"`
+	ExporterID         string    `json:"exporterId"`
+	PermitID           string    `json:"permitId"`
+	Amount             float64   `json:"amount"`
+	Currency           string    `json:"currency"`
+	CreditAdviceNumber string    `json:"creditAdviceNumber"` // Bank credit advice reference
+	ReceivingBank      string    `json:"receivingBank"`      // Ethiopian bank
+	ReceivingBankBIC   string    `json:"receivingBankBic"`
+	PayingBank         string    `json:"payingBank"` // Foreign bank
+	PayingBankBIC      string    `json:"payingBankBic"`
+	SWIFTReference     string    `json:"swiftReference"`
+	BeneficiaryName    string    `json:"beneficiaryName"` // Exporter
+	BeneficiaryAccount string    `json:"beneficiaryAccount"`
+	Status             string    `json:"status"` // RECEIVED, PERMIT_ISSUED, SHIPPED, SETTLED
+	ReceivedDate       time.Time `json:"receivedDate"`
+	PermitIssueDate    string    `json:"permitIssueDate"`
+	ShipmentDate       string    `json:"shipmentDate"`
+	SettlementDate     string    `json:"settlementDate"`
+	ShipmentID         string    `json:"shipmentId"` // Link to actual shipment
+	ShippedQuantity    float64   `json:"shippedQuantity"`
+	ShippedValue       float64   `json:"shippedValue"`
+	BalanceAmount      float64   `json:"balanceAmount"` // If shipment < advance
+	RefundAmount       float64   `json:"refundAmount"`  // Amount to refund if over-payment
+	Remarks            string    `json:"remarks"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // ==================== ADVANCE PAYMENT FUNCTIONS ====================
@@ -130,13 +130,13 @@ func (c *CoffeeContract) RecordAdvancePayment(ctx contractapi.TransactionContext
 
 	// Emit event
 	event := map[string]interface{}{
-		"eventType":    "AdvancePaymentReceived",
-		"paymentID":    paymentID,
-		"exporterID":   exporterID,
-		"amount":       amount,
-		"currency":     currency,
-		"swiftRef":     swiftReference,
-		"timestamp":    txTime.Format(time.RFC3339),
+		"eventType":  "AdvancePaymentReceived",
+		"paymentID":  paymentID,
+		"exporterID": exporterID,
+		"amount":     amount,
+		"currency":   currency,
+		"swiftRef":   swiftReference,
+		"timestamp":  txTime.Format(time.RFC3339),
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("AdvancePaymentReceived", eventJSON)
@@ -291,7 +291,7 @@ func (c *CoffeeContract) LinkShipmentToAdvance(ctx contractapi.TransactionContex
 	payment.ShipmentDate = txTime.Format(time.RFC3339)
 	payment.ShippedQuantity = shipment.Quantity
 	payment.ShippedValue = shipment.ValueUSD
-	
+
 	// Calculate balance (if shipped value < advance amount)
 	if payment.ShippedValue < payment.Amount {
 		payment.BalanceAmount = payment.Amount - payment.ShippedValue
@@ -301,7 +301,7 @@ func (c *CoffeeContract) LinkShipmentToAdvance(ctx contractapi.TransactionContex
 		payment.Remarks = fmt.Sprintf("Shipment value (%.2f %s) exceeds advance (%.2f %s).",
 			payment.ShippedValue, payment.Currency, payment.Amount, payment.Currency)
 	}
-	
+
 	payment.UpdatedAt = txTime
 
 	paymentJSON, err = json.Marshal(payment)

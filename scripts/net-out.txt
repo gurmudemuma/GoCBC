@@ -1,0 +1,10 @@
+=== peer0.nbe networks ===
+cecbs-network
+=== peer0.ecx networks ===
+cecbs-network
+=== peer0.ecta networks ===
+cecbs-network
+=== coffee-chaincode networks ===
+cecbs-network
+=== coffee-chaincode IP ===
+invalid IP

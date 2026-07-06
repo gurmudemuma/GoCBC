@@ -1,0 +1,47 @@
+=== checkcommitreadiness ===
+{
+	"approvals": {
+		"BanksMSP": true,
+		"CustomsMSP": true,
+		"ECTAMSP": true,
+		"ECXMSP": true,
+		"NBEMSP": true,
+		"ShippingMSP": true
+	}
+}
+
+=== Copying each org TLS CA into ecta container ===
+  Copied TLS CA for ecta
+  Copied TLS CA for ecx
+  Copied TLS CA for banks
+  Copied TLS CA for nbe
+  Copied TLS CA for customs
+  Copied TLS CA for shipping
+
+=== COMMIT with per-org TLS certs ===
+[34m2026-06-29 11:31:18.898 UTC 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.ecta.cecbs.et:7051
+[34m2026-06-29 11:31:18.907 UTC 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.nbe.cecbs.et:10051
+[34m2026-06-29 11:31:18.909 UTC 0003 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.banks.cecbs.et:9051
+[34m2026-06-29 11:31:18.912 UTC 0004 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.shipping.cecbs.et:12051
+[34m2026-06-29 11:31:18.914 UTC 0005 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.customs.cecbs.et:11051
+[34m2026-06-29 11:31:18.916 UTC 0006 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [de97ac61a4552205a05a5cdf6a9367d4757d1fc1ac8bda47777a3b78684425ce] committed with status (VALID) at peer0.ecx.cecbs.et:8051
+
+=== querycommitted ===
+{
+	"sequence": 1,
+	"version": "1.11",
+	"endorsement_plugin": "escc",
+	"validation_plugin": "vscc",
+	"validation_parameter": "EiAvQ2hhbm5lbC9BcHBsaWNhdGlvbi9FbmRvcnNlbWVudA==",
+	"collections": {},
+	"approvals": {
+		"BanksMSP": true,
+		"CustomsMSP": true,
+		"ECTAMSP": true,
+		"ECXMSP": true,
+		"NBEMSP": true,
+		"ShippingMSP": true
+	}
+}
+
+=== DONE ===

@@ -30,9 +30,17 @@ export const organizationColors = {
   BANKS: {
     primary: '#9b30b7',      // Purple - Commercial Bank of Ethiopia
     secondary: '#000000',    // Black
-    dark: '#000000',         // Black
-    light: '#9b30b7',        // Purple
-    gradient: 'linear-gradient(135deg, #000000 0%, #9b30b7 100%)',  // Black to Purple
+    dark: '#7a2592',         // Dark Purple
+    light: '#b366cc',        // Light Purple
+    gradient: 'linear-gradient(135deg, #9b30b7 0%, #9b30b7 100%)',  // Pure Purple
+    accent: '#FFD700',       // Golden
+  },
+  EXPORTER: {
+    primary: '#9b30b7',      // Purple
+    secondary: '#000000',    // Black
+    dark: '#7a2592',         // Dark Purple
+    light: '#b366cc',        // Light Purple
+    gradient: 'linear-gradient(135deg, #9b30b7 0%, #9b30b7 100%)',  // Pure Purple
     accent: '#FFD700',       // Golden
   },
   CUSTOMS: {
@@ -87,15 +95,54 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
         },
         error: {
           main: '#9b30b7',  // Purple for errors
+          light: '#b366cc',
+          dark: '#7a2592',
         },
         warning: {
           main: '#FFD700',  // Golden for warnings
+          light: '#FFE44D',
+          dark: '#CCB000',
         },
         info: {
-          main: '#000000',  // Black for info
+          main: '#9b30b7',  // Purple for info
+          light: '#b366cc',
+          dark: '#7a2592',
         },
         success: {
           main: '#FFD700',  // Golden for success
+          light: '#FFE44D',
+          dark: '#CCB000',
+        },
+        divider: '#000000',  // Black dividers
+      } : organization === 'EXPORTER' ? {
+        background: {
+          default: '#ffffff',  // White background
+          paper: '#ffffff',    // White paper
+        },
+        text: {
+          primary: '#000000',    // Black text
+          secondary: '#000000',  // Black text
+          disabled: '#666666',   // Dark gray for disabled
+        },
+        error: {
+          main: '#9b30b7',  // Purple for errors
+          light: '#b366cc',
+          dark: '#7a2592',
+        },
+        warning: {
+          main: '#FFD700',  // Golden for warnings
+          light: '#FFE44D',
+          dark: '#CCB000',
+        },
+        info: {
+          main: '#9b30b7',  // Purple for info
+          light: '#b366cc',
+          dark: '#7a2592',
+        },
+        success: {
+          main: '#FFD700',  // Golden for success
+          light: '#FFE44D',
+          dark: '#CCB000',
         },
         divider: '#000000',  // Black dividers
       } : organization === 'NBE' ? {
@@ -130,8 +177,8 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
     },
     typography: {
       fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-      // For BANKS: All text in black
-      ...(organization === 'BANKS' ? {
+      // For BANKS and EXPORTER: All text in black
+      ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
         allVariants: {
           color: '#000000',
         },
@@ -142,40 +189,40 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
       } : {}),
       h1: {
         fontWeight: 700,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       h2: {
         fontWeight: 700,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       h3: {
         fontWeight: 600,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       h4: {
         fontWeight: 600,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       h5: {
         fontWeight: 600,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       h6: {
         fontWeight: 600,
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       body1: {
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       body2: {
-        ...(organization === 'BANKS' && { color: '#000000' }),
+        ...((organization === 'BANKS' || organization === 'EXPORTER') && { color: '#000000' }),
         ...(organization === 'NBE' && { color: '#5C4A33' }),
       },
       button: {
@@ -206,22 +253,21 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
             },
           },
           outlined: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               borderColor: '#000000',
               color: '#000000',
               '&:hover': {
                 borderColor: '#9b30b7',
                 backgroundColor: 'rgba(155, 48, 183, 0.05)',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               borderColor: '#8B6F47',
               color: '#5C4A33',
               '&:hover': {
                 borderColor: '#C4A574',
                 backgroundColor: 'rgba(139, 111, 71, 0.05)',
               },
-            }),
+            } : {}),
           },
         },
       },
@@ -229,7 +275,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
         styleOverrides: {
           root: {
             borderRadius: 12,
-            ...(organization === 'BANKS' ? {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
               border: '1px solid #000000',
               '&:hover': {
@@ -256,7 +302,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
         styleOverrides: {
           root: {
             background: colors.gradient,
-            boxShadow: organization === 'BANKS' ? '0 2px 8px rgba(0,0,0,0.3)' : organization === 'NBE' ? '0 2px 8px rgba(92, 74, 51, 0.3)' : '0 2px 8px rgba(0,0,0,0.1)',
+            boxShadow: organization === 'BANKS' || organization === 'EXPORTER' ? '0 2px 8px rgba(0,0,0,0.3)' : organization === 'NBE' ? '0 2px 8px rgba(92, 74, 51, 0.3)' : '0 2px 8px rgba(0,0,0,0.1)',
           },
         },
       },
@@ -268,12 +314,11 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
           filled: {
             backgroundColor: colors.primary,
             color: '#ffffff',
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               border: '2px solid #FFD700',
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               border: '2px solid #C4A574',
-            }),
+            } : {}),
           },
         },
       },
@@ -282,7 +327,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
           root: {
             borderRadius: 4,
             height: 8,
-            backgroundColor: organization === 'BANKS' ? 'rgba(0,0,0,0.1)' : organization === 'NBE' ? 'rgba(139, 111, 71, 0.1)' : undefined,
+            backgroundColor: organization === 'BANKS' || organization === 'EXPORTER' ? 'rgba(0,0,0,0.1)' : organization === 'NBE' ? 'rgba(139, 111, 71, 0.1)' : undefined,
           },
           bar: {
             borderRadius: 4,
@@ -296,61 +341,58 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
             textTransform: 'none',
             fontWeight: 600,
             fontSize: '0.95rem',
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               color: '#000000',
               '&.Mui-selected': {
                 color: '#9b30b7',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               color: '#5C4A33',
               '&.Mui-selected': {
                 color: '#8B6F47',
               },
-            }),
+            } : {}),
           },
         },
       },
       MuiTabs: {
         styleOverrides: {
           indicator: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               backgroundColor: '#9b30b7',
               height: 3,
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               backgroundColor: '#8B6F47',
               height: 3,
-            }),
+            } : {}),
           },
         },
       },
       MuiTableHead: {
         styleOverrides: {
           root: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               '& .MuiTableCell-head': {
                 backgroundColor: '#000000',
                 color: '#FFD700',
                 fontWeight: 700,
                 borderBottom: '2px solid #9b30b7',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               '& .MuiTableCell-head': {
                 backgroundColor: '#5C4A33',
                 color: '#C4A574',
                 fontWeight: 700,
                 borderBottom: '2px solid #8B6F47',
               },
-            }),
+            } : {}),
           },
         },
       },
       MuiTableBody: {
         styleOverrides: {
           root: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               '& .MuiTableRow-root': {
                 '&:hover': {
                   backgroundColor: 'rgba(155, 48, 183, 0.05)',
@@ -363,8 +405,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
                 color: '#000000',
                 borderBottom: '1px solid rgba(0,0,0,0.1)',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               '& .MuiTableRow-root': {
                 '&:hover': {
                   backgroundColor: 'rgba(139, 111, 71, 0.05)',
@@ -377,46 +418,44 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
                 color: '#5C4A33',
                 borderBottom: '1px solid rgba(139, 111, 71, 0.1)',
               },
-            }),
+            } : {}),
           },
         },
       },
       MuiIconButton: {
         styleOverrides: {
           root: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               color: '#000000',
               '&:hover': {
                 backgroundColor: 'rgba(155, 48, 183, 0.1)',
                 color: '#9b30b7',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               color: '#5C4A33',
               '&:hover': {
                 backgroundColor: 'rgba(139, 111, 71, 0.1)',
                 color: '#8B6F47',
               },
-            }),
+            } : {}),
           },
         },
       },
       MuiDivider: {
         styleOverrides: {
           root: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               borderColor: '#000000',
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               borderColor: '#8B6F47',
-            }),
+            } : {}),
           },
         },
       },
       MuiAlert: {
         styleOverrides: {
           root: {
-            ...(organization === 'BANKS' && {
+            ...(organization === 'BANKS' || organization === 'EXPORTER' ? {
               '&.MuiAlert-standardSuccess': {
                 backgroundColor: 'rgba(255, 215, 0, 0.1)',
                 color: '#000000',
@@ -437,8 +476,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
                 color: '#000000',
                 border: '1px solid #000000',
               },
-            }),
-            ...(organization === 'NBE' && {
+            } : organization === 'NBE' ? {
               '&.MuiAlert-standardSuccess': {
                 backgroundColor: 'rgba(196, 165, 116, 0.1)',
                 color: '#5C4A33',
@@ -459,7 +497,7 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
                 color: '#5C4A33',
                 border: '1px solid #8B6F47',
               },
-            }),
+            } : {}),
           },
         },
       },

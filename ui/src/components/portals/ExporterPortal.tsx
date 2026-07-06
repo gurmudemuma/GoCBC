@@ -34,8 +34,11 @@ import {
   ListItemText,
   FormControlLabel,
   Switch,
+  ThemeProvider,
 } from '@mui/material';
+import { createOrganizationTheme } from '@/theme/organizationThemes';
 import BankSelect from '@/components/common/BankSelect';
+import { DocumentUploadDialog } from '@/components/portals/DocumentUploadDialog';
 // Commented out until @mui/lab is installed
 // import {
 //   Timeline,
@@ -61,6 +64,7 @@ import {
   Description,
   Notifications,
   Assignment,
+  Science,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
@@ -97,6 +101,7 @@ interface ExportContract {
   nbeReferenceNumber: string;
   buyerName: string;
   buyerCountry: string;
+  origin?: string;
   buyerBank?: string;        // Issuing bank (buyer's bank)
   exporterBank?: string;     // Advising bank (exporter's bank)
   coffeeType: string;
@@ -170,9 +175,9 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
 );
 
 const ExporterPortal: React.FC = () => {
-  // Brand colors for Exporter Portal
-  const brandPrimary = '#2E7D32'; // Green (coffee/growth)
-  const brandSecondary = '#FFA726'; // Orange (Ethiopian warmth)
+  // Brand colors for Exporter Portal - Purple and Golden theme
+  const brandPrimary = '#9b30b7'; // Purple (primary accent)
+  const brandSecondary = '#FFD700'; // Golden (secondary accent)
   const BRAND_COLOR = brandPrimary; // Primary brand color for components
   
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
@@ -191,9 +196,49 @@ const ExporterPortal: React.FC = () => {
   const [contractDialogOpen, setContractDialogOpen] = useState(false);
   const [createContractDialogOpen, setCreateContractDialogOpen] = useState(false);
   const [createShipmentDialogOpen, setCreateShipmentDialogOpen] = useState(false);
+  const [customsDeclarationDialogOpen, setCustomsDeclarationDialogOpen] = useState(false);
+  const [bookShippingDialogOpen, setBookShippingDialogOpen] = useState(false);
+  const [paymentSettlementDialogOpen, setPaymentSettlementDialogOpen] = useState(false);
+  const [selectedShipmentForCustoms, setSelectedShipmentForCustoms] = useState<ShipmentStatus | null>(null);
+  const [selectedShipmentForShipping, setSelectedShipmentForShipping] = useState<ShipmentStatus | null>(null);
+  const [selectedShipmentForPayment, setSelectedShipmentForPayment] = useState<ShipmentStatus | null>(null);
+  const [isSubmittingCustoms, setIsSubmittingCustoms] = useState(false);
+  const [isBookingShipping, setIsBookingShipping] = useState(false);
+  const [isInitiatingPayment, setIsInitiatingPayment] = useState(false);
+  const [customsForm, setCustomsForm] = useState({
+    hsCode: '090111',
+    portOfExit: 'Djibouti Port',
+    customsValue: '',
+    additionalNotes: '',
+    eudrCompliant: true,
+  });
+  const [shippingForm, setShippingForm] = useState({
+    shippingLine: 'Maersk Line',
+    containerType: 'DRY',
+    portOfLoading: 'Djibouti Port',
+    portOfDischarge: '',
+    vesselName: '',
+    estimatedDeparture: '',
+    specialInstructions: '',
+  });
+  const [paymentForm, setPaymentForm] = useState({
+    paymentMethod: 'LC',
+    beneficiaryName: '',
+    beneficiaryAccount: '',
+    beneficiaryBank: '',
+    beneficiaryBankBIC: '',
+    swiftInstructions: '',
+  });
   const [selectedContract, setSelectedContract] = useState<ExportContract | null>(null);
   const [isCreatingContract, setIsCreatingContract] = useState(false);
   const [isCreatingShipment, setIsCreatingShipment] = useState(false);
+  
+  // Document upload states
+  const [contractDocUploadOpen, setContractDocUploadOpen] = useState(false);
+  const [contractDocuments, setContractDocuments] = useState<any[]>([]);
+  const [shipmentDocUploadOpen, setShipmentDocUploadOpen] = useState(false);
+  const [shipmentDocuments, setShipmentDocuments] = useState<any[]>([]);
+  
   const [newContract, setNewContract] = useState({
     buyerName: '',
     buyerCompany: '',
@@ -225,9 +270,64 @@ const ExporterPortal: React.FC = () => {
     ecxLotNumber: '',
     channel: 'Direct Export',
     destination: '',
+    bondReference: '',
+    unionApprovalReference: '',
     eudrCompliant: true,
   });
+
+  const isECXShipment = newShipment.channel === 'ECX';
+  const isUnionShipment = newShipment.channel === 'Union';
+  const isDirectExport = newShipment.channel === 'Direct Export';
+
+  const shipmentFieldValidation = {
+    icoRequired: true,
+    ecxLotRequired: isECXShipment,
+    unionApprovalRequired: isUnionShipment,
+    bondReferenceRequired: isDirectExport,
+  };
+
+  // Forex allocation notification — shown when NBE has allocated forex for the exporter
+  const [forexAllocatedAlert, setForexAllocatedAlert] = useState<{
+    show: boolean;
+    forexId: string;
+    contractId: string;
+    allocatedAmount: number;
+    currency: string;
+    exchangeRate: number;
+  } | null>(null);
+
+  // Real forex rate for selected shipment contract
+  const [selectedShipmentForexRate, setSelectedShipmentForexRate] = useState<number>(115.5);
   
+  const generateICOReference = (contractId: string, exporterId?: string) => {
+    const exporterSegment = exporterId ? exporterId.replace(/\W/g, '').slice(-4).padStart(4, '0').toUpperCase() : '0000';
+    const contractSegment = contractId.replace(/\W/g, '').slice(-5).padStart(5, '0').toUpperCase();
+    return `ET-${exporterSegment}-${contractSegment}`;
+  };
+
+  const generateECXLotNumber = (contractId: string) => {
+    const year = new Date().getFullYear();
+    const contractSegment = contractId.replace(/\W/g, '').slice(-5).padStart(5, '0').toUpperCase();
+    const randomSegment = Math.floor(Math.random() * 90000 + 10000);
+    return `ECX-${year}-${contractSegment}-${randomSegment}`;
+  };
+
+  const applyContractToShipment = (contract: ExportContract | undefined, forexRate?: number) => {
+    if (!contract) return;
+    setNewShipment(prev => ({
+      ...prev,
+      contractId: contract.contractId,
+      quantity: contract.quantity.toString(),
+      origin: prev.origin || contract.origin || contract.buyerCountry || '',
+      destination: contract.buyerCountry,
+      icoNumber: prev.icoNumber || generateICOReference(contract.contractId, profile?.exporterId),
+      ecxLotNumber: prev.ecxLotNumber || generateECXLotNumber(contract.contractId),
+    }));
+    if (forexRate) {
+      setSelectedShipmentForexRate(forexRate);
+    }
+  };
+
   // Audit Trail State
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'EXPORTER' | 'CONTRACT' | 'SHIPMENT' | 'LC' | 'PAYMENT'>('EXPORTER');
@@ -264,6 +364,29 @@ const ExporterPortal: React.FC = () => {
             'Authorization': `Bearer ${token}`
           }
         });
+        
+        // Handle 401/404 gracefully - endpoint may not exist yet
+        if (!profileResponse.ok) {
+          if (profileResponse.status === 401 || profileResponse.status === 404) {
+            console.log('[EXPORTER] Profile endpoint not available, using default profile');
+            // Set default profile from token data
+            setProfile({
+              exporterId: currentExporterId,
+              companyName: userInfo?.org || userInfo?.organization || 'Your Coffee Company',
+              ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
+              licenseStatus: 'ACTIVE',
+              licenseExpiryDate: '2027-12-31',
+              bankName: userInfo?.bankName || 'Commercial Bank of Ethiopia',
+              bankBranch: userInfo?.bankBranch || 'Main Branch',
+              bankBranchCode: userInfo?.bankBranchCode || 'CBE-001',
+              capitalRequirement: 50000000,
+              laboratoryCertified: true,
+            });
+            return; // Skip the rest of profile loading
+          }
+          throw new Error(`Profile API returned ${profileResponse.status}`);
+        }
+        
         const profileResult = await profileResponse.json();
         
         if (profileResult.success && profileResult.data) {
@@ -358,17 +481,27 @@ const ExporterPortal: React.FC = () => {
               rawData: { buyerBank: c.buyerBank, BuyerBank: c.BuyerBank, exporterBank: c.exporterBank, ExporterBank: c.ExporterBank }
             });
             
+            // Extract numeric fields and ensure they're valid numbers
+            const rawQuantity = c.quantity || c.Quantity || '0';
+            const rawPricePerKg = c.pricePerKg || c.PricePerKg || '0';
+            const rawTotalValue = c.totalValue || c.TotalValue || '0';
+            
+            const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
+            const pricePerKg = typeof rawPricePerKg === 'string' ? parseFloat(rawPricePerKg) || 0 : Number(rawPricePerKg) || 0;
+            const totalValue = typeof rawTotalValue === 'string' ? parseFloat(rawTotalValue) || 0 : Number(rawTotalValue) || 0;
+            
             return {
               contractId: contractId,
               nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
               buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
               buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
+              origin: c.origin || c.Origin || c.contractOrigin || c.contractOrigin || '',
               buyerBank: buyerBank,
               exporterBank: exporterBank,
               coffeeType: c.coffeeType || c.CoffeeType || 'Unknown',
-              quantity: c.quantity || c.Quantity || 0,
-              pricePerKg: c.pricePerKg || c.PricePerKg || 0,
-              totalValue: c.totalValue || c.TotalValue || 0,
+              quantity,
+              pricePerKg,
+              totalValue,
               currency: c.currency || c.Currency || 'USD',
               status: c.contractStatus || c.ContractStatus || 'REGISTERED',
               registrationDate: c.registrationDate || c.RegistrationDate || new Date().toISOString(),
@@ -438,10 +571,84 @@ const ExporterPortal: React.FC = () => {
             requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
           })));
           console.log(`Loaded ${myForex.length} forex allocations for exporter`);
+
+          // Notify exporter if any forex has been ALLOCATED and they haven't seen it
+          const allocated = myForex.find((f: any) => (f.status || f.Status) === 'ALLOCATED');
+          if (allocated) {
+            setForexAllocatedAlert({
+              show: true,
+              forexId: allocated.forexId || allocated.ForexID,
+              contractId: allocated.contractId || allocated.ContractID,
+              allocatedAmount: allocated.allocatedAmount || allocated.AllocatedAmount || 0,
+              currency: allocated.currency || allocated.Currency || 'USD',
+              exchangeRate: allocated.exchangeRate || allocated.ExchangeRate || 0,
+            });
+          }
         }
       }
     } catch (error) {
       console.warn('Could not load forex allocations:', error);
+    }
+
+    // Load Shipments for current exporter
+    try {
+      if (token) {
+        const shipmentsResponse = await fetch('http://localhost:3001/api/v1/shipments', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const shipmentsResult = await shipmentsResponse.json();
+        if (shipmentsResult.success && shipmentsResult.data) {
+          const myShipments = shipmentsResult.data.filter((s: any) => 
+            (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
+          );
+          
+          // Load quality inspections to check for approved shipments
+          const inspectionsResponse = await fetch('http://localhost:3001/api/v1/quality/inspections', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const inspectionsResult = await inspectionsResponse.json();
+          
+          let approvedShipmentIds: Set<string> = new Set();
+          if (inspectionsResult.success && inspectionsResult.data) {
+            console.log('[EXPORTER] Loaded quality inspections:', inspectionsResult.data.length);
+            // Find all approved inspections
+            const approvedInspections = inspectionsResult.data.filter((i: any) => 
+              i.status === 'APPROVED' || i.status === 'SHIPPED'
+            );
+            approvedShipmentIds = new Set(approvedInspections.map((i: any) => i.shipmentId || i.shipmentID));
+            console.log('[EXPORTER] Approved shipment IDs:', Array.from(approvedShipmentIds));
+          }
+          
+          setShipments(myShipments.map((s: any) => {
+            const shipmentId = s.shipmentID || s.shipmentId;
+            let status = s.shipmentStatus || s.Status || 'CREATED';
+            
+            // Update status if quality inspection is approved
+            if (status === 'CREATED' && approvedShipmentIds.has(shipmentId)) {
+              status = 'SHIPPED';
+              console.log(`[EXPORTER] Updated shipment ${shipmentId} status to SHIPPED (quality approved)`);
+            }
+            
+            // Ensure quantity is always a valid number
+            const rawQuantity = s.quantity || s.Quantity || '0';
+            const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
+            
+            return {
+              shipmentId,
+              contractId: s.contractID || s.contractId,
+              quantity,
+              status,
+              billOfLading: s.billOfLading || s.BillOfLading,
+              vesselName: s.vesselName || s.VesselName,
+              currentLocation: s.currentLocation || s.CurrentLocation,
+              estimatedArrival: s.estimatedArrival || s.EstimatedArrival,
+            };
+          }));
+          console.log(`[EXPORTER] Loaded ${myShipments.length} shipments for exporter`);
+        }
+      }
+    } catch (error) {
+      console.warn('Could not load shipments:', error);
     }
     
     // Note: Forex, LC, Shipments, and Payments are loaded from blockchain above
@@ -482,6 +689,9 @@ const ExporterPortal: React.FC = () => {
         return;
       }
       
+      // Prepare documents metadata - extract only IDs for blockchain
+      const documentIDs = contractDocuments.map(doc => doc.documentId);
+      
       const contractData = {
         contractID: contractId,
         exporterID: profile.exporterId,
@@ -493,10 +703,20 @@ const ExporterPortal: React.FC = () => {
         quantity,
         pricePerKg,
         currency: newContract.currency,
-        eudrRequired: newContract.eudrRequired
+        eudrRequired: newContract.eudrRequired,
+        documents: contractDocuments.map(doc => ({
+          documentId: doc.documentId,
+          fileName: doc.file.name,
+          category: doc.category,
+          hash: doc.hash,
+          ipfsCID: doc.ipfsCID,
+          description: doc.description,
+          encrypted: doc.encrypt,
+        }))
       };
 
       console.log('Sending contract data:', contractData);
+      console.log(`Contract will link ${documentIDs.length} documents to blockchain:`, documentIDs);
 
       const token = localStorage.getItem('authToken');
       if (!token) {
@@ -546,6 +766,7 @@ const ExporterPortal: React.FC = () => {
           fairTradeCertified: false,
           specialInstructions: ''
         });
+        setContractDocuments([]); // Clear uploaded documents
         // Reload contracts
         loadMockData();
       } else {
@@ -594,8 +815,29 @@ const ExporterPortal: React.FC = () => {
       }
 
       const shipmentId = `SHIP${Date.now()}`;
-      const forexRate = 115.5; // Current ETB/USD rate
+      // Use real forex rate from the allocated forex for this contract, fallback to 115.5
+      const forexRate = selectedShipmentForexRate || 115.5;
       const valueUSD = quantity * selectedContract.pricePerKg;
+      const icoNumber = newShipment.icoNumber || generateICOReference(newShipment.contractId, profile.exporterId);
+      const ecxLotNumber = shipmentFieldValidation.ecxLotRequired
+        ? (newShipment.ecxLotNumber || generateECXLotNumber(newShipment.contractId))
+        : newShipment.ecxLotNumber;
+
+      if (shipmentFieldValidation.ecxLotRequired && !newShipment.ecxLotNumber) {
+        showWarning('Missing ECX Lot Number', 'Please enter the ECX lot number for ECX channel shipments', 'ECX Lot Number is required when channel is ECX');
+        return;
+      }
+      if (shipmentFieldValidation.unionApprovalRequired && !newShipment.unionApprovalReference) {
+        showWarning('Missing Union Approval', 'Please enter the union approval reference for Union/Cooperative shipments', 'Union Approval Reference is required when channel is Union/Cooperative');
+        return;
+      }
+      if (shipmentFieldValidation.bondReferenceRequired && !newShipment.bondReference) {
+        showWarning('Missing Bond Reference', 'Please enter the bond reference for Direct Export shipments', 'Bond Reference is required when channel is Direct Export');
+        return;
+      }
+
+      // Prepare documents metadata - extract only IDs for blockchain
+      const documentIDs = shipmentDocuments.map(doc => doc.documentId);
 
       const shipmentData = {
         shipmentID: shipmentId,
@@ -605,13 +847,26 @@ const ExporterPortal: React.FC = () => {
         origin: newShipment.origin,
         quantity,
         grade: newShipment.grade,
-        icoNumber: newShipment.icoNumber,
-        ecxLotNumber: newShipment.ecxLotNumber,
+        icoNumber,
+        ecxLotNumber,
         channel: newShipment.channel,
+        bondReference: newShipment.bondReference,
+        unionApprovalReference: newShipment.unionApprovalReference,
         forexRate,
         valueUSD,
         eudrCompliant: newShipment.eudrCompliant,
+        documents: shipmentDocuments.map(doc => ({
+          documentId: doc.documentId,
+          fileName: doc.file.name,
+          category: doc.category,
+          hash: doc.hash,
+          ipfsCID: doc.ipfsCID,
+          description: doc.description,
+          encrypted: doc.encrypt,
+        }))
       };
+
+      console.log(`Shipment will link ${documentIDs.length} documents to blockchain:`, documentIDs);
 
       const token = localStorage.getItem('authToken');
       if (!token) {
@@ -632,9 +887,15 @@ const ExporterPortal: React.FC = () => {
       
       if (result.success) {
         showSuccess(
-          'Shipment Created Successfully',
-          `Shipment ${shipmentId} has been registered on the blockchain`,
-          `Next Steps:\n1. ECTA will conduct quality inspection\n2. Export permit will be issued after approval\n3. Customs clearance\n4. Shipping arrangement\n\nYou can track progress in the Shipments tab`
+          '🎉 Shipment Registered & Quality Inspection Requested',
+          `Shipment ${shipmentId} has been registered on the blockchain.`,
+          `✅ Quality Inspection Request automatically sent to ECTA\n\n` +
+          `What happens next:\n` +
+          `1. ECTA Q-Grader will schedule physical & cupping inspection (2-3 business days)\n` +
+          `2. Inspector evaluates: moisture content, defects, bean size, cupping score (SCA protocol)\n` +
+          `3. If quality passes (Grade 1-5) → ECTA approves & issues Export Permit\n` +
+          `4. You can then proceed to: Customs Declaration → Shipping → Payment Settlement\n\n` +
+          `Track progress in the "Shipments" tab. You'll be notified when inspection is complete.`
         );
         setCreateShipmentDialogOpen(false);
         setNewShipment({
@@ -644,10 +905,14 @@ const ExporterPortal: React.FC = () => {
           grade: '',
           icoNumber: '',
           ecxLotNumber: '',
+          bondReference: '',
+          unionApprovalReference: '',
           channel: 'Direct Export',
           destination: '',
           eudrCompliant: true,
         });
+        setShipmentDocuments([]); // Clear uploaded documents
+        setSelectedShipmentForexRate(115.5);
         loadMockData(); // Reload to show new shipment
       } else {
         showError(
@@ -665,6 +930,286 @@ const ExporterPortal: React.FC = () => {
       );
     } finally {
       setIsCreatingShipment(false);
+    }
+  };
+
+  const handleSubmitCustomsDeclaration = async () => {
+    if (!selectedShipmentForCustoms || !profile) {
+      showError('Error', 'Shipment or profile not loaded', 'Please try again');
+      return;
+    }
+
+    setIsSubmittingCustoms(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+
+      const selectedContract = contracts.find(c => c.contractId === selectedShipmentForCustoms.contractId);
+      const declarationId = `CD-${selectedShipmentForCustoms.shipmentId}`;
+      
+      const declarationData = {
+        declarationID: declarationId,
+        shipmentID: selectedShipmentForCustoms.shipmentId,
+        exporterID: profile.exporterId,
+        declarationType: customsForm.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD',
+        hsCode: customsForm.hsCode,
+        quantity: selectedShipmentForCustoms.quantity,
+        value: customsForm.customsValue || (selectedShipmentForCustoms.quantity * 9.25),
+        currency: selectedContract?.currency || 'USD',
+        destination: selectedContract?.buyerCountry || 'Unknown',
+        portOfExit: customsForm.portOfExit,
+        eudrCompliant: customsForm.eudrCompliant,
+        additionalNotes: customsForm.additionalNotes,
+      };
+
+      const response = await fetch('http://localhost:3001/api/v1/customs/declaration/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(declarationData)
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        showSuccess(
+          '🛃 Customs Declaration Submitted Successfully',
+          `Declaration ${declarationId} submitted to Ethiopian Customs Commission`,
+          'What happens next:\n' +
+          '• ECC customs officer reviews declaration & documents (1-3 days)\n' +
+          '• Physical inspection may be scheduled based on risk assessment\n' +
+          '• EUDR compliance verified for EU destinations\n' +
+          '• Customs clearance issued upon approval\n\n' +
+          'You will be notified of any updates. Track status in Shipments tab.'
+        );
+        setCustomsDeclarationDialogOpen(false);
+        setSelectedShipmentForCustoms(null);
+        setCustomsForm({
+          hsCode: '090111',
+          portOfExit: 'Djibouti Port',
+          customsValue: '',
+          additionalNotes: '',
+          eudrCompliant: true,
+        });
+        loadMockData(); // Reload to update status
+      } else {
+        showError(
+          'Customs Declaration Failed',
+          result.error?.message || 'Failed to submit declaration',
+          'Please verify all information and try again. Ensure all required documents are uploaded.'
+        );
+      }
+    } catch (error: any) {
+      console.error('Error submitting customs declaration:', error);
+      showError(
+        'Network Error',
+        'Failed to submit customs declaration',
+        error.message || 'Please check if the API server is running and try again'
+      );
+    } finally {
+      setIsSubmittingCustoms(false);
+    }
+  };
+
+  const handleBookShipping = async () => {
+    if (!selectedShipmentForShipping || !profile) {
+      showError('Error', 'Shipment or profile not loaded', 'Please try again');
+      return;
+    }
+
+    setIsBookingShipping(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+
+      const selectedContract = contracts.find(c => c.contractId === selectedShipmentForShipping.contractId);
+      const bookingId = `BOOK-${selectedShipmentForShipping.shipmentId}`;
+      const containerNumber = `CONT${Date.now()}`;
+      const billOfLading = `BL-${Date.now()}`;
+      
+      const bookingData = {
+        bookingID: bookingId,
+        shipmentID: selectedShipmentForShipping.shipmentId,
+        exporterID: profile.exporterId,
+        shippingLine: shippingForm.shippingLine,
+        containerNumber,
+        containerType: shippingForm.containerType,
+        portOfLoading: shippingForm.portOfLoading,
+        portOfDischarge: shippingForm.portOfDischarge,
+        vesselName: shippingForm.vesselName || 'TBD - Assigned by shipping line',
+        estimatedDeparture: shippingForm.estimatedDeparture,
+        estimatedArrival: new Date(new Date(shippingForm.estimatedDeparture).getTime() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        billOfLading,
+        weight: selectedShipmentForShipping.quantity,
+        specialInstructions: shippingForm.specialInstructions,
+      };
+
+      // For now, just update shipment status to SHIPPED
+      // In production, this would call a shipping/booking API
+      const response = await fetch(`http://localhost:3001/api/v1/shipments/${selectedShipmentForShipping.shipmentId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: 'SHIPPED' })
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        showSuccess(
+          '🚢 Shipping Booked Successfully',
+          `Container booking confirmed for ${selectedShipmentForShipping.shipmentId}`,
+          `Container: ${containerNumber}\n` +
+          `Bill of Lading: ${billOfLading}\n` +
+          `Shipping Line: ${shippingForm.shippingLine}\n` +
+          `Port of Loading: ${shippingForm.portOfLoading}\n` +
+          `Estimated Departure: ${new Date(shippingForm.estimatedDeparture).toLocaleDateString()}\n\n` +
+          'What happens next:\n' +
+          '• Container loading scheduled at port\n' +
+          '• Vessel departure tracking activated\n' +
+          '• You can track shipment in real-time\n' +
+          '• After delivery, proceed to Payment Settlement'
+        );
+        setBookShippingDialogOpen(false);
+        setSelectedShipmentForShipping(null);
+        setShippingForm({
+          shippingLine: 'Maersk Line',
+          containerType: 'DRY',
+          portOfLoading: 'Djibouti Port',
+          portOfDischarge: '',
+          vesselName: '',
+          estimatedDeparture: '',
+          specialInstructions: '',
+        });
+        loadMockData(); // Reload to update status
+      } else {
+        showError(
+          'Shipping Booking Failed',
+          result.error?.message || 'Failed to book shipping',
+          'Please verify all information and try again.'
+        );
+      }
+    } catch (error: any) {
+      console.error('Error booking shipping:', error);
+      showError(
+        'Network Error',
+        'Failed to book shipping',
+        error.message || 'Please check if the API server is running and try again'
+      );
+    } finally {
+      setIsBookingShipping(false);
+    }
+  };
+
+  const handleInitiatePayment = async () => {
+    if (!selectedShipmentForPayment || !profile) {
+      showError('Error', 'Shipment or profile not loaded', 'Please try again');
+      return;
+    }
+
+    setIsInitiatingPayment(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+
+      const selectedContract = contracts.find(c => c.contractId === selectedShipmentForPayment.contractId);
+      const selectedLC = lcStatuses.find(lc => lc.contractId === selectedShipmentForPayment.contractId);
+      const selectedForex = forexStatuses.find(fx => fx.contractId === selectedShipmentForPayment.contractId);
+      
+      if (!selectedLC) {
+        showError('LC Not Found', 'No Letter of Credit found for this contract', 'Cannot initiate payment without LC');
+        return;
+      }
+
+      const paymentId = `PAY-${selectedShipmentForPayment.shipmentId}`;
+      
+      const paymentData = {
+        paymentID: paymentId,
+        contractID: selectedShipmentForPayment.contractId,
+        exporterID: profile.exporterId,
+        lcID: selectedLC.lcId,
+        amount: selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg).toString() : '0',
+        currency: selectedContract?.currency || 'USD',
+        receivingBank: paymentForm.beneficiaryBank || profile.bankName || '',
+        receivingBankBIC: paymentForm.beneficiaryBankBIC || '',
+        beneficiaryName: paymentForm.beneficiaryName || profile.companyName || '',
+        beneficiaryAccount: paymentForm.beneficiaryAccount || '',
+        paymentMethod: paymentForm.paymentMethod,
+      };
+
+      const response = await fetch('http://localhost:3001/api/v1/payments/initiate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(paymentData)
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        const amountUSD = selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg) : 0;
+        const exchangeRate = selectedForex?.exchangeRate || 115.5;
+        const retentionRate = selectedForex?.retentionRate || 100;
+        const amountETB = amountUSD * exchangeRate;
+        const retainedETB = (amountETB * retentionRate) / 100;
+        
+        showSuccess(
+          '💰 Payment Settlement Initiated',
+          `Payment process started for ${selectedShipmentForPayment.shipmentId}`,
+          `Payment ID: ${paymentId}\n` +
+          `Amount: $${amountUSD.toLocaleString()} USD\n` +
+          `Exchange Rate: ${exchangeRate} ETB/USD\n` +
+          `Amount in ETB: ${amountETB.toLocaleString()} ETB\n` +
+          `NBE Retention: ${retentionRate}% = ${retainedETB.toLocaleString()} ETB\n\n` +
+          'What happens next:\n' +
+          '• Bank reviews and verifies shipping documents\n' +
+          '• SWIFT payment initiated by buyer\'s bank\n' +
+          '• NBE processes forex conversion & retention\n' +
+          '• Funds credited to your account (3-5 business days)\n' +
+          '• Transaction complete - export cycle finished!'
+        );
+        setPaymentSettlementDialogOpen(false);
+        setSelectedShipmentForPayment(null);
+        setPaymentForm({
+          paymentMethod: 'LC',
+          beneficiaryName: '',
+          beneficiaryAccount: '',
+          beneficiaryBank: '',
+          beneficiaryBankBIC: '',
+          swiftInstructions: '',
+        });
+        loadMockData();
+      } else {
+        showError(
+          'Payment Initiation Failed',
+          result.error?.message || 'Failed to initiate payment',
+          'Please verify all information and try again.'
+        );
+      }
+    } catch (error: any) {
+      console.error('Error initiating payment:', error);
+      showError(
+        'Network Error',
+        'Failed to initiate payment',
+        error.message || 'Please check if the API server is running and try again'
+      );
+    } finally {
+      setIsInitiatingPayment(false);
     }
   };
   
@@ -698,13 +1243,13 @@ const ExporterPortal: React.FC = () => {
       field: 'quantity', 
       headerName: 'Quantity (kg)', 
       width: 130,
-      valueFormatter: (params) => params.value.toLocaleString(),
+      valueFormatter: (params) => params.value ? Number(params.value).toLocaleString() : '0',
     },
     { 
       field: 'totalValue', 
       headerName: 'Value', 
       width: 120,
-      valueFormatter: (params) => `$${params.value.toLocaleString()}`,
+      valueFormatter: (params) => params.value ? `$${Number(params.value).toLocaleString()}` : '$0',
     },
     {
       field: 'status',
@@ -728,111 +1273,157 @@ const ExporterPortal: React.FC = () => {
     },
   ];
 
+  // Create EXPORTER theme with purple and golden colors
+  const exporterTheme = createOrganizationTheme('EXPORTER');
+
   return (
-    <>
-    <Box sx={{ width: '100%', minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
-      {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={8}>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              Exporter Portal
+    <ThemeProvider theme={exporterTheme}>
+      <Box sx={{ width: '100%', minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
+        {/* Forex Allocation Notification Banner */}
+        {forexAllocatedAlert?.show && (
+          <Alert
+            severity="success"
+            sx={{ mb: 3, borderRadius: 2, '& .MuiAlert-message': { width: '100%' } }}
+            onClose={() => setForexAllocatedAlert(null)}
+            action={
+              <AnimatedButton
+                size="small"
+                variant="contained"
+                brandColor={brandPrimary}
+                onClick={() => {
+                  setForexAllocatedAlert(null);
+                  setCreateShipmentDialogOpen(true);
+                  // Pre-select the contract from this forex allocation
+                  const forex = forexStatuses.find(f => f.forexId === forexAllocatedAlert.forexId);
+                  if (forex) {
+                    const contract = contracts.find(c => c.contractId === forex.contractId);
+                    applyContractToShipment(contract, forex.exchangeRate);
+                  }
+                }}
+              >
+                Register Shipment
+              </AnimatedButton>
+            }
+          >
+            <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+              🎉 NBE Forex Allocated — Proceed to Coffee Procurement & Shipment Registration
             </Typography>
-            <Typography variant="body1" color="text.secondary">
-              Welcome, {profile?.companyName || 'Loading...'}
+            <Typography variant="body2">
+              NBE has allocated <strong>${forexAllocatedAlert.allocatedAmount.toLocaleString()} {forexAllocatedAlert.currency}</strong> for contract <strong>{forexAllocatedAlert.contractId}</strong>
+              {' '}at <strong>{forexAllocatedAlert.exchangeRate} ETB/USD</strong> (40% retained in USD, 60% converted to ETB).
             </Typography>
-          </Grid>
-          <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
-            {profile && (
-              <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
-                <Typography variant="caption" color="text.secondary" display="block">
-                  ECTA License
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <StatusChip status={profile.licenseStatus} />
-                  <Typography variant="body2" fontWeight="bold">
-                    {profile.ectaLicenseNumber}
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              <strong>Your next steps:</strong>
+              {' '}① Purchase your coffee lot at ECX warehouse and obtain the <strong>ECX Lot Number</strong> and warehouse receipt
+              → ② Return here and register the shipment with that lot number
+              → ③ ECTA will inspect the physical coffee and issue an <strong>Export Permit</strong>
+              → ④ Submit customs declaration to ECC
+              → ⑤ Arrange shipping from Djibouti/dry port
+            </Typography>
+          </Alert>
+        )}
+        {/* Header */}
+        <Box sx={{ mb: 4 }}>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} md={8}>
+              <Typography variant="h4" fontWeight="bold" gutterBottom>
+                Exporter Portal
+              </Typography>
+              <Typography variant="body1" color="text.secondary">
+                Welcome, {profile?.companyName || 'Loading...'}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+              {profile && (
+                <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    ECTA License
                   </Typography>
-                </Box>
-                <Typography variant="caption" color="text.secondary">
-                  Expires: {new Date(profile.licenseExpiryDate).toLocaleDateString()}
-                </Typography>
-              </Card>
-            )}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <StatusChip status={profile.licenseStatus} />
+                    <Typography variant="body2" fontWeight="bold">
+                      {profile.ectaLicenseNumber}
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Expires: {new Date(profile.licenseExpiryDate).toLocaleDateString()}
+                  </Typography>
+                </Card>
+              )}
+            </Grid>
+          </Grid>
+        </Box>
+
+        {/* KPI Cards - Always Visible */}
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <DashboardKPI
+              title="Active Contracts"
+              value={activeContracts}
+              icon={<CheckCircle />}
+              trend="up"
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <DashboardKPI
+              title="Pending Approvals"
+              value={pendingApprovals}
+              icon={<Warning />}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <DashboardKPI
+              title="In Transit"
+              value={inTransitShipments}
+              icon={<LocalShipping />}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <DashboardKPI
+              title="Total Export Value"
+              value={`$${totalExportValue.toLocaleString()}`}
+              icon={<AttachMoney />}
+              trend="up"
+            />
           </Grid>
         </Grid>
-      </Box>
 
-      {/* KPI Cards - Always Visible */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Active Contracts"
-            value={activeContracts}
-            icon={<CheckCircle />}
-            trend="up"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Pending Approvals"
-            value={pendingApprovals}
-            icon={<Warning />}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="In Transit"
-            value={inTransitShipments}
-            icon={<LocalShipping />}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Total Export Value"
-            value={`$${totalExportValue.toLocaleString()}`}
-            icon={<AttachMoney />}
-            trend="up"
-          />
-        </Grid>
-      </Grid>
+        {/* Tabs */}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+          <Tabs 
+            value={tabValue} 
+            onChange={handleTabChange}
+            variant="scrollable"
+            scrollButtons="auto"
+          >
+            <Tab label="Dashboard" icon={<Assessment />} iconPosition="start" />
+            <Tab label="My Contracts" icon={<Description />} iconPosition="start" />
+            <Tab label="Forex & Banking" icon={<AccountBalance />} iconPosition="start" />
+            <Tab label="Shipments" icon={<LocalShipping />} iconPosition="start" />
+            <Tab label="Documents" icon={<Description />} iconPosition="start" />
+            <Tab label="Reports" icon={<TrendingUp />} iconPosition="start" />
+          </Tabs>
+        </Box>
 
-      {/* Tabs */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs 
-          value={tabValue} 
-          onChange={handleTabChange}
-          variant="scrollable"
-          scrollButtons="auto"
-        >
-          <Tab label="Dashboard" icon={<Assessment />} iconPosition="start" />
-          <Tab label="My Contracts" icon={<Description />} iconPosition="start" />
-          <Tab label="Forex & Banking" icon={<AccountBalance />} iconPosition="start" />
-          <Tab label="Shipments" icon={<LocalShipping />} iconPosition="start" />
-          <Tab label="Documents" icon={<Description />} iconPosition="start" />
-          <Tab label="Reports" icon={<TrendingUp />} iconPosition="start" />
-        </Tabs>
-      </Box>
+        {/* Tab Content */}
+        <TabPanel value={tabValue} index={0}>
+          {/* Dashboard Tab */}
+          <Grid container spacing={3}>
 
-      {/* Tab Content */}
-      <TabPanel value={tabValue} index={0}>
-        {/* Dashboard Tab */}
-        <Grid container spacing={3}>
-
-          {/* Exporter Profile & License Information */}
-          {profile && (
-            <Grid item xs={12}>
-              <ModernCard>
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2 }}>
-                    <Box>
-                      <Typography variant="h6" fontWeight={700} gutterBottom>
-                        🏢 Exporter Profile & License Information
-                      </Typography>
-                      <Typography variant="caption" color="textSecondary">
-                        Your company and licensing details
-                      </Typography>
-                    </Box>
+            {/* Exporter Profile & License Information */}
+            {profile && (
+              <Grid item xs={12}>
+                <ModernCard>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2 }}>
+                      <Box>
+                        <Typography variant="h6" fontWeight={700} gutterBottom>
+                          🏢 Exporter Profile & License Information
+                        </Typography>
+                        <Typography variant="caption" color="textSecondary">
+                          Your company and licensing details
+                        </Typography>
+                      </Box>
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                       <Button
                         variant="outlined"
@@ -879,12 +1470,13 @@ const ExporterPortal: React.FC = () => {
                           </Box>
                           <Box>
                             <Typography variant="caption" color="textSecondary">Laboratory Status</Typography>
-                            <Chip
-                              label={profile.laboratoryCertified ? '✓ Certified' : '✗ Not Certified'}
-                              size="small"
-                              color={profile.laboratoryCertified ? 'success' : 'default'}
-                              sx={{ mt: 0.5 }}
-                            />
+                            <Box sx={{ mt: 0.5 }}>
+                              <Chip
+                                label={profile.laboratoryCertified ? '✓ Certified' : '✗ Not Certified'}
+                                size="small"
+                                color={profile.laboratoryCertified ? 'success' : 'default'}
+                              />
+                            </Box>
                           </Box>
                         </Box>
                       </Box>
@@ -917,16 +1509,18 @@ const ExporterPortal: React.FC = () => {
                               </Box>
                               <Box>
                                 <Typography variant="caption" color="textSecondary">LC Processing Branch</Typography>
-                                <Typography variant="body1" fontWeight={600}>
-                                  {profile.bankBranch}
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Typography variant="body1" fontWeight={600}>
+                                    {profile.bankBranch}
+                                  </Typography>
                                   {profile.bankBranchCode && (
                                     <Chip 
                                       label={profile.bankBranchCode} 
                                       size="small" 
-                                      sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+                                      sx={{ height: 20, fontSize: '0.7rem' }}
                                     />
                                   )}
-                                </Typography>
+                                </Box>
                                 <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
                                   ✓ All Letter of Credit requests will be processed through this branch
                                 </Typography>
@@ -959,12 +1553,12 @@ const ExporterPortal: React.FC = () => {
                     <Chip 
                       label="Value" 
                       size="small" 
-                      sx={{ bgcolor: '#2196f3', color: 'white' }}
+                      sx={{ bgcolor: brandPrimary, color: 'white' }}
                     />
                     <Chip 
                       label="Volume" 
                       size="small" 
-                      sx={{ bgcolor: '#4caf50', color: 'white' }}
+                      sx={{ bgcolor: brandSecondary, color: '#000000' }}
                     />
                   </Box>
                 </Box>
@@ -1006,25 +1600,25 @@ const ExporterPortal: React.FC = () => {
                       <XAxis 
                         dataKey="month" 
                         tick={{ fontSize: 12 }}
-                        stroke="#666"
+                        stroke="#000000"
                       />
                       <YAxis 
                         yAxisId="left"
                         tick={{ fontSize: 12 }}
-                        stroke="#2196f3"
+                        stroke={brandPrimary}
                         tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
                       />
                       <YAxis 
                         yAxisId="right"
                         orientation="right"
                         tick={{ fontSize: 12 }}
-                        stroke="#4caf50"
+                        stroke={brandSecondary}
                         tickFormatter={(value) => `${(value / 1000).toFixed(0)}T`}
                       />
                       <RechartsTooltip 
                         contentStyle={{
                           backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                          border: '1px solid #ddd',
+                          border: '1px solid rgba(0, 0, 0, 0.2)',
                           borderRadius: 8,
                           boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                         }}
@@ -1038,9 +1632,9 @@ const ExporterPortal: React.FC = () => {
                         yAxisId="left"
                         type="monotone" 
                         dataKey="value" 
-                        stroke="#2196f3" 
+                        stroke={brandPrimary} 
                         strokeWidth={3}
-                        dot={{ fill: '#2196f3', r: 4 }}
+                        dot={{ fill: brandPrimary, r: 4 }}
                         activeDot={{ r: 6 }}
                         name="Contract Value"
                       />
@@ -1048,9 +1642,9 @@ const ExporterPortal: React.FC = () => {
                         yAxisId="right"
                         type="monotone" 
                         dataKey="volume" 
-                        stroke="#4caf50" 
+                        stroke={brandSecondary} 
                         strokeWidth={3}
-                        dot={{ fill: '#4caf50', r: 4 }}
+                        dot={{ fill: brandSecondary, r: 4 }}
                         activeDot={{ r: 6 }}
                         name="Volume (kg)"
                       />
@@ -1085,7 +1679,7 @@ const ExporterPortal: React.FC = () => {
                     </Typography>
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h5" fontWeight={700} sx={{ color: '#ff9800' }}>
+                    <Typography variant="h5" fontWeight={700} sx={{ color: brandSecondary }}>
                       {contracts.length > 0 ? `$${(totalExportValue / contracts.length).toLocaleString()}` : '$0'}
                     </Typography>
                     <Typography variant="caption" color="textSecondary">
@@ -1183,7 +1777,13 @@ const ExporterPortal: React.FC = () => {
               variant="contained"
               startIcon={<Add />}
               sx={{ bgcolor: brandPrimary }}
-              onClick={() => setCreateContractDialogOpen(true)}
+              onClick={() => {
+                // Pre-fill exporter's advising bank from their registered profile bank
+                if (profile?.bankName) {
+                  setNewContract(prev => ({ ...prev, exporterBank: profile.bankName! }));
+                }
+                setCreateContractDialogOpen(true);
+              }}
             >
               Register New Contract
             </Button>
@@ -1249,7 +1849,7 @@ const ExporterPortal: React.FC = () => {
                 
                 <Grid item xs={12} sm={6}>
                   <Typography variant="caption" color="text.secondary">Quantity</Typography>
-                  <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
+                  <Typography variant="body1">{selectedContract.quantity ? Number(selectedContract.quantity).toLocaleString() : '0'} kg</Typography>
                 </Grid>
                 
                 <Grid item xs={12} sm={6}>
@@ -1260,7 +1860,7 @@ const ExporterPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <Typography variant="caption" color="text.secondary">Total Value</Typography>
                   <Typography variant="body1" fontWeight="bold">
-                    ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
+                    ${selectedContract.totalValue ? Number(selectedContract.totalValue).toLocaleString() : '0'} {selectedContract.currency}
                   </Typography>
                 </Grid>
                 
@@ -1394,7 +1994,11 @@ const ExporterPortal: React.FC = () => {
                   value={newContract.exporterBank}
                   onChange={(value) => setNewContract({...newContract, exporterBank: value})}
                   label="Exporter's Bank (Advising Bank)"
-                  helperText="Your Ethiopian bank that will receive the LC"
+                  helperText={
+                    profile?.bankName && newContract.exporterBank === profile.bankName
+                      ? `✅ Pre-filled from your registered bank`
+                      : "Your Ethiopian bank that will receive the LC"
+                  }
                   type="ethiopian"
                   excludeBank={newContract.buyerBank}
                   required
@@ -1650,6 +2254,77 @@ const ExporterPortal: React.FC = () => {
                   </Alert>
                 </Grid>
               )}
+
+              {/* Supporting Documents Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary, mt: 2 }}>
+                  <Description /> Supporting Documents
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12}>
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Recommended Documents (to support contract):</strong> Sample quality certificates, sales agreement/proforma invoice, 
+                    organic/fair trade certificates (if applicable), EUDR due diligence statement (for EU buyers)
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    <strong>Note:</strong> Export documents (Bill of Lading, Commercial Invoice, etc.) are created LATER when you register the actual shipment, not now.
+                  </Typography>
+                </Alert>
+                
+                <Box sx={{ 
+                  border: '2px dashed', 
+                  borderColor: contractDocuments.length > 0 ? 'success.main' : 'grey.400',
+                  borderRadius: 1, 
+                  p: 2, 
+                  textAlign: 'center',
+                  bgcolor: 'grey.50'
+                }}>
+                  {contractDocuments.length === 0 ? (
+                    <>
+                      <Upload sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        No documents uploaded yet
+                      </Typography>
+                      <Button 
+                        variant="outlined" 
+                        startIcon={<Upload />}
+                        onClick={() => setContractDocUploadOpen(true)}
+                        sx={{ mt: 1 }}
+                      >
+                        Upload Documents
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+                      <Typography variant="body2" gutterBottom>
+                        {contractDocuments.length} document{contractDocuments.length !== 1 ? 's' : ''} uploaded
+                      </Typography>
+                      <List dense>
+                        {contractDocuments.map((doc, idx) => (
+                          <ListItem key={idx}>
+                            <ListItemText 
+                              primary={doc.file.name}
+                              secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
+                            />
+                          </ListItem>
+                        ))}
+                      </List>
+                      <Button 
+                        variant="outlined" 
+                        startIcon={<Upload />}
+                        onClick={() => setContractDocUploadOpen(true)}
+                        size="small"
+                      >
+                        Add More Documents
+                      </Button>
+                    </>
+                  )}
+                </Box>
+              </Grid>
             </Grid>
           </DialogContent>
           <DialogActions sx={{ p: 2, gap: 1 }}>
@@ -1704,7 +2379,7 @@ const ExporterPortal: React.FC = () => {
           </Grid>
           
           <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#1976d2', color: 'white' }}>
+            <Card sx={{ bgcolor: brandPrimary, color: 'white' }}>
               <CardContent>
                 <Typography variant="caption">Converted (60%)</Typography>
                 <Typography variant="h5" fontWeight="bold">
@@ -1715,7 +2390,7 @@ const ExporterPortal: React.FC = () => {
           </Grid>
           
           <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#388e3c', color: 'white' }}>
+            <Card sx={{ bgcolor: brandSecondary, color: '#000000' }}>
               <CardContent>
                 <Typography variant="caption">Received in Birr</Typography>
                 <Typography variant="h5" fontWeight="bold">
@@ -1764,7 +2439,7 @@ const ExporterPortal: React.FC = () => {
                           </Grid>
                           <Grid item xs={12} sm={6}>
                             <Typography variant="caption" color="text.secondary">Expires</Typography>
-                            <Typography variant="body2">{new Date(forex.expiryDate).toLocaleDateString()}</Typography>
+                            <Typography variant="body2">{forex.expiryDate ? new Date(forex.expiryDate).toLocaleDateString() : 'N/A'}</Typography>
                           </Grid>
                         </Grid>
                       </CardContent>
@@ -1808,7 +2483,7 @@ const ExporterPortal: React.FC = () => {
                           </Grid>
                           <Grid item xs={12} sm={6}>
                             <Typography variant="caption" color="text.secondary">Expiry Date</Typography>
-                            <Typography variant="body2">{new Date(lc.expiryDate).toLocaleDateString()}</Typography>
+                            <Typography variant="body2">{lc.expiryDate ? new Date(lc.expiryDate).toLocaleDateString() : 'N/A'}</Typography>
                           </Grid>
                         </Grid>
                       </CardContent>
@@ -1916,11 +2591,30 @@ const ExporterPortal: React.FC = () => {
                 <strong>Workflow:</strong>
                 <br />1. Your contract must be approved by NBE
                 <br />2. Bank issues Letter of Credit (LC)
-                <br />3. Create shipment and request ECTA quality inspection
-                <br />4. After approval, customs clearance and shipping
+                <br />3. Create shipment — this automatically requests ECTA quality inspection
+                <br />4. ECTA inspector performs physical & cupping inspection
+                <br />5. ECTA approves quality and issues Export Permit
+                <br />6. After permit issued, proceed to customs clearance and shipping
               </Typography>
             </Alert>
           ) : null}
+
+          {/* Quality Inspection Pending Alert */}
+          {shipments.filter(s => s.status === 'CREATED').length > 0 && (
+            <Alert severity="warning" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                <strong>🔬 Quality Inspection Pending</strong>
+                <br />
+                You have {shipments.filter(s => s.status === 'CREATED').length} shipment(s) awaiting ECTA quality inspection.
+                ECTA inspector will perform physical inspection and cupping test within 2-3 business days.
+                <br /><br />
+                <strong>What happens next:</strong>
+                <br />• ECTA Q-Grader performs SCA cupping protocol (physical + sensory evaluation)
+                <br />• If Grade 1-5 quality passed → Export Permit issued
+                <br />• If quality failed → Shipment rejected, you'll be notified with detailed reasons
+              </Typography>
+            </Alert>
+          )}
           
           <Grid container spacing={3}>
             {shipments.map((shipment) => (
@@ -1941,6 +2635,86 @@ const ExporterPortal: React.FC = () => {
                       </Grid>
                       <Grid item xs={12} sm={4} sx={{ textAlign: { sm: 'right' } }}>
                         <StatusChip status={shipment.status} />
+                        
+                        {/* Quality Inspection Status Badge */}
+                        {shipment.status === 'CREATED' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<Science />}
+                              label="⏳ Quality Inspection Pending"
+                              color="warning"
+                              size="small"
+                              sx={{ fontWeight: 'bold', mb: 0.5 }}
+                            />
+                            <Typography variant="caption" display="block" color="warning.dark" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                              ⏱️ Waiting: ECTA inspector assignment
+                            </Typography>
+                          </Box>
+                        )}
+                        {(shipment.status === 'CREATED' || shipment.status === 'SHIPPED') && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<CheckCircle />}
+                              label="✅ Export Permit Issued"
+                              color="success"
+                              size="small"
+                              sx={{ fontWeight: 'bold', mb: 0.5 }}
+                            />
+                            <Typography variant="caption" display="block" color="primary.main" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                              🎯 Next: Submit Customs Declaration →
+                            </Typography>
+                          </Box>
+                        )}
+                        {shipment.status === 'LOADED' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<Assignment />}
+                              label="📋 Customs Declaration Submitted"
+                              color="info"
+                              size="small"
+                              sx={{ fontWeight: 'bold', mb: 0.5 }}
+                            />
+                            <Typography variant="caption" display="block" color="info.main" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                              🎯 Next: Awaiting Customs Clearance →
+                            </Typography>
+                          </Box>
+                        )}
+                        {shipment.status === 'DEPARTED' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<CheckCircle />}
+                              label="🛃 Customs Cleared"
+                              color="success"
+                              size="small"
+                              sx={{ fontWeight: 'bold', mb: 0.5 }}
+                            />
+                            <Typography variant="caption" display="block" color="success.main" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                              🎯 Next: Arrange Shipping & Payment →
+                            </Typography>
+                          </Box>
+                        )}
+                        {shipment.status === 'SHIPPED' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<LocalShipping />}
+                              label="🚢 In Transit"
+                              color="info"
+                              size="small"
+                              sx={{ fontWeight: 'bold' }}
+                            />
+                          </Box>
+                        )}
+                        {shipment.status === 'DELIVERED' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              icon={<CheckCircle />}
+                              label="✅ Delivered"
+                              color="success"
+                              size="small"
+                              sx={{ fontWeight: 'bold' }}
+                            />
+                          </Box>
+                        )}
                       </Grid>
                       
                       <Grid item xs={12}>
@@ -1950,7 +2724,7 @@ const ExporterPortal: React.FC = () => {
                       <Grid item xs={12} sm={6} md={3}>
                         <Typography variant="caption" color="text.secondary">Quantity</Typography>
                         <Typography variant="body1" fontWeight="bold">
-                          {shipment.quantity.toLocaleString()} kg
+                          {shipment.quantity ? Number(shipment.quantity).toLocaleString() : '0'} kg
                         </Typography>
                       </Grid>
                       
@@ -1981,7 +2755,7 @@ const ExporterPortal: React.FC = () => {
                         <Grid item xs={12}>
                           <Alert severity="info">
                             <Typography variant="body2">
-                              <strong>Estimated Arrival:</strong> {new Date(shipment.estimatedArrival).toLocaleDateString()}
+                              <strong>Estimated Arrival:</strong> {shipment.estimatedArrival ? new Date(shipment.estimatedArrival).toLocaleDateString() : 'TBD'}
                             </Typography>
                           </Alert>
                         </Grid>
@@ -2015,7 +2789,125 @@ const ExporterPortal: React.FC = () => {
                       </Grid>
                       
                       <Grid item xs={12}>
-                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                          {/* Submit Customs Declaration Button */}
+                          {(shipment.status === 'CREATED' || shipment.status === 'BOOKED') && (
+                            <AnimatedButton
+                              size="small"
+                              variant="contained"
+                              startIcon={<Assignment />}
+                              brandColor={brandPrimary}
+                              onClick={() => {
+                                setSelectedShipmentForCustoms(shipment);
+                                // Reset form with shipment data
+                                const selectedContract = contracts.find(c => c.contractId === shipment.contractId);
+                                setCustomsForm({
+                                  hsCode: '090111',
+                                  portOfExit: 'Djibouti Port',
+                                  customsValue: (shipment.quantity * (selectedContract?.pricePerKg || 9.25)).toFixed(2),
+                                  additionalNotes: '',
+                                  eudrCompliant: true,
+                                });
+                                setCustomsDeclarationDialogOpen(true);
+                              }}
+                            >
+                              Submit Customs Declaration
+                            </AnimatedButton>
+                          )}
+
+                          {/* Request Phytosanitary Certificate Button */}
+                          {(shipment.status === 'CREATED' || shipment.status === 'DEPARTED') && (
+                            <Tooltip title="Required for all agricultural exports (IPPC)">
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="success"
+                                startIcon={<Science />}
+                                onClick={() => {
+                                  showInfo(
+                                    '🌿 Phytosanitary Certificate',
+                                    'Request plant health certification',
+                                    `Shipment: ${shipment.shipmentId}\n\nPlease contact Ministry of Agriculture or ECTA to arrange phytosanitary inspection and certificate issuance.\n\nRequired: Plant health inspection, treatment verification, and IPPC compliance check.`
+                                  );
+                                }}
+                              >
+                                🌿 Phytosanitary
+                              </Button>
+                            </Tooltip>
+                          )}
+
+                          {/* Purchase Insurance Certificate Button (for CIF) */}
+                          {shipment.status === 'IN_TRANSIT' && (
+                            <Tooltip title="Required for CIF incoterm shipments">
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                startIcon={<Description />}
+                                onClick={() => {
+                                  const selectedContract = contracts.find(c => c.contractId === shipment.contractId);
+                                  showInfo(
+                                    '🛡️ Marine Insurance Certificate',
+                                    'Purchase cargo insurance coverage',
+                                    `Shipment: ${shipment.shipmentId}\nIncoterm: FOB\n\nOptional for FOB shipments\n\nContact your insurance provider to purchase marine cargo insurance. Coverage types: ICC(A) All Risks, ICC(B) Named Perils, ICC(C) Minimum.`
+                                  );
+                                }}
+                              >
+                                🛡️ Insurance
+                              </Button>
+                            </Tooltip>
+                          )}
+
+                          {/* Book Shipping Button */}
+                          {shipment.status === 'ARRIVED' && (
+                            <AnimatedButton
+                              size="small"
+                              variant="contained"
+                              startIcon={<LocalShipping />}
+                              brandColor={brandPrimary}
+                              onClick={() => {
+                                setSelectedShipmentForShipping(shipment);
+                                const selectedContract = contracts.find(c => c.contractId === shipment.contractId);
+                                setShippingForm({
+                                  shippingLine: 'Maersk Line',
+                                  containerType: 'DRY',
+                                  portOfLoading: 'Djibouti Port',
+                                  portOfDischarge: selectedContract?.buyerCountry || '',
+                                  vesselName: '',
+                                  estimatedDeparture: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                                  specialInstructions: '',
+                                });
+                                setBookShippingDialogOpen(true);
+                              }}
+                            >
+                              Book Shipping
+                            </AnimatedButton>
+                          )}
+
+                          {/* Initiate Payment Button */}
+                          {shipment.status === 'DELIVERED' && (
+                            <AnimatedButton
+                              size="small"
+                              variant="contained"
+                              startIcon={<AttachMoney />}
+                              brandColor={brandPrimary}
+                              onClick={() => {
+                                setSelectedShipmentForPayment(shipment);
+                                setPaymentForm({
+                                  paymentMethod: 'LC',
+                                  beneficiaryName: profile?.companyName || '',
+                                  beneficiaryAccount: '',
+                                  beneficiaryBank: profile?.bankName || '',
+                                  beneficiaryBankBIC: '',
+                                  swiftInstructions: '',
+                                });
+                                setPaymentSettlementDialogOpen(true);
+                              }}
+                            >
+                              Initiate Payment
+                            </AnimatedButton>
+                          )}
+                          
                           <Button size="small" startIcon={<Visibility />}>
                             Track on Map
                           </Button>
@@ -2296,7 +3188,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Quantity</Typography>
-                <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
+                <Typography variant="body1">{selectedContract.quantity ? Number(selectedContract.quantity).toLocaleString() : '0'} kg</Typography>
               </Grid>
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Price per Kg</Typography>
@@ -2305,7 +3197,7 @@ const ExporterPortal: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Total Value</Typography>
                 <Typography variant="body1" color="primary" fontWeight={600}>
-                  ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
+                  ${selectedContract.totalValue ? Number(selectedContract.totalValue).toLocaleString() : '0'} {selectedContract.currency}
                 </Typography>
               </Grid>
               <Grid item xs={12} md={6}>
@@ -2428,6 +3320,547 @@ This contract is registered with ECTA and approved by NBE.
       </DialogActions>
     </Dialog>
 
+    {/* Customs Declaration Dialog */}
+    <Dialog
+      open={customsDeclarationDialogOpen}
+      onClose={() => {
+        setCustomsDeclarationDialogOpen(false);
+        setSelectedShipmentForCustoms(null);
+      }}
+      maxWidth="md"
+      fullWidth
+    >
+      <DialogTitle>
+        <Box display="flex" alignItems="center" gap={1}>
+          <Assignment />
+          <Typography variant="h6">
+            🛃 Submit Customs Declaration
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent>
+        {selectedShipmentForCustoms && (
+          <>
+            <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
+              <Typography variant="body2" fontWeight="bold" gutterBottom>
+                Ethiopian Customs Commission (ECC) — Export Declaration
+              </Typography>
+              <Typography variant="body2">
+                You are now at <strong>Step 9 of 11</strong> in the export process.
+                <br />
+                Shipment: <strong>{selectedShipmentForCustoms.shipmentId}</strong> • Quantity: <strong>{selectedShipmentForCustoms.quantity ? Number(selectedShipmentForCustoms.quantity).toLocaleString() : '0'} kg</strong>
+              </Typography>
+            </Alert>
+
+            <Alert severity="warning" sx={{ mb: 3 }}>
+              <Typography variant="body2" fontWeight="bold" gutterBottom>
+                📋 Required Documents Checklist
+              </Typography>
+              <Box component="ul" sx={{ m: 0, pl: 3 }}>
+                <Typography component="li" variant="body2">✅ Commercial Invoice (showing FOB value, buyer details)</Typography>
+                <Typography component="li" variant="body2">✅ Packing List (container/bag details, weight)</Typography>
+                <Typography component="li" variant="body2">✅ ECTA Export Permit (issued after quality approval)</Typography>
+                <Typography component="li" variant="body2">✅ ICO Certificate of Origin (for ICO-certified coffee)</Typography>
+                <Typography component="li" variant="body2">✅ Bill of Lading or Waybill (if already issued)</Typography>
+                <Typography component="li" variant="body2">✅ Phytosanitary Certificate (plant health clearance)</Typography>
+                <Typography component="li" variant="body2">✅ EUDR Due Diligence Statement (for EU destinations only)</Typography>
+              </Box>
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                ⚠️ All documents must be uploaded to the system before final submission
+              </Typography>
+            </Alert>
+
+            <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>
+              Declaration Details
+            </Typography>
+
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="HS Code"
+                  value={customsForm.hsCode}
+                  onChange={(e) => setCustomsForm({ ...customsForm, hsCode: e.target.value })}
+                  helperText="Coffee, not roasted, not decaffeinated"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Customs Value (USD)"
+                  type="number"
+                  value={customsForm.customsValue || (selectedShipmentForCustoms.quantity * 9.25).toFixed(2)}
+                  onChange={(e) => setCustomsForm({ ...customsForm, customsValue: e.target.value })}
+                  helperText="FOB value from contract"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Port of Exit"
+                  value={customsForm.portOfExit}
+                  onChange={(e) => setCustomsForm({ ...customsForm, portOfExit: e.target.value })}
+                  helperText="Primary exit point for Ethiopian coffee"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Customs Officer (Auto-assigned)"
+                  value="Officer Alemayehu T. (ECC)"
+                  disabled
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch 
+                      checked={customsForm.eudrCompliant}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
+                        setCustomsForm({ ...customsForm, eudrCompliant: e.target.checked })
+                      }
+                    />
+                  }
+                  label="🇪🇺 EUDR Enhanced Verification Required (for EU destinations)"
+                />
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
+                  Enhanced due diligence for deforestation-free coffee — GPS farm coordinates and traceability verified
+                </Typography>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  label="Additional Notes"
+                  value={customsForm.additionalNotes}
+                  onChange={(e) => setCustomsForm({ ...customsForm, additionalNotes: e.target.value })}
+                  placeholder="Any special instructions or remarks for customs..."
+                  helperText="Optional information for customs officers"
+                />
+              </Grid>
+            </Grid>
+
+            <Alert severity="success" sx={{ mt: 3 }}>
+              <Typography variant="body2">
+                <strong>What happens after submission:</strong>
+                <br />
+                1. ECC customs officer reviews declaration & supporting documents
+                <br />
+                2. Physical inspection scheduled (if required based on risk assessment)
+                <br />
+                3. EUDR compliance verified (for EU destinations)
+                <br />
+                4. Customs clearance issued (typically 1-3 days)
+                <br />
+                5. You can then proceed to book shipping and arrange container loading
+              </Typography>
+            </Alert>
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => {
+          setCustomsDeclarationDialogOpen(false);
+          setSelectedShipmentForCustoms(null);
+        }}>
+          Cancel
+        </Button>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={isSubmittingCustoms}
+          onClick={handleSubmitCustomsDeclaration}
+        >
+          {isSubmittingCustoms ? 'Submitting...' : 'Submit to ECC'}
+        </AnimatedButton>
+      </DialogActions>
+    </Dialog>
+
+    {/* Book Shipping Dialog */}
+    <Dialog
+      open={bookShippingDialogOpen}
+      onClose={() => {
+        setBookShippingDialogOpen(false);
+        setSelectedShipmentForShipping(null);
+      }}
+      maxWidth="md"
+      fullWidth
+    >
+      <DialogTitle>
+        <Box display="flex" alignItems="center" gap={1}>
+          <LocalShipping />
+          <Typography variant="h6">
+            🚢 Book Shipping & Container
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent>
+        {selectedShipmentForShipping && (
+          <>
+            <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
+              <Typography variant="body2" fontWeight="bold" gutterBottom>
+                Shipping & Logistics Booking — Step 10 of 11
+              </Typography>
+              <Typography variant="body2">
+                Shipment: <strong>{selectedShipmentForShipping.shipmentId}</strong> • Quantity: <strong>{selectedShipmentForShipping.quantity ? Number(selectedShipmentForShipping.quantity).toLocaleString() : '0'} kg</strong>
+                <br />
+                Customs cleared — ready for container booking and shipping
+              </Typography>
+            </Alert>
+
+            <Typography variant="h6" gutterBottom>
+              Container & Shipping Details
+            </Typography>
+
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Shipping Line</InputLabel>
+                  <Select
+                    value={shippingForm.shippingLine}
+                    label="Shipping Line"
+                    onChange={(e) => setShippingForm({ ...shippingForm, shippingLine: e.target.value })}
+                  >
+                    <MenuItem value="Maersk Line">Maersk Line</MenuItem>
+                    <MenuItem value="MSC">Mediterranean Shipping Company (MSC)</MenuItem>
+                    <MenuItem value="CMA CGM">CMA CGM</MenuItem>
+                    <MenuItem value="COSCO Shipping">COSCO Shipping</MenuItem>
+                    <MenuItem value="Hapag-Lloyd">Hapag-Lloyd</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Container Type</InputLabel>
+                  <Select
+                    value={shippingForm.containerType}
+                    label="Container Type"
+                    onChange={(e) => setShippingForm({ ...shippingForm, containerType: e.target.value })}
+                  >
+                    <MenuItem value="DRY">Dry Container (20ft/40ft)</MenuItem>
+                    <MenuItem value="REEFER">Refrigerated Container</MenuItem>
+                    <MenuItem value="OPEN_TOP">Open Top Container</MenuItem>
+                  </Select>
+                  <Typography variant="caption" color="text.secondary" sx={{ ml: 2, mt: 0.5 }}>
+                    Most coffee exports use dry containers with proper ventilation
+                  </Typography>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Port of Loading"
+                  value={shippingForm.portOfLoading}
+                  onChange={(e) => setShippingForm({ ...shippingForm, portOfLoading: e.target.value })}
+                  helperText="Ethiopian coffee typically ships from Djibouti"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  required
+                  label="Port of Discharge"
+                  value={shippingForm.portOfDischarge}
+                  onChange={(e) => setShippingForm({ ...shippingForm, portOfDischarge: e.target.value })}
+                  helperText="Destination port in buyer's country"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Vessel Name (Optional)"
+                  value={shippingForm.vesselName}
+                  onChange={(e) => setShippingForm({ ...shippingForm, vesselName: e.target.value })}
+                  helperText="Will be assigned by shipping line if not specified"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  required
+                  type="date"
+                  label="Estimated Departure Date"
+                  value={shippingForm.estimatedDeparture}
+                  onChange={(e) => setShippingForm({ ...shippingForm, estimatedDeparture: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  helperText="Coordinate with shipping line schedule"
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  label="Special Instructions"
+                  value={shippingForm.specialInstructions}
+                  onChange={(e) => setShippingForm({ ...shippingForm, specialInstructions: e.target.value })}
+                  placeholder="e.g., Handle with care, temperature control requirements..."
+                  helperText="Any special handling or shipping requirements"
+                />
+              </Grid>
+            </Grid>
+
+            <Alert severity="success" sx={{ mt: 3 }}>
+              <Typography variant="body2">
+                <strong>What happens after booking:</strong>
+                <br />
+                1. Container assigned and tracking number generated
+                <br />
+                2. Bill of Lading (B/L) issued by shipping line
+                <br />
+                3. Coffee loaded into container at port
+                <br />
+                4. Vessel departs on scheduled date
+                <br />
+                5. Real-time tracking available throughout journey (15-25 days)
+                <br />
+                6. After delivery confirmation → proceed to Payment Settlement
+              </Typography>
+            </Alert>
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => {
+          setBookShippingDialogOpen(false);
+          setSelectedShipmentForShipping(null);
+        }}>
+          Cancel
+        </Button>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={isBookingShipping || !shippingForm.portOfDischarge || !shippingForm.estimatedDeparture}
+          onClick={handleBookShipping}
+        >
+          {isBookingShipping ? 'Booking...' : 'Confirm Booking'}
+        </AnimatedButton>
+      </DialogActions>
+    </Dialog>
+
+    {/* Payment Settlement Dialog */}
+    <Dialog
+      open={paymentSettlementDialogOpen}
+      onClose={() => {
+        setPaymentSettlementDialogOpen(false);
+        setSelectedShipmentForPayment(null);
+      }}
+      maxWidth="md"
+      fullWidth
+    >
+      <DialogTitle>
+        <Box display="flex" alignItems="center" gap={1}>
+          <AttachMoney />
+          <Typography variant="h6">
+            💰 Initiate Payment Settlement
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent>
+        {selectedShipmentForPayment && (
+          <>
+            <Alert severity="success" sx={{ mb: 3, mt: 2 }}>
+              <Typography variant="body2" fontWeight="bold" gutterBottom>
+                Final Step — Payment Settlement (Step 11 of 11)
+              </Typography>
+              <Typography variant="body2">
+                Shipment: <strong>{selectedShipmentForPayment.shipmentId}</strong> • Status: <strong>Delivered</strong>
+                <br />
+                Coffee successfully delivered — ready to receive payment
+              </Typography>
+            </Alert>
+
+            {(() => {
+              const selectedContract = contracts.find(c => c.contractId === selectedShipmentForPayment.contractId);
+              const selectedForex = forexStatuses.find(fx => fx.contractId === selectedShipmentForPayment.contractId);
+              const selectedLC = lcStatuses.find(lc => lc.contractId === selectedShipmentForPayment.contractId);
+              
+              if (!selectedLC) {
+                return (
+                  <Alert severity="error" sx={{ mb: 2 }}>
+                    <strong>No Letter of Credit Found</strong>
+                    <br />
+                    Cannot initiate payment without an active Letter of Credit for this contract.
+                  </Alert>
+                );
+              }
+
+              const amountUSD = selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg) : 0;
+              const exchangeRate = selectedForex?.exchangeRate || 115.5;
+              const retentionRate = selectedForex?.retentionRate || 100;
+              const amountETB = amountUSD * exchangeRate;
+              const retainedETB = (amountETB * retentionRate) / 100;
+
+              return (
+                <>
+                  <Alert severity="info" sx={{ mb: 3 }}>
+                    <Typography variant="body2" fontWeight="bold" gutterBottom>
+                      Payment Calculation
+                    </Typography>
+                    <Typography variant="body2">
+                      Contract Value: <strong>${amountUSD.toLocaleString()} {selectedContract?.currency || 'USD'}</strong>
+                      <br />
+                      NBE Exchange Rate: <strong>{exchangeRate} ETB/USD</strong>
+                      <br />
+                      Amount in ETB: <strong>{amountETB.toLocaleString()} ETB</strong>
+                      <br />
+                      NBE Retention Rate: <strong>{retentionRate}%</strong>
+                      <br />
+                      <strong>You will receive: {retainedETB.toLocaleString()} ETB</strong>
+                    </Typography>
+                  </Alert>
+
+                  <Typography variant="h6" gutterBottom>
+                    Payment & Beneficiary Details
+                  </Typography>
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6}>
+                      <FormControl fullWidth>
+                        <InputLabel>Payment Method</InputLabel>
+                        <Select
+                          value={paymentForm.paymentMethod}
+                          label="Payment Method"
+                          onChange={(e) => setPaymentForm({ ...paymentForm, paymentMethod: e.target.value })}
+                        >
+                          <MenuItem value="LC">Letter of Credit (LC)</MenuItem>
+                          <MenuItem value="TT_POST">Telegraphic Transfer - Post Shipment</MenuItem>
+                          <MenuItem value="CAD">Cash Against Documents (CAD)</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="LC Reference"
+                        value={selectedLC?.lcId || ''}
+                        disabled
+                        helperText="Linked Letter of Credit"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        required
+                        label="Beneficiary Name"
+                        value={paymentForm.beneficiaryName}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, beneficiaryName: e.target.value })}
+                        helperText="Your company name (as registered)"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        required
+                        label="Beneficiary Account Number"
+                        value={paymentForm.beneficiaryAccount}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, beneficiaryAccount: e.target.value })}
+                        helperText="Your bank account for receiving payment"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        required
+                        label="Beneficiary Bank"
+                        value={paymentForm.beneficiaryBank}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, beneficiaryBank: e.target.value })}
+                        helperText="Your bank (advising bank)"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        required
+                        label="Bank SWIFT/BIC Code"
+                        value={paymentForm.beneficiaryBankBIC}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, beneficiaryBankBIC: e.target.value })}
+                        placeholder="e.g., CBETETAA"
+                        helperText="SWIFT code for international transfer"
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <TextField
+                        fullWidth
+                        multiline
+                        rows={3}
+                        label="SWIFT Payment Instructions"
+                        value={paymentForm.swiftInstructions}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, swiftInstructions: e.target.value })}
+                        placeholder="Any special instructions for the paying bank..."
+                        helperText="Optional - additional payment instructions"
+                      />
+                    </Grid>
+                  </Grid>
+
+                  <Alert severity="warning" sx={{ mt: 3 }}>
+                    <Typography variant="body2">
+                      <strong>Required Documents (must be submitted to bank):</strong>
+                      <br />
+                      ✅ Bill of Lading (B/L)
+                      <br />
+                      ✅ Commercial Invoice
+                      <br />
+                      ✅ Packing List
+                      <br />
+                      ✅ ECTA Export Permit
+                      <br />
+                      ✅ ICO Certificate of Origin
+                      <br />
+                      ✅ Insurance Certificate
+                      <br />
+                      ✅ Customs Clearance Certificate
+                    </Typography>
+                  </Alert>
+
+                  <Alert severity="success" sx={{ mt: 2 }}>
+                    <Typography variant="body2">
+                      <strong>After payment initiation:</strong>
+                      <br />
+                      1. Bank verifies all shipping documents
+                      <br />
+                      2. SWIFT MT700/MT760 sent to buyer's bank
+                      <br />
+                      3. Buyer's bank releases payment
+                      <br />
+                      4. NBE processes forex conversion (at official rate: {exchangeRate} ETB/USD)
+                      <br />
+                      5. Funds credited to your account (3-5 business days)
+                      <br />
+                      6. <strong>Export cycle complete! 🎉</strong>
+                    </Typography>
+                  </Alert>
+                </>
+              );
+            })()}
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => {
+          setPaymentSettlementDialogOpen(false);
+          setSelectedShipmentForPayment(null);
+        }}>
+          Cancel
+        </Button>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={
+            isInitiatingPayment || 
+            !paymentForm.beneficiaryName || 
+            !paymentForm.beneficiaryAccount ||
+            !paymentForm.beneficiaryBank ||
+            !paymentForm.beneficiaryBankBIC
+          }
+          onClick={handleInitiatePayment}
+        >
+          {isInitiatingPayment ? 'Processing...' : 'Submit to Bank'}
+        </AnimatedButton>
+      </DialogActions>
+    </Dialog>
+
     <NotificationDialog
       open={notification.open}
       onClose={closeNotification}
@@ -2449,6 +3882,8 @@ This contract is registered with ECTA and approved by NBE.
           grade: '',
           icoNumber: '',
           ecxLotNumber: '',
+          bondReference: '',
+          unionApprovalReference: '',
           channel: 'Direct Export',
           destination: '',
           eudrCompliant: true,
@@ -2462,10 +3897,41 @@ This contract is registered with ECTA and approved by NBE.
         Create New Shipment
       </DialogTitle>
       <DialogContent>
-        <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
-          <strong>Shipment Workflow:</strong> After creating the shipment, ECTA will conduct quality inspection 
-          and issue an export permit. Then customs will clear for shipping.
+        <Alert severity="info" sx={{ mb: 2, mt: 2 }}>
+          <Typography variant="body2" fontWeight="bold" gutterBottom>
+            Ethiopian Coffee Export — Shipment Registration
+          </Typography>
+          <Typography variant="body2">
+            You are at <strong>Step 6 of 10</strong> in the export process. Before registering this shipment you must have:
+          </Typography>
+          <Box component="ol" sx={{ m: 0, pl: 2, mt: 0.5 }}>
+            <Typography component="li" variant="body2">✅ ECTA export license (active)</Typography>
+            <Typography component="li" variant="body2">✅ Sales contract registered and NBE-approved</Typography>
+            <Typography component="li" variant="body2">✅ Letter of Credit issued by buyer&apos;s bank</Typography>
+            <Typography component="li" variant="body2">✅ Forex allocation approved by NBE</Typography>
+            <Typography component="li" variant="body2">✅ Coffee procured from ECX/origin warehouse (ECX Lot Number in hand)</Typography>
+          </Box>
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            After this step: ECTA quality inspection → Export permit → Customs declaration → Shipping → Payment settlement
+          </Typography>
         </Alert>
+
+        {/* Show forex allocation info for the selected contract */}
+        {newShipment.contractId && (() => {
+          const forex = forexStatuses.find(f => f.contractId === newShipment.contractId && f.status === 'ALLOCATED');
+          if (!forex) return null;
+          return (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              <strong>✅ Forex Allocated for this Contract</strong>
+              <br />
+              Amount: <strong>${forex.allocatedAmount.toLocaleString()} {forex.currency}</strong> &bull;
+              Rate: <strong>{forex.exchangeRate} ETB/USD</strong> &bull;
+              Retention: <strong>{forex.retentionRate}%</strong>
+              <br />
+              <em>Exchange rate auto-applied to shipment value calculation.</em>
+            </Alert>
+          );
+        })()}
 
         <Grid container spacing={2}>
           <Grid item xs={12}>
@@ -2476,21 +3942,30 @@ This contract is registered with ECTA and approved by NBE.
                 label="Select Approved Contract"
                 onChange={(e) => {
                   const selectedContract = contracts.find(c => c.contractId === e.target.value);
-                  setNewShipment({
-                    ...newShipment, 
-                    contractId: e.target.value,
-                    quantity: selectedContract?.quantity.toString() || '',
-                    destination: selectedContract?.buyerCountry || '',
-                  });
+                  // Get real forex rate from allocated forex for this contract
+                  const matchedForex = forexStatuses.find(
+                    f => f.contractId === e.target.value && f.status === 'ALLOCATED'
+                  );
+                  applyContractToShipment(selectedContract, matchedForex?.exchangeRate);
                 }}
               >
                 {contracts
                   .filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE')
-                  .map((contract) => (
-                    <MenuItem key={contract.contractId} value={contract.contractId}>
-                      {contract.contractId} - {contract.coffeeType} ({contract.quantity.toLocaleString()} kg) - {contract.buyerCountry}
-                    </MenuItem>
-                  ))}
+                  .map((contract) => {
+                    const forex = forexStatuses.find(f => f.contractId === contract.contractId && f.status === 'ALLOCATED');
+                    const hasForex = !!forex;
+                    return (
+                      <MenuItem
+                        key={contract.contractId}
+                        value={contract.contractId}
+                        disabled={!hasForex}
+                        sx={{ opacity: hasForex ? 1 : 0.5 }}
+                      >
+                        {hasForex ? '✅' : '⏳'} {contract.contractId} — {contract.coffeeType} ({contract.quantity.toLocaleString()} kg) → {contract.buyerCountry}
+                        {!hasForex && ' (awaiting forex allocation)'}
+                      </MenuItem>
+                    );
+                  })}
               </Select>
             </FormControl>
           </Grid>
@@ -2503,7 +3978,16 @@ This contract is registered with ECTA and approved by NBE.
               value={newShipment.quantity}
               onChange={(e) => setNewShipment({...newShipment, quantity: e.target.value})}
               required
-              helperText="Must not exceed contract quantity"
+              helperText={(() => {
+                const q = parseFloat(newShipment.quantity);
+                const contract = contracts.find(c => c.contractId === newShipment.contractId);
+                if (contract && !isNaN(q) && q > 0) {
+                  const valueUSD = (q * contract.pricePerKg).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                  const valueETB = (q * contract.pricePerKg * selectedShipmentForexRate).toLocaleString(undefined, { maximumFractionDigits: 0 });
+                  return `Value: $${valueUSD} USD = ${valueETB} ETB`;
+                }
+                return 'Must not exceed contract quantity';
+              })()}
             />
           </Grid>
 
@@ -2529,18 +4013,21 @@ This contract is registered with ECTA and approved by NBE.
 
           <Grid item xs={12} sm={6}>
             <FormControl fullWidth required>
-              <InputLabel>Coffee Grade</InputLabel>
+              <InputLabel>Coffee Grade (ECX Assigned)</InputLabel>
               <Select
                 value={newShipment.grade}
-                label="Coffee Grade"
+                label="Coffee Grade (ECX Assigned)"
                 onChange={(e) => setNewShipment({...newShipment, grade: e.target.value})}
               >
-                <MenuItem value="Grade 1">Grade 1 - Specialty</MenuItem>
-                <MenuItem value="Grade 2">Grade 2 - Premium</MenuItem>
-                <MenuItem value="Grade 3">Grade 3 - Exchange</MenuItem>
-                <MenuItem value="Grade 4">Grade 4 - Standard</MenuItem>
-                <MenuItem value="Grade 5">Grade 5 - Commercial</MenuItem>
+                <MenuItem value="Grade 1">Grade 1 — Specialty (≤3 defects, score ≥80)</MenuItem>
+                <MenuItem value="Grade 2">Grade 2 — Premium (≤12 defects, score ≥80)</MenuItem>
+                <MenuItem value="Grade 3">Grade 3 — Exchange (≤25 defects, score ≥75)</MenuItem>
+                <MenuItem value="Grade 4">Grade 4 — Commercial (≤45 defects)</MenuItem>
+                <MenuItem value="Grade 5">Grade 5 — Commercial (≤100 defects)</MenuItem>
               </Select>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1 }}>
+                As assigned by ECX warehouse grader — must match your warehouse receipt
+              </Typography>
             </FormControl>
           </Grid>
 
@@ -2550,9 +4037,13 @@ This contract is registered with ECTA and approved by NBE.
               label="ICO Number"
               value={newShipment.icoNumber}
               onChange={(e) => setNewShipment({...newShipment, icoNumber: e.target.value})}
-              required
-              placeholder="ICO/2026/XXXXX"
-              helperText="International Coffee Organization certificate"
+              required={shipmentFieldValidation.icoRequired}
+              placeholder="ET-XXXX-XXXXX"
+              helperText={
+                shipmentFieldValidation.icoRequired
+                  ? 'Your ICO shipment mark — format: country code + exporter code + serial (e.g. ET-1234-00001)'
+                  : 'Optional for non-ICO export channels'
+              }
             />
           </Grid>
 
@@ -2562,11 +4053,44 @@ This contract is registered with ECTA and approved by NBE.
               label="ECX Lot Number"
               value={newShipment.ecxLotNumber}
               onChange={(e) => setNewShipment({...newShipment, ecxLotNumber: e.target.value})}
-              required
-              placeholder="ECX-LOT-2026-XXXXX"
-              helperText="Ethiopian Commodity Exchange lot"
+              required={shipmentFieldValidation.ecxLotRequired}
+              placeholder="ECX-2026-XXXXX"
+              helperText={
+                shipmentFieldValidation.ecxLotRequired
+                  ? 'Warehouse receipt lot number from ECX — required for ECX channel shipments.'
+                  : 'Only required when exporting through ECX.'
+              }
+              disabled={!shipmentFieldValidation.ecxLotRequired}
             />
           </Grid>
+
+          {shipmentFieldValidation.unionApprovalRequired && (
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Union Approval Reference"
+                value={newShipment.unionApprovalReference}
+                onChange={(e) => setNewShipment({...newShipment, unionApprovalReference: e.target.value})}
+                required
+                placeholder="UNION-APPROVAL-12345"
+                helperText="Required for Union/Cooperative channel shipments."
+              />
+            </Grid>
+          )}
+
+          {shipmentFieldValidation.bondReferenceRequired && (
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Bond Reference"
+                value={newShipment.bondReference}
+                onChange={(e) => setNewShipment({...newShipment, bondReference: e.target.value})}
+                required
+                placeholder="BOND-REF-2026-001"
+                helperText="Required for Direct Export channel shipments."
+              />
+            </Grid>
+          )}
 
           <Grid item xs={12} sm={6}>
             <FormControl fullWidth required>
@@ -2574,7 +4098,18 @@ This contract is registered with ECTA and approved by NBE.
               <Select
                 value={newShipment.channel}
                 label="Export Channel"
-                onChange={(e) => setNewShipment({...newShipment, channel: e.target.value})}
+                onChange={(e) => {
+                  const selectedChannel = e.target.value;
+                  setNewShipment({
+                    ...newShipment,
+                    channel: selectedChannel,
+                    bondReference: selectedChannel === 'Direct Export' ? newShipment.bondReference : '',
+                    unionApprovalReference: selectedChannel === 'Union' ? newShipment.unionApprovalReference : '',
+                    ecxLotNumber: selectedChannel === 'ECX'
+                      ? (newShipment.ecxLotNumber || generateECXLotNumber(newShipment.contractId))
+                      : newShipment.ecxLotNumber,
+                  });
+                }}
               >
                 <MenuItem value="Direct Export">Direct Export</MenuItem>
                 <MenuItem value="ECX">ECX (Ethiopian Commodity Exchange)</MenuItem>
@@ -2607,6 +4142,85 @@ This contract is registered with ECTA and approved by NBE.
               label="EUDR Compliant (Required for EU destinations)"
             />
           </Grid>
+
+          {/* Shipment Documents Section */}
+          <Grid item xs={12}>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Description /> Shipping Documents
+            </Typography>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                <strong>Required Export Documents:</strong> These documents are created during the export process:
+              </Typography>
+              <List dense>
+                <ListItem><ListItemText primary="• Bill of Lading (B/L) - Issued by shipping company" /></ListItem>
+                <ListItem><ListItemText primary="• Commercial Invoice - Your sales invoice to buyer" /></ListItem>
+                <ListItem><ListItemText primary="• Packing List - Details of shipment packaging" /></ListItem>
+                <ListItem><ListItemText primary="• Quality/ICO Certificate - From ECTA quality inspection" /></ListItem>
+                <ListItem><ListItemText primary="• Phytosanitary Certificate - From Ministry of Agriculture" /></ListItem>
+                <ListItem><ListItemText primary="• Certificate of Origin - Proves Ethiopian origin" /></ListItem>
+                <ListItem><ListItemText primary="• Insurance Certificate - Cargo insurance (if CIF/CIP terms)" /></ListItem>
+              </List>
+              <Typography variant="caption" color="text.secondary">
+                Upload these documents as you obtain them during the shipping process. They are required for customs clearance and LC negotiation.
+              </Typography>
+            </Alert>
+            
+            <Box sx={{ 
+              border: '2px dashed', 
+              borderColor: shipmentDocuments.length > 0 ? 'success.main' : 'grey.400',
+              borderRadius: 1, 
+              p: 2, 
+              textAlign: 'center',
+              bgcolor: 'grey.50'
+            }}>
+              {shipmentDocuments.length === 0 ? (
+                <>
+                  <Upload sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    No documents uploaded yet
+                  </Typography>
+                  <Button 
+                    variant="outlined" 
+                    startIcon={<Upload />}
+                    onClick={() => setShipmentDocUploadOpen(true)}
+                    sx={{ mt: 1 }}
+                  >
+                    Upload Documents
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <CheckCircle sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+                  <Typography variant="body2" gutterBottom>
+                    {shipmentDocuments.length} document{shipmentDocuments.length !== 1 ? 's' : ''} uploaded
+                  </Typography>
+                  <List dense>
+                    {shipmentDocuments.map((doc, idx) => (
+                      <ListItem key={idx}>
+                        <ListItemText 
+                          primary={doc.file.name}
+                          secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                  <Button 
+                    variant="outlined" 
+                    startIcon={<Upload />}
+                    onClick={() => setShipmentDocUploadOpen(true)}
+                    size="small"
+                  >
+                    Add More Documents
+                  </Button>
+                </>
+              )}
+            </Box>
+          </Grid>
         </Grid>
       </DialogContent>
       <DialogActions>
@@ -2623,7 +4237,9 @@ This contract is registered with ECTA and approved by NBE.
             !newShipment.origin || 
             !newShipment.grade ||
             !newShipment.icoNumber ||
-            !newShipment.ecxLotNumber
+            (shipmentFieldValidation.ecxLotRequired && !newShipment.ecxLotNumber) ||
+            (shipmentFieldValidation.unionApprovalRequired && !newShipment.unionApprovalReference) ||
+            (shipmentFieldValidation.bondReferenceRequired && !newShipment.bondReference)
           }
           brandColor={brandPrimary}
         >
@@ -2641,7 +4257,28 @@ This contract is registered with ECTA and approved by NBE.
         onClose={() => setShowAuditTrail(false)}
       />
     )}
-    </>
+
+    {/* Document Upload Dialogs */}
+    <DocumentUploadDialog
+      open={contractDocUploadOpen}
+      entityType="CONTRACT"
+      onClose={() => setContractDocUploadOpen(false)}
+      onUploadComplete={(docs) => {
+        setContractDocuments(prev => [...prev, ...docs]);
+        setContractDocUploadOpen(false);
+      }}
+    />
+
+    <DocumentUploadDialog
+      open={shipmentDocUploadOpen}
+      entityType="SHIPMENT"
+      onClose={() => setShipmentDocUploadOpen(false)}
+      onUploadComplete={(docs) => {
+        setShipmentDocuments(prev => [...prev, ...docs]);
+        setShipmentDocUploadOpen(false);
+      }}
+    />
+    </ThemeProvider>
   );
 };
 

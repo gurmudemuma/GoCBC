@@ -777,16 +777,16 @@ const LoginPage2026: React.FC = () => {
                         textTransform: 'none',
                         fontSize: '1rem',
                         fontWeight: 600,
-                        borderColor: darkMode ? '#4caf50' : '#078930',
-                        color: darkMode ? '#4caf50' : '#078930',
+                        borderColor: '#FFD700',
+                        color: darkMode ? '#FFD700' : '#B8860B',
                         borderWidth: 2,
                         transition: 'all 0.3s ease',
                         '&:hover': {
                           borderWidth: 2,
-                          borderColor: darkMode ? '#66bb6a' : '#078930',
-                          background: alpha(darkMode ? '#4caf50' : '#078930', 0.1),
+                          borderColor: '#FFD700',
+                          background: alpha('#FFD700', 0.08),
                           transform: 'translateY(-2px)',
-                          boxShadow: `0 4px 12px ${alpha(darkMode ? '#4caf50' : '#078930', 0.3)}`,
+                          boxShadow: `0 6px 18px ${alpha('#B8860B', 0.18)}`,
                         },
                       }}
                     >

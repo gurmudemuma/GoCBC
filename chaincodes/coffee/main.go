@@ -19,7 +19,7 @@ type CoffeeContract struct {
 // Basic CoffeeShipment structure that works
 type CoffeeShipment struct {
 	ShipmentID       string    `json:"shipmentId"`
-	ContractID       string    `json:"contractId"`          // Link to sales contract
+	ContractID       string    `json:"contractId"` // Link to sales contract
 	ExporterID       string    `json:"exporterId"`
 	BuyerID          string    `json:"buyerId"`
 	Origin           string    `json:"origin"`
@@ -27,38 +27,39 @@ type CoffeeShipment struct {
 	Grade            string    `json:"grade"`
 	ICONumber        string    `json:"icoNumber"`
 	ECXLotNumber     string    `json:"ecxLotNumber"`
+	Documents        []string  `json:"documents"` // Document IDs linked to this shipment
 	Status           string    `json:"status"`
 	Channel          string    `json:"channel"`
 	ForexRate        float64   `json:"forexRate"`
 	ValueUSD         float64   `json:"valueUsd"`
 	EUDRCompliant    bool      `json:"eudrCompliant"`
-	BillOfLadingNo   string    `json:"billOfLadingNo"`      // B/L number
-	BillOfLadingDate string    `json:"billOfLadingDate"`    // B/L issue date
-	VesselName       string    `json:"vesselName"`          // Vessel/truck name
-	DeparturePort    string    `json:"departurePort"`       // Port of departure
-	DestinationPort  string    `json:"destinationPort"`     // Port of destination
-	EstimatedArrival string    `json:"estimatedArrival"`    // ETA
-	ActualArrival    string    `json:"actualArrival"`       // Actual arrival date
-	TrackingNumber   string    `json:"trackingNumber"`      // GPS/Container tracking
+	BillOfLadingNo   string    `json:"billOfLadingNo"`   // B/L number
+	BillOfLadingDate string    `json:"billOfLadingDate"` // B/L issue date
+	VesselName       string    `json:"vesselName"`       // Vessel/truck name
+	DeparturePort    string    `json:"departurePort"`    // Port of departure
+	DestinationPort  string    `json:"destinationPort"`  // Port of destination
+	EstimatedArrival string    `json:"estimatedArrival"` // ETA
+	ActualArrival    string    `json:"actualArrival"`    // Actual arrival date
+	TrackingNumber   string    `json:"trackingNumber"`   // GPS/Container tracking
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 // 2026 Compliance Extensions
 type Exporter struct {
-	ExporterID                   string    `json:"exporterId"`
-	CompanyName                  string    `json:"companyName"`
-	ECTALicenseNumber            string    `json:"ectaLicenseNumber"`
-	LicenseStatus                string    `json:"licenseStatus"`
-	ExporterType                 string    `json:"exporterType"`                 // Added: private, company, individual
-	CapitalRequirement           float64   `json:"capitalRequirement"`
-	LaboratoryCertified          bool      `json:"laboratoryCertified"`
-	LaboratoryCertificateNumber  string    `json:"laboratoryCertificateNumber"`  // Added: ECTA lab certificate
-	ProfessionalTaster           string    `json:"professionalTaster"`
-	TasterCertificate            string    `json:"tasterCertificate"`
-	LicenseExpiryDate            string    `json:"licenseExpiryDate"` // Using string to avoid schema issues
-	CreatedAt                    time.Time `json:"createdAt"`
-	UpdatedAt                    time.Time `json:"updatedAt"`
+	ExporterID                  string    `json:"exporterId"`
+	CompanyName                 string    `json:"companyName"`
+	ECTALicenseNumber           string    `json:"ectaLicenseNumber"`
+	LicenseStatus               string    `json:"licenseStatus"`
+	ExporterType                string    `json:"exporterType"` // Added: private, company, individual
+	CapitalRequirement          float64   `json:"capitalRequirement"`
+	LaboratoryCertified         bool      `json:"laboratoryCertified"`
+	LaboratoryCertificateNumber string    `json:"laboratoryCertificateNumber"` // Added: ECTA lab certificate
+	ProfessionalTaster          string    `json:"professionalTaster"`
+	TasterCertificate           string    `json:"tasterCertificate"`
+	LicenseExpiryDate           string    `json:"licenseExpiryDate"` // Using string to avoid schema issues
+	CreatedAt                   time.Time `json:"createdAt"`
+	UpdatedAt                   time.Time `json:"updatedAt"`
 }
 
 type SalesContract struct {
@@ -67,8 +68,8 @@ type SalesContract struct {
 	ExporterID            string    `json:"exporterId"`
 	BuyerID               string    `json:"buyerId"`
 	BuyerCountry          string    `json:"buyerCountry"`
-	BuyerBank             string    `json:"buyerBank"`             // Issuing bank (buyer's bank)
-	ExporterBank          string    `json:"exporterBank"`          // Advising/Beneficiary bank (exporter's bank)
+	BuyerBank             string    `json:"buyerBank"`    // Issuing bank (buyer's bank)
+	ExporterBank          string    `json:"exporterBank"` // Advising/Beneficiary bank (exporter's bank)
 	CoffeeType            string    `json:"coffeeType"`
 	Quantity              float64   `json:"quantity"`
 	PricePerKg            float64   `json:"pricePerKg"`
@@ -76,12 +77,14 @@ type SalesContract struct {
 	Currency              string    `json:"currency"`
 	MinimumPriceCompliant bool      `json:"minimumPriceCompliant"`
 	EUDRRequired          bool      `json:"eudrRequired"`
+	Documents             []string  `json:"documents"` // Document IDs linked to this contract
 	ContractStatus        string    `json:"contractStatus"`
 	RegistrationDate      time.Time `json:"registrationDate"`
 	ApprovalDate          string    `json:"approvalDate"` // Using string to avoid schema issues
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
+
 func (c *CoffeeContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
 	return nil
 }
@@ -89,15 +92,31 @@ func (c *CoffeeContract) InitLedger(ctx contractapi.TransactionContextInterface)
 // ==================== EXPORTER MANAGEMENT ====================
 
 func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInterface,
-	exporterID, companyName, ectaLicenseNumber, exporterType, capitalRequirementStr, 
+	exporterID, companyName, ectaLicenseNumber, exporterType, capitalRequirementStr,
 	professionalTaster, tasterCertificate, laboratoryCertificateNumber, licenseExpiryDate string) error {
-	
+
+	// VALIDATION: IDs and required fields
+	if err := ValidateID(exporterID, "exporterID"); err != nil {
+		return fmt.Errorf("RegisterExporter: %w", err)
+	}
+	if err := ValidateNonEmptyString(companyName, "companyName", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterExporter: %w", err)
+	}
+	if err := ValidateNonEmptyString(ectaLicenseNumber, "ectaLicenseNumber", MaxIDLen); err != nil {
+		return fmt.Errorf("RegisterExporter: %w", err)
+	}
+
 	// Convert parameters
 	capitalRequirement, err := strconv.ParseFloat(capitalRequirementStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid capital requirement: %v", err)
+		return fmt.Errorf("RegisterExporter: invalid capital requirement: %w", err)
 	}
-	
+
+	// VALIDATION: Capital requirement
+	if err := ValidateAmount(capitalRequirement, "capitalRequirement"); err != nil {
+		return fmt.Errorf("RegisterExporter: %w", err)
+	}
+
 	// Validate exporter type
 	validTypes := map[string]bool{
 		"private":    true,
@@ -105,25 +124,32 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		"individual": true,
 	}
 	if exporterType != "" && !validTypes[exporterType] {
-		return fmt.Errorf("invalid exporter type: %s. Must be private, company, or individual", exporterType)
+		return fmt.Errorf("RegisterExporter: invalid exporter type: %s. Must be private, company, or individual", exporterType)
 	}
-	
+
+	// VALIDATION: License expiry date
+	if licenseExpiryDate != "" {
+		if err := ValidateDate(licenseExpiryDate, "licenseExpiryDate", false); err != nil {
+			return fmt.Errorf("RegisterExporter: %w", err)
+		}
+	}
+
 	// Check if exporter already exists
 	exists, err := c.ExporterExists(ctx, exporterID)
 	if err != nil {
-		return err
+		return fmt.Errorf("RegisterExporter: failed to check exporter existence for %s: %w", exporterID, err)
 	}
 	if exists {
-		return fmt.Errorf("exporter %s already exists", exporterID)
+		return fmt.Errorf("RegisterExporter: exporter %s already exists", exporterID)
 	}
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	exporter := Exporter{
 		ExporterID:                  exporterID,
 		CompanyName:                 companyName,
@@ -139,12 +165,12 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		CreatedAt:                   timestamp,
 		UpdatedAt:                   timestamp,
 	}
-	
+
 	exporterJSON, err := json.Marshal(exporter)
 	if err != nil {
 		return err
 	}
-	
+
 	// Save exporter to ledger
 	err = ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
 	if err != nil {
@@ -168,7 +194,7 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		ComplianceNote: "Exporter registered, pending NBE approval for contracts",
 	}
 
-	err = c.CreateAuditLog(ctx, "CREATE", "EXPORTER", exporterID, "", "ACTIVE", changes, 
+	err = c.CreateAuditLog(ctx, "CREATE", "EXPORTER", exporterID, "", "ACTIVE", changes,
 		"New exporter registration by ECTA", compliance)
 	if err != nil {
 		log.Printf("WARNING: Failed to create audit log: %v", err)
@@ -186,13 +212,13 @@ func (c *CoffeeContract) ReadExporter(ctx contractapi.TransactionContextInterfac
 	if exporterJSON == nil {
 		return nil, fmt.Errorf("exporter %s does not exist", exporterID)
 	}
-	
+
 	var exporter Exporter
 	err = json.Unmarshal(exporterJSON, &exporter)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &exporter, nil
 }
 
@@ -201,33 +227,86 @@ func (c *CoffeeContract) ExporterExists(ctx contractapi.TransactionContextInterf
 	if err != nil {
 		return false, fmt.Errorf("failed to read from world state: %v", err)
 	}
-	
+
 	return exporterJSON != nil, nil
 }
+
 // ==================== SALES CONTRACT MANAGEMENT ====================
 
 func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContextInterface,
-	contractID, exporterID, buyerID, buyerCountry, coffeeType, quantityStr, 
-	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank string) error {
-	
+	contractID, exporterID, buyerID, buyerCountry, coffeeType, quantityStr,
+	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, documentsJSON string) error {
+
 	log.Printf("=== RegisterSalesContract called: contractID=%s, exporterID=%s ===", contractID, exporterID)
-	
+
+	// VALIDATION: IDs
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+	if err := ValidateID(exporterID, "exporterID"); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+	if err := ValidateID(buyerID, "buyerID"); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+
+	// VALIDATION: Required fields
+	if err := ValidateNonEmptyString(buyerCountry, "buyerCountry", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+	if err := ValidateNonEmptyString(coffeeType, "coffeeType", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+	if err := ValidateNonEmptyString(buyerBank, "buyerBank", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+	if err := ValidateNonEmptyString(exporterBank, "exporterBank", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+
+	// VALIDATION: Currency
+	if err := ValidateCurrency(currency); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+
 	// Convert parameters
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid quantity: %v", err)
+		return fmt.Errorf("RegisterSalesContract: invalid quantity: %w", err)
 	}
-	
+
+	// VALIDATION: Quantity
+	if err := ValidateQuantity(quantity, "quantity"); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+
 	pricePerKg, err := strconv.ParseFloat(pricePerKgStr, 64)
 	if err != nil {
-		return fmt.Errorf("invalid price per kg: %v", err)
+		return fmt.Errorf("RegisterSalesContract: invalid price per kg: %w", err)
 	}
-	
+
+	// VALIDATION: Price
+	if err := ValidateAmount(pricePerKg, "pricePerKg"); err != nil {
+		return fmt.Errorf("RegisterSalesContract: %w", err)
+	}
+
 	eudrRequired, err := strconv.ParseBool(eudrRequiredStr)
 	if err != nil {
-		return fmt.Errorf("invalid EUDR required flag: %v", err)
+		return fmt.Errorf("RegisterSalesContract: invalid EUDR required flag: %w", err)
 	}
-	
+
+	// Parse documents array
+	var documents []string
+	if documentsJSON != "" && documentsJSON != "[]" {
+		err = json.Unmarshal([]byte(documentsJSON), &documents)
+		if err != nil {
+			return fmt.Errorf("invalid documents JSON: %v", err)
+		}
+	}
+	if documents == nil {
+		documents = []string{} // Ensure non-nil empty array
+	}
+
 	// Check if contract already exists
 	exists, err := c.SalesContractExists(ctx, contractID)
 	if err != nil {
@@ -236,20 +315,20 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 	if exists {
 		return fmt.Errorf("sales contract %s already exists", contractID)
 	}
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	// Generate NBE reference number
 	nbeReferenceNumber := fmt.Sprintf("NBE-%s-%d", contractID, timestamp.Unix())
-	
+
 	totalValue := quantity * pricePerKg
 	minimumPriceCompliant := pricePerKg >= 5.0 // Simplified minimum price check
-	
+
 	contract := SalesContract{
 		ContractID:            contractID,
 		NBEReferenceNumber:    nbeReferenceNumber,
@@ -265,18 +344,19 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		Currency:              currency,
 		MinimumPriceCompliant: minimumPriceCompliant,
 		EUDRRequired:          eudrRequired,
+		Documents:             documents, // Add documents
 		ContractStatus:        "REGISTERED",
 		RegistrationDate:      timestamp,
 		ApprovalDate:          "",
 		CreatedAt:             timestamp,
 		UpdatedAt:             timestamp,
 	}
-	
+
 	contractJSON, err := json.Marshal(contract)
 	if err != nil {
 		return err
 	}
-	
+
 	key := "CONTRACT_" + contractID
 	log.Printf("Storing contract with key: %s", key)
 	err = ctx.GetStub().PutState(key, contractJSON)
@@ -284,7 +364,7 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		log.Printf("ERROR: PutState failed for key %s: %v", key, err)
 		return err
 	}
-	
+
 	log.Printf("=== RegisterSalesContract completed successfully: %s ===", key)
 	return nil
 }
@@ -297,13 +377,18 @@ func (c *CoffeeContract) ReadSalesContract(ctx contractapi.TransactionContextInt
 	if contractJSON == nil {
 		return nil, fmt.Errorf("sales contract %s does not exist", contractID)
 	}
-	
+
 	var contract SalesContract
 	err = json.Unmarshal(contractJSON, &contract)
 	if err != nil {
 		return nil, err
 	}
-	
+
+	// Ensure Documents is never nil (backward compatibility)
+	if contract.Documents == nil {
+		contract.Documents = []string{}
+	}
+
 	return &contract, nil
 }
 
@@ -312,7 +397,7 @@ func (c *CoffeeContract) SalesContractExists(ctx contractapi.TransactionContextI
 	if err != nil {
 		return false, fmt.Errorf("failed to read from world state: %v", err)
 	}
-	
+
 	return contractJSON != nil, nil
 }
 
@@ -332,21 +417,21 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	if err != nil {
 		return err
 	}
-	
+
 	// Capture previous status for audit
 	previousStatus := contract.ContractStatus
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	contract.ContractStatus = "APPROVED"
 	contract.ApprovalDate = timestamp.Format(time.RFC3339)
 	contract.UpdatedAt = timestamp
-	
+
 	contractJSON, err := json.Marshal(contract)
 	if err != nil {
 		return err
@@ -381,16 +466,16 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 
 	// Emit event
 	event := map[string]interface{}{
-		"eventType":   "ContractApproved",
-		"contractID":  contractID,
-		"exporterID":  contract.ExporterID,
-		"totalValue":  contract.TotalValue,
-		"timestamp":   timestamp.Format(time.RFC3339),
-		"approvedBy":  mspID,
+		"eventType":  "ContractApproved",
+		"contractID": contractID,
+		"exporterID": contract.ExporterID,
+		"totalValue": contract.TotalValue,
+		"timestamp":  timestamp.Format(time.RFC3339),
+		"approvedBy": mspID,
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ContractApproved", eventJSON)
-	
+
 	return nil
 }
 
@@ -399,27 +484,27 @@ func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionCon
 	if err != nil {
 		return err
 	}
-	
+
 	certified, err := strconv.ParseBool(certifiedStr)
 	if err != nil {
 		return fmt.Errorf("invalid certified flag: %v", err)
 	}
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	exporter.LaboratoryCertified = certified
 	exporter.UpdatedAt = timestamp
-	
+
 	exporterJSON, err := json.Marshal(exporter)
 	if err != nil {
 		return err
 	}
-	
+
 	return ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
 }
 
@@ -428,7 +513,7 @@ func (c *CoffeeContract) UpdateExporterStatus(ctx contractapi.TransactionContext
 	if err != nil {
 		return err
 	}
-	
+
 	// Validate status
 	validStatuses := map[string]bool{
 		"ACTIVE":    true,
@@ -436,33 +521,33 @@ func (c *CoffeeContract) UpdateExporterStatus(ctx contractapi.TransactionContext
 		"EXPIRED":   true,
 		"REVOKED":   true,
 	}
-	
+
 	if !validStatuses[status] {
 		return fmt.Errorf("invalid status: %s. Must be ACTIVE, SUSPENDED, EXPIRED, or REVOKED", status)
 	}
-	
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	exporter.LicenseStatus = status
 	exporter.UpdatedAt = timestamp
-	
+
 	exporterJSON, err := json.Marshal(exporter)
 	if err != nil {
 		return err
 	}
-	
+
 	return ctx.GetStub().PutState("EXPORTER_"+exporterID, exporterJSON)
 }
 
 // SuspendExporter - ECTA suspends exporter license
-func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInterface, 
+func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInterface,
 	exporterID, reason string) error {
-	
+
 	// Get MSP ID for access control
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -478,23 +563,23 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	if err != nil {
 		return err
 	}
-	
+
 	if exporter.LicenseStatus == "REVOKED" {
 		return fmt.Errorf("cannot suspend revoked license")
 	}
-	
+
 	// Capture previous status
 	previousStatus := exporter.LicenseStatus
-	
+
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	exporter.LicenseStatus = "SUSPENDED"
 	exporter.UpdatedAt = timestamp
-	
+
 	exporterJSON, err := json.Marshal(exporter)
 	if err != nil {
 		return err
@@ -536,14 +621,14 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ExporterSuspended", eventJSON)
-	
+
 	return nil
 }
 
 // RevokeExporterLicense - ECTA permanently revokes exporter license
-func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContextInterface, 
+func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContextInterface,
 	exporterID, reason string) error {
-	
+
 	// Get MSP ID for access control
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -559,19 +644,19 @@ func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContex
 	if err != nil {
 		return err
 	}
-	
+
 	// Capture previous status for audit
 	previousStatus := exporter.LicenseStatus
-	
+
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
-	
+
 	exporter.LicenseStatus = "REVOKED"
 	exporter.UpdatedAt = timestamp
-	
+
 	exporterJSON, err := json.Marshal(exporter)
 	if err != nil {
 		return err
@@ -596,7 +681,7 @@ func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContex
 		ComplianceNote: "License permanently revoked by ECTA: " + reason,
 	}
 
-	err = c.CreateAuditLog(ctx, "REVOKE", "EXPORTER", exporterID, previousStatus, "REVOKED", 
+	err = c.CreateAuditLog(ctx, "REVOKE", "EXPORTER", exporterID, previousStatus, "REVOKED",
 		changes, reason, compliance)
 	if err != nil {
 		log.Printf("WARNING: Failed to create audit log: %v", err)
@@ -604,24 +689,24 @@ func (c *CoffeeContract) RevokeExporterLicense(ctx contractapi.TransactionContex
 
 	// Emit event
 	event := map[string]interface{}{
-		"eventType":   "ExporterRevoked",
-		"exporterID":  exporterID,
-		"reason":      reason,
-		"timestamp":   timestamp.Format(time.RFC3339),
-		"revokedBy":   mspID,
+		"eventType":  "ExporterRevoked",
+		"exporterID": exporterID,
+		"reason":     reason,
+		"timestamp":  timestamp.Format(time.RFC3339),
+		"revokedBy":  mspID,
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ExporterRevoked", eventJSON)
-	
+
 	return nil
 }
 
 // ==================== SHIPMENT MANAGEMENT ====================
 
-func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterface, 
-	shipmentID, contractID, exporterID, buyerID, origin, quantityStr, grade, icoNumber, 
-	ecxLotNumber, channel, forexRateStr, valueUSDStr, eudrCompliantStr string) error {
-	
+func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterface,
+	shipmentID, contractID, exporterID, buyerID, origin, quantityStr, grade, icoNumber,
+	ecxLotNumber, channel, forexRateStr, valueUSDStr, eudrCompliantStr, documentsJSON string) error {
+
 	fmt.Printf("=== CreateShipment called: shipmentID=%s, contractID=%s ===\n", shipmentID, contractID)
 
 	// Fetch contract data for auto-mapping
@@ -696,7 +781,7 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		valueUSD = contract.TotalValue
 		fmt.Printf("CreateShipment: Auto-mapped valueUSD: %f\n", valueUSD)
 	}
-	
+
 	// AUTO-MAP: EUDR compliance from contract if not provided
 	eudrCompliant := false
 	if eudrCompliantStr == "" || eudrCompliantStr == "AUTO" {
@@ -708,7 +793,20 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 			return fmt.Errorf("invalid EUDR compliant flag: %v", err)
 		}
 	}
-	
+
+	// Parse documents array
+	var documents []string
+	if documentsJSON != "" && documentsJSON != "[]" {
+		err = json.Unmarshal([]byte(documentsJSON), &documents)
+		if err != nil {
+			return fmt.Errorf("invalid documents JSON: %v", err)
+		}
+	}
+	if documents == nil {
+		documents = []string{} // Ensure non-nil empty array
+	}
+	fmt.Printf("CreateShipment: Documents to be linked: %d document(s)\n", len(documents))
+
 	exists, err := c.ShipmentExists(ctx, shipmentID)
 	if err != nil {
 		return err
@@ -734,6 +832,7 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		Grade:         grade,
 		ICONumber:     icoNumber,
 		ECXLotNumber:  ecxLotNumber,
+		Documents:     documents,
 		Status:        "CREATED",
 		Channel:       channel,
 		ForexRate:     forexRate,
@@ -758,15 +857,15 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 	// AUTO-TRIGGER: Request ECTA quality inspection
 	// AUTO-MAPS: Shipment ID, Contract ID, Exporter ID
 	inspectionID := "INSPECTION_" + shipmentID
-	
+
 	inspection := QualityInspection{
-		InspectionID:   inspectionID,
-		ShipmentID:     shipmentID,
-		ContractID:     contractID,       // AUTO-MAPPED from shipment
-		ExporterID:     mappedExporterID, // AUTO-MAPPED from contract/shipment
-		Status:         "PENDING",
-		CreatedAt:      timestamp,
-		UpdatedAt:      timestamp,
+		InspectionID: inspectionID,
+		ShipmentID:   shipmentID,
+		ContractID:   contractID,       // AUTO-MAPPED from shipment
+		ExporterID:   mappedExporterID, // AUTO-MAPPED from contract/shipment
+		Status:       "PENDING",
+		CreatedAt:    timestamp,
+		UpdatedAt:    timestamp,
 	}
 
 	inspectionJSON, err := json.Marshal(inspection)
@@ -804,12 +903,20 @@ func (c *CoffeeContract) ReadShipment(ctx contractapi.TransactionContextInterfac
 	return &shipment, nil
 }
 
-func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContextInterface, 
+func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContextInterface,
 	shipmentID, newStatus string) error {
-	
+
+	// VALIDATION: IDs and required fields
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("UpdateShipmentStatus: %w", err)
+	}
+	if err := ValidateNonEmptyString(newStatus, "newStatus", MaxIDLen); err != nil {
+		return fmt.Errorf("UpdateShipmentStatus: %w", err)
+	}
+
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
-		return err
+		return fmt.Errorf("UpdateShipmentStatus: %w", err)
 	}
 
 	// Use transaction timestamp for deterministic behavior
@@ -832,9 +939,9 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 
 // RecordBillOfLading - Shipping company records Bill of Lading details
 func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextInterface,
-	shipmentID, billOfLadingNo, vesselName, departurePort, destinationPort, 
+	shipmentID, billOfLadingNo, vesselName, departurePort, destinationPort,
 	estimatedArrival, trackingNumber string) error {
-	
+
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
 		return err
@@ -867,7 +974,7 @@ func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextIn
 // UpdateShipmentLocation - Update shipment GPS location/status
 func (c *CoffeeContract) UpdateShipmentLocation(ctx contractapi.TransactionContextInterface,
 	shipmentID, location, status string) error {
-	
+
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
 		return err
@@ -952,9 +1059,9 @@ func (c *CoffeeContract) QueryAllAssets(ctx contractapi.TransactionContextInterf
 		}
 
 		// Skip non-shipment records (those with prefixes)
-		if len(queryResponse.Key) > 0 && 
-		   (queryResponse.Key[:9] == "EXPORTER_" || 
-		    queryResponse.Key[:9] == "CONTRACT_") {
+		if len(queryResponse.Key) >= 9 &&
+			(queryResponse.Key[:9] == "EXPORTER_" ||
+				queryResponse.Key[:9] == "CONTRACT_") {
 			continue
 		}
 
@@ -963,6 +1070,12 @@ func (c *CoffeeContract) QueryAllAssets(ctx contractapi.TransactionContextInterf
 		if err != nil {
 			continue // Skip if not a shipment record
 		}
+		
+		// Ensure Documents is never nil (backward compatibility)
+		if asset.Documents == nil {
+			asset.Documents = []string{}
+		}
+		
 		assets = append(assets, &asset)
 	}
 
@@ -1013,7 +1126,7 @@ func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInt
 			log.Printf("ERROR: Iterator.Next() failed: %v", err)
 			return nil, err
 		}
-		
+
 		count++
 		log.Printf("Found contract key: %s", queryResponse.Key)
 
@@ -1023,6 +1136,12 @@ func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInt
 			log.Printf("ERROR: Failed to unmarshal contract %s: %v", queryResponse.Key, err)
 			return nil, err
 		}
+		
+		// Ensure Documents is never nil (backward compatibility for contracts created before v1.15)
+		if contract.Documents == nil {
+			contract.Documents = []string{}
+		}
+		
 		contracts = append(contracts, &contract)
 	}
 
@@ -1034,7 +1153,7 @@ func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInt
 
 func (c *CoffeeContract) QueryShipmentsByExporter(ctx contractapi.TransactionContextInterface, exporterID string) ([]*CoffeeShipment, error) {
 	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
-	
+
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, err
@@ -1062,7 +1181,7 @@ func (c *CoffeeContract) QueryShipmentsByExporter(ctx contractapi.TransactionCon
 // QueryContractsByExporter - Get all sales contracts for a specific exporter
 func (c *CoffeeContract) QueryContractsByExporter(ctx contractapi.TransactionContextInterface, exporterID string) ([]*SalesContract, error) {
 	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
-	
+
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query contracts by exporter: %v", err)
@@ -1089,7 +1208,7 @@ func (c *CoffeeContract) QueryContractsByExporter(ctx contractapi.TransactionCon
 
 func (c *CoffeeContract) QueryEUDRCompliantShipments(ctx contractapi.TransactionContextInterface) ([]*CoffeeShipment, error) {
 	queryString := `{"selector":{"eudrCompliant":true}}`
-	
+
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, err
@@ -1117,7 +1236,7 @@ func (c *CoffeeContract) QueryEUDRCompliantShipments(ctx contractapi.Transaction
 // QueryShipmentsByContract - Get all shipments for a specific contract
 func (c *CoffeeContract) QueryShipmentsByContract(ctx contractapi.TransactionContextInterface, contractID string) ([]*CoffeeShipment, error) {
 	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
-	
+
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query shipments by contract: %v", err)
@@ -1170,12 +1289,12 @@ func (c *CoffeeContract) GetCompleteTraceability(ctx contractapi.TransactionCont
 
 	// Build complete traceability record
 	traceability := map[string]interface{}{
-		"shipment": shipment,
-		"exporter": exporter,
-		"contract": contract,
+		"shipment":             shipment,
+		"exporter":             exporter,
+		"contract":             contract,
 		"traceabilityComplete": true,
-		"eudrCompliant": shipment.EUDRCompliant,
-		"generatedAt": time.Now().Format(time.RFC3339),
+		"eudrCompliant":        shipment.EUDRCompliant,
+		"generatedAt":          time.Now().Format(time.RFC3339),
 	}
 
 	return traceability, nil
@@ -1185,9 +1304,9 @@ func main() {
 	// Chaincode as a Service (CaaS) configuration
 	ccid := os.Getenv("CORE_CHAINCODE_ID_NAME")
 	address := os.Getenv("CHAINCODE_SERVER_ADDRESS")
-	
+
 	log.Printf("Starting Coffee Chaincode - CCID: %s, Address: %s", ccid, address)
-	
+
 	chaincode, err := contractapi.NewChaincode(&CoffeeContract{})
 	if err != nil {
 		log.Panicf("Error creating coffee chaincode: %v", err)

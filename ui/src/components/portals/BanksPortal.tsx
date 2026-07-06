@@ -32,7 +32,11 @@ import {
   Step,
   StepLabel,
   Divider,
+  Checkbox,
+  ThemeProvider,
+  createTheme,
 } from '@mui/material';
+import { createOrganizationTheme } from '@/theme/organizationThemes';
 import {
   AccountBalance,
   CurrencyExchange,
@@ -44,7 +48,13 @@ import {
   TrendingUp,
   Warning,
   AttachMoney,
+  AccessTime,
+  Comment as CommentIcon,
+  CloudUpload,
 } from '@mui/icons-material';
+import AuditTrailViewer from './AuditTrailViewer';
+import DocumentVerificationPanel from './DocumentVerificationPanel';
+import { DocumentUploadDialog } from './DocumentUploadDialog';
 
 // Modern Components
 import {
@@ -104,6 +114,9 @@ interface ForexAllocation {
   expiryDate: string;
 }
 
+// Use the organization theme for BANKS (purple/golden/black/white)
+const banksTheme = createOrganizationTheme('BANKS');
+
 const BanksPortal: React.FC = () => {
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
@@ -114,10 +127,28 @@ const BanksPortal: React.FC = () => {
   const [documentaryCollections, setDocumentaryCollections] = useState<any[]>([]);
   const [advancePayments, setAdvancePayments] = useState<any[]>([]);
   const [consignments, setConsignments] = useState<any[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<any[]>([]);
+  const [selectedPayment, setSelectedPayment] = useState<any | null>(null);
+  const [verificationDialogOpen, setVerificationDialogOpen] = useState(false);
+  const [documentUploadDialogOpen, setDocumentUploadDialogOpen] = useState(false);
+  const [uploadEntityId, setUploadEntityId] = useState<string>('');
+  const [uploadEntityType, setUploadEntityType] = useState<string>('');
   const [selectedContract, setSelectedContract] = useState<SalesContract | null>(null);
   const [selectedLC, setSelectedLC] = useState<LetterOfCredit | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | 'lcDetails' | 'cad' | 'advance' | 'consignment' | null>(null);
+  const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | 'lcDetails' | 'lcAmend' | 'cad' | 'advance' | 'consignment' | null>(null);
+  
+  // Bulk selection state
+  const [selectedLCIds, setSelectedLCIds] = useState<string[]>([]);
+  const [bulkApproving, setBulkApproving] = useState(false);
+  
+  // LC Amendment Form
+  const [amendmentForm, setAmendmentForm] = useState({
+    amendmentReason: '',
+    newAmount: '',
+    newExpiryDate: '',
+    newTerms: '',
+  });
   
   // LC Form
   const [lcForm, setLcForm] = useState({
@@ -180,20 +211,42 @@ const BanksPortal: React.FC = () => {
     permitAmount: '',
   });
 
+  // Search and Filter State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [currentPage, setCurrentPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  
+  // Advanced filters
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
   useEffect(() => {
     loadBankingData();
   }, []);
 
   const loadBankingData = async () => {
     const token = localStorage.getItem('authToken');
-    if (!token) return;
+    if (!token) {
+      console.error('[BANKS] No auth token found');
+      showError('Authentication Required', 'Please log in to access banking data', '');
+      return;
+    }
+
+    console.log('[BANKS] Starting to load banking data...');
 
     try {
       // Load all NBE-approved contracts
+      console.log('[BANKS] Fetching contracts from API...');
       const contractsResponse = await fetch('http://localhost:3001/api/v1/contracts', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      console.log('[BANKS] Contracts response status:', contractsResponse.status);
       const contractsResult = await contractsResponse.json();
+      console.log('[BANKS] Contracts result:', contractsResult);
       
       let nbeApprovedContracts: any[] = [];
       
@@ -303,7 +356,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Documentary Collections
       try {
-        const collectionsResponse = await fetch('http://localhost:3001/api/v1/collections', {
+        const collectionsResponse = await fetch('http://localhost:3001/api/v1/banking/cad/exporter/' + encodeURIComponent('ALL'), {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const collectionsResult = await collectionsResponse.json();
@@ -314,9 +367,9 @@ const BanksPortal: React.FC = () => {
         console.warn('Could not load documentary collections:', err);
       }
 
-      // Load Advance Payments
+      // Load Advance Payments (via generic payment query)
       try {
-        const advanceResponse = await fetch('http://localhost:3001/api/v1/advance', {
+        const advanceResponse = await fetch('http://localhost:3001/api/v1/banking/payment/by-method/ADVANCE', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const advanceResult = await advanceResponse.json();
@@ -329,7 +382,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Consignments
       try {
-        const consignmentsResponse = await fetch('http://localhost:3001/api/v1/consignment', {
+        const consignmentsResponse = await fetch('http://localhost:3001/api/v1/banking/consignment/outstanding', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const consignmentsResult = await consignmentsResponse.json();
@@ -338,6 +391,23 @@ const BanksPortal: React.FC = () => {
         }
       } catch (err) {
         console.warn('Could not load consignments:', err);
+      }
+
+      // Load Pending Documents for Verification
+      try {
+        const paymentsResponse = await fetch('http://localhost:3001/api/v1/banking/payment/by-method/LC', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const paymentsResult = await paymentsResponse.json();
+        if (paymentsResult.success && Array.isArray(paymentsResult.data)) {
+          // Filter for payments with documents submitted but not verified
+          const pending = paymentsResult.data.filter((p: any) => 
+            p.status === 'DOCUMENTS_SUBMITTED' || p.status === 'UNDER_VERIFICATION'
+          );
+          setPendingDocuments(pending);
+        }
+      } catch (err) {
+        console.warn('Could not load pending documents:', err);
       }
 
       console.log(`Loaded ${nbeApprovedContracts?.length || 0} NBE-approved contracts for bank processing`);
@@ -360,7 +430,8 @@ const BanksPortal: React.FC = () => {
       }
       
     } catch (error) {
-      console.error('Failed to load banking data:', error);
+      console.error('[BANKS] Failed to load banking data:', error);
+      showError('Data Loading Failed', 'Could not load banking data from the server', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -565,6 +636,107 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  const handleBulkApproveLC = async () => {
+    if (selectedLCIds.length === 0) return;
+    
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+
+    setBulkApproving(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const lcId of selectedLCIds) {
+      try {
+        const lc = letterOfCredits.find(l => l.lcId === lcId);
+        if (!lc) continue;
+
+        const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            beneficiary: lc.exporterId,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (error) {
+        failCount++;
+      }
+    }
+
+    setBulkApproving(false);
+    setSelectedLCIds([]);
+
+    if (failCount === 0) {
+      showSuccess('Bulk Approval Complete', `Successfully approved ${successCount} Letters of Credit`);
+    } else {
+      showWarning('Bulk Approval Partial', `Approved: ${successCount}, Failed: ${failCount}`);
+    }
+
+    loadBankingData();
+  };
+
+  const toggleLCSelection = (lcId: string) => {
+    setSelectedLCIds(prev => 
+      prev.includes(lcId) ? prev.filter(id => id !== lcId) : [...prev, lcId]
+    );
+  };
+
+  const toggleAllLCSelection = () => {
+    const requestedLCs = getFilteredLCs().filter(lc => lc.status === 'REQUESTED');
+    if (selectedLCIds.length === requestedLCs.length) {
+      setSelectedLCIds([]);
+    } else {
+      setSelectedLCIds(requestedLCs.map(lc => lc.lcId));
+    }
+  };
+
+  const handleAmendLC = async () => {
+    if (!selectedLC) return;
+
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${selectedLC.lcId}/amend`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amendmentReason: amendmentForm.amendmentReason,
+          newAmount: amendmentForm.newAmount ? parseFloat(amendmentForm.newAmount) : undefined,
+          newExpiryDate: amendmentForm.newExpiryDate || undefined,
+          newTerms: amendmentForm.newTerms || undefined,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('LC Amended', `LC ${selectedLC.lcId} has been amended successfully`);
+        handleCloseDialog();
+        loadBankingData();
+      } else {
+        showError('Amendment Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
   const handlePaymentMethodSubmit = async (type: string, data: any) => {
     const token = localStorage.getItem('authToken');
     if (!token || !selectedContract) return;
@@ -572,20 +744,27 @@ const BanksPortal: React.FC = () => {
     try {
       if (type === 'cad') {
         const collectionId = `CAD${Date.now()}`;
-        const permitId = `PERMIT${Date.now()}`;
         
-        const response = await fetch('http://localhost:3001/api/v1/collections/send', {
+        const response = await fetch('http://localhost:3001/api/v1/banking/cad/register', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            collectionId,
-            contractId: selectedContract.contractId,
-            exporterId: selectedContract.exporterId,
-            permitId,
-            ...data,
+            collectionID: collectionId,
+            contractID: selectedContract.contractId,
+            exporterID: selectedContract.exporterId,
+            drawerName: data.drawerName,
+            draweeName: data.draweeName,
+            draweeAddress: data.draweeAddress,
             amount: selectedContract.totalValue,
             currency: selectedContract.currency,
-            documents: ['Bill of Lading', 'Commercial Invoice', 'Packing List'],
+            paymentTerm: data.paymentTerm,
+            acceptanceDays: data.acceptanceDays ? parseInt(data.acceptanceDays) : 0,
+            remittingBank: data.remittingBank,
+            remittingBankBIC: data.remittingBankBIC,
+            collectingBank: data.collectingBank,
+            collectingBankBIC: data.collectingBankBIC,
+            instructions: data.instructions,
+            documents: ['Bill of Lading', 'Commercial Invoice', 'Packing List', 'Certificate of Origin'],
           }),
         });
 
@@ -599,20 +778,26 @@ const BanksPortal: React.FC = () => {
         }
       } else if (type === 'advance') {
         const paymentId = `ADV${Date.now()}`;
+        const advancePercentage = data.advancePercentage || '30';
         
-        const response = await fetch('http://localhost:3001/api/v1/advance/record', {
+        const response = await fetch('http://localhost:3001/api/v1/banking/payment/initiate', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            paymentId,
-            contractId: selectedContract.contractId,
-            exporterId: selectedContract.exporterId,
-            amount: data.amount,
+            paymentID: paymentId,
+            contractID: selectedContract.contractId,
+            exporterID: selectedContract.exporterId,
+            lcID: '', // May not have LC for advance payment
+            paymentMethod: 'ADVANCE',
+            amount: selectedContract.totalValue.toString(),
             currency: selectedContract.currency,
+            swiftReference: data.swiftReference || '',
+            payingBank: data.payingBank || '',
+            payingBankBIC: data.payingBankBIC || '',
             receivingBank: selectedContract.exporterBank || 'Commercial Bank of Ethiopia',
             receivingBankBIC: 'CBETETAA',
             beneficiaryName: selectedContract.exporterId,
-            ...data,
+            beneficiaryAccount: data.beneficiaryAccount || '',
           }),
         });
 
@@ -626,26 +811,27 @@ const BanksPortal: React.FC = () => {
         }
       } else if (type === 'consignment') {
         const consignmentId = `CONSIGN${Date.now()}`;
-        const permitId = `PERMIT${Date.now()}`;
         
-        const response = await fetch('http://localhost:3001/api/v1/consignment/issue-permit', {
+        const response = await fetch('http://localhost:3001/api/v1/banking/consignment/register', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            consignmentId,
-            permitId,
-            permitNumber: `CP-${Date.now()}`,
-            exporterId: selectedContract.exporterId,
+            consignmentID: consignmentId,
+            exporterID: selectedContract.exporterId,
+            commodityType: data.commodityType,
+            description: data.description,
+            buyerName: data.buyerName || selectedContract.buyerName,
+            buyerAddress: data.buyerAddress,
+            buyerCountry: selectedContract.buyerCountry,
+            permitAmount: data.permitAmount || selectedContract.totalValue.toString(),
             currency: selectedContract.currency,
-            bankBranch: selectedContract.exporterBank || 'CBE Main Branch',
-            destination: selectedContract.buyerCountry,
-            ...data,
+            permitNumber: `CP-${Date.now()}`,
           }),
         });
 
         const result = await response.json();
         if (result.success) {
-          showSuccess('Consignment Permit Issued', `Permit ${permitId} issued for ${data.commodityType}`);
+          showSuccess('Consignment Permit Issued', `Consignment ${consignmentId} issued for ${data.commodityType}`);
           handleCloseDialog();
           loadBankingData();
         } else {
@@ -657,19 +843,214 @@ const BanksPortal: React.FC = () => {
     }
   };
 
-  return (
-    <Box sx={{ p: 3 }}>
-      {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
-          <AccountBalance sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Commercial Banks Portal
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Letter of Credit Issuance, Forex Management & Export Finance
-        </Typography>
-      </Box>
+  const handleDocumentVerification = async (approved: boolean, comments: string, checklist: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token || !selectedPayment) return;
 
+    try {
+      const response = await fetch(`http://localhost:3001/api/v1/banking/payment/${selectedPayment.paymentID}/verify-documents`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approved,
+          verifierComments: comments,
+          documentChecklist: checklist,
+          verificationDate: new Date().toISOString(),
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        if (approved) {
+          showSuccess('Documents Verified', 'Payment documents approved. Payment can proceed to settlement.');
+        } else {
+          showWarning('Documents Rejected', 'Payment documents have discrepancies. Exporter notified.');
+        }
+        setVerificationDialogOpen(false);
+        setSelectedPayment(null);
+        loadBankingData();
+      } else {
+        showError('Verification Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
+  // Filter and Pagination Helper Functions
+  const getFilteredContracts = () => {
+    let filtered = contracts;
+    if (searchTerm) {
+      filtered = filtered.filter(c => 
+        c.contractId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.exporterId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.buyerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.buyerCountry.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    if (dateFrom) {
+      filtered = filtered.filter(c => new Date(c.registrationDate) >= new Date(dateFrom));
+    }
+    if (dateTo) {
+      filtered = filtered.filter(c => new Date(c.registrationDate) <= new Date(dateTo));
+    }
+    if (amountMin) {
+      filtered = filtered.filter(c => c.totalValue >= parseFloat(amountMin));
+    }
+    if (amountMax) {
+      filtered = filtered.filter(c => c.totalValue <= parseFloat(amountMax));
+    }
+    return filtered;
+  };
+
+  const getFilteredLCs = () => {
+    let filtered = letterOfCredits;
+    if (searchTerm) {
+      filtered = filtered.filter(lc => 
+        lc.lcId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        lc.contractId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        lc.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    if (filterStatus !== 'ALL') {
+      filtered = filtered.filter(lc => lc.status === filterStatus);
+    }
+    if (dateFrom) {
+      filtered = filtered.filter(lc => new Date(lc.requestDate) >= new Date(dateFrom));
+    }
+    if (dateTo) {
+      filtered = filtered.filter(lc => new Date(lc.requestDate) <= new Date(dateTo));
+    }
+    if (amountMin) {
+      filtered = filtered.filter(lc => lc.amount >= parseFloat(amountMin));
+    }
+    if (amountMax) {
+      filtered = filtered.filter(lc => lc.amount <= parseFloat(amountMax));
+    }
+    return filtered;
+  };
+
+  const getFilteredForex = () => {
+    let filtered = forexAllocations;
+    if (searchTerm) {
+      filtered = filtered.filter(forex => 
+        forex.forexId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        forex.lcId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        forex.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    if (filterStatus !== 'ALL') {
+      filtered = filtered.filter(forex => forex.status === filterStatus);
+    }
+    if (amountMin) {
+      filtered = filtered.filter(forex => forex.allocatedAmount >= parseFloat(amountMin));
+    }
+    if (amountMax) {
+      filtered = filtered.filter(forex => forex.allocatedAmount <= parseFloat(amountMax));
+    }
+    return filtered;
+  };
+
+  const getFilteredPayments = () => {
+    let filtered = pendingDocuments;
+    if (searchTerm) {
+      filtered = filtered.filter(payment => 
+        payment.paymentId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        payment.exporterId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        payment.paymentMethod?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    if (filterStatus !== 'ALL') {
+      filtered = filtered.filter(payment => payment.status === filterStatus);
+    }
+    return filtered;
+  };
+
+  const getPaginatedData = (data: any[]) => {
+    const startIndex = currentPage * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return data.slice(startIndex, endIndex);
+  };
+
+  const handleChangePage = (newPage: number) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleChangeRowsPerPage = (newRowsPerPage: number) => {
+    setRowsPerPage(newRowsPerPage);
+    setCurrentPage(0);
+  };
+
+  // CSV Export Functions
+  const generateContractCSV = (data: SalesContract[]) => {
+    const headers = ['Contract ID', 'NBE Reference', 'Exporter', 'Buyer', 'Country', 'Coffee Type', 'Quantity (kg)', 'Price/kg', 'Total Value', 'Currency', 'Status', 'Registration Date'];
+    const rows = data.map(c => [
+      c.contractId,
+      c.nbeReferenceNumber,
+      c.exporterId,
+      c.buyerName,
+      c.buyerCountry,
+      c.coffeeType,
+      c.quantity,
+      c.pricePerKg,
+      c.totalValue,
+      c.currency,
+      c.status,
+      new Date(c.registrationDate).toLocaleDateString()
+    ]);
+    return [headers, ...rows].map(row => row.join(',')).join('\n');
+  };
+
+  const generateLCCSV = (data: LetterOfCredit[]) => {
+    const headers = ['LC ID', 'Contract ID', 'Exporter', 'Issuing Bank', 'Advising Bank', 'Amount', 'Currency', 'Status', 'Expiry Date', 'Request Date'];
+    const rows = data.map(lc => [
+      lc.lcId,
+      lc.contractId,
+      lc.exporterId,
+      lc.issuingBank || 'N/A',
+      lc.advisingBank || 'N/A',
+      lc.amount,
+      lc.currency,
+      lc.status,
+      new Date(lc.expiryDate).toLocaleDateString(),
+      new Date(lc.requestDate).toLocaleDateString()
+    ]);
+    return [headers, ...rows].map(row => row.join(',')).join('\n');
+  };
+
+  const generateForexCSV = (data: ForexAllocation[]) => {
+    const headers = ['Forex ID', 'LC ID', 'Exporter', 'Allocated Amount', 'Exchange Rate', 'USD Retained (40%)', 'ETB Converted (60%)', 'Status', 'Expiry Date'];
+    const rows = data.map(f => [
+      f.forexId,
+      f.lcId,
+      f.exporterId,
+      f.allocatedAmount,
+      f.exchangeRate,
+      (f.allocatedAmount * 0.4).toFixed(2),
+      (f.allocatedAmount * 0.6 * f.exchangeRate).toFixed(2),
+      f.status,
+      new Date(f.expiryDate).toLocaleDateString()
+    ]);
+    return [headers, ...rows].map(row => row.join(',')).join('\n');
+  };
+
+  const downloadCSV = (csvContent: string, filename: string) => {
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) {
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  return (
+    <ThemeProvider theme={banksTheme}>
+    <Box sx={{ p: 3 }}>
       {/* KPIs */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={3}>
@@ -677,7 +1058,7 @@ const BanksPortal: React.FC = () => {
             title="Pending Contracts"
             value={contracts.length}
             icon={<Assignment />}
-            brandColor="#1976d2"
+            brandColor="#FFD700"
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -685,7 +1066,7 @@ const BanksPortal: React.FC = () => {
             title="Active LCs"
             value={letterOfCredits.filter(lc => lc.status === 'ISSUED').length}
             icon={<Description />}
-            brandColor="#2e7d32"
+            brandColor="#FFD700"
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -693,7 +1074,7 @@ const BanksPortal: React.FC = () => {
             title="Forex Allocated"
             value={`$${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000).toFixed(0)}K`}
             icon={<CurrencyExchange />}
-            brandColor="#ed6c02"
+            brandColor="#FFD700"
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -701,7 +1082,7 @@ const BanksPortal: React.FC = () => {
             title="Payments Pending"
             value="3"
             icon={<Payment />}
-            brandColor="#d32f2f"
+            brandColor="#FFD700"
           />
         </Grid>
       </Grid>
@@ -727,9 +1108,57 @@ const BanksPortal: React.FC = () => {
             LC confirms payment guarantee from buyer's bank and enables forex allocation.
           </Alert>
 
+          {/* Search and Filter Controls */}
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search contracts..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 300 }}
+              InputProps={{
+                startAdornment: <CommentIcon sx={{ mr: 1, color: 'black' }} />,
+              }}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setSearchTerm('');
+                setFilterStatus('ALL');
+                setCurrentPage(0);
+              }}
+            >
+              Clear Filters
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              startIcon={<Description />}
+              onClick={() => {
+                const csv = generateContractCSV(getFilteredContracts());
+                downloadCSV(csv, 'NBE-Approved-Contracts.csv');
+              }}
+            >
+              Export CSV
+            </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="black">
+              Showing {getPaginatedData(getFilteredContracts()).length} of {getFilteredContracts().length} contracts
+            </Typography>
+          </Box>
+
           {contracts.length === 0 ? (
             <Alert severity="info">
               No NBE-approved contracts pending LC issuance.
+            </Alert>
+          ) : getFilteredContracts().length === 0 ? (
+            <Alert severity="warning">
+              No contracts match your search criteria.
             </Alert>
           ) : (
             <TableContainer>
@@ -747,14 +1176,14 @@ const BanksPortal: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {contracts.map((contract) => (
+                  {getPaginatedData(getFilteredContracts()).map((contract) => (
                     <TableRow key={contract.contractId}>
                       <TableCell>{contract.contractId}</TableCell>
                       <TableCell>{contract.exporterId}</TableCell>
                       <TableCell>
                         {contract.buyerName}
                         <br />
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" color="black">
                           {contract.buyerCountry}
                         </Typography>
                       </TableCell>
@@ -762,7 +1191,7 @@ const BanksPortal: React.FC = () => {
                       <TableCell>{contract.quantity.toLocaleString()}</TableCell>
                       <TableCell>
                         <strong>${contract.totalValue.toLocaleString()}</strong>
-                        <Typography variant="caption" display="block" color="text.secondary">
+                        <Typography variant="caption" display="block" color="black">
                           @ ${contract.pricePerKg}/kg
                         </Typography>
                       </TableCell>
@@ -788,6 +1217,50 @@ const BanksPortal: React.FC = () => {
               </Table>
             </TableContainer>
           )}
+
+          {/* Pagination Controls */}
+          {getFilteredContracts().length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} of {Math.ceil(getFilteredContracts().length / rowsPerPage)}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(getFilteredContracts().length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
         </ModernCard>
       )}
 
@@ -802,15 +1275,175 @@ const BanksPortal: React.FC = () => {
             Each issued LC enables NBE forex allocation and export permit issuance.
           </Alert>
 
+          {/* Search and Filter Controls */}
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search LCs..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 300 }}
+              InputProps={{
+                startAdornment: <CommentIcon sx={{ mr: 1, color: 'black' }} />,
+              }}
+            />
+            <TextField
+              select
+              size="small"
+              label="Filter by Status"
+              value={filterStatus}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 150 }}
+            >
+              <MenuItem value="ALL">All Status</MenuItem>
+              <MenuItem value="REQUESTED">Requested</MenuItem>
+              <MenuItem value="APPROVED">Approved</MenuItem>
+              <MenuItem value="ISSUED">Issued</MenuItem>
+              <MenuItem value="UTILIZED">Utilized</MenuItem>
+            </TextField>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            >
+              {showAdvancedFilters ? 'Hide' : 'Show'} Advanced Filters
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setSearchTerm('');
+                setFilterStatus('ALL');
+                setDateFrom('');
+                setDateTo('');
+                setAmountMin('');
+                setAmountMax('');
+                setCurrentPage(0);
+              }}
+            >
+              Clear All Filters
+            </Button>
+            {selectedLCIds.length > 0 && (
+              <Button
+                size="small"
+                variant="contained"
+                color="success"
+                startIcon={<CheckCircle />}
+                onClick={handleBulkApproveLC}
+                disabled={bulkApproving}
+              >
+                {bulkApproving ? 'Approving...' : `Approve ${selectedLCIds.length} LC${selectedLCIds.length > 1 ? 's' : ''}`}
+              </Button>
+            )}
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              startIcon={<Description />}
+              onClick={() => {
+                const csv = generateLCCSV(getFilteredLCs());
+                downloadCSV(csv, 'Letters-of-Credit.csv');
+              }}
+            >
+              Export CSV
+            </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="black">
+              Showing {getPaginatedData(getFilteredLCs()).length} of {getFilteredLCs().length} LCs
+            </Typography>
+          </Box>
+
+          {/* Advanced Filters Panel */}
+          {showAdvancedFilters && (
+            <Paper sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }}>
+              <Typography variant="subtitle2" gutterBottom>Advanced Filters</Typography>
+              <Grid container spacing={2} sx={{ mt: 1 }}>
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    label="Date From"
+                    value={dateFrom}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value);
+                      setCurrentPage(0);
+                    }}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    label="Date To"
+                    value={dateTo}
+                    onChange={(e) => {
+                      setDateTo(e.target.value);
+                      setCurrentPage(0);
+                    }}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    label="Amount Min (USD)"
+                    value={amountMin}
+                    onChange={(e) => {
+                      setAmountMin(e.target.value);
+                      setCurrentPage(0);
+                    }}
+                    placeholder="e.g., 10000"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    label="Amount Max (USD)"
+                    value={amountMax}
+                    onChange={(e) => {
+                      setAmountMax(e.target.value);
+                      setCurrentPage(0);
+                    }}
+                    placeholder="e.g., 100000"
+                  />
+                </Grid>
+              </Grid>
+            </Paper>
+          )}
+
           {letterOfCredits.length === 0 ? (
             <Alert severity="info">
               No Letters of Credit on record. Issue LCs from NBE-Approved Contracts tab.
+            </Alert>
+          ) : getFilteredLCs().length === 0 ? (
+            <Alert severity="warning">
+              No LCs match your search criteria.
             </Alert>
           ) : (
             <TableContainer>
               <Table>
                 <TableHead>
                   <TableRow>
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        indeterminate={selectedLCIds.length > 0 && selectedLCIds.length < getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length}
+                        checked={getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length > 0 && selectedLCIds.length === getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length}
+                        onChange={toggleAllLCSelection}
+                      />
+                    </TableCell>
                     <TableCell><strong>LC ID</strong></TableCell>
                     <TableCell><strong>Contract</strong></TableCell>
                     <TableCell><strong>Exporter</strong></TableCell>
@@ -823,8 +1456,16 @@ const BanksPortal: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {letterOfCredits.map((lc) => (
-                    <TableRow key={lc.lcId}>
+                  {getPaginatedData(getFilteredLCs()).map((lc) => (
+                    <TableRow key={lc.lcId} selected={selectedLCIds.includes(lc.lcId)}>
+                      <TableCell padding="checkbox">
+                        {lc.status === 'REQUESTED' && (
+                          <Checkbox
+                            checked={selectedLCIds.includes(lc.lcId)}
+                            onChange={() => toggleLCSelection(lc.lcId)}
+                          />
+                        )}
+                      </TableCell>
                       <TableCell>{lc.lcId}</TableCell>
                       <TableCell>{lc.contractId}</TableCell>
                       <TableCell>{lc.exporterId}</TableCell>
@@ -869,6 +1510,50 @@ const BanksPortal: React.FC = () => {
               </Table>
             </TableContainer>
           )}
+
+          {/* Pagination Controls */}
+          {getFilteredLCs().length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} of {Math.ceil(getFilteredLCs().length / rowsPerPage)}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(getFilteredLCs().length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
         </ModernCard>
       )}
 
@@ -883,9 +1568,74 @@ const BanksPortal: React.FC = () => {
             Forex allocated after LC confirmation, valid for 180 days
           </Alert>
 
+          {/* Search and Filter Controls */}
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search forex allocations..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 300 }}
+              InputProps={{
+                startAdornment: <CommentIcon sx={{ mr: 1, color: 'black' }} />,
+              }}
+            />
+            <TextField
+              select
+              size="small"
+              label="Filter by Status"
+              value={filterStatus}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 150 }}
+            >
+              <MenuItem value="ALL">All Status</MenuItem>
+              <MenuItem value="ALLOCATED">Allocated</MenuItem>
+              <MenuItem value="PENDING">Pending</MenuItem>
+              <MenuItem value="UTILIZED">Utilized</MenuItem>
+              <MenuItem value="EXPIRED">Expired</MenuItem>
+            </TextField>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setSearchTerm('');
+                setFilterStatus('ALL');
+                setCurrentPage(0);
+              }}
+            >
+              Clear Filters
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              startIcon={<Description />}
+              onClick={() => {
+                const csv = generateForexCSV(getFilteredForex());
+                downloadCSV(csv, 'Forex-Allocations.csv');
+              }}
+            >
+              Export CSV
+            </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="black">
+              Showing {getPaginatedData(getFilteredForex()).length} of {getFilteredForex().length} allocations
+            </Typography>
+          </Box>
+
           {forexAllocations.length === 0 ? (
             <Alert severity="warning">
               No forex allocations yet. Allocations are triggered by NBE after LC issuance.
+            </Alert>
+          ) : getFilteredForex().length === 0 ? (
+            <Alert severity="warning">
+              No forex allocations match your search criteria.
             </Alert>
           ) : (
             <TableContainer>
@@ -904,7 +1654,7 @@ const BanksPortal: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {forexAllocations.map((forex) => (
+                  {getPaginatedData(getFilteredForex()).map((forex) => (
                     <TableRow key={forex.forexId}>
                       <TableCell>{forex.forexId}</TableCell>
                       <TableCell>{forex.lcId}</TableCell>
@@ -933,6 +1683,50 @@ const BanksPortal: React.FC = () => {
             </TableContainer>
           )}
 
+          {/* Pagination Controls */}
+          {getFilteredForex().length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} of {Math.ceil(getFilteredForex().length / rowsPerPage)}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(getFilteredForex().length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
+
           <Box sx={{ mt: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
             <Typography variant="subtitle2" gutterBottom>
               <CurrencyExchange sx={{ mr: 1, verticalAlign: 'middle', fontSize: 20 }} />
@@ -940,19 +1734,19 @@ const BanksPortal: React.FC = () => {
             </Typography>
             <Grid container spacing={2} sx={{ mt: 1 }}>
               <Grid item xs={12} sm={4}>
-                <Typography variant="body2" color="text.secondary">Total Allocated</Typography>
+                <Typography variant="body2" color="black">Total Allocated</Typography>
                 <Typography variant="h6">
                   ${forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0).toLocaleString()}
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
-                <Typography variant="body2" color="text.secondary">USD Retained (40%)</Typography>
+                <Typography variant="body2" color="black">USD Retained (40%)</Typography>
                 <Typography variant="h6">
                   ${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) * 0.4).toLocaleString()}
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
-                <Typography variant="body2" color="text.secondary">Active Allocations</Typography>
+                <Typography variant="body2" color="black">Active Allocations</Typography>
                 <Typography variant="h6">
                   {forexAllocations.filter(f => f.status === 'ALLOCATED').length}
                 </Typography>
@@ -984,14 +1778,10 @@ const BanksPortal: React.FC = () => {
               color="primary"
               startIcon={<Description />}
               onClick={() => {
-                const contract = contracts[0];
-                if (contract) {
-                  setSelectedContract(contract);
-                  setDialogType('cad');
-                  setDialogOpen(true);
-                }
+                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
+                setDialogType('cad');
+                setDialogOpen(true);
               }}
-              disabled={contracts.length === 0}
             >
               Documentary Collection (CAD)
             </Button>
@@ -1000,14 +1790,10 @@ const BanksPortal: React.FC = () => {
               color="secondary"
               startIcon={<AttachMoney />}
               onClick={() => {
-                const contract = contracts[0];
-                if (contract) {
-                  setSelectedContract(contract);
-                  setDialogType('advance');
-                  setDialogOpen(true);
-                }
+                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
+                setDialogType('advance');
+                setDialogOpen(true);
               }}
-              disabled={contracts.length === 0}
             >
               Record Advance Payment
             </Button>
@@ -1016,16 +1802,26 @@ const BanksPortal: React.FC = () => {
               color="warning"
               startIcon={<Assignment />}
               onClick={() => {
-                const contract = contracts[0];
-                if (contract) {
-                  setSelectedContract(contract);
-                  setDialogType('consignment');
-                  setDialogOpen(true);
-                }
+                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
+                setDialogType('consignment');
+                setDialogOpen(true);
               }}
-              disabled={contracts.length === 0}
             >
               Consignment Permit
+            </Button>
+            <Button
+              variant="outlined"
+              color="info"
+              startIcon={<CheckCircle />}
+              onClick={() => {
+                if (pendingDocuments.length > 0) {
+                  setSelectedPayment(pendingDocuments[0]);
+                  setVerificationDialogOpen(true);
+                }
+              }}
+              disabled={pendingDocuments.length === 0}
+            >
+              Verify Documents ({pendingDocuments.length})
             </Button>
           </Box>
 
@@ -1106,10 +1902,12 @@ const BanksPortal: React.FC = () => {
                     <TableRow>
                       <TableCell><strong>Payment ID</strong></TableCell>
                       <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Total Amount</strong></TableCell>
+                      <TableCell><strong>Advance %</strong></TableCell>
+                      <TableCell><strong>Advance Paid</strong></TableCell>
+                      <TableCell><strong>Balance Due</strong></TableCell>
                       <TableCell><strong>SWIFT Ref</strong></TableCell>
                       <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Received Date</strong></TableCell>
                       <TableCell><strong>Actions</strong></TableCell>
                     </TableRow>
                   </TableHead>
@@ -1118,15 +1916,47 @@ const BanksPortal: React.FC = () => {
                       <TableRow key={payment.paymentId}>
                         <TableCell>{payment.paymentId}</TableCell>
                         <TableCell>{payment.exporterId}</TableCell>
-                        <TableCell>${payment.amount?.toLocaleString()} {payment.currency}</TableCell>
-                        <TableCell>{payment.swiftReference}</TableCell>
+                        <TableCell>
+                          <strong>${payment.amount?.toLocaleString()}</strong> {payment.currency}
+                        </TableCell>
+                        <TableCell>
+                          {payment.advancePercentage ? (
+                            <Chip 
+                              label={`${payment.advancePercentage.toFixed(0)}%`}
+                              size="small" 
+                              color="info"
+                            />
+                          ) : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          {payment.advanceAmount ? (
+                            <Typography color="black" fontWeight={600}>
+                              ${payment.advanceAmount.toLocaleString()} {payment.currency}
+                            </Typography>
+                          ) : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          {payment.balanceAmount !== undefined ? (
+                            <Typography 
+                              color={payment.balanceAmount > 0 ? 'warning.main' : 'success.main'}
+                              fontWeight={600}
+                            >
+                              ${payment.balanceAmount.toLocaleString()} {payment.currency}
+                              {payment.balanceAmount > 0 && (
+                                <Tooltip title="Balance payment pending">
+                                  <AccessTime sx={{ ml: 0.5, fontSize: 16, verticalAlign: 'middle' }} />
+                                </Tooltip>
+                              )}
+                            </Typography>
+                          ) : 'N/A'}
+                        </TableCell>
+                        <TableCell>{payment.swiftReference || 'N/A'}</TableCell>
                         <TableCell>
                           <StatusChip 
                             label={payment.status} 
                             status={payment.status === 'SETTLED' ? 'approved' : 'pending'} 
                           />
                         </TableCell>
-                        <TableCell>{new Date(payment.receivedDate).toLocaleDateString()}</TableCell>
                         <TableCell>
                           <Tooltip title="View Details">
                             <IconButton size="small" color="primary">
@@ -1287,19 +2117,19 @@ const BanksPortal: React.FC = () => {
             </Typography>
             <Grid container spacing={2} sx={{ mt: 1 }}>
               <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="text.secondary">Documentary Collections</Typography>
+                <Typography variant="body2" color="black">Documentary Collections</Typography>
                 <Typography variant="h6">{documentaryCollections.length}</Typography>
               </Grid>
               <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="text.secondary">Advance Payments</Typography>
+                <Typography variant="body2" color="black">Advance Payments</Typography>
                 <Typography variant="h6">{advancePayments.length}</Typography>
               </Grid>
               <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="text.secondary">Consignments</Typography>
+                <Typography variant="body2" color="black">Consignments</Typography>
                 <Typography variant="h6">{consignments.length}</Typography>
               </Grid>
               <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="text.secondary">Total Permits</Typography>
+                <Typography variant="body2" color="black">Total Permits</Typography>
                 <Typography variant="h6">{exportPermits.length}</Typography>
               </Grid>
             </Grid>
@@ -1315,46 +2145,46 @@ const BanksPortal: React.FC = () => {
             <Box sx={{ pt: 2 }}>
               <Grid container spacing={2}>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
+                  <Typography variant="body2" color="black">Contract ID</Typography>
                   <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">NBE Reference</Typography>
+                  <Typography variant="body2" color="black">NBE Reference</Typography>
                   <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                  <Typography variant="body2" color="black">Exporter</Typography>
                   <Typography variant="body1">{selectedContract.exporterId}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Buyer / Country</Typography>
+                  <Typography variant="body2" color="black">Buyer / Country</Typography>
                   <Typography variant="body1">{selectedContract.buyerName}</Typography>
-                  <Typography variant="caption" color="textSecondary">{selectedContract.buyerCountry}</Typography>
+                  <Typography variant="caption" color="black">{selectedContract.buyerCountry}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Coffee Type</Typography>
+                  <Typography variant="body2" color="black">Coffee Type</Typography>
                   <Typography variant="body1">{selectedContract.coffeeType}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                  <Typography variant="body2" color="black">Quantity</Typography>
                   <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Price per Kg</Typography>
+                  <Typography variant="body2" color="black">Price per Kg</Typography>
                   <Typography variant="body1">${selectedContract.pricePerKg.toFixed(2)}</Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Total Value</Typography>
-                  <Typography variant="body1" color="primary" fontWeight={600}>
+                  <Typography variant="body2" color="black">Total Value</Typography>
+                  <Typography variant="body1" color="black" fontWeight={600}>
                     ${selectedContract.totalValue.toLocaleString()} {selectedContract.currency}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Status</Typography>
+                  <Typography variant="body2" color="black">Status</Typography>
                   <StatusChip label={selectedContract.status} status="approved" />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
+                  <Typography variant="body2" color="black">Registration Date</Typography>
                   <Typography variant="body1">{new Date(selectedContract.registrationDate).toLocaleDateString()}</Typography>
                 </Grid>
               </Grid>
@@ -1392,28 +2222,28 @@ const BanksPortal: React.FC = () => {
               <Grid container spacing={3}>
                 {/* LC Information */}
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  <Typography variant="subtitle2" color="black" gutterBottom>
                     LC Information
                   </Typography>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">LC ID</Typography>
+                        <Typography variant="body2" color="black">LC ID</Typography>
                         <Typography variant="body1" fontWeight={600}>{selectedLC.lcId}</Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Status</Typography>
+                        <Typography variant="body2" color="black">Status</Typography>
                         <StatusChip 
                           label={selectedLC.status} 
                           status={selectedLC.status === 'ISSUED' ? 'APPROVED' : selectedLC.status === 'REQUESTED' ? 'PENDING' : 'ACTIVE'} 
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Contract Reference</Typography>
+                        <Typography variant="body2" color="black">Contract Reference</Typography>
                         <Typography variant="body1">{selectedLC.contractId}</Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
+                        <Typography variant="body2" color="black">Exporter ID</Typography>
                         <Typography variant="body1">{selectedLC.exporterId}</Typography>
                       </Grid>
                     </Grid>
@@ -1422,19 +2252,19 @@ const BanksPortal: React.FC = () => {
 
                 {/* Banking Details */}
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  <Typography variant="subtitle2" color="black" gutterBottom>
                     Banking Details
                   </Typography>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Issuing Bank (Buyer's Bank)</Typography>
+                        <Typography variant="body2" color="black">Issuing Bank (Buyer's Bank)</Typography>
                         <Typography variant="body1" fontWeight={600}>
                           {selectedLC.issuingBank || 'N/A'}
                         </Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Advising Bank (Exporter's Bank)</Typography>
+                        <Typography variant="body2" color="black">Advising Bank (Exporter's Bank)</Typography>
                         <Typography variant="body1" fontWeight={600}>
                           {selectedLC.advisingBank || selectedLC.bankName || 'N/A'}
                         </Typography>
@@ -1445,19 +2275,19 @@ const BanksPortal: React.FC = () => {
 
                 {/* Financial Details */}
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  <Typography variant="subtitle2" color="black" gutterBottom>
                     Financial Details
                   </Typography>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">LC Amount</Typography>
-                        <Typography variant="h6" color="primary" fontWeight={600}>
+                        <Typography variant="body2" color="black">LC Amount</Typography>
+                        <Typography variant="h6" color="black" fontWeight={600}>
                           ${selectedLC.amount.toLocaleString()} {selectedLC.currency}
                         </Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Currency</Typography>
+                        <Typography variant="body2" color="black">Currency</Typography>
                         <Typography variant="body1">{selectedLC.currency}</Typography>
                       </Grid>
                     </Grid>
@@ -1466,13 +2296,13 @@ const BanksPortal: React.FC = () => {
 
                 {/* Timeline */}
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  <Typography variant="subtitle2" color="black" gutterBottom>
                     Timeline
                   </Typography>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Request Date</Typography>
+                        <Typography variant="body2" color="black">Request Date</Typography>
                         <Typography variant="body1">
                           {new Date(selectedLC.requestDate).toLocaleDateString('en-US', {
                             year: 'numeric',
@@ -1482,7 +2312,7 @@ const BanksPortal: React.FC = () => {
                         </Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="textSecondary">Expiry Date</Typography>
+                        <Typography variant="body2" color="black">Expiry Date</Typography>
                         <Typography variant="body1" fontWeight={600}>
                           {new Date(selectedLC.expiryDate).toLocaleDateString('en-US', {
                             year: 'numeric',
@@ -1492,7 +2322,7 @@ const BanksPortal: React.FC = () => {
                         </Typography>
                       </Grid>
                       <Grid item xs={12}>
-                        <Typography variant="body2" color="textSecondary">Days Remaining</Typography>
+                        <Typography variant="body2" color="black">Days Remaining</Typography>
                         <Typography variant="body1">
                           {Math.max(0, Math.ceil((new Date(selectedLC.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} days
                         </Typography>
@@ -1545,6 +2375,143 @@ const BanksPortal: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog}>Close</Button>
+          {selectedLC && selectedLC.status === 'ISSUED' && (
+            <>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<CloudUpload />}
+                onClick={() => {
+                  setUploadEntityId(selectedLC.lcId);
+                  setUploadEntityType('LC');
+                  setDocumentUploadDialogOpen(true);
+                }}
+              >
+                Upload Documents
+              </Button>
+              <Button
+                variant="outlined"
+                color="primary"
+                onClick={() => {
+                  setDialogType('lcAmend');
+                  setAmendmentForm({
+                    amendmentReason: '',
+                    newAmount: selectedLC.amount.toString(),
+                    newExpiryDate: selectedLC.expiryDate,
+                    newTerms: '',
+                  });
+                }}
+              >
+                Amend LC
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* LC Amendment Dialog */}
+      <Dialog open={dialogOpen && dialogType === 'lcAmend'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Amend Letter of Credit
+        </DialogTitle>
+        <DialogContent>
+          {selectedLC && (
+            <>
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <strong>UCP 600 Article 10: LC Amendments</strong><br />
+                All amendments require agreement of all parties. Only issued LCs can be amended.
+              </Alert>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="black">
+                    Current LC Details
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Typography variant="body2">
+                      <strong>LC ID:</strong> {selectedLC.lcId}<br />
+                      <strong>Current Amount:</strong> ${selectedLC.amount.toLocaleString()} {selectedLC.currency}<br />
+                      <strong>Current Expiry:</strong> {new Date(selectedLC.expiryDate).toLocaleDateString()}<br />
+                      <strong>Status:</strong> {selectedLC.status}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Amendment Reason *"
+                    value={amendmentForm.amendmentReason}
+                    onChange={(e) => setAmendmentForm({...amendmentForm, amendmentReason: e.target.value})}
+                    multiline
+                    rows={2}
+                    helperText="Explain why the LC needs to be amended"
+                    required
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="New Amount (USD)"
+                    type="number"
+                    value={amendmentForm.newAmount}
+                    onChange={(e) => setAmendmentForm({...amendmentForm, newAmount: e.target.value})}
+                    helperText="Leave empty to keep current amount"
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="New Expiry Date"
+                    type="date"
+                    value={amendmentForm.newExpiryDate}
+                    onChange={(e) => setAmendmentForm({...amendmentForm, newExpiryDate: e.target.value})}
+                    InputLabelProps={{ shrink: true }}
+                    helperText="Leave empty to keep current date"
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="New Terms and Conditions"
+                    value={amendmentForm.newTerms}
+                    onChange={(e) => setAmendmentForm({...amendmentForm, newTerms: e.target.value})}
+                    multiline
+                    rows={3}
+                    helperText="Leave empty to keep current terms"
+                  />
+                </Grid>
+              </Grid>
+
+              <Alert severity="info" sx={{ mt: 3 }}>
+                <strong>Amendment Process:</strong><br />
+                1. Amendment will be recorded on blockchain<br />
+                2. All parties will be notified of the changes<br />
+                3. Original LC will show amendment history<br />
+                4. NBE forex allocation may need adjustment
+              </Alert>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            handleCloseDialog();
+            setDialogType('lcDetails');
+          }}>
+            Cancel
+          </Button>
+          <AnimatedButton
+            variant="contained"
+            color="primary"
+            onClick={handleAmendLC}
+            disabled={!amendmentForm.amendmentReason}
+          >
+            Submit Amendment
+          </AnimatedButton>
         </DialogActions>
       </Dialog>
 
@@ -1564,7 +2531,7 @@ const BanksPortal: React.FC = () => {
 
               <Grid container spacing={2}>
                 <Grid item xs={12}>
-                  <Typography variant="subtitle2" color="text.secondary">
+                  <Typography variant="subtitle2" color="black">
                     Contract Details
                   </Typography>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
@@ -1632,6 +2599,35 @@ const BanksPortal: React.FC = () => {
                     helperText="Typically 90-180 days for coffee exports"
                   />
                 </Grid>
+
+                {/* Supporting Documents Section */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Description /> Supporting Documents
+                  </Typography>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    <Typography variant="caption">
+                      <strong>For LC Issuance Review:</strong> Proforma Invoice (preliminary invoice), Purchase Order (buyer's PO), 
+                      Sales Contract (signed agreement). These documents help the bank assess the transaction before issuing the LC.
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+                      <strong>Note:</strong> Commercial Invoice, Bill of Lading, and other export documents are required LATER when the exporter ships the goods and presents documents for LC payment.
+                    </Typography>
+                  </Alert>
+                  <Button
+                    variant="outlined"
+                    startIcon={<CloudUpload />}
+                    onClick={() => {
+                      setUploadEntityId(selectedContract.contractId);
+                      setUploadEntityType('LC');
+                      setDocumentUploadDialogOpen(true);
+                    }}
+                    fullWidth
+                  >
+                    Upload LC Application Documents
+                  </Button>
+                </Grid>
               </Grid>
 
               <Alert severity="warning" sx={{ mt: 3 }}>
@@ -1666,6 +2662,34 @@ const BanksPortal: React.FC = () => {
         onSubmit={handlePaymentMethodSubmit}
       />
 
+      {/* Document Verification Dialog */}
+      <DocumentVerificationPanel
+        open={verificationDialogOpen}
+        paymentId={selectedPayment?.paymentID || ''}
+        paymentData={selectedPayment}
+        onClose={() => {
+          setVerificationDialogOpen(false);
+          setSelectedPayment(null);
+        }}
+        onVerify={handleDocumentVerification}
+      />
+
+      {/* Document Upload Dialog */}
+      <DocumentUploadDialog
+        open={documentUploadDialogOpen}
+        entityId={uploadEntityId}
+        entityType={uploadEntityType}
+        onClose={() => {
+          setDocumentUploadDialogOpen(false);
+          setUploadEntityId('');
+          setUploadEntityType('');
+        }}
+        onUploadComplete={(docs) => {
+          showSuccess('Documents Uploaded', `Successfully uploaded ${docs.length} document(s)`);
+          setDocumentUploadDialogOpen(false);
+        }}
+      />
+
       <NotificationDialog
         open={notification.open}
         onClose={closeNotification}
@@ -1675,6 +2699,7 @@ const BanksPortal: React.FC = () => {
         details={notification.details}
       />
     </Box>
+    </ThemeProvider>
   );
 };
 

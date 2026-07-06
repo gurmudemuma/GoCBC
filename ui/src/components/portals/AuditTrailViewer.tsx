@@ -37,7 +37,7 @@ import {
   Download as DownloadIcon,
   ContentCopy as ContentCopyIcon,
 } from '@mui/icons-material';
-import { api } from '../../utils/api';
+import api from '../../utils/api';
 
 interface AuditLog {
   logId: string;
@@ -80,7 +80,7 @@ interface AuditLog {
 }
 
 interface AuditTrailViewerProps {
-  entityType: 'EXPORTER' | 'CONTRACT' | 'SHIPMENT' | 'LC' | 'PAYMENT';
+  entityType: 'EXPORTER' | 'CONTRACT' | 'SHIPMENT' | 'LC' | 'PAYMENT' | 'LOT' | 'FOREX' | 'PERMIT' | 'DECLARATION' | 'INSPECTION' | 'BOOKING' | 'CONTAINER' | 'QUALITY';
   entityId: string;
   open: boolean;
   onClose: () => void;
@@ -97,11 +97,18 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [verificationStatus, setVerificationStatus] = useState<any>(null);
   const [activeTab, setActiveTab] = useState(0);
+  
+  // Feature flag - set to true when audit API endpoints are implemented
+  const AUDIT_API_ENABLED = true;
 
   useEffect(() => {
-    if (open) {
+    if (open && AUDIT_API_ENABLED) {
       fetchAuditLogs();
       verifyAuditTrail();
+    } else if (open && !AUDIT_API_ENABLED) {
+      // Show friendly message that feature is coming soon
+      setError('Audit trail feature is currently under development. Check back soon!');
+      setLoading(false);
     }
   }, [open, entityType, entityId]);
 
@@ -118,8 +125,15 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
         setError(response.data.error || 'Failed to fetch audit logs');
       }
     } catch (err: any) {
-      console.error('Error fetching audit logs:', err);
-      setError(err.response?.data?.error || 'Failed to fetch audit logs');
+      // Gracefully handle 404 - audit endpoints not yet implemented
+      if (err.response?.status === 404) {
+        console.log('[AUDIT] Audit trail endpoints not yet implemented');
+        setError('Audit trail feature coming soon');
+        setAuditLogs([]);
+      } else {
+        console.error('Error fetching audit logs:', err);
+        setError(err.response?.data?.error || 'Failed to fetch audit logs');
+      }
     } finally {
       setLoading(false);
     }
@@ -129,11 +143,22 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
     try {
       const response = await api.get(`/audit/verify/${entityType}/${entityId}`);
       
-      if (response.data.success) {
-        setVerificationStatus(response.data);
+      if (response.data.success && response.data.data) {
+        // Extract the verification data from the nested structure
+        setVerificationStatus({
+          verified: response.data.data.verified,
+          message: response.data.message || 'Verification complete',
+          ...response.data.data
+        });
       }
-    } catch (err) {
-      console.error('Error verifying audit trail:', err);
+    } catch (err: any) {
+      // Gracefully handle 404 - audit endpoints not yet implemented
+      if (err.response?.status === 404) {
+        console.log('[AUDIT] Audit verification endpoints not yet implemented');
+        setVerificationStatus(null);
+      } else {
+        console.error('Error verifying audit trail:', err);
+      }
     }
   };
 
@@ -142,19 +167,248 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
       const response = await api.get(`/audit/compliance-report/${entityType}/${entityId}`);
       
       if (response.data.success) {
-        // Create downloadable JSON file
-        const dataStr = JSON.stringify(response.data.report, null, 2);
-        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+        const report = response.data.report;
         
-        const exportFileDefaultName = `compliance-report-${entityType}-${entityId}.json`;
+        // Create a comprehensive formatted text report
+        const formattedReport = `
+═══════════════════════════════════════════════════════════════════════════
+            ETHIOPIAN COFFEE EXPORT CONSORTIUM BLOCKCHAIN SYSTEM
+                   COMPREHENSIVE COMPLIANCE AUDIT REPORT
+═══════════════════════════════════════════════════════════════════════════
+
+Report Generated: ${new Date(report.reportGeneratedAt).toLocaleString()}
+Entity Type: ${report.entityType}
+Entity ID: ${report.entityId}
+
+───────────────────────────────────────────────────────────────────────────
+CURRENT ENTITY STATE
+───────────────────────────────────────────────────────────────────────────
+
+${report.currentState ? Object.entries(report.currentState).map(([key, value]) => 
+  `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`
+).join('\n') : 'No current state data available'}
+
+───────────────────────────────────────────────────────────────────────────
+OVERALL STATISTICS
+───────────────────────────────────────────────────────────────────────────
+
+Total Blockchain Transactions: ${report.summary?.totalTransactions || 0}
+Total Export Value: $${(report.summary?.exportValue || 0).toLocaleString()}
+Total Shipment Weight: ${(report.summary?.shipmentWeight || 0).toLocaleString()} kg
+
+───────────────────────────────────────────────────────────────────────────
+AUDIT TRAIL SUMMARY
+───────────────────────────────────────────────────────────────────────────
+
+Total Actions: ${report.auditTrail?.totalActions || 0}
+
+Compliance Status:
+  ✓ ECTA Compliance:  ${report.auditTrail?.complianceSummary?.ectaCompliance || 0} actions compliant
+  ○ NBE Compliance:   ${report.auditTrail?.complianceSummary?.nbeCompliance || 0} actions compliant
+  ○ UCP600:           ${report.auditTrail?.complianceSummary?.ucp600Compliance || 0} actions compliant
+  ○ EUDR:             ${report.auditTrail?.complianceSummary?.eudrCompliance || 0} actions compliant
+  ○ ICO:              ${report.auditTrail?.complianceSummary?.icoCompliance || 0} actions compliant
+
+Actions by Type:
+${Object.entries(report.auditTrail?.actionsByType || {}).map(([action, count]) => 
+  `  ${action}: ${count}`
+).join('\n') || '  No actions recorded'}
+
+Actor Summary:
+${Object.entries(report.auditTrail?.actorSummary || {}).map(([actor, count]) => 
+  `  ${actor}: ${count} action(s)`
+).join('\n') || '  No actors recorded'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - CONTRACTS
+───────────────────────────────────────────────────────────────────────────
+
+Total Contracts: ${report.businessHistory?.contracts?.total || 0}
+Active: ${report.businessHistory?.contracts?.active || 0}
+Completed: ${report.businessHistory?.contracts?.completed || 0}
+
+${report.businessHistory?.contracts?.details?.length > 0 ? 
+  report.businessHistory.contracts.details.map((c: any, i: number) => `
+Contract #${i + 1}:
+  ID: ${c.contractId || c.ContractId}
+  NBE Reference: ${c.nbeReferenceNumber || c.NbeReferenceNumber || 'N/A'}
+  Buyer: ${c.buyerName || c.BuyerName} (${c.buyerCountry || c.BuyerCountry})
+  Value: $${(parseFloat(c.contractValue || c.ContractValue || '0')).toLocaleString()}
+  Quantity: ${c.quantity || c.Quantity} kg
+  Status: ${c.status || c.Status}
+  Created: ${c.createdAt || c.CreatedAt || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No contracts found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - SHIPMENTS
+───────────────────────────────────────────────────────────────────────────
+
+Total Shipments: ${report.businessHistory?.shipments?.total || 0}
+In Transit: ${report.businessHistory?.shipments?.inTransit || 0}
+Delivered: ${report.businessHistory?.shipments?.delivered || 0}
+
+${report.businessHistory?.shipments?.details?.length > 0 ?
+  report.businessHistory.shipments.details.map((s: any, i: number) => `
+Shipment #${i + 1}:
+  ID: ${s.shipmentId || s.ShipmentId}
+  Contract: ${s.contractId || s.ContractId}
+  ECX Lot: ${s.ecxLotNumber || s.EcxLotNumber || 'N/A'}
+  Quantity: ${s.quantity || s.Quantity} kg
+  Origin: ${s.origin || s.Origin}
+  Port of Loading: ${s.portOfLoading || s.PortOfLoading || 'N/A'}
+  Port of Discharge: ${s.portOfDischarge || s.PortOfDischarge || 'N/A'}
+  Status: ${s.status || s.Status}
+  Shipped: ${s.shippedDate || s.ShippedDate || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No shipments found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - LETTERS OF CREDIT
+───────────────────────────────────────────────────────────────────────────
+
+Total LCs: ${report.businessHistory?.letterOfCredit?.total || 0}
+Issued: ${report.businessHistory?.letterOfCredit?.issued || 0}
+Utilized: ${report.businessHistory?.letterOfCredit?.utilized || 0}
+
+${report.businessHistory?.letterOfCredit?.details?.length > 0 ?
+  report.businessHistory.letterOfCredit.details.map((lc: any, i: number) => `
+LC #${i + 1}:
+  ID: ${lc.lcId || lc.LcId}
+  Contract: ${lc.contractId || lc.ContractId}
+  Amount: $${(parseFloat(lc.amount || lc.Amount || '0')).toLocaleString()}
+  Issuing Bank: ${lc.issuingBank || lc.IssuingBank}
+  Advising Bank: ${lc.advisingBank || lc.AdvisingBank || 'N/A'}
+  Status: ${lc.status || lc.Status}
+  Issued: ${lc.issuedDate || lc.IssuedDate || 'N/A'}
+  Expiry: ${lc.expiryDate || lc.ExpiryDate || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No LCs found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - PAYMENTS
+───────────────────────────────────────────────────────────────────────────
+
+Total Payments: ${report.businessHistory?.payments?.total || 0}
+Completed: ${report.businessHistory?.payments?.completed || 0}
+Total Amount: $${(report.businessHistory?.payments?.totalAmount || 0).toLocaleString()}
+
+${report.businessHistory?.payments?.details?.length > 0 ?
+  report.businessHistory.payments.details.map((p: any, i: number) => `
+Payment #${i + 1}:
+  ID: ${p.paymentId || p.PaymentId}
+  LC: ${p.lcId || p.LcId}
+  Amount: $${(parseFloat(p.amount || p.Amount || '0')).toLocaleString()}
+  Currency: ${p.currency || p.Currency}
+  Status: ${p.status || p.Status}
+  Date: ${p.paymentDate || p.PaymentDate || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No payments found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - FOREX ALLOCATIONS
+───────────────────────────────────────────────────────────────────────────
+
+Total Forex: ${report.businessHistory?.forexAllocations?.total || 0}
+Allocated: ${report.businessHistory?.forexAllocations?.allocated || 0}
+Total Allocated: $${(report.businessHistory?.forexAllocations?.totalAllocated || 0).toLocaleString()}
+
+${report.businessHistory?.forexAllocations?.details?.length > 0 ?
+  report.businessHistory.forexAllocations.details.map((f: any, i: number) => `
+Forex #${i + 1}:
+  ID: ${f.forexId || f.ForexId}
+  Contract: ${f.contractId || f.ContractId}
+  Amount: $${(parseFloat(f.allocatedAmount || f.AllocatedAmount || '0')).toLocaleString()}
+  Exchange Rate: ${f.exchangeRate || f.ExchangeRate} ETB/USD
+  Status: ${f.status || f.Status}
+  Allocated: ${f.allocationDate || f.AllocationDate || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No forex allocations found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - QUALITY INSPECTIONS
+───────────────────────────────────────────────────────────────────────────
+
+Total Inspections: ${report.businessHistory?.qualityInspections?.total || 0}
+Approved: ${report.businessHistory?.qualityInspections?.approved || 0}
+Rejected: ${report.businessHistory?.qualityInspections?.rejected || 0}
+
+${report.businessHistory?.qualityInspections?.details?.length > 0 ?
+  report.businessHistory.qualityInspections.details.map((q: any, i: number) => `
+Inspection #${i + 1}:
+  ID: ${q.inspectionId || q.InspectionId}
+  Shipment: ${q.shipmentId || q.ShipmentId}
+  Grade: ${q.gradeAssessed || q.GradeAssessed}
+  Result: ${q.result || q.Result}
+  Inspector: ${q.inspectorId || q.InspectorId}
+  Date: ${q.inspectionDate || q.InspectionDate || 'N/A'}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No quality inspections found'}
+
+───────────────────────────────────────────────────────────────────────────
+BUSINESS HISTORY - PERMITS & CERTIFICATES
+───────────────────────────────────────────────────────────────────────────
+
+Export Permits: ${report.businessHistory?.permits?.total || 0} (Active: ${report.businessHistory?.permits?.active || 0})
+Insurance Certificates: ${report.businessHistory?.insurance?.total || 0} (Active: ${report.businessHistory?.insurance?.active || 0})
+Phytosanitary Certificates: ${report.businessHistory?.phytosanitary?.total || 0} (Active: ${report.businessHistory?.phytosanitary?.active || 0})
+Customs Declarations: ${report.businessHistory?.customs?.total || 0} (Cleared: ${report.businessHistory?.customs?.cleared || 0})
+
+───────────────────────────────────────────────────────────────────────────
+DETAILED AUDIT LOGS
+───────────────────────────────────────────────────────────────────────────
+
+${report.auditTrail?.detailedLogs?.length > 0 ? report.auditTrail.detailedLogs.map((log: any, index: number) => `
+[${index + 1}] ${log.actionType} - ${new Date(log.createdAt).toLocaleString()}
+    Transaction ID: ${log.signature.transactionId}
+    Actor: ${log.signature.caller.commonName} (${log.signature.caller.mspId})
+    Status Change: ${log.statusBefore || 'N/A'} → ${log.statusAfter}
+    Reason: ${log.reason}
+    
+    Compliance:
+      • ECTA: ${log.complianceData.ectaCompliance ? '✓ Pass' : '✗ Fail'}
+      • NBE: ${log.complianceData.nbeCompliance ? '✓ Pass' : '✗ Fail'}
+      • UCP600: ${log.complianceData.ucp600Check ? '✓ Pass' : '✗ Fail'}
+      • EUDR: ${log.complianceData.eudrCompliance ? '✓ Pass' : '✗ Fail'}
+      • ICO: ${log.complianceData.icoCompliance ? '✓ Pass' : '✗ Fail'}
+    Note: ${log.complianceData.complianceNote}
+    
+    Changes:
+${log.changes.map((change: any) => 
+  `      • ${change.fieldName}: "${change.oldValue || 'N/A'}" → "${change.newValue}"`
+).join('\n')}
+    
+    Blockchain Verification:
+      • Data Hash: ${log.signature.dataHash}
+      • Endorsing Peers: ${log.signature.endorsingPeers.join(', ')}
+      • Channel: ${log.signature.channelId}
+`).join('\n' + '─'.repeat(75) + '\n') : '  No audit logs found'}
+
+═══════════════════════════════════════════════════════════════════════════
+                              END OF REPORT
+═══════════════════════════════════════════════════════════════════════════
+
+This comprehensive report includes ALL historical blockchain data for ${entityType} ${entityId}.
+All transactions are cryptographically verified and immutable.
+
+Ethiopian Coffee & Tea Authority (ECTA)
+National Bank of Ethiopia (NBE)
+Ethiopian Commodity Exchange (ECX)
+Ethiopian Customs Commission (ECC)
+`;
+
+        // Create downloadable text file
+        const dataUri = 'data:text/plain;charset=utf-8,' + encodeURIComponent(formattedReport);
+        const exportFileDefaultName = `CECBS-Complete-Report-${entityType}-${entityId}-${new Date().toISOString().split('T')[0]}.txt`;
         
         const linkElement = document.createElement('a');
         linkElement.setAttribute('href', dataUri);
         linkElement.setAttribute('download', exportFileDefaultName);
         linkElement.click();
       }
-    } catch (err) {
-      console.error('Error downloading compliance report:', err);
+    } catch (err: any) {
+      // Gracefully handle 404 - audit endpoints not yet implemented
+      if (err.response?.status === 404) {
+        console.log('[AUDIT] Compliance report endpoints not yet implemented');
+        alert('Compliance report feature coming soon');
+      } else {
+        console.error('Error downloading compliance report:', err);
+        alert('Failed to download compliance report');
+      }
     }
   };
 
@@ -224,7 +478,9 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
             </Box>
             
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              by {log.signature.caller.commonName} ({log.signature.caller.mspId})
+              by {log.signature.caller.commonName} ({log.signature.caller.role && log.signature.caller.role !== 'unknown' 
+                ? log.signature.caller.role 
+                : log.signature.caller.organizationUnit || log.signature.caller.mspId})
             </Typography>
             
             {log.statusBefore && log.statusAfter && (
@@ -281,7 +537,9 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
               <TableCell>
                 <Typography variant="body2">{log.signature.caller.commonName}</Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {log.signature.caller.role}
+                  {log.signature.caller.role && log.signature.caller.role !== 'unknown' 
+                    ? log.signature.caller.role 
+                    : log.signature.caller.organizationUnit || log.signature.caller.mspId}
                 </Typography>
               </TableCell>
               <TableCell>

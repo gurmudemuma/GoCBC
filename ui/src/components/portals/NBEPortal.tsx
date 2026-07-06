@@ -24,20 +24,11 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Divider,
-  LinearProgress,
+  Snackbar,
 } from '@mui/material';
 import {
   Add,
   CheckCircle,
-  Cancel,
   TrendingUp,
   AccountBalance,
   CurrencyExchange,
@@ -47,19 +38,8 @@ import {
   Warning,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { useForm, Controller } from 'react-hook-form';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
-import { SalesContract, ContractFormData } from '@/types';
-
-// Modern Components - 2026 Design
-import {
-  ModernCard,
-  AnimatedButton,
-  DashboardKPI,
-  StatusChip,
-  ThemeToggle,
-} from '@/components/modern';
+import { SalesContract } from '@/types';
 
 interface ForexAllocation {
   forexId: string;
@@ -90,15 +70,11 @@ interface ExchangeRate {
   status: 'ACTIVE' | 'INACTIVE' | 'SUPERSEDED';
 }
 
-interface RetentionPolicy {
-  policyId: string;
-  commodityType: string;
-  retentionRate: number;
-  surrenderRate: number;
-  effectiveDate: string;
-  status: 'ACTIVE' | 'INACTIVE';
-  setBy: string;
-  justification: string;
+interface BankingMetrics {
+  totalExports: number;
+  forexVolume: number;
+  complianceRate: number;
+  avgProcessingTime: number;
 }
 
 interface TabPanelProps {
@@ -113,6 +89,17 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
   </div>
 );
 
+const StatusChip: React.FC<{ status: string }> = ({ status }) => (
+  <Chip
+    label={status}
+    size="small"
+    sx={{
+      backgroundColor: getStatusColor(status, 'NBE'),
+      color: 'white',
+    }}
+  />
+);
+
 const NBEPortal: React.FC = () => {
   // NBE Brand Colors
   const BRAND_COLOR = '#8B6F47';  // Bronze
@@ -122,105 +109,31 @@ const NBEPortal: React.FC = () => {
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
-  const [retentionPolicies, setRetentionPolicies] = useState<RetentionPolicy[]>([]);
+  const [bankingMetrics, setBankingMetrics] = useState<BankingMetrics>({
+    totalExports: 0,
+    forexVolume: 0,
+    complianceRate: 0,
+    avgProcessingTime: 0
+  });
   const [loading, setLoading] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<SalesContract | null>(null);
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const [forexDialogOpen, setForexDialogOpen] = useState(false);
   const [rateDialogOpen, setRateDialogOpen] = useState(false);
-  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
-  const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
 
-  // Mock Data
-  const mockForex: ForexAllocation[] = [
-    {
-      forexId: 'FOREX20260603001',
-      contractId: 'CONTRACT2026001',
-      exporterId: 'EXP2026001',
-      requestedAmount: 50000,
-      allocatedAmount: 50000,
-      currency: 'USD',
-      exchangeRate: 115.5,
-      officialRate: 115.5,
-      retentionRate: 40,
-      status: 'ALLOCATED',
-      requestDate: '2026-06-01T10:00:00Z',
-      approvalDate: '2026-06-01T14:00:00Z',
-      allocationDate: '2026-06-02T09:00:00Z',
-      expiryDate: '2026-09-30',
-      nbeOfficer: 'NBE_OFFICER_001',
-      nbeApprovalRef: 'NBE/FX/2026/001234',
-    },
-    {
-      forexId: 'FOREX20260603002',
-      contractId: 'CONTRACT2026002',
-      exporterId: 'EXP2026002',
-      requestedAmount: 75000,
-      allocatedAmount: 0,
-      currency: 'USD',
-      exchangeRate: 0,
-      officialRate: 115.5,
-      retentionRate: 40,
-      status: 'REQUESTED',
-      requestDate: '2026-06-03T08:00:00Z',
-      expiryDate: '2026-10-31',
-    },
-  ];
+  const [approvalNotification, setApprovalNotification] = useState<{open: boolean, success: boolean, message: string}>({
+    open: false, success: false, message: ''
+  });
 
-  const mockRates: ExchangeRate[] = [
-    {
-      rateId: 'RATE20260603001',
-      currency: 'USD',
-      buyingRate: 115.0,
-      sellingRate: 116.0,
-      midRate: 115.5,
-      effectiveDate: '2026-06-03',
-      status: 'ACTIVE',
-    },
-    {
-      rateId: 'RATE20260603002',
-      currency: 'EUR',
-      buyingRate: 125.0,
-      sellingRate: 126.5,
-      midRate: 125.75,
-      effectiveDate: '2026-06-03',
-      status: 'ACTIVE',
-    },
-  ];
-
-  const mockPolicies: RetentionPolicy[] = [
-    {
-      policyId: 'POLICY20260101',
-      commodityType: 'COFFEE',
-      retentionRate: 40,
-      surrenderRate: 60,
-      effectiveDate: '2026-01-01',
-      status: 'ACTIVE',
-      setBy: 'NBE Governor',
-      justification: 'Balance forex reserves while supporting coffee exporters',
-    },
-  ];
-
-  const { control, handleSubmit, reset } = useForm<ContractFormData>();
-
-  // This is handled by mockForex above - removed duplicate
-
-  const forexData = [
-    { month: 'Jan', usd: 55.2, eur: 60.8, gbp: 68.5 },
-    { month: 'Feb', usd: 56.1, eur: 61.2, gbp: 69.1 },
-    { month: 'Mar', usd: 56.8, eur: 61.8, gbp: 70.2 },
-    { month: 'Apr', usd: 57.0, eur: 62.0, gbp: 70.5 },
-    { month: 'May', usd: 57.25, eur: 62.1, gbp: 70.8 },
-  ];
-
-  const contractStatusData = [
-    { name: 'Registered', value: 45, color: '#2196f3' },
-    { name: 'Approved', value: 32, color: '#4caf50' },
-    { name: 'Rejected', value: 3, color: '#f44336' },
-    { name: 'Under Review', value: 12, color: '#ff9800' },
-  ];
+  const [forexForm, setForexForm] = useState({
+    allocatedAmount: '',
+    exchangeRate: '115.50',
+    retentionRate: '40',
+    nbeOfficer: '',
+    nbeApprovalRef: '',
+    expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+  });
 
   useEffect(() => {
     loadData();
@@ -229,36 +142,103 @@ const NBEPortal: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
+      // Load real contracts data from API
       const contractsRes = await api.getContracts();
       if (contractsRes.success) {
         const allContracts = contractsRes.data || [];
-        console.log(`[NBE] Loaded ${allContracts.length} total contracts`);
-        console.log(`[NBE] Contract statuses:`, allContracts.map(c => ({ id: c.contractId, status: c.contractStatus })));
         setContracts(allContracts);
+        console.log(`Loaded ${allContracts.length} contracts from API`);
       }
-      
-      // Load forex allocations from blockchain
+
+      // Load real forex allocations from API
       try {
-        const forexRes = await fetch('http://localhost:3001/api/v1/banking/forex', {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          },
-        });
-        const forexData = await forexRes.json();
-        if (forexData.success && forexData.data) {
-          setForexAllocations(forexData.data);
-        } else {
-          // Fallback to mock data if API fails
-          setForexAllocations(mockForex);
+        const forexRes = await api.get('/forex');
+        if (forexRes.data.success) {
+          const forexData = (forexRes.data.data || []).map((forex: any) => ({
+            forexId: forex.ForexID || forex.forexId || '',
+            contractId: forex.ContractID || forex.contractId || '',
+            exporterId: forex.ExporterID || forex.exporterId || '',
+            requestedAmount: parseFloat(forex.RequestedAmount || forex.requestedAmount || '0'),
+            allocatedAmount: parseFloat(forex.AllocatedAmount || forex.allocatedAmount || '0'),
+            currency: forex.Currency || forex.currency || 'USD',
+            exchangeRate: parseFloat(forex.ExchangeRate || forex.exchangeRate || '0'),
+            officialRate: parseFloat(forex.OfficialRate || forex.officialRate || '115.50'),
+            retentionRate: parseFloat(forex.RetentionRate || forex.retentionRate || '40'),
+            status: forex.Status || forex.status || 'REQUESTED',
+            requestDate: forex.RequestDate || forex.requestDate || new Date().toISOString(),
+            approvalDate: forex.ApprovalDate || forex.approvalDate,
+            allocationDate: forex.AllocationDate || forex.allocationDate,
+            expiryDate: forex.ExpiryDate || forex.expiryDate || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString(),
+            nbeOfficer: forex.NBEOfficer || forex.nbeOfficer,
+            nbeApprovalRef: forex.NBEApprovalRef || forex.nbeApprovalRef,
+          }));
+          setForexAllocations(forexData);
+          console.log(`Loaded ${forexData.length} forex allocations from API`);
         }
-      } catch (err) {
-        console.error('Failed to load forex allocations:', err);
-        setForexAllocations(mockForex);
+      } catch (error) {
+        console.warn('Could not load forex data, using empty array:', error);
+        setForexAllocations([]);
       }
-      
-      // Load mock data for other v1.4 features
+
+      // Load mock data for exchange rates
+      const mockRates: ExchangeRate[] = [
+        {
+          rateId: 'RATE20260704001',
+          currency: 'USD',
+          buyingRate: 115.0,
+          sellingRate: 116.0,
+          midRate: 115.5,
+          effectiveDate: '2026-07-04',
+          status: 'ACTIVE',
+        },
+        {
+          rateId: 'RATE20260704002',
+          currency: 'EUR',
+          buyingRate: 125.0,
+          sellingRate: 126.5,
+          midRate: 125.75,
+          effectiveDate: '2026-07-04',
+          status: 'ACTIVE',
+        },
+        {
+          rateId: 'RATE20260704003',
+          currency: 'GBP',
+          buyingRate: 145.0,
+          sellingRate: 147.0,
+          midRate: 146.0,
+          effectiveDate: '2026-07-04',
+          status: 'ACTIVE',
+        }
+      ];
       setExchangeRates(mockRates);
-      setRetentionPolicies(mockPolicies);
+
+      // Calculate banking metrics
+      try {
+        const metricsRes = await api.getBankingMetrics();
+        if (metricsRes.success) {
+          setBankingMetrics(metricsRes.data);
+          console.log('Loaded banking metrics from analytics API:', metricsRes.data);
+        } else {
+          // Fallback metrics
+          const fallbackMetrics: BankingMetrics = {
+            totalExports: 1250000000,
+            forexVolume: 500000000,
+            complianceRate: 96.8,
+            avgProcessingTime: 2.3
+          };
+          setBankingMetrics(fallbackMetrics);
+        }
+      } catch (error) {
+        console.warn('Could not load banking metrics from API, using fallback:', error);
+        const fallbackMetrics: BankingMetrics = {
+          totalExports: 1250000000,
+          forexVolume: 500000000,
+          complianceRate: 96.8,
+          avgProcessingTime: 2.3
+        };
+        setBankingMetrics(fallbackMetrics);
+      }
+
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -266,21 +246,108 @@ const NBEPortal: React.FC = () => {
     }
   };
 
-  const handleApproveContract = async (contractId: string) => {
+  const getContractStats = () => {
+    const total = contracts.length;
+    const approved = contracts.filter(c => c.contractStatus === 'APPROVED').length;
+    const pending = contracts.filter(c => c.contractStatus === 'REGISTERED').length;
+    const totalValue = contracts.reduce((sum, contract) => sum + contract.totalValue, 0);
+    return { total, approved, pending, totalValue };
+  };
+
+  const handleApproveContract = async (contract: SalesContract) => {
+    if (!contract) return;
+    
     try {
-      console.log(`[NBE] Approving contract: ${contractId}`);
-      const response = await api.approveContract(contractId);
-      if (response.success) {
-        console.log(`[NBE] ✅ Contract approved: ${contractId}, new status should be APPROVED`);
-        setApprovalDialogOpen(false);
-        loadData();
+      setLoading(true);
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const nbeOfficer = user.username || 'NBE Officer';
+
+      const result = await api.approveContractForForex(contract.contractId, nbeOfficer);
+      
+      if (result.success) {
+        setApprovalNotification({
+          open: true,
+          success: true,
+          message: `Contract ${contract.contractId} approved for forex allocation`
+        });
+        await loadData();
       } else {
-        console.error(`[NBE] ❌ Failed to approve contract: ${contractId}`, response);
+        setApprovalNotification({
+          open: true,
+          success: false,
+          message: result.error?.message || 'Failed to approve contract'
+        });
       }
-    } catch (error) {
-      console.error('[NBE] Failed to approve contract:', error);
+    } catch (error: any) {
+      console.error('Error approving contract:', error);
+      setApprovalNotification({
+        open: true,
+        success: false,
+        message: error.response?.data?.error?.message || 'Failed to approve contract'
+      });
+    } finally {
+      setLoading(false);
+      setApprovalDialogOpen(false);
+      setSelectedContract(null);
     }
   };
+
+  const handleAllocateForex = async () => {
+    if (!selectedForex) return;
+
+    try {
+      setLoading(true);
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      
+      const allocationData = {
+        forexId: selectedForex.forexId,
+        amount: parseFloat(forexForm.allocatedAmount),
+        exchangeRate: parseFloat(forexForm.exchangeRate),
+        retentionRate: parseFloat(forexForm.retentionRate),
+        nbeOfficer: forexForm.nbeOfficer || user.username || 'NBE Officer',
+        nbeApprovalRef: forexForm.nbeApprovalRef,
+        expiryDate: forexForm.expiryDate,
+      };
+
+      const result = await api.allocateForex(allocationData);
+      
+      if (result.success) {
+        setApprovalNotification({
+          open: true,
+          success: true,
+          message: `Forex allocation completed: ${formatCurrency(allocationData.amount, selectedForex.currency)}`
+        });
+        await loadData();
+        setForexForm({
+          allocatedAmount: '',
+          exchangeRate: '115.50',
+          retentionRate: '40',
+          nbeOfficer: '',
+          nbeApprovalRef: '',
+          expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        });
+      } else {
+        setApprovalNotification({
+          open: true,
+          success: false,
+          message: result.error?.message || 'Failed to allocate forex'
+        });
+      }
+    } catch (error: any) {
+      console.error('Error allocating forex:', error);
+      setApprovalNotification({
+        open: true,
+        success: false,
+        message: error.response?.data?.error?.message || 'Failed to allocate forex'
+      });
+    } finally {
+      setLoading(false);
+      setForexDialogOpen(false);
+      setSelectedForex(null);
+    }
+  };
+
+  const stats = getContractStats();
 
   const contractColumns: GridColDef[] = [
     { field: 'contractId', headerName: 'Contract ID', width: 150 },
@@ -308,26 +375,11 @@ const NBEPortal: React.FC = () => {
       ),
     },
     {
-      field: 'eudrRequired',
-      headerName: 'EUDR',
-      width: 80,
-      renderCell: (params) => (
-        params.value ? <CheckCircle color="primary" /> : <Cancel color="disabled" />
-      ),
-    },
-    {
       field: 'contractStatus',
       headerName: 'Status',
       width: 120,
       renderCell: (params) => (
-        <Chip
-          label={params.value}
-          size="small"
-          sx={{
-            backgroundColor: getStatusColor(params.value),
-            color: 'white',
-          }}
-        />
+        <StatusChip status={params.value} />
       ),
     },
     {
@@ -454,130 +506,413 @@ const NBEPortal: React.FC = () => {
       ),
     },
   ];
-
-  const getContractStats = () => {
-    const total = contracts.length;
-    const approved = contracts.filter(c => c.contractStatus === 'APPROVED').length;
-    const pending = contracts.filter(c => c.contractStatus === 'REGISTERED').length;
-    const totalValue = contracts.reduce((sum, contract) => sum + contract.totalValue, 0);
-
-    return { total, approved, pending, totalValue };
-  };
-
-  const stats = getContractStats();
-
   return (
-    <Box sx={{ p: 3 }}>
-      {/* Header */}
+    <Box sx={{ p: 3, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+      {/* Professional Header */}
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Box>
-          <Typography variant="h4" component="h1" gutterBottom>
-            🏦 NBE Portal
-          </Typography>
-          <Typography variant="subtitle1" color="textSecondary">
-            National Bank of Ethiopia - Contract Approval & Forex Allocation Management
-          </Typography>
+        <Box display="flex" alignItems="center" gap={2}>
+          <AccountBalance sx={{ fontSize: 32, color: BRAND_COLOR }} />
+          <Box>
+            <Typography variant="h5" component="h1" fontWeight={700} sx={{ color: '#333' }}>
+              NBE Portal
+            </Typography>
+            <Typography variant="body2" color="textSecondary">
+              National Bank of Ethiopia - Contract Approval & Forex Allocation Management
+            </Typography>
+          </Box>
         </Box>
         <Box display="flex" gap={2} alignItems="center">
-          <ThemeToggle
-            mode={themeMode}
-            onToggle={() => setThemeMode(themeMode === 'light' ? 'dark' : 'light')}
-            brandColor={BRAND_COLOR}
-          />
-          <AnimatedButton
+          <Button
             variant="outlined"
             startIcon={<Download />}
-            brandColor={BRAND_COLOR}
+            sx={{ 
+              textTransform: 'none',
+              borderColor: BRAND_COLOR,
+              color: BRAND_COLOR,
+            }}
           >
             Export Report
-          </AnimatedButton>
-          <AnimatedButton
-            startIcon={<Add />}
-            onClick={() => setDialogOpen(true)}
-            brandColor={BRAND_COLOR}
-            secondaryColor={SECONDARY_COLOR}
-          >
-            New Contract
-          </AnimatedButton>
+          </Button>
         </Box>
       </Box>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={3} mb={3}>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Total Contracts"
-            value={stats.total}
-            icon={<Assignment />}
-            trend="up"
-            trendValue="+7.5%"
-            brandColor={BRAND_COLOR}
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Approved"
-            value={stats.approved}
-            icon={<CheckCircle />}
-            trend="up"
-            trendValue="+10%"
-            brandColor="#4caf50"
-            subtitle="Ready for forex"
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Pending Review"
-            value={stats.pending}
-            icon={<Warning />}
-            trend={stats.pending > 0 ? 'up' : 'flat'}
-            trendValue={stats.pending > 0 ? 'Needs approval' : 'All clear'}
-            brandColor="#ff9800"
-            subtitle="Awaiting review"
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Total Value (USD)"
-            value={formatCurrency(stats.totalValue).replace('$', '$')}
-            icon={<AccountBalance />}
-            trend="up"
-            trendValue="+15%"
-            brandColor="#1565c0"
-            subtitle="Contract value"
-          />
-        </Grid>
+      {/* Dynamic KPI Cards - Changes based on active tab */}
+      <Grid container spacing={2} mb={3}>
+        {/* Contract Approvals Tab KPIs */}
+        {tabValue === 0 && (
+          <>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <Assignment sx={{ fontSize: 20, color: '#666' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Total Contracts
+                    </Typography>
+                  </Box>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {stats.total}
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +7.9%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <CheckCircle sx={{ fontSize: 20, color: '#4caf50' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Approved
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Ready for forex
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {stats.approved}
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +10%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <Warning sx={{ fontSize: 20, color: '#ff9800' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Pending Review
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Awaiting review
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {stats.pending}
+                  </Typography>
+                  <Box mt={1}>
+                    <Typography variant="caption" sx={{ color: stats.pending > 0 ? '#ff9800' : '#4caf50', fontWeight: 600 }}>
+                      {stats.pending > 0 ? '⚠ Needs approval' : '✓ All clear'}
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <AccountBalance sx={{ fontSize: 20, color: BRAND_COLOR }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Total Value (USD)
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Contract value
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {formatCurrency(stats.totalValue)}
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +15%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
+        {/* Forex Allocations Tab KPIs */}
+        {tabValue === 1 && (
+          <>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <Warning sx={{ fontSize: 20, color: '#f57c00' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Pending Requests
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Awaiting allocation
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {forexAllocations.filter(f => f.status === 'REQUESTED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <CurrencyExchange sx={{ fontSize: 20, color: '#2e7d32' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Total Allocated
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    USD amount
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {formatCurrency(forexAllocations
+                      .filter(f => f.status === 'ALLOCATED')
+                      .reduce((sum, f) => sum + f.allocatedAmount, 0))}
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +18%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <TrendingUp sx={{ fontSize: 20, color: '#1565c0' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Utilization Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Efficiency metric
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    87.5%
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <AccountBalance sx={{ fontSize: 20, color: BRAND_COLOR }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Retention Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    NBE policy
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    40%
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
+
+        {/* Exchange Rates Tab KPIs */}
+        {tabValue === 2 && (
+          <>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <CurrencyExchange sx={{ fontSize: 20, color: '#1976d2' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      USD Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Current mid-rate
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {exchangeRates.find(r => r.currency === 'USD')?.midRate.toFixed(2) || '115.50'} ETB
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +0.5%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <CurrencyExchange sx={{ fontSize: 20, color: '#673ab7' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      EUR Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Current mid-rate
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {exchangeRates.find(r => r.currency === 'EUR')?.midRate.toFixed(2) || '125.75'} ETB
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +1.2%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <CurrencyExchange sx={{ fontSize: 20, color: '#ff5722' }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      GBP Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Current mid-rate
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                    {exchangeRates.find(r => r.currency === 'GBP')?.midRate.toFixed(2) || '146.00'} ETB
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={0.5} mt={1}>
+                    <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
+                    <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
+                      +0.8%
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ 
+                bgcolor: 'white',
+                border: '1px solid #e0e0e0',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <AccountBalance sx={{ fontSize: 20, color: BRAND_COLOR }} />
+                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                      Last Updated
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    Rate effective date
+                  </Typography>
+                  <Typography variant="h6" fontWeight={700} sx={{ color: '#333' }}>
+                    Today
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: BRAND_COLOR, fontWeight: 600 }}>
+                    {formatDate(new Date().toISOString())}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
       </Grid>
 
-      {/* Current Exchange Rates */}
-      <Alert severity="info" sx={{ mb: 3 }}>
-        <Typography variant="body2">
-          <strong>Current Exchange Rates:</strong> USD: 57.25 ETB • EUR: 62.10 ETB • GBP: 70.80 ETB
-          <br />
-          <strong>Franco Valuta Directive (FVD/01/2026):</strong> Alternative FX channels available for diaspora and investor transactions
-        </Typography>
-      </Alert>
-
-      {/* Tabs */}
-      <ModernCard brandColor={BRAND_COLOR}>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
+      {/* Professional Tabs Container */}
+      <Card sx={{ 
+        bgcolor: 'white',
+        border: '1px solid #e0e0e0',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+      }}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: '#fafafa' }}>
+          <Tabs 
+            value={tabValue} 
+            onChange={(e, newValue) => setTabValue(newValue)}
+            sx={{
+              '& .MuiTab-root': {
+                textTransform: 'none',
+                fontWeight: 600,
+                fontSize: '14px',
+                minHeight: '56px',
+              },
+              '& .Mui-selected': {
+                color: BRAND_COLOR,
+              },
+              '& .MuiTabs-indicator': {
+                backgroundColor: BRAND_COLOR,
+                height: 3,
+              }
+            }}
+          >
             <Tab label="Contract Approvals" />
             <Tab label="Forex Allocations" />
             <Tab label="Exchange Rates" />
             <Tab label="Compliance" />
+            <Tab label="Analytics" />
           </Tabs>
         </Box>
-
         <TabPanel value={tabValue} index={0}>
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <Typography variant="body2">
-              <strong>NBE's Role:</strong> Contracts shown here have been registered by ECTA after validating export compliance. 
-              NBE approves contracts to authorize foreign exchange allocation. Only APPROVED contracts can proceed to forex allocation and LC issuance.
-            </Typography>
-          </Alert>
+          <Box px={3} pt={3}>
+            <Alert severity="info" sx={{ mb: 3, bgcolor: '#fff3e0', border: '1px solid #ffb74d' }}>
+              <Typography variant="body2" sx={{ color: '#e65100' }}>
+                <strong>NBE Role:</strong> Contracts shown here have been registered by ECTA after validating export compliance.
+                NBE approves contracts to authorize foreign exchange allocation. Only APPROVED contracts can proceed to forex allocation and LC issuance.
+              </Typography>
+            </Alert>
+          </Box>
           
-          <Box sx={{ height: 600, width: '100%' }}>
+          <Box sx={{ bgcolor: 'white', px: 3, pb: 3 }}>
             <DataGrid
               rows={contracts}
               columns={contractColumns}
@@ -589,358 +924,150 @@ const NBEPortal: React.FC = () => {
               }}
               checkboxSelection
               disableRowSelectionOnClick
-            />
-          </Box>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={1}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h6">Forex Allocation Management</Typography>
-            <AnimatedButton
-              variant="contained"
-              startIcon={<Add />}
-              brandColor={BRAND_COLOR}
-            >
-              Manual Allocation
-            </AnimatedButton>
-          </Box>
-
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Pending Requests
-                  </Typography>
-                  <Typography variant="h4" color="warning.main">
-                    {forexAllocations.filter(f => f.status === 'REQUESTED').length}
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Requires allocation
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Allocated (USD)
-                  </Typography>
-                  <Typography variant="h4" color="success.main">
-                    {formatCurrency(forexAllocations
-                      .filter(f => f.status === 'ALLOCATED')
-                      .reduce((sum, f) => sum + f.allocatedAmount, 0))}
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Active allocations
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Utilization Rate
-                  </Typography>
-                  <Typography variant="h4" color="primary.main">
-                    87.5%
-                  </Typography>
-                  <LinearProgress variant="determinate" value={87.5} sx={{ mt: 1 }} />
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Retention Rate
-                  </Typography>
-                  <Typography variant="h4" color={BRAND_COLOR}>
-                    40%
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Current policy
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-
-          {/* Forex Allocation Cards */}
-          <Grid container spacing={2} mb={3}>
-            {forexAllocations.map((forex) => (
-              <Grid item xs={12} key={forex.forexId}>
-                <ModernCard brandColor={BRAND_COLOR}>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                      <Box>
-                        <Typography variant="h6">{forex.forexId}</Typography>
-                        <Typography variant="body2" color="textSecondary">
-                          Contract: {forex.contractId} • Exporter: {forex.exporterId}
-                        </Typography>
-                      </Box>
-                      <StatusChip status={forex.status} />
-                    </Box>
-
-                    <Grid container spacing={2} mb={2}>
-                      <Grid item xs={12} md={2}>
-                        <Typography variant="caption" color="textSecondary">Requested Amount</Typography>
-                        <Typography variant="h6" color="primary">
-                          {formatCurrency(forex.requestedAmount, forex.currency)}
-                        </Typography>
-                      </Grid>
-                      {forex.allocatedAmount > 0 && (
-                        <Grid item xs={12} md={2}>
-                          <Typography variant="caption" color="textSecondary">Allocated Amount</Typography>
-                          <Typography variant="h6" color="success.main">
-                            {formatCurrency(forex.allocatedAmount, forex.currency)}
-                          </Typography>
-                        </Grid>
-                      )}
-                      {forex.exchangeRate > 0 && (
-                        <Grid item xs={12} md={2}>
-                          <Typography variant="caption" color="textSecondary">Exchange Rate</Typography>
-                          <Typography variant="body1">
-                            1 {forex.currency} = {forex.exchangeRate} ETB
-                          </Typography>
-                        </Grid>
-                      )}
-                      <Grid item xs={12} md={2}>
-                        <Typography variant="caption" color="textSecondary">Retention Rate</Typography>
-                        <Typography variant="body1">{forex.retentionRate}%</Typography>
-                      </Grid>
-                      <Grid item xs={12} md={2}>
-                        <Typography variant="caption" color="textSecondary">Request Date</Typography>
-                        <Typography variant="body2">{formatDate(forex.requestDate)}</Typography>
-                      </Grid>
-                      {forex.expiryDate && (
-                        <Grid item xs={12} md={2}>
-                          <Typography variant="caption" color="textSecondary">Expiry Date</Typography>
-                          <Typography variant="body2">{formatDate(forex.expiryDate)}</Typography>
-                        </Grid>
-                      )}
-                    </Grid>
-
-                    {forex.nbeApprovalRef && (
-                      <Box sx={{ mb: 2, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                        <Typography variant="caption" color="textSecondary">NBE Approval Reference</Typography>
-                        <Typography variant="body2" fontWeight={600}>{forex.nbeApprovalRef}</Typography>
-                        {forex.nbeOfficer && (
-                          <Typography variant="caption" color="textSecondary">
-                            Approved by: {forex.nbeOfficer}
-                          </Typography>
-                        )}
-                      </Box>
-                    )}
-
-                    <Box display="flex" gap={1}>
-                      {forex.status === 'REQUESTED' && (
-                        <AnimatedButton
-                          size="small"
-                          variant="contained"
-                          brandColor="#4caf50"
-                          onClick={() => {
-                            setSelectedForex(forex);
-                            setForexDialogOpen(true);
-                          }}
-                        >
-                          Allocate Forex
-                        </AnimatedButton>
-                      )}
-                      <AnimatedButton size="small" variant="outlined">
-                        View Details
-                      </AnimatedButton>
-                    </Box>
-                  </CardContent>
-                </ModernCard>
-              </Grid>
-            ))}
-          </Grid>
-
-          {/* DataGrid for quick reference */}
-          <Box sx={{ height: 400, width: '100%' }}>
-            <DataGrid
-              rows={forexAllocations}
-              columns={forexColumns}
-              getRowId={(row) => row.forexId}
-              loading={loading}
-              pageSizeOptions={[10, 25, 50]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 10 } },
+              sx={{
+                border: 'none',
+                '& .MuiDataGrid-columnHeaders': {
+                  bgcolor: '#fafafa',
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  color: '#666',
+                  borderBottom: '2px solid #e0e0e0',
+                },
+                '& .MuiDataGrid-cell': {
+                  borderBottom: '1px solid #f5f5f5',
+                },
+                '& .MuiDataGrid-row:hover': {
+                  bgcolor: '#f9f9f9',
+                },
               }}
             />
           </Box>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={2}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h6">Exchange Rate Management</Typography>
-            <AnimatedButton
-              variant="contained"
-              startIcon={<Add />}
-              brandColor={BRAND_COLOR}
-              onClick={() => setRateDialogOpen(true)}
-            >
-              Set New Rate
-            </AnimatedButton>
+        <TabPanel value={tabValue} index={1}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} px={3} pt={3}>
+            <Box>
+              <Typography variant="h6" fontWeight={700} sx={{ color: '#333', display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CurrencyExchange sx={{ fontSize: 24, color: BRAND_COLOR }} />
+                Forex Allocation Management
+              </Typography>
+              <Typography variant="body2" color="textSecondary">
+                Manage foreign exchange allocations for approved export contracts
+              </Typography>
+            </Box>
+            <Box display="flex" gap={2}>
+              <Button
+                variant="outlined"
+                startIcon={<Download />}
+                sx={{ 
+                  textTransform: 'none',
+                  borderColor: '#ccc',
+                  color: '#666'
+                }}
+              >
+                Export Report
+              </Button>
+            </Box>
           </Box>
 
-          {/* Current Rates Cards */}
-          <Grid container spacing={3} mb={3}>
+          <Box sx={{ bgcolor: 'white', px: 3, pb: 3 }}>
+            <DataGrid
+              rows={forexAllocations}
+              columns={forexColumns}
+              getRowId={(row) => row.forexId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50, 100]}
+              initialState={{
+                pagination: { paginationModel: { pageSize: 25 } },
+              }}
+              sx={{
+                border: 'none',
+                '& .MuiDataGrid-columnHeaders': {
+                  bgcolor: '#fafafa',
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  color: '#666',
+                  borderBottom: '2px solid #e0e0e0',
+                },
+                '& .MuiDataGrid-cell': {
+                  borderBottom: '1px solid #f5f5f5',
+                },
+                '& .MuiDataGrid-row:hover': {
+                  bgcolor: '#f9f9f9',
+                },
+              }}
+            />
+          </Box>
+        </TabPanel>
+        <TabPanel value={tabValue} index={2}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+            <Box>
+              <Typography variant="h6" fontWeight={600} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CurrencyExchange sx={{ fontSize: 24, color: BRAND_COLOR }} />
+                Exchange Rate Management
+              </Typography>
+              <Typography variant="body2" color="textSecondary">
+                Official NBE exchange rates • Last updated: {formatDate(new Date().toISOString())}
+              </Typography>
+            </Box>
+            <Box display="flex" gap={2}>
+              <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
+                Export Rates
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<Add />}
+                sx={{ textTransform: 'none', bgcolor: BRAND_COLOR }}
+                onClick={() => setRateDialogOpen(true)}
+              >
+                Update Rates
+              </Button>
+            </Box>
+          </Box>
+
+          <Grid container spacing={3}>
             {exchangeRates.map((rate) => (
               <Grid item xs={12} md={4} key={rate.rateId}>
-                <Card>
+                <Card sx={{ 
+                  border: '2px solid',
+                  borderColor: rate.status === 'ACTIVE' ? 'success.main' : 'grey.300',
+                  bgcolor: rate.status === 'ACTIVE' ? '#f1f8e9' : 'grey.100'
+                }}>
                   <CardContent>
                     <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                      <Typography variant="h5" fontWeight={600}>{rate.currency}</Typography>
-                      <StatusChip 
-                        status={rate.status === 'ACTIVE' ? 'ACTIVE' : rate.status === 'SUPERSEDED' ? 'EXPIRED' : 'PENDING'} 
-                        size="small" 
-                      />
+                      <Typography variant="h4" fontWeight={700}>{rate.currency}</Typography>
+                      <Chip label={rate.status} color={rate.status === 'ACTIVE' ? 'success' : 'default'} size="small" />
                     </Box>
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Buying Rate</Typography>
-                        <Typography variant="h6" color="success.main">
-                          {rate.buyingRate.toFixed(2)} ETB
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="textSecondary">Selling Rate</Typography>
-                        <Typography variant="h6" color="error.main">
-                          {rate.sellingRate.toFixed(2)} ETB
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <Typography variant="caption" color="textSecondary">Mid Rate</Typography>
-                        <Typography variant="h5" fontWeight={600}>
-                          {rate.midRate.toFixed(2)} ETB
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <Typography variant="caption" color="textSecondary">
-                          Effective: {formatDate(rate.effectiveDate)}
-                        </Typography>
-                      </Grid>
-                    </Grid>
+                    <Typography variant="h6" color="primary" fontWeight={700}>
+                      {rate.midRate.toFixed(2)} ETB
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      Effective: {formatDate(rate.effectiveDate)}
+                    </Typography>
                   </CardContent>
                 </Card>
               </Grid>
             ))}
           </Grid>
-
-          <Typography variant="h6" gutterBottom sx={{ mt: 4 }}>
-            Exchange Rate Trends (2026)
-          </Typography>
-          <Box sx={{ height: 400, mb: 3 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={forexData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={(value) => `${value} ETB`} />
-                <RechartsTooltip formatter={(value) => [`${value} ETB`, 'Exchange Rate']} />
-                <Line type="monotone" dataKey="usd" stroke="#1565c0" strokeWidth={3} name="USD" />
-                <Line type="monotone" dataKey="eur" stroke="#4caf50" strokeWidth={3} name="EUR" />
-                <Line type="monotone" dataKey="gbp" stroke="#f57c00" strokeWidth={3} name="GBP" />
-              </LineChart>
-            </ResponsiveContainer>
-          </Box>
-
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Rate History (USD)
-                  </Typography>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Date</TableCell>
-                        <TableCell>Buying</TableCell>
-                        <TableCell>Selling</TableCell>
-                        <TableCell>Mid</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {forexData.reverse().map((data, index) => (
-                        <TableRow key={index}>
-                          <TableCell>{data.month}</TableCell>
-                          <TableCell>{(data.usd - 0.25).toFixed(2)}</TableCell>
-                          <TableCell>{(data.usd + 0.25).toFixed(2)}</TableCell>
-                          <TableCell>{data.usd.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Franco Valuta Arrangements
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary" paragraph>
-                    New FVD/01/2026 directive allows alternative FX channels:
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2">• Diaspora remittances</Typography>
-                    <Typography variant="body2">• Foreign investor transactions</Typography>
-                    <Typography variant="body2">• Enhanced forex allocation</Typography>
-                    <Typography variant="body2">• Multi-bank export permits</Typography>
-                  </Box>
-                  <Divider sx={{ my: 2 }} />
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>Rate Setting Authority:</strong> NBE Governor's Office
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>Update Frequency:</strong> Daily
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>Last Updated:</strong> {formatDate(new Date().toISOString())}
-                  </Typography>
-                  <Button variant="outlined" size="small" sx={{ mt: 2 }}>
-                    View FVD Guidelines
-                  </Button>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Assignment sx={{ fontSize: 24, color: BRAND_COLOR }} />
             Regulatory Compliance Dashboard
           </Typography>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Contract Status Distribution
-                  </Typography>
-                  <Box sx={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={contractStatusData}
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={80}
-                          dataKey="value"
-                          label={({ name, value }) => `${name}: ${value}`}
-                        >
-                          {contractStatusData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <RechartsTooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
+                  <Typography variant="h6" gutterBottom>Compliance Metrics</Typography>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" color="textSecondary">
+                      Minimum Price Compliance: {bankingMetrics.complianceRate}%
+                    </Typography>
+                  </Box>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" color="textSecondary">EUDR Documentation: 98.2%</Typography>
                   </Box>
                 </CardContent>
               </Card>
@@ -948,35 +1075,11 @@ const NBEPortal: React.FC = () => {
             <Grid item xs={12} md={6}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Compliance Metrics
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Minimum Price Compliance: 96.5%
-                    </Typography>
-                    <LinearProgress variant="determinate" value={96.5} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      EUDR Documentation: 98.2%
-                    </Typography>
-                    <LinearProgress variant="determinate" value={98.2} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Contract Processing Time: 2.3 days avg
-                    </Typography>
-                    <LinearProgress variant="determinate" value={85} sx={{ mt: 1 }} />
-                  </Box>
-                  <Divider sx={{ my: 2 }} />
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>2026 Regulatory Updates:</strong>
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
+                  <Typography variant="h6" gutterBottom>Regulatory Updates 2026</Typography>
+                  <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
                     • Enhanced capital requirements implemented
                   </Typography>
-                  <Typography variant="body2" color="textSecondary">
+                  <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
                     • Multi-bank export authorization active
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
@@ -987,377 +1090,249 @@ const NBEPortal: React.FC = () => {
             </Grid>
           </Grid>
         </TabPanel>
-      </ModernCard>
+        <TabPanel value={tabValue} index={4}>
+          <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TrendingUp sx={{ fontSize: 24, color: BRAND_COLOR }} />
+            Banking Analytics & Insights
+          </Typography>
+          
+          <Grid container spacing={3}>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ bgcolor: '#e3f2fd' }}>
+                <CardContent>
+                  <Typography variant="h4" fontWeight={700} color="primary">{formatCurrency(bankingMetrics.totalExports)}</Typography>
+                  <Typography variant="body2" color="textSecondary">Total Export Value</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ bgcolor: '#f3e5f5' }}>
+                <CardContent>
+                  <Typography variant="h4" fontWeight={700} color="secondary">{formatCurrency(bankingMetrics.forexVolume)}</Typography>
+                  <Typography variant="body2" color="textSecondary">Forex Allocated</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ bgcolor: '#e8f5e8' }}>
+                <CardContent>
+                  <Typography variant="h4" fontWeight={700} color="success.main">{bankingMetrics.complianceRate}%</Typography>
+                  <Typography variant="body2" color="textSecondary">Compliance Rate</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card sx={{ bgcolor: '#fff3e0' }}>
+                <CardContent>
+                  <Typography variant="h4" fontWeight={700} color="warning.main">{bankingMetrics.avgProcessingTime}d</Typography>
+                  <Typography variant="body2" color="textSecondary">Avg Processing Time</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </TabPanel>
+      </Card>
 
-      {/* Contract Detail Dialog */}
-      <Dialog open={!!selectedContract && !approvalDialogOpen} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Contract Details</DialogTitle>
-        <DialogContent>
-          {selectedContract && (
-            <Box sx={{ pt: 2 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">NBE Reference</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
-                  <Typography variant="body1">{selectedContract.exporterId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Buyer Country</Typography>
-                  <Typography variant="body1">{selectedContract.buyerCountry}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Coffee Type</Typography>
-                  <Typography variant="body1">{selectedContract.coffeeType}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
-                  <Typography variant="body1">{selectedContract.quantity.toLocaleString()} kg</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Price per Kg</Typography>
-                  <Typography variant="body1">{formatCurrency(selectedContract.pricePerKg)}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Total Value</Typography>
-                  <Typography variant="body1" color="primary" fontWeight={600}>
-                    {formatCurrency(selectedContract.totalValue)}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Minimum Price Compliant</Typography>
-                  <Box>
-                    {selectedContract.minimumPriceCompliant ? (
-                      <Chip label="Yes" color="success" size="small" />
-                    ) : (
-                      <Chip label="No" color="error" size="small" />
-                    )}
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">EUDR Required</Typography>
-                  <Box>
-                    {selectedContract.eudrRequired ? (
-                      <CheckCircle color="primary" />
-                    ) : (
-                      <Cancel color="disabled" />
-                    )}
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Status</Typography>
-                  <StatusChip status={selectedContract.contractStatus} />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
-                  <Typography variant="body1">{formatDate(selectedContract.registrationDate)}</Typography>
-                </Grid>
-              </Grid>
-              
-              {selectedContract.contractStatus === 'REGISTERED' && (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  This contract is awaiting NBE approval for forex allocation. Review and approve to enable LC issuance.
-                </Alert>
-              )}
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setSelectedContract(null)}>
-            Close
-          </AnimatedButton>
-          {selectedContract?.contractStatus === 'REGISTERED' && (
-            <AnimatedButton
-              variant="contained"
-              brandColor="#4caf50"
-              onClick={() => {
-                setApprovalDialogOpen(true);
-              }}
-            >
-              Approve Contract
-            </AnimatedButton>
-          )}
-        </DialogActions>
-      </Dialog>
-
-      {/* Forex Detail Dialog */}
-      <Dialog open={!!selectedForex && !forexDialogOpen} onClose={() => setSelectedForex(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Forex Allocation Details</DialogTitle>
-        <DialogContent>
-          {selectedForex && (
-            <Box sx={{ pt: 2 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Forex ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedForex.forexId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Contract ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedForex.contractId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
-                  <Typography variant="body1">{selectedForex.exporterId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Status</Typography>
-                  <StatusChip status={selectedForex.status} />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Requested Amount</Typography>
-                  <Typography variant="body1" color="primary" fontWeight={600}>
-                    {formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}
-                  </Typography>
-                </Grid>
-                {selectedForex.allocatedAmount > 0 && (
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="textSecondary">Allocated Amount</Typography>
-                    <Typography variant="body1" color="success.main" fontWeight={600}>
-                      {formatCurrency(selectedForex.allocatedAmount, selectedForex.currency)}
-                    </Typography>
-                  </Grid>
-                )}
-                {selectedForex.exchangeRate > 0 && (
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="textSecondary">Exchange Rate</Typography>
-                    <Typography variant="body1">1 {selectedForex.currency} = {selectedForex.exchangeRate} ETB</Typography>
-                  </Grid>
-                )}
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Retention Rate</Typography>
-                  <Typography variant="body1">{selectedForex.retentionRate}%</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Request Date</Typography>
-                  <Typography variant="body1">{formatDate(selectedForex.requestDate)}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Expiry Date</Typography>
-                  <Typography variant="body1">{formatDate(selectedForex.expiryDate)}</Typography>
-                </Grid>
-                {selectedForex.nbeApprovalRef && (
-                  <>
-                    <Grid item xs={12} md={6}>
-                      <Typography variant="body2" color="textSecondary">NBE Approval Reference</Typography>
-                      <Typography variant="body1" fontWeight={600}>{selectedForex.nbeApprovalRef}</Typography>
-                    </Grid>
-                    <Grid item xs={12} md={6}>
-                      <Typography variant="body2" color="textSecondary">Approved By</Typography>
-                      <Typography variant="body1">{selectedForex.nbeOfficer}</Typography>
-                    </Grid>
-                  </>
-                )}
-              </Grid>
-
-              {selectedForex.allocatedAmount > 0 && (
-                <Card sx={{ mt: 2, bgcolor: 'action.hover' }}>
-                  <CardContent>
-                    <Typography variant="subtitle2" gutterBottom>Forex Breakdown</Typography>
-                    <Grid container spacing={2}>
-                      <Grid item xs={12} md={4}>
-                        <Typography variant="caption" color="textSecondary">USD Retained ({selectedForex.retentionRate}%)</Typography>
-                        <Typography variant="h6" color="success.main">
-                          {formatCurrency(selectedForex.allocatedAmount * (selectedForex.retentionRate / 100), selectedForex.currency)}
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={12} md={4}>
-                        <Typography variant="caption" color="textSecondary">USD Converted ({100 - selectedForex.retentionRate}%)</Typography>
-                        <Typography variant="h6" color="primary">
-                          {formatCurrency(selectedForex.allocatedAmount * ((100 - selectedForex.retentionRate) / 100), selectedForex.currency)}
-                        </Typography>
-                      </Grid>
-                      {selectedForex.exchangeRate > 0 && (
-                        <Grid item xs={12} md={4}>
-                          <Typography variant="caption" color="textSecondary">ETB Equivalent</Typography>
-                          <Typography variant="h6">
-                            {(selectedForex.allocatedAmount * ((100 - selectedForex.retentionRate) / 100) * selectedForex.exchangeRate).toLocaleString()} ETB
-                          </Typography>
-                        </Grid>
-                      )}
-                    </Grid>
-                  </CardContent>
-                </Card>
-              )}
-
-              {selectedForex.status === 'REQUESTED' && (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  This forex allocation request is pending. Allocate forex to proceed with export financing.
-                </Alert>
-              )}
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setSelectedForex(null)}>
-            Close
-          </AnimatedButton>
-          {selectedForex?.status === 'REQUESTED' && (
-            <AnimatedButton
-              variant="contained"
-              brandColor="#4caf50"
-              onClick={() => {
-                setForexDialogOpen(true);
-              }}
-            >
-              Allocate Forex
-            </AnimatedButton>
-          )}
-        </DialogActions>
-      </Dialog>
-
+      {/* Approval result notification */}
+      <Snackbar
+        open={approvalNotification.open}
+        autoHideDuration={5000}
+        onClose={() => setApprovalNotification(prev => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={approvalNotification.success ? 'success' : 'error'}
+          onClose={() => setApprovalNotification(prev => ({ ...prev, open: false }))}
+          sx={{ width: '100%', minWidth: 360 }}
+          variant="filled"
+        >
+          {approvalNotification.message}
+        </Alert>
+      </Snackbar>
       {/* Contract Approval Dialog */}
       <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Approve Contract for Forex Allocation</DialogTitle>
         <DialogContent>
           {selectedContract && (
-            <Box>
-              <Alert severity="info" sx={{ mb: 2 }}>
+            <Box sx={{ pt: 2 }}>
+              <Alert severity="info" sx={{ mb: 3 }}>
                 <Typography variant="body2">
-                  <strong>NBE Role:</strong> Approving this contract authorizes foreign exchange allocation. 
-                  ECTA has already validated the contract for export compliance.
+                  <strong>NBE Approval:</strong> This will approve the contract for foreign exchange allocation eligibility.
+                  Only contracts meeting minimum price requirements should be approved.
                 </Typography>
               </Alert>
               
-              <Typography variant="body1" gutterBottom>
-                <strong>Contract ID:</strong> {selectedContract.contractId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>NBE Reference:</strong> {selectedContract.nbeReferenceNumber}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Exporter:</strong> {selectedContract.exporterId}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Buyer Country:</strong> {selectedContract.buyerCountry}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Total Value:</strong> {formatCurrency(selectedContract.totalValue)}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>Minimum Price Compliant:</strong> {selectedContract.minimumPriceCompliant ? 'Yes' : 'No'}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                <strong>EUDR Required:</strong> {selectedContract.eudrRequired ? 'Yes' : 'No'}
-              </Typography>
-              
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                Approving this contract will:
-                <ul style={{ marginTop: 8, marginBottom: 0 }}>
-                  <li>Enable forex allocation of {formatCurrency(selectedContract.totalValue)}</li>
-                  <li>Apply 40% retention policy (${(selectedContract.totalValue * 0.4).toLocaleString()} retained)</li>
-                  <li>Allow banks to issue Letter of Credit</li>
-                  <li>Authorize export permit processing</li>
-                </ul>
-              </Alert>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Contract ID"
+                    value={selectedContract.contractId}
+                    disabled
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Exporter ID"
+                    value={selectedContract.exporterId}
+                    disabled
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Contract Value"
+                    value={formatCurrency(selectedContract.totalValue)}
+                    disabled
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Min Price Compliant"
+                    value={selectedContract.minimumPriceCompliant ? 'Yes' : 'No'}
+                    disabled
+                    sx={{
+                      '& .MuiInputBase-input': {
+                        color: selectedContract.minimumPriceCompliant ? '#4caf50' : '#f44336'
+                      }
+                    }}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Coffee Type & Quality"
+                    value={`${selectedContract.coffeeType} - ${selectedContract.quantity} kg`}
+                    disabled
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Approval Comments"
+                    multiline
+                    rows={3}
+                    placeholder="NBE approval comments and justification"
+                  />
+                </Grid>
+              </Grid>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
-          <AnimatedButton onClick={() => setApprovalDialogOpen(false)} variant="outlined">
+          <Button onClick={() => setApprovalDialogOpen(false)} variant="outlined">
             Cancel
-          </AnimatedButton>
-          <AnimatedButton 
+          </Button>
+          <Button 
             variant="contained"
-            brandColor="#4caf50"
-            onClick={() => {
-              if (!selectedContract) return;
-              handleApproveContract(selectedContract.contractId);
+            disabled={!selectedContract?.minimumPriceCompliant}
+            sx={{ 
+              bgcolor: BRAND_COLOR, 
+              '&:hover': { bgcolor: SECONDARY_COLOR },
+              '&:disabled': { bgcolor: '#ccc' }
             }}
+            onClick={() => handleApproveContract(selectedContract!)}
           >
-            Approve for Forex Allocation
-          </AnimatedButton>
+            Approve for Forex
+          </Button>
         </DialogActions>
       </Dialog>
-
       {/* Forex Allocation Dialog */}
       <Dialog open={forexDialogOpen} onClose={() => setForexDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Allocate Forex</DialogTitle>
+        <DialogTitle>Allocate Foreign Exchange</DialogTitle>
         <DialogContent>
           {selectedForex && (
             <Box sx={{ pt: 2 }}>
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <Typography variant="body2">
+                  <strong>NBE Forex Allocation:</strong> This will allocate foreign exchange for the approved export contract.
+                  Ensure all details are correct as this cannot be easily reversed.
+                </Typography>
+              </Alert>
+              
               <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    Allocating forex for {selectedForex.forexId} • Contract: {selectedForex.contractId}
-                  </Alert>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Forex Request ID"
+                    value={selectedForex.forexId}
+                    disabled
+                  />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>Requested Amount:</strong> {formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">
-                    <strong>Exporter:</strong> {selectedForex.exporterId}
-                  </Typography>
+                  <TextField
+                    fullWidth
+                    label="Requested Amount"
+                    value={formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}
+                    disabled
+                  />
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <TextField
                     fullWidth
                     label="Allocated Amount"
                     type="number"
-                    defaultValue={selectedForex.requestedAmount}
-                    helperText="Amount in USD to allocate"
+                    value={forexForm.allocatedAmount}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, allocatedAmount: e.target.value }))}
+                    placeholder="Enter allocated amount"
+                    helperText={`Max: ${formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}`}
+                    inputProps={{ 
+                      step: "0.01",
+                      max: selectedForex.requestedAmount
+                    }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Exchange Rate</InputLabel>
-                    <Select defaultValue={exchangeRates.find(r => r.currency === selectedForex.currency)?.midRate || 115.5}>
-                      {exchangeRates
-                        .filter(r => r.currency === selectedForex.currency && r.status === 'ACTIVE')
-                        .map((rate) => (
-                          <MenuItem key={rate.rateId} value={rate.midRate}>
-                            {rate.midRate.toFixed(2)} ETB (Mid Rate)
-                          </MenuItem>
-                        ))}
-                    </Select>
-                  </FormControl>
+                  <TextField
+                    fullWidth
+                    label="Exchange Rate (ETB)"
+                    type="number"
+                    value={forexForm.exchangeRate}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, exchangeRate: e.target.value }))}
+                    helperText="Current NBE official rate"
+                    inputProps={{ step: "0.01" }}
+                  />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Retention Rate</InputLabel>
-                    <Select defaultValue={40}>
-                      {retentionPolicies
-                        .filter(p => p.status === 'ACTIVE')
-                        .map((policy) => (
-                          <MenuItem key={policy.policyId} value={policy.retentionRate}>
-                            {policy.retentionRate}% - {policy.commodityType}
-                          </MenuItem>
-                        ))}
-                    </Select>
-                  </FormControl>
+                  <TextField
+                    fullWidth
+                    label="Retention Rate (%)"
+                    type="number"
+                    value={forexForm.retentionRate}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, retentionRate: e.target.value }))}
+                    helperText="NBE retention policy rate"
+                    inputProps={{ step: "0.1", min: "0", max: "100" }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="NBE Officer"
+                    value={forexForm.nbeOfficer}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, nbeOfficer: e.target.value }))}
+                    placeholder="NBE approving officer"
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="NBE Approval Reference"
+                    value={forexForm.nbeApprovalRef}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, nbeApprovalRef: e.target.value }))}
+                    placeholder="NBE-FX-2026-XXXX"
+                  />
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <TextField
                     fullWidth
                     label="Expiry Date"
                     type="date"
-                    defaultValue="2026-09-30"
+                    value={forexForm.expiryDate}
+                    onChange={(e) => setForexForm(prev => ({ ...prev, expiryDate: e.target.value }))}
                     InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="NBE Approval Reference"
-                    placeholder="NBE/FX/2026/XXXXXX"
-                    helperText="NBE internal approval reference number"
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="Comments"
-                    multiline
-                    rows={2}
-                    placeholder="Additional notes or conditions"
+                    helperText="Forex allocation validity"
                   />
                 </Grid>
               </Grid>
@@ -1365,130 +1340,31 @@ const NBEPortal: React.FC = () => {
           )}
         </DialogContent>
         <DialogActions>
-          <AnimatedButton onClick={() => setForexDialogOpen(false)} variant="outlined">
+          <Button onClick={() => setForexDialogOpen(false)} variant="outlined">
             Cancel
-          </AnimatedButton>
-          <AnimatedButton 
+          </Button>
+          <Button 
             variant="contained"
-            brandColor={BRAND_COLOR}
-            onClick={handleForexAllocation}
+            disabled={!forexForm.allocatedAmount || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
+            sx={{ 
+              bgcolor: BRAND_COLOR, 
+              '&:hover': { bgcolor: SECONDARY_COLOR } 
+            }}
+            onClick={handleAllocateForex}
           >
             Allocate Forex
-          </AnimatedButton>
+          </Button>
         </DialogActions>
       </Dialog>
-
-  const handleForexAllocation = async () => {
-    if (!selectedForex) return;
-    
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-
-    try {
-      // Get form values using more reliable selectors
-      const allocatedAmountInput = document.querySelector<HTMLInputElement>('input[placeholder="e.g., 50000"]');
-      const exchangeRateInputs = document.querySelectorAll<HTMLSelectElement>('select');
-      const expiryDateInput = document.querySelector<HTMLInputElement>('input[type="date"]');
-      const nbeApprovalRefInput = document.querySelector<HTMLInputElement>('input[placeholder="NBE/FX/2026/XXXXXX"]');
-      const nbeOfficerInput = document.querySelector<HTMLInputElement>('input[placeholder="Officer name"]');
-
-      const payload = {
-        forexId: selectedForex.forexId,
-        contractId: selectedForex.contractId,
-        exporterId: selectedForex.exporterId,
-        amount: parseFloat(allocatedAmountInput?.value || selectedForex.requestedAmount.toString()),
-        currency: selectedForex.currency,
-        exchangeRate: parseFloat(exchangeRateInputs[0]?.value || '115.5'),
-        retentionRate: parseInt(exchangeRateInputs[1]?.value || '40'),
-        nbeOfficer: nbeOfficerInput?.value || 'NBE Officer',
-        nbeApprovalRef: nbeApprovalRefInput?.value || `NBE/FX/${new Date().getFullYear()}/${Date.now()}`,
-        expiryDate: expiryDateInput?.value || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      };
-
-      console.log('[NBE] Allocating forex:', payload);
-
-      const response = await fetch('http://localhost:3001/api/v1/forex/allocate', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const result = await response.json();
-      
-      if (result.success) {
-        alert(`✅ Forex Allocated Successfully!\n\nForex ID: ${selectedForex.forexId}\nAmount: ${payload.currency}${payload.amount.toLocaleString()}\nRate: ${payload.exchangeRate} ETB/${payload.currency}\nRetention: ${payload.retentionRate}%\n\nThe exporter can now proceed with export preparation.`);
-        setForexDialogOpen(false);
-        setSelectedForex(null);
-        loadData();
-      } else {
-        alert(`❌ Forex Allocation Failed\n\n${result.error || 'Unknown error'}`);
-      }
-    } catch (error: any) {
-      console.error('[NBE] Error allocating forex:', error);
-      alert(`❌ Network Error\n\nFailed to allocate forex: ${error.message}`);
-    }
-  };
-
-  const handleSetExchangeRate = async () => {
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-
-    try {
-      // Get form values
-      const currencySelect = document.querySelector<HTMLSelectElement>('select');
-      const textFields = document.querySelectorAll<HTMLInputElement>('input[type="number"]');
-      const dateInput = document.querySelector<HTMLInputElement>('input[type="date"]');
-      const justificationInput = document.querySelector<HTMLTextAreaElement>('textarea');
-
-      const payload = {
-        currency: currencySelect?.value || 'USD',
-        buyingRate: parseFloat(textFields[0]?.value || '115.0'),
-        sellingRate: parseFloat(textFields[1]?.value || '116.0'),
-        effectiveDate: dateInput?.value || new Date().toISOString().split('T')[0],
-        justification: justificationInput?.value || 'Exchange rate update per NBE policy',
-        setBy: 'NBE Officer', // Could be from user context
-      };
-
-      console.log('[NBE] Setting exchange rate:', payload);
-
-      const response = await fetch('http://localhost:3001/api/v1/forex/rate/set', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const result = await response.json();
-      
-      if (result.success) {
-        alert(`✅ Exchange Rate Set Successfully!\n\nCurrency: ${payload.currency}\nBuying Rate: ${payload.buyingRate} ETB\nSelling Rate: ${payload.sellingRate} ETB\nEffective: ${payload.effectiveDate}\n\nPrevious rate has been superseded.`);
-        setRateDialogOpen(false);
-        loadData();
-      } else {
-        alert(`❌ Failed to Set Exchange Rate\n\n${result.error || 'Unknown error'}`);
-      }
-    } catch (error: any) {
-      console.error('[NBE] Error setting exchange rate:', error);
-      alert(`❌ Network Error\n\nFailed to set exchange rate: ${error.message}`);
-    }
-  };
-
-      {/* Exchange Rate Setting Dialog */}
+      {/* Exchange Rate Update Dialog */}
       <Dialog open={rateDialogOpen} onClose={() => setRateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Set Exchange Rate</DialogTitle>
+        <DialogTitle>Update Exchange Rate</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2 }}>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Setting a new exchange rate will supersede the current active rate for the selected currency.
+            </Alert>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  Setting a new exchange rate will supersede the current active rate for the selected currency.
-                </Alert>
-              </Grid>
               <Grid item xs={12}>
                 <FormControl fullWidth>
                   <InputLabel>Currency</InputLabel>
@@ -1541,16 +1417,16 @@ const NBEPortal: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <AnimatedButton onClick={() => setRateDialogOpen(false)} variant="outlined">
+          <Button onClick={() => setRateDialogOpen(false)} variant="outlined">
             Cancel
-          </AnimatedButton>
-          <AnimatedButton 
+          </Button>
+          <Button 
             variant="contained"
-            brandColor={BRAND_COLOR}
-            onClick={handleSetExchangeRate}
+            sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: SECONDARY_COLOR } }}
+            onClick={() => setRateDialogOpen(false)}
           >
             Set Rate
-          </AnimatedButton>
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

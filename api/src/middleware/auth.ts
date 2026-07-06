@@ -37,16 +37,52 @@ export const authMiddleware = (
     const jwtSecret = process.env.JWT_SECRET || 'cecbs-secret-key';
 
     const decoded = jwt.verify(token, jwtSecret) as any;
-    
+    const rawOrg = decoded.organization || decoded.org || '';
+
+    const normalizeOrg = (org: string): string => {
+      const normalized = org.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      switch (normalized) {
+        case 'NBE':
+        case 'NBEMSP':
+        case 'NATIONALBANKOFETHIOPIA':
+          return 'NBEMSP';
+        case 'ECTA':
+        case 'ECTAMSP':
+        case 'ETHIOPIANCOFFEEANDTEAAUTHORITY':
+          return 'ECTAMSP';
+        case 'ECX':
+        case 'ECXMSP':
+          return 'ECXMSP';
+        case 'BANKS':
+        case 'BANKSMSP':
+        case 'COMMERCIALBANKOFETHIOPIA':
+          return 'BanksMSP';
+        case 'CUSTOMS':
+        case 'CUSTOMSMSP':
+          return 'CustomsMSP';
+        case 'SHIPPING':
+        case 'SHIPPINGMSP':
+          return 'ShippingMSP';
+        default:
+          return org;
+      }
+    };
+
     req.user = {
       sub: decoded.sub,
-      org: decoded.org,
+      org: normalizeOrg(rawOrg),
       role: decoded.role,
       permissions: decoded.permissions || [],
     };
+    
+    // Add additional fields that may be needed by routes
+    (req as any).user.exporterId = decoded.exporterId || decoded.username || decoded.sub;
+    (req as any).user.username = decoded.username;
+    (req as any).user.userId = decoded.userId || decoded.sub;
 
     logger.info('User authenticated:', {
       userId: req.user.sub,
+      exporterId: (req as any).user.exporterId,
       organization: req.user.org,
       role: req.user.role,
     });

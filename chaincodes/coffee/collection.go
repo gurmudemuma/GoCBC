@@ -16,11 +16,11 @@ type DocumentaryCollection struct {
 	ContractID        string    `json:"contractId"`
 	ExporterID        string    `json:"exporterId"`
 	PermitID          string    `json:"permitId"`
-	DrawerName        string    `json:"drawerName"`        // Exporter name
-	DraweeName        string    `json:"draweeName"`        // Importer name
-	DraweeAddress     string    `json:"draweeAddress"`     // Importer address
-	PaymentTerm       string    `json:"paymentTerm"`       // SIGHT, ACCEPTANCE
-	AcceptanceDays    int       `json:"acceptanceDays"`    // Days for acceptance (e.g., 60, 90)
+	DrawerName        string    `json:"drawerName"`     // Exporter name
+	DraweeName        string    `json:"draweeName"`     // Importer name
+	DraweeAddress     string    `json:"draweeAddress"`  // Importer address
+	PaymentTerm       string    `json:"paymentTerm"`    // SIGHT, ACCEPTANCE
+	AcceptanceDays    int       `json:"acceptanceDays"` // Days for acceptance (e.g., 60, 90)
 	Amount            float64   `json:"amount"`
 	Currency          string    `json:"currency"`
 	CollectingBank    string    `json:"collectingBank"`    // Foreign bank
@@ -31,18 +31,18 @@ type DocumentaryCollection struct {
 	Instructions      string    `json:"instructions"`      // Collection instructions
 	Status            string    `json:"status"`            // SENT, PRESENTED, ACCEPTED, PAID, UNPAID, RETURNED
 	SentDate          time.Time `json:"sentDate"`
-	PresentationDate  string    `json:"presentationDate"`  // When docs presented to drawee
-	AcceptanceDate    string    `json:"acceptanceDate"`    // When drawee accepts
-	DueDate           string    `json:"dueDate"`           // Payment due date
-	PaymentDate       string    `json:"paymentDate"`       // Actual payment date
-	ReturnedDate      string    `json:"returnedDate"`      // If documents returned
+	PresentationDate  string    `json:"presentationDate"` // When docs presented to drawee
+	AcceptanceDate    string    `json:"acceptanceDate"`   // When drawee accepts
+	DueDate           string    `json:"dueDate"`          // Payment due date
+	PaymentDate       string    `json:"paymentDate"`      // Actual payment date
+	ReturnedDate      string    `json:"returnedDate"`     // If documents returned
 	ReturnReason      string    `json:"returnReason"`
-	ChargesAccount    string    `json:"chargesAccount"`    // OUR, DRAWER, DRAWEE
+	ChargesAccount    string    `json:"chargesAccount"` // OUR, DRAWER, DRAWEE
 	Charges           float64   `json:"charges"`
-	ProtestRequired   bool      `json:"protestRequired"`   // If non-payment requires protest
+	ProtestRequired   bool      `json:"protestRequired"` // If non-payment requires protest
 	Remarks           string    `json:"remarks"`
-	FollowUpDays      int       `json:"followUpDays"`      // Days since sent without payment
-	RemindersCount    int       `json:"remindersCount"`    // Number of reminders sent
+	FollowUpDays      int       `json:"followUpDays"`   // Days since sent without payment
+	RemindersCount    int       `json:"remindersCount"` // Number of reminders sent
 	LastReminderDate  string    `json:"lastReminderDate"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
@@ -163,14 +163,14 @@ func (c *CoffeeContract) SendDocumentaryCollection(ctx contractapi.TransactionCo
 
 	// Emit event
 	event := map[string]interface{}{
-		"eventType":     "CollectionSent",
-		"collectionID":  collectionID,
-		"exporterID":    exporterID,
-		"amount":        amount,
-		"currency":      currency,
-		"paymentTerm":   paymentTerm,
+		"eventType":      "CollectionSent",
+		"collectionID":   collectionID,
+		"exporterID":     exporterID,
+		"amount":         amount,
+		"currency":       currency,
+		"paymentTerm":    paymentTerm,
 		"collectingBank": collectingBank,
-		"timestamp":     txTime.Format(time.RFC3339),
+		"timestamp":      txTime.Format(time.RFC3339),
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("CollectionSent", eventJSON)

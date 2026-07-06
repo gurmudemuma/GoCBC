@@ -44,6 +44,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
 import NextLink from 'next/link';
 import NotificationCenter from '@/components/NotificationCenter';
+import OrganizationLogo from '@/components/OrganizationLogo';
 
 interface HideOnScrollProps {
   children: React.ReactElement;
@@ -87,128 +88,12 @@ const NavigationBar: React.FC = () => {
   };
 
   const getOrganizationLogo = (role: string) => {
-    // For BANKS (CBE), show CBE branding with their colors
-    if (role === 'BANKS') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography 
-            variant="h5" 
-            sx={{ 
-              fontWeight: 800,
-              color: '#FFD700',  // Golden
-              fontSize: '1.5rem',
-              letterSpacing: '2px',
-              textShadow: '2px 2px 4px rgba(0,0,0,0.3)',
-            }}
-          >
-            CBE
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // For NBE, show NBE branding with their colors
-    if (role === 'NBE') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography 
-            variant="h5" 
-            sx={{ 
-              fontWeight: 800,
-              color: '#C4A574',  // Light Bronze/Golden
-              fontSize: '1.5rem',
-              letterSpacing: '2px',
-              textShadow: '2px 2px 4px rgba(92, 74, 51, 0.3)',
-            }}
-          >
-            NBE
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // For ECTA, show with green
-    if (role === 'ECTA') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Coffee sx={{ fontSize: 32, color: '#078930' }} />
-          <Typography 
-            variant="h6" 
-            sx={{ 
-              fontWeight: 700,
-              color: '#ffffff',
-              fontSize: '1.1rem',
-              letterSpacing: '1px',
-            }}
-          >
-            ECTA
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // For ECX, show with blue
-    if (role === 'ECX') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Coffee sx={{ fontSize: 32, color: '#FCDD09' }} />
-          <Typography 
-            variant="h6" 
-            sx={{ 
-              fontWeight: 700,
-              color: '#ffffff',
-              fontSize: '1.1rem',
-              letterSpacing: '1px',
-            }}
-          >
-            ECX
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // For CUSTOMS, show with government blue
-    if (role === 'CUSTOMS') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <VerifiedUser sx={{ fontSize: 32, color: '#FCDD09' }} />
-          <Typography 
-            variant="h6" 
-            sx={{ 
-              fontWeight: 700,
-              color: '#ffffff',
-              fontSize: '1.1rem',
-              letterSpacing: '1px',
-            }}
-          >
-            CUSTOMS
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // For SHIPPING, show with teal
-    if (role === 'SHIPPING') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <LocalShipping sx={{ fontSize: 32, color: '#0097a7' }} />
-          <Typography 
-            variant="h6" 
-            sx={{ 
-              fontWeight: 700,
-              color: '#ffffff',
-              fontSize: '1.1rem',
-              letterSpacing: '1px',
-            }}
-          >
-            SHIPPING
-          </Typography>
-        </Box>
-      );
-    }
-    
-    // Default coffee icon for other organizations
-    return <Coffee sx={{ fontSize: 32, color: '#ffd54f' }} />;
+    // Use the reusable OrganizationLogo with professional styling
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <OrganizationLogo role={role} height={40} width={120} variant="professional" showBorder={true} />
+      </Box>
+    );
   };
 
   const getRoleColor = (role: string) => {

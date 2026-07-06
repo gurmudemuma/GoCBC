@@ -1,7 +1,8 @@
 import express from 'express';
-import { fabricService } from '../services/fabricService';
+import { FabricService } from '../services/fabricService';
 
 const router = express.Router();
+const fabricService = FabricService.getInstance();
 
 // Record advance payment
 router.post('/record', async (req, res) => {

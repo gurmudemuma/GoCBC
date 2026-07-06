@@ -43,7 +43,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
   onSuccess,
 }) => {
   const { notification, showSuccess, showError, showWarning, closeNotification } = useNotification();
-  const [step, setStep] = useState<'perform' | 'approve' | 'permit'>('perform');
+  const [step, setStep] = useState<'perform' | 'done'>('perform');
   const [loading, setLoading] = useState(false);
   const [inspectionData, setInspectionData] = useState<any>(null);
   const [exporterTaster, setExporterTaster] = useState<string>('');
@@ -75,33 +75,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     remarks: '',
   });
 
-  // Approve Inspection Form Data
-  const [approvalForm, setApprovalForm] = useState({
-    approvedBy: '',
-    certificateNo: '',
-  });
-
-  // Export Permit Form Data
-  const [permitForm, setPermitForm] = useState({
-    exportPermitNo: '',
-    issuedBy: '',
-  });
-
-  // Auto-generate IDs
-  useEffect(() => {
-    const today = new Date();
-    const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
-    
-    setApprovalForm(prev => ({
-      ...prev,
-      certificateNo: `CERT-${dateStr}-${Math.floor(Math.random() * 1000)}`,
-    }));
-
-    setPermitForm(prev => ({
-      ...prev,
-      exportPermitNo: `EP-${dateStr}-${Math.floor(Math.random() * 1000)}`,
-    }));
-  }, []);
+  // Note: Approve/Reject/Permit handling moved to InspectionManagement component
 
   // Fetch exporter's registered taster (for information only - not official inspector)
   useEffect(() => {
@@ -174,11 +148,11 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
       if (response.data?.success) {
         setInspectionData({ ...response.data.data, inspectionId });
         showSuccess(
-          'Inspection Performed',
-          `Quality inspection completed for ${shipment.shipmentId}. Total Score: ${calculateTotalScore()}/100`,
-          `Grade: ${getQualityGrade()} • Cupping: ${getCuppingGrade()}`
+          'Inspection Recorded',
+          `Physical & cupping inspection completed for ${shipment.shipmentId}. Score: ${calculateTotalScore()}/100 — ${getQualityGrade()}`,
+          'The inspection record is now on the blockchain. Go to the Quality Control tab → All Inspections to Approve or Reject this inspection and then issue the Export Permit.'
         );
-        setStep('approve');
+        setStep('done');
       } else {
         showError('Inspection Failed', response.data?.error?.message || 'Failed to perform inspection');
       }
@@ -189,69 +163,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     }
   };
 
-  const handleApproveInspection = async () => {
-    if (!approvalForm.approvedBy || !approvalForm.certificateNo) {
-      showError('Validation Error', 'Please fill in all approval fields');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await api.post(`/quality/inspections/${inspectionData.inspectionId}/approve`, {
-        approvedBy: approvalForm.approvedBy,
-        certificateNo: approvalForm.certificateNo,
-      });
-
-      if (response.data?.success) {
-        showSuccess(
-          'Inspection Approved',
-          `Quality approved for ${shipment.shipmentId}. Certificate: ${approvalForm.certificateNo}`,
-          'Ready to issue export permit'
-        );
-        setStep('permit');
-      } else {
-        showError('Approval Failed', response.data?.error?.message || 'Failed to approve inspection');
-      }
-    } catch (error: any) {
-      showError('Approval Error', error.message || 'An unexpected error occurred');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleIssuePermit = async () => {
-    if (!permitForm.issuedBy || !permitForm.exportPermitNo) {
-      showError('Validation Error', 'Please fill in all permit fields');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await api.post(`/quality/inspections/${inspectionData.inspectionId}/issue-permit`, {
-        exportPermitNo: permitForm.exportPermitNo,
-        issuedBy: permitForm.issuedBy,
-      });
-
-      if (response.data?.success) {
-        showSuccess(
-          'Export Permit Issued',
-          `Export permit ${permitForm.exportPermitNo} issued successfully.`,
-          'Coffee cleared for export. Exporter can now proceed to customs declaration.'
-        );
-        // Call onSuccess callback to refresh the list
-        setTimeout(() => {
-          onSuccess();
-          onClose();
-        }, 2000);
-      } else {
-        showError('Permit Issuance Failed', response.data?.error?.message || 'Failed to issue permit');
-      }
-    } catch (error: any) {
-      showError('Permit Error', error.message || 'An unexpected error occurred');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Note: Approve/Reject/Permit handlers moved to InspectionManagement component
 
   const calculateTotalScore = () => {
     const scores = [
@@ -291,8 +203,11 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
           </Box>
           <Box mt={1}>
             <Chip
-              label={step === 'perform' ? 'Step 1: Perform Inspection' : step === 'approve' ? 'Step 2: Approve Quality' : 'Step 3: Issue Export Permit'}
-              color="primary"
+              label={
+                step === 'perform' ? 'Step 1 of 3: Perform Physical & Cupping Inspection' :
+                'Step 1 Complete — Proceed to Quality Control tab for approval'
+              }
+              color={step === 'done' ? 'success' : 'primary'}
               size="small"
             />
           </Box>
@@ -520,129 +435,75 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
             </Box>
           )}
 
-          {/* STEP 2: Approve Inspection */}
-          {step === 'approve' && (
-            <Box>
+          {/* STEP COMPLETE: Next steps in Quality Control tab */}
+          {step === 'done' && (
+            <Box sx={{ textAlign: 'center', py: 3 }}>
               <Alert severity="success" sx={{ mb: 3 }}>
-                <strong>Inspection Completed!</strong> Total Score: {calculateTotalScore()}/100 • Grade: {getQualityGrade()}
+                <strong>✅ Inspection Recorded on Blockchain!</strong>
+                <br />
+                Shipment: {shipment.shipmentId} • Total Score: {calculateTotalScore()}/100 • Grade: {getQualityGrade()}
+                <br />
+                {inspectionData?.inspectionId && `Inspection ID: ${inspectionData.inspectionId}`}
               </Alert>
-
+              
               <Typography variant="h6" gutterBottom>
-                Quality Approval
+                📋 What's Next?
               </Typography>
-
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <FormControl fullWidth>
-                    <InputLabel>Approved By *</InputLabel>
-                    <Select
-                      value={approvalForm.approvedBy}
-                      onChange={(e) => setApprovalForm({ ...approvalForm, approvedBy: e.target.value })}
-                      label="Approved By *"
-                    >
-                      <MenuItem value="Dr. Getachew Amare">Dr. Getachew Amare (Quality Director)</MenuItem>
-                      <MenuItem value="Ato Mekonnen Solomon">Ato Mekonnen Solomon (Senior Manager)</MenuItem>
-                      <MenuItem value="W/ro Hana Tesfaye">W/ro Hana Tesfaye (Quality Manager)</MenuItem>
-                      <MenuItem value="Dr. Yohannes Assefa">Dr. Yohannes Assefa (Chief Q-Grader)</MenuItem>
-                    </Select>
-                    <FormHelperText>ECTA Quality Approval Authority</FormHelperText>
-                  </FormControl>
-                </Grid>
-
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="Quality Certificate Number"
-                    value={approvalForm.certificateNo}
-                    onChange={(e) => setApprovalForm({ ...approvalForm, certificateNo: e.target.value })}
-                    helperText="Automatically generated certificate ID"
-                  />
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-
-          {/* STEP 3: Issue Export Permit */}
-          {step === 'permit' && (
-            <Box>
-              <Alert severity="success" sx={{ mb: 3 }}>
-                <strong>Quality Approved!</strong> Certificate: {approvalForm.certificateNo}
-              </Alert>
-
-              <Typography variant="h6" gutterBottom>
-                Export Permit Issuance
+              <Typography variant="body1" align="left" sx={{ maxWidth: 600, mx: 'auto', mb: 2 }}>
+                The inspection is now recorded on the blockchain. To complete the quality control workflow:
               </Typography>
+              
+              <Box sx={{ maxWidth: 600, mx: 'auto', textAlign: 'left', bgcolor: 'grey.50', p: 2, borderRadius: 1 }}>
+                <Typography variant="body2" paragraph>
+                  <strong>Step 1:</strong> Navigate to the <strong>Quality Control</strong> tab in the ECTA portal
+                </Typography>
+                <Typography variant="body2" paragraph>
+                  <strong>Step 2:</strong> Find this inspection in the <strong>All Inspections</strong> table
+                </Typography>
+                <Typography variant="body2" paragraph>
+                  <strong>Step 3:</strong> Review and click <strong>✓ Approve</strong> (if quality passed) or <strong>✗ Reject</strong> (if failed)
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Step 4:</strong> After approval, click <strong>Issue Permit</strong> to generate the Export Permit
+                </Typography>
+              </Box>
 
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="Export Permit Number"
-                    value={permitForm.exportPermitNo}
-                    onChange={(e) => setPermitForm({ ...permitForm, exportPermitNo: e.target.value })}
-                    helperText="Format: EP-YYYYMMDD-XXX"
-                  />
-                </Grid>
-
-                <Grid item xs={12}>
-                  <FormControl fullWidth>
-                    <InputLabel>Issued By *</InputLabel>
-                    <Select
-                      value={permitForm.issuedBy}
-                      onChange={(e) => setPermitForm({ ...permitForm, issuedBy: e.target.value })}
-                      label="Issued By *"
-                    >
-                      <MenuItem value="Ato Alemayehu Tadesse">Ato Alemayehu Tadesse (Permit Officer)</MenuItem>
-                      <MenuItem value="W/ro Tsion Gebre">W/ro Tsion Gebre (Export Coordinator)</MenuItem>
-                      <MenuItem value="Ato Dawit Hailu">Ato Dawit Hailu (Senior Inspector)</MenuItem>
-                      <MenuItem value="W/ro Meron Worku">W/ro Meron Worku (Trade Facilitator)</MenuItem>
-                    </Select>
-                    <FormHelperText>ECTA Export Permit Authority</FormHelperText>
-                  </FormControl>
-                </Grid>
-              </Grid>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 3 }}>
+                The 3-step approval workflow (Perform → Approve → Permit) is separated for professional auditability. 
+                Each action is logged independently on the blockchain with proper stakeholder authentication.
+              </Typography>
             </Box>
           )}
         </DialogContent>
 
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <AnimatedButton onClick={onClose} disabled={loading}>
-            Cancel
-          </AnimatedButton>
-
           {step === 'perform' && (
-            <AnimatedButton
-              variant="contained"
-              onClick={handlePerformInspection}
-              disabled={loading || !inspectionForm.inspectorName}
-              startIcon={<Assignment />}
-              brandColor="#2e7d32"
-            >
-              Complete Inspection
-            </AnimatedButton>
+            <>
+              <AnimatedButton onClick={onClose} disabled={loading}>
+                Cancel
+              </AnimatedButton>
+              <AnimatedButton
+                variant="contained"
+                onClick={handlePerformInspection}
+                disabled={loading || !inspectionForm.inspectorName}
+                startIcon={<Assignment />}
+                brandColor="#2e7d32"
+              >
+                Complete Inspection
+              </AnimatedButton>
+            </>
           )}
 
-          {step === 'approve' && (
+          {step === 'done' && (
             <AnimatedButton
               variant="contained"
-              onClick={handleApproveInspection}
-              disabled={loading || !approvalForm.approvedBy}
-              startIcon={<CheckCircle />}
+              onClick={() => {
+                onSuccess();
+                onClose();
+              }}
               brandColor="#1976d2"
             >
-              Approve Quality
-            </AnimatedButton>
-          )}
-
-          {step === 'permit' && (
-            <AnimatedButton
-              variant="contained"
-              onClick={handleIssuePermit}
-              disabled={loading || !permitForm.issuedBy}
-              startIcon={<Science />}
-              brandColor="#ed6c02"
-            >
-              Issue Export Permit
+              Got It - Go to Quality Control Tab
             </AnimatedButton>
           )}
         </DialogActions>

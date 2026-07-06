@@ -1,328 +1,249 @@
+// Ethiopian Coffee Export Consortium Blockchain System (CECBS)
+// Forex Allocation API Routes — uses shared FabricService singleton
+
 import express from 'express';
-import { Gateway, Wallets } from 'fabric-network';
-import * as path from 'path';
-import * as fs from 'fs';
+import { FabricService } from '../services/fabricService';
+import { authMiddleware } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
-
-// Helper function to connect to Fabric network
-async function connectToNetwork(orgName: string) {
-  const ccpPath = path.resolve(__dirname, '..', '..', '..', 'blockchain', 'organizations', 
-    'peerOrganizations', `${orgName.toLowerCase()}.et`, `connection-${orgName.toLowerCase()}.json`);
-  const ccp = JSON.parse(fs.readFileSync(ccpPath, 'utf8'));
-
-  const walletPath = path.join(process.cwd(), 'wallet');
-  const wallet = await Wallets.newFileSystemWallet(walletPath);
-
-  const identity = await wallet.get('admin');
-  if (!identity) {
-    throw new Error('Admin identity not found in wallet');
-  }
-
-  const gateway = new Gateway();
-  await gateway.connect(ccp, {
-    wallet,
-    identity: 'admin',
-    discovery: { enabled: true, asLocalhost: true }
-  });
-
-  const network = await gateway.getNetwork('coffeechannel');
-  const contract = network.getContract('coffee');
-
-  return { gateway, contract };
-}
+const fabricService = FabricService.getInstance();
 
 // ==================== FOREX ALLOCATION ROUTES ====================
 
-// Request forex allocation
-router.post('/request', async (req, res) => {
+// GET /api/v1/forex — all forex allocations
+router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { forexId, contractId, exporterId, lcId, amount, currency } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction(
-      'RequestForex',
-      forexId,
-      contractId,
-      exporterId,
-      lcId,
-      amount.toString(),
-      currency
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Forex requested successfully', forexId });
+    const result = await fabricService.queryAllForex();
+    if (result.success) {
+      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+    } else {
+      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    }
   } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    logger.error('Error fetching forex allocations:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// Allocate forex
-router.post('/allocate', async (req, res) => {
+// GET /api/v1/forex/:forexId — single forex record
+router.get('/:forexId', authMiddleware, async (req, res) => {
   try {
-    const { forexId, amount, exchangeRate, retentionRate, nbeOfficer, nbeApprovalRef, expiryDate } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction(
-      'AllocateForex',
-      forexId,
-      amount.toString(),
-      exchangeRate.toString(),
-      retentionRate.toString(),
-      nbeOfficer,
-      nbeApprovalRef,
-      expiryDate
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Forex allocated successfully' });
+    const result = await fabricService.getForex(req.params.forexId);
+    if (result.success) {
+      res.json({ success: true, data: result.data, timestamp: new Date().toISOString() });
+    } else {
+      res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: result.error }, timestamp: new Date().toISOString() });
+    }
   } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// Utilize forex
-router.post('/utilize', async (req, res) => {
+// GET /api/v1/forex/exporter/:exporterId
+router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
   try {
-    const { forexId, utilizedAmount } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction('UtilizeForex', forexId, utilizedAmount.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Forex utilized successfully' });
+    const result = await fabricService.getForexByExporter(req.params.exporterId);
+    if (result.success) {
+      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+    } else {
+      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    }
   } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// Get all forex allocations
-router.get('/', async (req, res) => {
+// POST /api/v1/forex/request — create forex request
+// NOTE: LC ID removed from parameters to prevent SDK-level state queries
+// LC will be linked during NBE allocation phase
+router.post('/request', authMiddleware, async (req, res) => {
   try {
-    const { gateway, contract } = await connectToNetwork('NBE');
+    const { forexId, contractId, exporterId, amount, currency } = req.body;
+    if (!forexId || !contractId || !exporterId || !amount) {
+      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'forexId, contractId, exporterId, amount are required' } });
+    }
+
+    // NOTE: Auto-mapping removed to prevent "Peer endorsements do not match" errors
+    // In multi-peer networks, querying recently-created contracts during endorsement causes inconsistency
+    // All required fields must be provided in the request body
+
+    const finalCurrency = currency || 'USD';
+
+    // Retry logic for peer synchronization issues
+    let result;
+    let lastError;
+    const maxRetries = 5; // Increased from 3 to 5 attempts
     
-    const result = await contract.evaluateTransaction('QueryAllForex');
-    const forexList = JSON.parse(result.toString());
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // RequestForex now takes 5 parameters (lcId removed)
+        result = await fabricService.invokeChaincode('RequestForex', [
+          forexId, contractId, exporterId, amount.toString(), finalCurrency,
+        ]);
+        
+        if (result.success) {
+          logger.info(`✅ Forex request created: ${forexId} (attempt ${attempt})`);
+          
+          // Wait for transaction to propagate to all peers before responding
+          // This prevents the next operation (AllocateForex) from failing
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          return res.status(201).json({ 
+            success: true, 
+            data: { forexId },
+            txId: result.txId, 
+            attempt,
+            timestamp: new Date().toISOString() 
+          });
+        }
+        
+        lastError = result.error;
+        
+        // If error is about peer endorsement mismatch or LC not found, wait and retry
+        if (result.error && (
+          result.error.includes('Peer endorsements do not match') ||
+          result.error.includes('does not exist') ||
+          result.error.includes('not found')
+        )) {
+          const waitTime = 4000 * attempt; // 4s, 8s, 12s, 16s, 20s
+          logger.warn(`Peer sync issue detected on attempt ${attempt}/${maxRetries}, waiting ${waitTime}ms before retry...`);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
+        } else {
+          // Other errors, don't retry
+          break;
+        }
+      } catch (error: any) {
+        lastError = error.message;
+        logger.error(`Error on attempt ${attempt}:`, error);
+        if (attempt < maxRetries) {
+          const waitTime = 4000 * attempt;
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
     
-    await gateway.disconnect();
-    
-    res.json({
-      success: true,
-      data: forexList,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    res.status(500).json({ 
+    // All retries failed
+    res.status(400).json({ 
       success: false, 
       error: { 
-        code: 'QUERY_FAILED', 
-        message: error.message 
-      },
-      timestamp: new Date().toISOString(),
+        code: 'REQUEST_FAILED', 
+        message: lastError,
+        hint: 'Peers may not be synchronized. Wait a few seconds and try again, or check that the LC exists and blockchain peers are healthy.'
+      }, 
+      timestamp: new Date().toISOString() 
     });
+  } catch (error: any) {
+    logger.error('Error requesting forex:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// Get forex details
-router.get('/:forexId', async (req, res) => {
+// POST /api/v1/forex/allocate — NBE allocates forex (NBEMSP enforced on-chain)
+// NOTE: LC ID now provided during allocation instead of request to prevent peer mismatch
+router.post('/allocate', authMiddleware, async (req, res) => {
   try {
-    const { forexId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
+    const { forexId, lcId, amount, exchangeRate, retentionRate, nbeOfficer, nbeApprovalRef, expiryDate } = req.body;
+    if (!forexId || !lcId || !amount || !exchangeRate || !retentionRate || !nbeOfficer || !nbeApprovalRef || !expiryDate) {
+      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'All fields required: forexId, lcId, amount, exchangeRate, retentionRate, nbeOfficer, nbeApprovalRef, expiryDate' } });
+    }
 
+    // Connect as NBE since AllocateForex requires NBEMSP
+    await fabricService.connectAsOrg('NBEMSP');
+
+    // Retry logic for peer synchronization issues
+    let result;
+    let lastError;
+    const maxRetries = 5; // Increased from 3 to 5 attempts
     
-    const result = await contract.evaluateTransaction('ReadForex', forexId);
-    const forex = JSON.parse(result.toString());
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // AllocateForex now takes 8 parameters (lcId added as second parameter)
+        result = await fabricService.invokeChaincode('AllocateForex', [
+          forexId,
+          lcId,
+          amount.toString(),
+          exchangeRate.toString(),
+          retentionRate.toString(),
+          nbeOfficer,
+          nbeApprovalRef,
+          expiryDate,
+        ]);
+        
+        if (result.success) {
+          logger.info(`Forex allocated: ${forexId} by ${nbeOfficer} (attempt ${attempt})`);
+          
+          // Wait for transaction to propagate before responding
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          return res.json({ 
+            success: true, 
+            data: { forexId }, 
+            txId: result.txId, 
+            attempt,
+            timestamp: new Date().toISOString() 
+          });
+        }
+        
+        lastError = result.error;
+        
+        // If error is about forex not existing or peer mismatch, wait and retry
+        if (result.error && (
+          result.error.includes('does not exist') ||
+          result.error.includes('Peer endorsements do not match') ||
+          result.error.includes('not found')
+        )) {
+          const waitTime = 5000 * attempt; // 5s, 10s, 15s, 20s, 25s
+          logger.warn(`Forex not synced or peer mismatch on attempt ${attempt}/${maxRetries}, waiting ${waitTime}ms...`);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
+        } else {
+          // Other errors, don't retry
+          break;
+        }
+      } catch (error: any) {
+        lastError = error.message;
+        logger.error(`Error on attempt ${attempt}:`, error);
+        if (attempt < maxRetries) {
+          const waitTime = 5000 * attempt;
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
     
-    await gateway.disconnect();
-    
-    res.json({ success: true, forex });
+    // All retries failed
+    res.status(400).json({ 
+      success: false, 
+      error: { 
+        code: 'ALLOCATE_FAILED', 
+        message: lastError,
+        hint: 'Forex request may not be synchronized across peers yet. Wait a few seconds and try again.'
+      }, 
+      timestamp: new Date().toISOString() 
+    });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    logger.error('Error allocating forex:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// Query forex by exporter
-router.get('/exporter/:exporterId', async (req, res) => {
+// POST /api/v1/forex/utilize
+router.post('/utilize', authMiddleware, async (req, res) => {
   try {
-    const { exporterId } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    const result = await contract.evaluateTransaction('QueryForexByExporter', exporterId);
-    const forexList = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, forexList });
+    const { forexId, utilizedAmount } = req.body;
+    const result = await fabricService.invokeChaincode('UtilizeForex', [forexId, utilizedAmount.toString()]);
+    if (result.success) {
+      res.json({ success: true, txId: result.txId, timestamp: new Date().toISOString() });
+    } else {
+      res.status(400).json({ success: false, error: { code: 'UTILIZE_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    }
   } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Query forex by status
-router.get('/status/:status', async (req, res) => {
-  try {
-    const { status } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    const result = await contract.evaluateTransaction('QueryForexByStatus', status);
-    const forexList = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, forexList });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Verify forex utilization
-router.post('/verify', async (req, res) => {
-  try {
-    const { forexId, paymentId } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction('VerifyForexUtilization', forexId, paymentId);
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Forex utilization verified successfully' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== EXCHANGE RATE ROUTES ====================
-
-// Set exchange rate
-router.post('/rate/set', async (req, res) => {
-  try {
-    const { rateId, currency, buyingRate, sellingRate, setBy } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction(
-      'SetExchangeRate',
-      rateId,
-      currency,
-      buyingRate.toString(),
-      sellingRate.toString(),
-      setBy
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Exchange rate set successfully', rateId });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get current exchange rate
-router.get('/rate/:currency', async (req, res) => {
-  try {
-    const { currency } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    const result = await contract.evaluateTransaction('GetCurrentExchangeRate', currency);
-    const rate = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, rate });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get exchange rate history
-router.get('/rate/:currency/history', async (req, res) => {
-  try {
-    const { currency } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    const result = await contract.evaluateTransaction('QueryExchangeRateHistory', currency);
-    const rates = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, rates });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== RETENTION POLICY ROUTES ====================
-
-// Set retention policy
-router.post('/retention/set', async (req, res) => {
-  try {
-    const { policyId, commodityType, retentionRate, setBy, justification } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction(
-      'SetRetentionPolicy',
-      policyId,
-      commodityType,
-      retentionRate.toString(),
-      setBy,
-      justification
-    );
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Retention policy set successfully', policyId });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get current retention policy
-router.get('/retention/:commodityType', async (req, res) => {
-  try {
-    const { commodityType } = req.params;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    const result = await contract.evaluateTransaction('GetCurrentRetentionPolicy', commodityType);
-    const policy = JSON.parse(result.toString());
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, policy });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== PAYMENT OVERSIGHT ROUTES ====================
-
-// Approve payment settlement
-router.post('/payment/approve', async (req, res) => {
-  try {
-    const { paymentId, nbeOfficer, approvalRef } = req.body;
-    
-    const { gateway, contract } = await connectToNetwork('NBE');
-    
-    await contract.submitTransaction('ApprovePaymentSettlement', paymentId, nbeOfficer, approvalRef);
-    
-    await gateway.disconnect();
-    
-    res.json({ success: true, message: 'Payment approved for settlement' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 

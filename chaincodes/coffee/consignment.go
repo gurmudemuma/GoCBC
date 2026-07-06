@@ -12,35 +12,35 @@ import (
 // ==================== CONSIGNMENT PAYMENT STRUCTURE ====================
 
 type ConsignmentPayment struct {
-	ConsignmentID     string    `json:"consignmentId"`
-	ExporterID        string    `json:"exporterId"`
-	PermitID          string    `json:"permitId"`
-	CommodityType     string    `json:"commodityType"`     // Only: FRUITS, FLOWERS, MEAT
-	Description       string    `json:"description"`
-	Destination       string    `json:"destination"`
-	BuyerName         string    `json:"buyerName"`
-	BuyerAddress      string    `json:"buyerAddress"`
-	PermitAmount      float64   `json:"permitAmount"`      // Initial permit amount
-	Currency          string    `json:"currency"`
-	ShippedValue      float64   `json:"shippedValue"`      // Total value shipped
-	SettledAmount     float64   `json:"settledAmount"`     // Amount repatriated
-	OutstandingAmount float64   `json:"outstandingAmount"` // Awaiting repatriation
-	Status            string    `json:"status"`            // PERMIT_ISSUED, SHIPPED, PARTIAL, SETTLED
-	ShippedDate       string    `json:"shippedDate"`
+	ConsignmentID     string           `json:"consignmentId"`
+	ExporterID        string           `json:"exporterId"`
+	PermitID          string           `json:"permitId"`
+	CommodityType     string           `json:"commodityType"` // Only: FRUITS, FLOWERS, MEAT
+	Description       string           `json:"description"`
+	Destination       string           `json:"destination"`
+	BuyerName         string           `json:"buyerName"`
+	BuyerAddress      string           `json:"buyerAddress"`
+	PermitAmount      float64          `json:"permitAmount"` // Initial permit amount
+	Currency          string           `json:"currency"`
+	ShippedValue      float64          `json:"shippedValue"`      // Total value shipped
+	SettledAmount     float64          `json:"settledAmount"`     // Amount repatriated
+	OutstandingAmount float64          `json:"outstandingAmount"` // Awaiting repatriation
+	Status            string           `json:"status"`            // PERMIT_ISSUED, SHIPPED, PARTIAL, SETTLED
+	ShippedDate       string           `json:"shippedDate"`
 	PartialPayments   []PartialPayment `json:"partialPayments"` // Track multiple payments
-	BankBranch        string    `json:"bankBranch"`
-	Remarks           string    `json:"remarks"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	BankBranch        string           `json:"bankBranch"`
+	Remarks           string           `json:"remarks"`
+	CreatedAt         time.Time        `json:"createdAt"`
+	UpdatedAt         time.Time        `json:"updatedAt"`
 }
 
 // Track individual payments for consignment
 type PartialPayment struct {
-	PaymentDate       string  `json:"paymentDate"`
-	Amount            float64 `json:"amount"`
-	Currency          string  `json:"currency"`
-	SWIFTReference    string  `json:"swiftReference"`
-	ReceivedBy        string  `json:"receivedBy"`
+	PaymentDate    string  `json:"paymentDate"`
+	Amount         float64 `json:"amount"`
+	Currency       string  `json:"currency"`
+	SWIFTReference string  `json:"swiftReference"`
+	ReceivedBy     string  `json:"receivedBy"`
 }
 
 // ==================== CONSIGNMENT PAYMENT FUNCTIONS ====================
@@ -315,7 +315,7 @@ func (c *CoffeeContract) RecordPartialPayment(ctx contractapi.TransactionContext
 	if consignment.OutstandingAmount <= 0.01 { // Allow small rounding differences
 		consignment.Status = "SETTLED"
 		consignment.OutstandingAmount = 0
-		
+
 		// Settle the permit
 		if consignment.PermitID != "" {
 			err = c.SettleExportPermit(ctx, consignment.PermitID, fmt.Sprintf("%.2f", consignment.SettledAmount))
@@ -341,13 +341,13 @@ func (c *CoffeeContract) RecordPartialPayment(ctx contractapi.TransactionContext
 	}
 
 	event := map[string]interface{}{
-		"eventType":        eventType,
-		"consignmentID":    consignmentID,
-		"exporterID":       consignment.ExporterID,
-		"paymentAmount":    amount,
-		"settledAmount":    consignment.SettledAmount,
+		"eventType":         eventType,
+		"consignmentID":     consignmentID,
+		"exporterID":        consignment.ExporterID,
+		"paymentAmount":     amount,
+		"settledAmount":     consignment.SettledAmount,
 		"outstandingAmount": consignment.OutstandingAmount,
-		"timestamp":        txTime.Format(time.RFC3339),
+		"timestamp":         txTime.Format(time.RFC3339),
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent(eventType, eventJSON)

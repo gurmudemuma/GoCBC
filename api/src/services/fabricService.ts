@@ -15,6 +15,8 @@ export interface ChaincodeResponse {
 }
 
 export class FabricService {
+  private static instance: FabricService | null = null;
+
   private gateway: Gateway | null = null;
   private network: Network | null = null;
   private contract: Contract | null = null;
@@ -22,9 +24,16 @@ export class FabricService {
   private connected: boolean = false;
   private db: sqlite3.Database | null = null;
 
-  constructor() {
-    this.gateway = new Gateway();
+  private constructor() {
+    // Gateway is created lazily in connect() to ensure env vars are loaded first
     this.initializeDatabase();
+  }
+
+  public static getInstance(): FabricService {
+    if (!FabricService.instance) {
+      FabricService.instance = new FabricService();
+    }
+    return FabricService.instance;
   }
 
   private initializeDatabase(): void {
@@ -97,47 +106,138 @@ export class FabricService {
     });
   }
 
-  public async connect(): Promise<void> {
+  private connectCalled: boolean = false;
+
+  // Normalize organization name to MSP ID
+  private normalizeMspId(org: string): string {
+    // First normalize: remove all non-alphanumeric chars and uppercase
+    const normalized = org.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    
+    // Then check against known patterns
+    switch (normalized) {
+      case 'NBE':
+      case 'NBEMSP':
+      case 'NATIONALBANKOFETHIOPIA':
+        return 'NBEMSP';
+      case 'ECTA':
+      case 'ECTAMSP':
+      case 'ETHIOPIANCOFFEEANDTEAAUTHORITY':  // with "AND"
+      case 'ETHIOPIANCOFFEETEAAUTHORITY':     // without "AND" (& symbol removed)
+        return 'ECTAMSP';
+      case 'ECX':
+      case 'ECXMSP':
+      case 'ETHIOPIANCOMMODITYEXCHANGE':
+        return 'ECXMSP';
+      case 'BANKS':
+      case 'BANKSMSP':
+      case 'COMMERCIALBANKOFETHIOPIA':
+        return 'BanksMSP';
+      case 'CUSTOMS':
+      case 'CUSTOMSMSP':
+      case 'ETHIOPIANCUSTOMS':
+        return 'CustomsMSP';
+      case 'SHIPPING':
+      case 'SHIPPINGMSP':
+      case 'SHIPPINGLINES':
+        return 'ShippingMSP';
+      default:
+        // If the normalized version ends with MSP, it's already in MSP format
+        if (normalized.endsWith('MSP')) {
+          return normalized;
+        }
+        // Otherwise add MSP suffix to normalized version
+        return `${normalized}MSP`;
+    }
+  }
+
+  public async connect(orgId?: string): Promise<void> {
+    const requireFabric = process.env.FABRIC_REQUIRED === 'true';
+    let targetOrg = orgId || process.env.FABRIC_MSP_ID || 'ECTAMSP';
+    
+    // Normalize the organization ID to proper MSP format
+    targetOrg = this.normalizeMspId(targetOrg);
+
+    // If explicitly requesting a different org, force reconnect
+    const forcedReconnect = orgId && process.env.FABRIC_MSP_ID !== targetOrg;
+    
+    // Already connected to the same org and not forcing reconnect — no-op
+    if (this.connected && process.env.FABRIC_MSP_ID === targetOrg && !forcedReconnect) {
+      return;
+    }
+
+    if (process.env.FABRIC_ENABLED === 'false') {
+      if (!this.connectCalled) {
+        logger.warn('Fabric integration disabled by configuration; continuing without blockchain connectivity');
+        this.connectCalled = true;
+      }
+      this.connected = false;
+      return;
+    }
+
     try {
-      logger.info('Connecting to Hyperledger Fabric network...');
+      logger.info(`Connecting to Hyperledger Fabric network as ${targetOrg}...`);
+
+      process.env.FABRIC_MSP_ID = targetOrg;
+
+      const adminLabel = `admin-${targetOrg}`;
 
       // Load wallet
       this.wallet = await Wallets.newFileSystemWallet(
         process.env.FABRIC_WALLET_PATH || './wallet'
       );
 
-      // Check if admin identity exists
-      const adminIdentity = await this.wallet.get('admin');
+      // Check if admin identity exists for the target org
+      const adminIdentity = await this.wallet.get(adminLabel);
       if (!adminIdentity) {
-        await this.importAdminIdentity();
+        await this.importAdminIdentity(targetOrg, adminLabel);
       }
 
       // Build connection profile dynamically
       const ccp = this.buildConnectionProfile();
 
-      // Gateway connection options with discovery enabled for multi-org endorsement
       const connectionOptions = {
         wallet: this.wallet,
-        identity: 'admin',
-        discovery: { enabled: true, asLocalhost: true },
-        eventHandlerOptions: {
-          commitTimeout: 300,
+        identity: adminLabel,
+        discovery: {
+          enabled: true,
+          asLocalhost: process.env.FABRIC_AS_LOCALHOST !== 'false',
         },
       };
 
-      // Connect to gateway
+      if (!this.gateway) {
+        this.gateway = new Gateway();
+      } else {
+        this.gateway.disconnect();
+        this.gateway = new Gateway();
+      }
+
       await this.gateway.connect(ccp, connectionOptions);
 
-      // Get network and contract
       this.network = await this.gateway.getNetwork(process.env.FABRIC_CHANNEL_NAME || 'coffeechannel');
       this.contract = this.network.getContract(process.env.FABRIC_CHAINCODE_NAME || 'coffee');
 
       this.connected = true;
-      logger.info('✅ Successfully connected to Hyperledger Fabric network');
+      logger.info(`✅ Successfully connected to Hyperledger Fabric network as ${targetOrg}`);
 
     } catch (error) {
-      logger.error('Failed to connect to Fabric network:', error);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`Fabric network unavailable; continuing without blockchain connectivity. ${message}`);
+
+      // Disconnect gateway to stop any background discovery/event threads
+      try {
+        if (this.gateway) {
+          this.gateway.disconnect();
+          this.gateway = null;
+        }
+      } catch (_) { /* ignore disconnect errors */ }
+
+      this.connected = false;
+      this.network = null;
+      this.contract = null;
+
+      if (requireFabric) {
+        throw error;
+      }
     }
   }
 
@@ -163,14 +263,23 @@ export class FabricService {
     return this.connected;
   }
 
-  private async importAdminIdentity(): Promise<void> {
+  public async connectAsOrg(orgId: string): Promise<void> {
+    await this.connect(orgId);
+  }
+
+  private async importAdminIdentity(orgId?: string, label: string = 'admin'): Promise<void> {
     try {
       logger.info('Importing admin identity from cryptogen certificates...');
 
-      const mspId = process.env.FABRIC_MSP_ID || 'ECTAMSP';
-      const orgName = mspId.replace('MSP', '').toLowerCase(); // ECTAMSP -> ecta
+      let mspId = orgId || process.env.FABRIC_MSP_ID || 'ECTAMSP';
       
-      // Path to admin credentials
+      // Normalize using the class method
+      mspId = this.normalizeMspId(mspId);
+      logger.info(`[FABRIC] Normalized MSP ID from "${orgId}" to "${mspId}"`);
+      
+      const orgName = mspId.replace('MSP', '').toLowerCase();
+      logger.info(`[FABRIC] Using organization name: "${orgName}" for credential path`);
+
       const credPath = path.join(
         __dirname,
         '..',
@@ -211,8 +320,8 @@ export class FabricService {
         type: 'X.509',
       };
 
-      await this.wallet!.put('admin', x509Identity);
-      logger.info('✅ Admin identity imported successfully');
+      await this.wallet!.put(label, x509Identity);
+      logger.info(`✅ Admin identity imported successfully for ${mspId}`);
 
     } catch (error) {
       logger.error('Failed to import admin identity:', error);
@@ -334,69 +443,68 @@ export class FabricService {
 
   // Chaincode invoke operations
   public async invokeChaincode(functionName: string, args: string[]): Promise<ChaincodeResponse> {
-    try {
-      // Check if contract exists, if not try to reconnect
-      if (!this.contract || !this.network) {
-        logger.warn('Contract or network is null, attempting to reconnect...');
-        await this.connect();
-      }
-      
-      if (!this.contract) {
-        throw new Error('Not connected to Fabric network');
-      }
+    // Retry logic for handling peer synchronization issues
+    const maxRetries = 4; // Increased to 4 attempts
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Check if contract exists, if not try to reconnect
+        if (!this.contract || !this.network) {
+          logger.warn('Contract or network is null, attempting to reconnect...');
+          await this.connect();
+        }
+        
+        if (!this.contract) {
+          throw new Error('Not connected to Fabric network');
+        }
 
-      logger.info(`Invoking chaincode function: ${functionName}`, { args });
+        logger.info(`Invoking chaincode function: ${functionName} (attempt ${attempt}/${maxRetries})`, { args });
 
-      // Create transaction and submit with retry logic for endorsement mismatches
-      const maxRetries = 3;
-      const retryDelay = 2000; // 2 seconds
-      let lastError: any = null;
+        // Submit transaction - Fabric SDK handles endorsement and commit
+        const transaction = this.contract.createTransaction(functionName);
+        const result = await transaction.submit(...args);
+        const txId = transaction.getTransactionId();
 
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const transaction = this.contract.createTransaction(functionName);
-          const result = await transaction.submit(...args);
-          const txId = transaction.getTransactionId();
+        logger.info(`✅ Chaincode invoke successful: ${functionName} (attempt ${attempt})`, { txId });
 
-          logger.info(`✅ Chaincode invoke successful: ${functionName}`, { txId, attempt });
+        return {
+          success: true,
+          data: result.toString() ? JSON.parse(result.toString()) : null,
+          txId,
+        };
 
-          return {
-            success: true,
-            data: result.toString() ? JSON.parse(result.toString()) : null,
-            txId,
-          };
-        } catch (error: any) {
-          lastError = error;
-          
-          // Check if error is due to endorsement mismatch
-          if (error.message && error.message.includes('Peer endorsements do not match')) {
-            logger.warn(`⚠️ Endorsement mismatch on attempt ${attempt}/${maxRetries}. Peers may be out of sync. Retrying in ${retryDelay}ms...`);
-            
-            if (attempt < maxRetries) {
-              // Wait before retry
-              await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-              continue;
-            } else {
-              logger.error(`❌ All ${maxRetries} attempts failed due to endorsement mismatch. Peers are not synchronized.`);
-              throw new Error('Blockchain peers are not synchronized. Please wait a few moments and try again.');
-            }
-          }
-          
-          // For other errors, throw immediately
-          throw error;
+      } catch (error) {
+        lastError = error;
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        logger.error(`Failed to invoke chaincode function ${functionName} (attempt ${attempt}/${maxRetries}):`, error);
+        
+        // Check if this is a peer synchronization issue that warrants retry
+        const isPeerSyncIssue = errorMessage.includes('Peer endorsements do not match') ||
+                               errorMessage.includes('does not exist') ||
+                               errorMessage.includes('not found') ||
+                               errorMessage.includes('MVCC_READ_CONFLICT');
+        
+        if (isPeerSyncIssue && attempt < maxRetries) {
+          // Wait with exponential backoff before retry
+          const waitTime = 4000 * attempt; // 4s, 8s, 12s, 16s
+          logger.warn(`🔄 Peer synchronization issue detected, waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        
+        // If not a sync issue or last attempt, return failure
+        if (attempt === maxRetries) {
+          logger.error(`❌ All ${maxRetries} attempts failed for ${functionName}`);
         }
       }
-
-      // If we get here, all retries failed
-      throw lastError || new Error('Transaction failed after all retries');
-
-    } catch (error) {
-      logger.error(`Failed to invoke chaincode function ${functionName}:`, error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
     }
+    
+    // All retries failed
+    return {
+      success: false,
+      error: lastError instanceof Error ? lastError.message : 'Unknown error',
+    };
   }
 
   // Chaincode query operations
@@ -485,7 +593,8 @@ export class FabricService {
     currency: string,
     eudrRequired: string,
     buyerBank?: string,
-    exporterBank?: string
+    exporterBank?: string,
+    documentsJSON?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('RegisterSalesContract', [
       contractId,
@@ -499,6 +608,7 @@ export class FabricService {
       eudrRequired,
       buyerBank || '',
       exporterBank || '',
+      documentsJSON || '[]',
     ]);
   }
 
@@ -626,7 +736,8 @@ export class FabricService {
     channel: string,
     forexRate: string,
     valueUsd: string,
-    eudrCompliant: string
+    eudrCompliant: string,
+    documentsJSON?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('CreateShipment', [
       shipmentId,
@@ -642,6 +753,7 @@ export class FabricService {
       forexRate,
       valueUsd,
       eudrCompliant,
+      documentsJSON || '[]',
     ]);
   }
 
@@ -828,25 +940,13 @@ export class FabricService {
         throw new Error('Not connected to Fabric network');
       }
 
-      const listener = await this.network.addBlockListener(
-        'block-listener',
-        (event) => {
+      await this.network.addBlockListener(
+        async (event: any) => {
           logger.info('New block received:', {
             blockNumber: event.blockNumber,
-            transactionCount: event.blockData.data.data.length,
-          });
-          
-          // Process transactions in the block
-          event.blockData.data.data.forEach((transaction: any, index: number) => {
-            logger.info(`Transaction ${index}:`, {
-              txId: transaction.payload.header.channel_header.tx_id,
-              timestamp: new Date(transaction.payload.header.channel_header.timestamp).toISOString(),
-            });
           });
         },
-        {
-          type: 'full',
-        }
+        { type: 'filtered' }
       );
 
       logger.info('✅ Block event listener started');
@@ -863,20 +963,17 @@ export class FabricService {
         throw new Error('Not connected to Fabric network');
       }
 
-      const channel = this.network.getChannel();
-      const peers = channel.getPeers();
-      const orderers = channel.getOrderers();
+      // fabric-network v2 exposes channel name via getChannel().getName() but
+      // peer/orderer enumeration was removed. Return what we have from config.
+      const channelName = process.env.FABRIC_CHANNEL_NAME || 'coffeechannel';
+      const mspId = process.env.FABRIC_MSP_ID || 'ECTAMSP';
+      const orgName = mspId.replace('MSP', '').toLowerCase();
 
       return {
-        channelName: channel.getName(),
-        peers: peers.map(peer => ({
-          name: peer.getName(),
-          url: peer.getUrl(),
-        })),
-        orderers: orderers.map(orderer => ({
-          name: orderer.getName(),
-          url: orderer.getUrl(),
-        })),
+        channelName,
+        connectedOrg: mspId,
+        peers: [`peer0.${orgName}.cecbs.et:${this.getPeerPort(orgName)}`],
+        orderers: ['orderer.cecbs.et:7050'],
       };
 
     } catch (error) {
@@ -1026,6 +1123,275 @@ export class FabricService {
 
   public async getInspectionsByStatus(status: string): Promise<ChaincodeResponse> {
     return this.queryChaincode('QueryInspectionsByStatus', [status]);
+  }
+
+  // ==================== PHYTOSANITARY CERTIFICATE OPERATIONS ====================
+
+  public async issuePhytosanitaryCertificate(
+    certificateID: string,
+    shipmentID: string,
+    exporterID: string,
+    inspectorName: string,
+    botanicalName: string,
+    treatmentApplied: string,
+    placeOfOrigin: string,
+    pointOfEntry: string,
+    quantity: string,
+    packagingType: string,
+    numberOfPackages: string,
+    distinguishMarks: string,
+    meansOfConveyance: string,
+    issuedBy: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('IssuePhytosanitaryCertificate', [
+      certificateID,
+      shipmentID,
+      exporterID,
+      inspectorName,
+      botanicalName,
+      treatmentApplied,
+      placeOfOrigin,
+      pointOfEntry,
+      quantity,
+      packagingType,
+      numberOfPackages,
+      distinguishMarks,
+      meansOfConveyance,
+      issuedBy,
+    ]);
+  }
+
+  public async getPhytosanitaryCertificate(certificateID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
+  }
+
+  public async getPhytosanitaryCertificatesByShipment(shipmentID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryPhytosanitaryCertificatesByShipment', [shipmentID]);
+  }
+
+  public async getPhytosanitaryCertificatesByExporter(exporterID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryPhytosanitaryCertificatesByExporter', [exporterID]);
+  }
+
+  public async getAllPhytosanitaryCertificates(): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryAllPhytosanitaryCertificates', []);
+  }
+
+  public async revokePhytosanitaryCertificate(
+    certificateID: string,
+    revokedBy: string,
+    reason: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RevokePhytosanitaryCertificate', [
+      certificateID,
+      revokedBy,
+      reason,
+    ]);
+  }
+
+  // ==================== INSURANCE CERTIFICATE OPERATIONS ====================
+
+  public async issueInsuranceCertificate(
+    insuranceID: string,
+    shipmentID: string,
+    contractID: string,
+    policyNumber: string,
+    insuranceCompany: string,
+    insuredValue: string,
+    currency: string,
+    coverageType: string,
+    vesselName: string,
+    voyageNumber: string,
+    containerNumber: string,
+    portOfLoading: string,
+    portOfDischarge: string,
+    goodsDescription: string,
+    quantity: string,
+    incoterm: string,
+    claimsPayable: string,
+    issuedBy: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('IssueInsuranceCertificate', [
+      insuranceID,
+      shipmentID,
+      contractID,
+      policyNumber,
+      insuranceCompany,
+      insuredValue,
+      currency,
+      coverageType,
+      vesselName,
+      voyageNumber,
+      containerNumber,
+      portOfLoading,
+      portOfDischarge,
+      goodsDescription,
+      quantity,
+      incoterm,
+      claimsPayable,
+      issuedBy,
+    ]);
+  }
+
+  public async getInsuranceCertificate(insuranceID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadInsuranceCertificate', [insuranceID]);
+  }
+
+  public async getInsuranceCertificatesByShipment(shipmentID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryInsuranceCertificatesByShipment', [shipmentID]);
+  }
+
+  public async getInsuranceCertificatesByContract(contractID: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryInsuranceCertificatesByContract', [contractID]);
+  }
+
+  public async getAllInsuranceCertificates(): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryAllInsuranceCertificates', []);
+  }
+
+  public async recordInsuranceClaim(
+    insuranceID: string,
+    claimReason: string,
+    claimAmount: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RecordInsuranceClaim', [
+      insuranceID,
+      claimReason,
+      claimAmount,
+    ]);
+  }
+
+  // ==================== ECX LOT RELEASE AUTOMATION ====================
+
+  public async releaseECXLotForShipment(
+    shipmentID: string,
+    ecxLotNumber: string,
+    releasedBy: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ReleaseECXLotForShipment', [
+      shipmentID,
+      ecxLotNumber,
+      releasedBy,
+    ]);
+  }
+
+  public async getECXLotsByStatus(status: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryECXLotsByStatus', [status]);
+  }
+
+  // ==================== CUSTOMS DECLARATION OPERATIONS ====================
+
+  public async submitCustomsDeclaration(
+    declarationId: string,
+    shipmentId: string,
+    exporterId: string,
+    declarationType: string,
+    hsCode: string,
+    quantity: string,
+    value: string,
+    currency: string,
+    destination: string,
+    portOfExit: string,
+    eudrCompliant: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('SubmitCustomsDeclaration', [
+      declarationId,
+      shipmentId,
+      exporterId,
+      declarationType,
+      hsCode,
+      quantity,
+      value,
+      currency,
+      destination,
+      portOfExit,
+      eudrCompliant,
+    ]);
+  }
+
+  public async reviewCustomsDeclaration(
+    declarationId: string,
+    reviewedBy: string,
+    inspectionType: string,
+    inspectorNotes: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ReviewCustomsDeclaration', [
+      declarationId,
+      reviewedBy,
+      inspectionType,
+      inspectorNotes,
+    ]);
+  }
+
+  public async completeCustomsInspection(
+    declarationId: string,
+    inspectionResult: string,
+    inspectorComments: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('CompleteCustomsInspection', [
+      declarationId,
+      inspectionResult,
+      inspectorComments,
+    ]);
+  }
+
+  public async clearCustomsDeclaration(
+    declarationId: string,
+    clearedBy: string,
+    clearanceNumber: string,
+    dutiesAmount: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ClearCustomsDeclaration', [
+      declarationId,
+      clearedBy,
+      clearanceNumber,
+      dutiesAmount,
+    ]);
+  }
+
+  public async rejectCustomsDeclaration(
+    declarationId: string,
+    rejectedBy: string,
+    rejectionReason: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RejectCustomsDeclaration', [
+      declarationId,
+      rejectedBy,
+      rejectionReason,
+    ]);
+  }
+
+  public async getCustomsDeclaration(declarationId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadCustomsDeclaration', [declarationId]);
+  }
+
+  public async getAllCustomsDeclarations(): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryAllCustomsDeclarations', []);
+  }
+
+  public async getCustomsDeclarationsByExporter(exporterId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryCustomsDeclarationsByExporter', [exporterId]);
+  }
+
+  public async getCustomsDeclarationsByStatus(status: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryCustomsDeclarationsByStatus', [status]);
+  }
+
+  // ==================== PASS-THROUGH METHODS ====================
+  // These provide a lower-level interface for routes that call chaincode directly
+
+  public async submitTransaction(functionName: string, ...args: string[]): Promise<Buffer> {
+    if (!this.contract) {
+      throw new Error('Not connected to Fabric network');
+    }
+    return this.contract.submitTransaction(functionName, ...args);
+  }
+
+  public async evaluateTransaction(functionName: string, ...args: string[]): Promise<Buffer> {
+    if (!this.contract) {
+      throw new Error('Not connected to Fabric network');
+    }
+    return this.contract.evaluateTransaction(functionName, ...args);
   }
 }
 

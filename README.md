@@ -339,6 +339,24 @@ docker restart coffee-chaincode
 
 Proprietary - Ethiopian Coffee & Tea Authority (ECTA)
 
+## 📚 Documentation
+
+For detailed documentation, please refer to the `Docs/` folder:
+
+- **[QUICK-START.md](Docs/QUICK-START.md)** - Fast setup guide
+- **[SYSTEM-DOCUMENTATION.md](Docs/SYSTEM-DOCUMENTATION.md)** - Complete system documentation
+- **[DOCUMENTATION-INDEX.md](Docs/DOCUMENTATION-INDEX.md)** - Index of all documentation
+- **[CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md)** - Business value & architecture
+- **[ARCHITECTURE.md](Docs/ARCHITECTURE.md)** - Technical architecture details
+- **[API-DOCUMENTATION.md](Docs/API-DOCUMENTATION.md)** - API reference guide
+- **[CHAINCODE-MANAGEMENT.md](Docs/CHAINCODE-MANAGEMENT.md)** - Chaincode deployment & management
+
+### Additional Resources
+- Organization roles: [ORGANIZATION-ROLES-RESPONSIBILITIES.md](Docs/ORGANIZATION-ROLES-RESPONSIBILITIES.md)
+- User management: [USER-MANAGEMENT-SYSTEM.md](Docs/USER-MANAGEMENT-SYSTEM.md)
+- Export requirements: [ETHIOPIAN-COFFEE-EXPORT-REQUIREMENTS.md](Docs/ETHIOPIAN-COFFEE-EXPORT-REQUIREMENTS.md)
+- Feature guides: [See Docs/ folder for all available documentation](Docs/)
+
 ## Support
 
-For technical support, contact the development team or refer to `/Docs/` for detailed documentation.
+For technical support, contact the development team or refer to the comprehensive documentation in the `Docs/` folder.

@@ -31,6 +31,11 @@ import {
   Divider,
   Snackbar,
   Button,
+  InputAdornment,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
@@ -38,6 +43,7 @@ import {
   Edit,
   Visibility,
   CheckCircle,
+  CheckCircleOutline,
   Warning,
   Science,
   Assignment,
@@ -45,7 +51,10 @@ import {
   Download,
   Upload,
   Cancel,
+  Description,
 } from '@mui/icons-material';
+import AuditTrailViewer from './AuditTrailViewer';
+
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
 import { InspectionManagement } from './InspectionManagement';
@@ -117,6 +126,8 @@ interface ExporterApplication {
   region?: string;
   bank_name?: string;
   bank_account_number?: string;
+  bank_branch_name?: string;
+  bank_branch_code?: string;
   comments?: string;
   status: 'pending' | 'approved' | 'rejected';
   submitted_at: string;
@@ -126,6 +137,7 @@ interface ExporterApplication {
   exporter_id?: string;
   ecta_license_number?: string;
   license_expiry_date?: string;
+  documents?: string | any[];  // JSON string or parsed array of document metadata
 }
 
 const ECTAPortal: React.FC = () => {
@@ -154,6 +166,7 @@ const ECTAPortal: React.FC = () => {
     ectaLicenseNumber: '',
     licenseExpiryDate: '',
     bankName: '',
+    bankAccountNumber: '',
     bankBranch: '',
     bankBranchCode: '',
   });
@@ -162,6 +175,12 @@ const ECTAPortal: React.FC = () => {
   const [notificationContent, setNotificationContent] = useState({ title: '', message: '', type: 'success' as 'success' | 'error' });
   const [searchTerm, setSearchTerm] = useState('');
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
+
+  // Audit Trail State
+  const [showAuditTrail, setShowAuditTrail] = useState(false);
+  const [auditEntityType, setAuditEntityType] = useState<'EXPORTER' | 'SHIPMENT' | 'QUALITY' | 'PERMIT'>('EXPORTER');
+  const [auditEntityId, setAuditEntityId] = useState<string>('');
+
 
   const { control, handleSubmit, reset, formState: { errors } } = useForm<ExporterFormData>({
     resolver: yupResolver(exporterSchema),
@@ -310,6 +329,7 @@ ${action === 'suspend' ?
         {
           ...approvalData,
           bankName: approvalData.bankName,
+          bankAccountNumber: approvalData.bankAccountNumber,
           bankBranch: approvalData.bankBranch,
           bankBranchCode: approvalData.bankBranchCode,
         }
@@ -362,6 +382,7 @@ The exporter account is now active and can start using the system.`,
           ectaLicenseNumber: '',
           licenseExpiryDate: '',
           bankName: '',
+          bankAccountNumber: '',
           bankBranch: '',
           bankBranchCode: '',
         });
@@ -466,6 +487,11 @@ The exporter can reapply once all requirements are met.`,
       exporterId: `EXP${randomNum}`,
       ectaLicenseNumber: `ECTA-LIC-${currentYear}-${String(licenseNum).padStart(3, '0')}`,
       licenseExpiryDate: formattedExpiry,
+      // Pre-populate banking info from the exporter's application
+      bankName: selectedApplication?.bank_name || '',
+      bankAccountNumber: selectedApplication?.bank_account_number || '',
+      bankBranch: selectedApplication?.bank_branch_name || '',
+      bankBranchCode: selectedApplication?.bank_branch_code || '',
     });
   };
 
@@ -611,8 +637,8 @@ The exporter can reapply once all requirements are met.`,
           <AnimatedButton
             startIcon={<Add />}
             onClick={() => setDialogOpen(true)}
-            brandColor={BRAND_COLOR}
-            secondaryColor={SECONDARY_COLOR}
+            brandColor="#FFD700"
+            secondaryColor="#B8860B"
           >
             Register Exporter
           </AnimatedButton>
@@ -946,10 +972,10 @@ The exporter can reapply once all requirements are met.`,
               <ModernCard brandColor={BRAND_COLOR}>
                 <CardContent>
                   <Typography variant="h6" gutterBottom>
-                    Pending Quality Inspections
+                    Shipments Awaiting Inspection
                   </Typography>
                   {shipments
-                    .filter(s => s.status === 'CREATED')
+                    .filter(s => s.status === 'APPROVED' || s.status === 'QUALITY_CONTROL')
                     .slice(0, 5)
                     .map((shipment) => (
                       <Box key={shipment.shipmentId} sx={{ mb: 2, p: 2, border: '1px solid #eee', borderRadius: 1 }}>
@@ -975,6 +1001,9 @@ The exporter can reapply once all requirements are met.`,
                         </Box>
                       </Box>
                     ))}
+                  {shipments.filter(s => s.status === 'APPROVED' || s.status === 'QUALITY_CONTROL').length === 0 && (
+                    <Typography variant="body2" color="textSecondary">No shipments pending inspection.</Typography>
+                  )}
                 </CardContent>
               </ModernCard>
             </Grid>
@@ -982,32 +1011,45 @@ The exporter can reapply once all requirements are met.`,
               <ModernCard brandColor={BRAND_COLOR}>
                 <CardContent>
                   <Typography variant="h6" gutterBottom>
-                    Quality Statistics
+                    Shipment Quality Summary
                   </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Grade 1 Coffee: 85%
-                    </Typography>
-                    <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
-                      <Box sx={{ width: '85%', bgcolor: '#4caf50', height: 8, borderRadius: 1 }} />
-                    </Box>
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Grade 2 Coffee: 12%
-                    </Typography>
-                    <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
-                      <Box sx={{ width: '12%', bgcolor: '#ff9800', height: 8, borderRadius: 1 }} />
-                    </Box>
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Rejected: 3%
-                    </Typography>
-                    <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
-                      <Box sx={{ width: '3%', bgcolor: '#f44336', height: 8, borderRadius: 1 }} />
-                    </Box>
-                  </Box>
+                  {(() => {
+                    const total = shipments.length || 1;
+                    const approved = shipments.filter(s => s.status === 'APPROVED' || s.status === 'SHIPPED').length;
+                    const rejected = shipments.filter(s => s.status === 'DELIVERED').length;
+                    const pending = shipments.filter(s => s.status === 'QUALITY_CONTROL').length;
+                    return (
+                      <>
+                        <Box sx={{ mb: 2 }}>
+                          <Typography variant="body2" color="textSecondary">
+                            Approved: {approved} ({Math.round(approved / total * 100)}%)
+                          </Typography>
+                          <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
+                            <Box sx={{ width: `${Math.round(approved / total * 100)}%`, bgcolor: '#4caf50', height: 8, borderRadius: 1 }} />
+                          </Box>
+                        </Box>
+                        <Box sx={{ mb: 2 }}>
+                          <Typography variant="body2" color="textSecondary">
+                            Pending: {pending} ({Math.round(pending / total * 100)}%)
+                          </Typography>
+                          <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
+                            <Box sx={{ width: `${Math.round(pending / total * 100)}%`, bgcolor: '#ff9800', height: 8, borderRadius: 1 }} />
+                          </Box>
+                        </Box>
+                        <Box sx={{ mb: 2 }}>
+                          <Typography variant="body2" color="textSecondary">
+                            Rejected: {rejected} ({Math.round(rejected / total * 100)}%)
+                          </Typography>
+                          <Box sx={{ width: '100%', bgcolor: '#f5f5f5', borderRadius: 1, mt: 1 }}>
+                            <Box sx={{ width: `${Math.round(rejected / total * 100)}%`, bgcolor: '#f44336', height: 8, borderRadius: 1, minWidth: rejected > 0 ? 4 : 0 }} />
+                          </Box>
+                        </Box>
+                        <Typography variant="caption" color="textSecondary">
+                          Total shipments: {shipments.length}
+                        </Typography>
+                      </>
+                    );
+                  })()}
                 </CardContent>
               </ModernCard>
             </Grid>
@@ -1274,8 +1316,8 @@ The exporter can reapply once all requirements are met.`,
             <AnimatedButton 
               type="submit" 
               variant="contained"
-              brandColor={BRAND_COLOR}
-              secondaryColor={SECONDARY_COLOR}
+              brandColor="#FFD700"
+              secondaryColor="#B8860B"
             >
               Register Exporter
             </AnimatedButton>
@@ -1366,6 +1408,78 @@ The exporter can reapply once all requirements are met.`,
                   <Typography variant="body1">{selectedApplication.comments}</Typography>
                 </Grid>
               )}
+
+              {/* Uploaded Documents Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Uploaded Documents</Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+              <Grid item xs={12}>
+                {(() => {
+                  try {
+                    const documents = selectedApplication.documents 
+                      ? (typeof selectedApplication.documents === 'string' 
+                        ? JSON.parse(selectedApplication.documents) 
+                        : selectedApplication.documents)
+                      : [];
+                    
+                    return documents.length > 0 ? (
+                      <List>
+                        {documents.map((doc: any, index: number) => (
+                          <ListItem key={index}>
+                            <ListItemIcon>
+                              <Description color="primary" />
+                            </ListItemIcon>
+                            <ListItemText
+                              primary={doc.fileName || `Document ${index + 1}`}
+                              secondary={
+                                <>
+                                  {doc.category && <Chip label={doc.category} size="small" sx={{ mr: 1 }} />}
+                                  {doc.hash && <Typography variant="caption">Hash: {doc.hash.slice(0, 16)}...</Typography>}
+                                  {doc.ipfsCID && <Typography variant="caption" sx={{ ml: 1 }}>IPFS: {doc.ipfsCID.slice(0, 12)}...</Typography>}
+                                </>
+                              }
+                            />
+                            <Button
+                              size="small"
+                              startIcon={<Visibility />}
+                              onClick={async () => {
+                                try {
+                                  const response = await api.get(`/documents/${doc.documentId}/download`, {
+                                    responseType: 'blob'
+                                  });
+                                  const url = window.URL.createObjectURL(new Blob([response.data]));
+                                  const link = document.createElement('a');
+                                  link.href = url;
+                                  link.setAttribute('download', doc.fileName || 'document');
+                                  document.body.appendChild(link);
+                                  link.click();
+                                  link.remove();
+                                } catch (err) {
+                                  console.error('Failed to download document:', err);
+                                  alert('Failed to download document');
+                                }
+                              }}
+                            >
+                              View
+                            </Button>
+                          </ListItem>
+                        ))}
+                      </List>
+                    ) : (
+                      <Alert severity="warning">
+                        No documents uploaded. Applicant may need to provide supporting documents before approval.
+                      </Alert>
+                    );
+                  } catch (error) {
+                    return (
+                      <Alert severity="error">
+                        Error loading documents: {error instanceof Error ? error.message : 'Unknown error'}
+                      </Alert>
+                    );
+                  }
+                })()}
+              </Grid>
             </Grid>
           )}
         </DialogContent>
@@ -1459,23 +1573,37 @@ The exporter can reapply once all requirements are met.`,
                 </Typography>
               </Divider>
             </Grid>
-            
-            {/* Bank Selection */}
-            <Grid item xs={12}>
-              <BankSelect
-                value={approvalData.bankName}
-                onChange={(value) => {
-                  setApprovalData({ 
-                    ...approvalData, 
-                    bankName: value,
-                    bankBranch: '', // Reset branch when bank changes
-                    bankBranchCode: '',
-                  });
-                }}
-                label="Primary Bank *"
-                helperText="Bank where exporter holds account for LC transactions"
-                type="ethiopian"
+
+            {/* Bank Name — pre-filled from exporter's application */}
+            <Grid item xs={12} md={8}>
+              <TextField
+                fullWidth
                 required
+                label="Primary Bank"
+                value={approvalData.bankName}
+                onChange={(e) => setApprovalData({
+                  ...approvalData,
+                  bankName: e.target.value,
+                  bankBranch: '',
+                  bankBranchCode: '',
+                })}
+                helperText="As submitted by the exporter — edit if needed"
+                InputProps={{
+                  endAdornment: selectedApplication?.bank_name && approvalData.bankName === selectedApplication.bank_name
+                    ? <InputAdornment position="end"><CheckCircleOutline sx={{ color: 'success.main', fontSize: 18 }} /></InputAdornment>
+                    : undefined,
+                }}
+              />
+            </Grid>
+
+            {/* Account Number — pre-filled from exporter's application */}
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                label="Account Number"
+                value={approvalData.bankAccountNumber}
+                onChange={(e) => setApprovalData({ ...approvalData, bankAccountNumber: e.target.value })}
+                helperText="As submitted by the exporter"
               />
             </Grid>
             
@@ -1492,7 +1620,7 @@ The exporter can reapply once all requirements are met.`,
                   });
                 }}
                 label="LC Processing Branch *"
-                helperText="This branch will approve Letters of Credit for this exporter"
+                helperText="Select the branch that will approve Letters of Credit for this exporter"
                 required
                 showDetails
               />
@@ -1507,6 +1635,7 @@ The exporter can reapply once all requirements are met.`,
               ectaLicenseNumber: '', 
               licenseExpiryDate: '',
               bankName: '',
+              bankAccountNumber: '',
               bankBranch: '',
               bankBranchCode: '',
             });
@@ -1638,20 +1767,22 @@ The exporter can reapply once all requirements are met.`,
           )}
         </DialogContent>
         <DialogActions>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Assignment />}
+            onClick={() => {
+              setAuditEntityType('EXPORTER');
+              setAuditEntityId(selectedExporter?.exporterId || '');
+              setShowAuditTrail(true);
+            }}
+            sx={{ textTransform: 'none', mr: 'auto' }}
+          >
+            Audit Trail
+          </Button>
           <AnimatedButton onClick={() => setSelectedExporter(null)} variant="outlined">
             Close
           </AnimatedButton>
-          {selectedExporter?.licenseStatus === 'ACTIVE' && (
-            <AnimatedButton 
-              variant="contained"
-              brandColor={BRAND_COLOR}
-              onClick={() => {
-                setQualityDialogOpen(true);
-              }}
-            >
-              Request Quality Inspection
-            </AnimatedButton>
-          )}
           {selectedExporter?.licenseStatus === 'ACTIVE' && (
             <AnimatedButton 
               variant="outlined"
@@ -1769,6 +1900,16 @@ The exporter can reapply once all requirements are met.`,
         message={notification.message}
         details={notification.details}
       />
+
+      {/* Audit Trail Viewer */}
+      {showAuditTrail && auditEntityType && (
+        <AuditTrailViewer
+          open={showAuditTrail}
+          entityType={auditEntityType as 'EXPORTER' | 'CONTRACT' | 'SHIPMENT' | 'LC' | 'PAYMENT'}
+          entityId={auditEntityId}
+          onClose={() => setShowAuditTrail(false)}
+        />
+      )}
     </Box>
   );
 };

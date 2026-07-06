@@ -25,6 +25,8 @@ import {
   MenuItem,
   alpha,
   useTheme,
+  ThemeProvider,
+  createTheme,
 } from '@mui/material';
 import {
   Business,
@@ -40,13 +42,18 @@ import {
   Phone,
   LocationOn,
   AccountBalance,
+  CloudUpload,
+  Attachment,
 } from '@mui/icons-material';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import api from '@/utils/api';
 import { ETHIOPIAN_BANKS } from '@/utils/banks';
+import BankSelect from '@/components/common/BankSelect';
+import { createOrganizationTheme } from '@/theme/organizationThemes';import BankBranchSelect from '@/components/common/BankBranchSelect';
+import { DocumentUploadDialog } from '@/components/portals/DocumentUploadDialog';
 
-const steps = ['Company Information', 'Requirements', 'Contact Details', 'Review & Submit'];
+const steps = ['Company Information', 'Requirements', 'Documents', 'Contact Details', 'Review & Submit'];
 
 // Ethiopian Regions
 const ETHIOPIAN_REGIONS = [
@@ -149,13 +156,18 @@ const CITIES_BY_REGION: Record<string, string[]> = {
   ],
 };
 
-const RegisterExporterPage: React.FC = () => {
+// Apply EXPORTER theme (purple and golden colors)
+const exporterTheme = createOrganizationTheme('EXPORTER');
+
+const RegisterExporterPage = () => {
   const theme = useTheme();
   const router = useRouter();
   const [activeStep, setActiveStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadedDocuments, setUploadedDocuments] = useState<any[]>([]);
 
   // Form data
   const [formData, setFormData] = useState({
@@ -184,6 +196,8 @@ const RegisterExporterPage: React.FC = () => {
     // Additional
     bankName: '',
     bankAccountNumber: '',
+    bankBranchName: '',
+    bankBranchCode: '',
     comments: '',
   });
 
@@ -219,8 +233,22 @@ const RegisterExporterPage: React.FC = () => {
     setError('');
 
     try {
-      // Submit application to API
-      await api.post('/exporters/exporter-applications', formData);
+      // Prepare documents data for submission
+      const documentsData = uploadedDocuments.map(doc => ({
+        documentId: doc.documentId,
+        fileName: doc.file.name,
+        category: doc.category,
+        hash: doc.hash,
+        ipfsCID: doc.ipfsCID,
+        description: doc.description,
+        encrypted: doc.encrypt,
+      }));
+
+      // Submit application to API with documents
+      await api.post('/exporters/exporter-applications', {
+        ...formData,
+        documents: documentsData,
+      });
       
       setSuccess(true);
       setLoading(false);
@@ -230,16 +258,21 @@ const RegisterExporterPage: React.FC = () => {
     }
   };
 
+  const handleDocumentUploadComplete = (documents: any[]) => {
+    setUploadedDocuments(prevDocs => [...prevDocs, ...documents]);
+    setUploadDialogOpen(false);
+  };
+
   const renderStepContent = (step: number) => {
     switch (step) {
       case 0:
         return (
-          <Grid container spacing={3}>
+          <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="h6" gutterBottom>
+              <Typography variant="subtitle1" fontWeight="600" gutterBottom sx={{ color: '#000000' }}>
                 Company Information
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography variant="caption" sx={{ color: '#000000' }}>
                 Please provide your company's basic information
               </Typography>
             </Grid>
@@ -251,10 +284,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Company Name"
                 value={formData.companyName}
                 onChange={handleChange('companyName')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Business />
+                      <Business sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -269,6 +303,7 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.tinNumber}
                 onChange={handleChange('tinNumber')}
                 helperText="Tax Identification Number"
+                size="small"
               />
             </Grid>
 
@@ -279,6 +314,7 @@ const RegisterExporterPage: React.FC = () => {
                 label="Business License Number"
                 value={formData.businessLicenseNumber}
                 onChange={handleChange('businessLicenseNumber')}
+                size="small"
               />
             </Grid>
 
@@ -291,6 +327,7 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.registrationDate}
                 onChange={handleChange('registrationDate')}
                 InputLabelProps={{ shrink: true }}
+                size="small"
               />
             </Grid>
           </Grid>
@@ -298,12 +335,12 @@ const RegisterExporterPage: React.FC = () => {
 
       case 1:
         return (
-          <Grid container spacing={3}>
+          <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="h6" gutterBottom>
+              <Typography variant="subtitle1" fontWeight="600" gutterBottom sx={{ color: '#000000' }}>
                 ECTA Requirements
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography variant="caption" sx={{ color: '#000000' }}>
                 Coffee export license requirements as per ECTA regulations
               </Typography>
             </Grid>
@@ -345,6 +382,7 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.exporterType}
                 onChange={handleChange('exporterType')}
                 helperText="Select your business structure"
+                size="small"
                 sx={{ mt: 0 }}
               >
                 <MenuItem value="">Select Type</MenuItem>
@@ -362,10 +400,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Capital Requirement (ETB)"
                 value={formData.capitalRequirement}
                 onChange={handleChange('capitalRequirement')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <AttachMoney />
+                      <AttachMoney sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -385,10 +424,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Professional Taster Name"
                 value={formData.professionalTaster}
                 onChange={handleChange('professionalTaster')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Person />
+                      <Person sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -403,10 +443,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Taster Proficiency Certificate Number"
                 value={formData.tasterCertificate}
                 onChange={handleChange('tasterCertificate')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Description />
+                      <Description sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -423,6 +464,7 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.laboratoryFacility}
                 onChange={handleChange('laboratoryFacility')}
                 helperText="Mandatory for basic quality testing"
+                size="small"
                 sx={{ mt: 0 }}
               >
                 <MenuItem value="">Select</MenuItem>
@@ -439,6 +481,7 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.laboratoryCertificateNumber}
                 onChange={handleChange('laboratoryCertificateNumber')}
                 helperText="If you have an ECTA-certified lab"
+                size="small"
               />
             </Grid>
           </Grid>
@@ -446,12 +489,129 @@ const RegisterExporterPage: React.FC = () => {
 
       case 2:
         return (
-          <Grid container spacing={3}>
+          <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="h6" gutterBottom>
+              <Typography variant="subtitle1" fontWeight="600" gutterBottom sx={{ color: '#000000' }}>
+                Required Documents
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#000000' }}>
+                Upload supporting documents for verification and compliance
+              </Typography>
+            </Grid>
+
+            <Grid item xs={12}>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <strong>Required Business Documents (for application verification):</strong>
+                <List dense sx={{ mt: 1 }}>
+                  <ListItem>
+                    <ListItemText primary="• Tax Certificate (TIN) - Valid tax registration" />
+                  </ListItem>
+                  <ListItem>
+                    <ListItemText primary="• Business Registration/Trade License - Current and valid" />
+                  </ListItem>
+                  <ListItem>
+                    <ListItemText primary="• Bank Statement (Last 3 months) - Showing minimum capital requirement" />
+                  </ListItem>
+                  <ListItem>
+                    <ListItemText primary="• Professional Taster Certificate - Renewed proficiency certificate" />
+                  </ListItem>
+                  <ListItem>
+                    <ListItemText primary="• Laboratory Certification - If you have ECTA-certified lab (optional)" />
+                  </ListItem>
+                  <ListItem>
+                    <ListItemText primary="• Company Profile/References - Business history or trade references (optional)" />
+                  </ListItem>
+                </List>
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Important:</strong> Your <strong>ECTA Export License</strong> will be issued by ECTA <em>after</em> your application is approved. 
+                    You do not need to upload it now. These documents are for identity verification and qualification assessment only.
+                  </Typography>
+                </Alert>
+              </Alert>
+            </Grid>
+
+            <Grid item xs={12}>
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 3,
+                  textAlign: 'center',
+                  bgcolor: 'grey.50',
+                  border: '2px dashed',
+                  borderColor: uploadedDocuments.length > 0 ? 'success.main' : 'grey.400',
+                }}
+              >
+                {uploadedDocuments.length === 0 ? (
+                  <>
+                    <CloudUpload sx={{ fontSize: 64, color: 'grey.400', mb: 2 }} />
+                    <Typography variant="h6" gutterBottom>
+                      No documents uploaded yet
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" paragraph>
+                      Click the button below to upload your supporting documents
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      startIcon={<CloudUpload />}
+                      onClick={() => setUploadDialogOpen(true)}
+                      size="large"
+                    >
+                      Upload Documents
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle sx={{ fontSize: 64, color: 'success.main', mb: 2 }} />
+                    <Typography variant="h6" gutterBottom>
+                      {uploadedDocuments.length} Document{uploadedDocuments.length !== 1 ? 's' : ''} Uploaded
+                    </Typography>
+                    <List sx={{ mt: 2, textAlign: 'left' }}>
+                      {uploadedDocuments.map((doc, index) => (
+                        <ListItem key={index}>
+                          <ListItemIcon>
+                            <Attachment />
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={doc.file.name}
+                            secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
+                          />
+                        </ListItem>
+                      ))}
+                    </List>
+                    <Box sx={{ mt: 2 }}>
+                      <Button
+                        variant="outlined"
+                        startIcon={<CloudUpload />}
+                        onClick={() => setUploadDialogOpen(true)}
+                      >
+                        Upload More Documents
+                      </Button>
+                    </Box>
+                  </>
+                )}
+              </Paper>
+            </Grid>
+
+            {uploadedDocuments.length === 0 && (
+              <Grid item xs={12}>
+                <Alert severity="warning">
+                  Documents are required for application verification. You can proceed without uploading now, 
+                  but your application may be rejected if documents are not provided.
+                </Alert>
+              </Grid>
+            )}
+          </Grid>
+        );
+
+      case 3:
+        return (
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Typography variant="subtitle1" fontWeight="600" gutterBottom sx={{ color: '#000000' }}>
                 Contact Details
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography variant="caption" sx={{ color: '#000000' }}>
                 How can ECTA reach you regarding your application?
               </Typography>
             </Grid>
@@ -463,10 +623,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Contact Person"
                 value={formData.contactPerson}
                 onChange={handleChange('contactPerson')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Person />
+                      <Person sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -481,10 +642,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Email Address"
                 value={formData.email}
                 onChange={handleChange('email')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Email />
+                      <Email sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -498,10 +660,11 @@ const RegisterExporterPage: React.FC = () => {
                 label="Phone Number"
                 value={formData.phone}
                 onChange={handleChange('phone')}
+                size="small"
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Phone />
+                      <Phone sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -518,11 +681,12 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.region}
                 onChange={handleChange('region')}
                 helperText="Select your region/state first"
+                size="small"
                 sx={{ mt: 0 }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <LocationOn />
+                      <LocationOn sx={{ color: '#9b30b7' }} />
                     </InputAdornment>
                   ),
                 }}
@@ -546,6 +710,7 @@ const RegisterExporterPage: React.FC = () => {
                 onChange={handleChange('city')}
                 disabled={!formData.region}
                 helperText={formData.region ? `Select city in ${formData.region}` : 'Select region first'}
+                size="small"
                 sx={{ mt: 0 }}
               >
                 <MenuItem value="">Select City</MenuItem>
@@ -558,40 +723,19 @@ const RegisterExporterPage: React.FC = () => {
             </Grid>
 
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                required
-                label="Street Address"
-                value={formData.address}
-                onChange={handleChange('address')}
-                placeholder="e.g., Bole Road, near Edna Mall"
-                helperText="Provide detailed street address"
-              />
+              <Divider sx={{ my: 1 }}>
+                <Typography variant="caption" sx={{ color: '#000000' }}>Banking Information</Typography>
+              </Divider>
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                select
-                label="Bank Name"
+              <BankSelect
                 value={formData.bankName}
-                onChange={handleChange('bankName')}
-                sx={{ mt: 0 }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <AccountBalance />
-                    </InputAdornment>
-                  ),
-                }}
-              >
-                <MenuItem value="">Select Bank</MenuItem>
-                {ETHIOPIAN_BANKS.map((bank) => (
-                  <MenuItem key={bank.id} value={bank.name}>
-                    {bank.name}
-                  </MenuItem>
-                ))}
-              </TextField>
+                onChange={(value) => setFormData({ ...formData, bankName: value, bankBranchName: '', bankBranchCode: '' })}
+                label="Bank Name"
+                helperText="Bank where you hold your export account"
+                type="ethiopian"
+              />
             </Grid>
 
             <Grid item xs={12} md={6}>
@@ -600,6 +744,27 @@ const RegisterExporterPage: React.FC = () => {
                 label="Bank Account Number"
                 value={formData.bankAccountNumber}
                 onChange={handleChange('bankAccountNumber')}
+                size="small"
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <AccountBalance sx={{ color: '#9b30b7' }} />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <BankBranchSelect
+                bankName={formData.bankName}
+                value={formData.bankBranchName}
+                onChange={(branchName, branch) =>
+                  setFormData({ ...formData, bankBranchName: branchName, bankBranchCode: branch?.branchCode || '' })
+                }
+                label="Bank Branch"
+                helperText="Select your branch — this will be used for LC processing"
+                showDetails
               />
             </Grid>
 
@@ -610,14 +775,15 @@ const RegisterExporterPage: React.FC = () => {
                 value={formData.comments}
                 onChange={handleChange('comments')}
                 multiline
-                rows={3}
+                rows={2}
+                size="small"
                 placeholder="Any additional information you'd like to provide..."
               />
             </Grid>
           </Grid>
         );
 
-      case 3:
+      case 4:
         return (
           <Box>
             <Typography variant="h6" gutterBottom>
@@ -695,6 +861,31 @@ const RegisterExporterPage: React.FC = () => {
               </Grid>
             </Paper>
 
+            <Paper variant="outlined" sx={{ p: 3, mb: 3 }}>
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                Uploaded Documents
+              </Typography>
+              {uploadedDocuments.length > 0 ? (
+                <List dense>
+                  {uploadedDocuments.map((doc, index) => (
+                    <ListItem key={index}>
+                      <ListItemIcon>
+                        <CheckCircle color="success" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={doc.file.name}
+                        secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              ) : (
+                <Alert severity="warning">
+                  No documents uploaded. Your application may require additional verification.
+                </Alert>
+              )}
+            </Paper>
+
             <Paper variant="outlined" sx={{ p: 3 }}>
               <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
                 Contact Details
@@ -720,6 +911,24 @@ const RegisterExporterPage: React.FC = () => {
                   <Typography variant="body2" color="text.secondary">Address:</Typography>
                   <Typography variant="body1">{formData.address}</Typography>
                 </Grid>
+                {formData.bankName && (
+                  <>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">Bank:</Typography>
+                      <Typography variant="body1">{formData.bankName}</Typography>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">Account Number:</Typography>
+                      <Typography variant="body1">{formData.bankAccountNumber || '—'}</Typography>
+                    </Grid>
+                    {formData.bankBranchName && (
+                      <Grid item xs={6}>
+                        <Typography variant="body2" color="text.secondary">Branch:</Typography>
+                        <Typography variant="body1">{formData.bankBranchName}{formData.bankBranchCode ? ` (${formData.bankBranchCode})` : ''}</Typography>
+                      </Grid>
+                    )}
+                  </>
+                )}
               </Grid>
             </Paper>
           </Box>
@@ -732,18 +941,42 @@ const RegisterExporterPage: React.FC = () => {
 
   if (success) {
     return (
+      <ThemeProvider theme={exporterTheme}>
       <Box
         sx={{
           minHeight: '100vh',
           display: 'flex',
           alignItems: 'center',
-          background: `linear-gradient(135deg, ${alpha('#078930', 0.95)}, ${alpha('#6d4c41', 0.98)})`,
+          background: '#9b30b7',
         }}
       >
         <Container maxWidth="md">
-          <Card elevation={24}>
+          <Card 
+            elevation={24}
+            sx={{
+              borderRadius: 4,
+              overflow: 'hidden',
+              bgcolor: '#FFFFFF',
+            }}
+          >
+            <Box 
+              sx={{ 
+                height: 4, 
+                bgcolor: '#FFD700',
+              }} 
+            />
             <CardContent sx={{ p: 5, textAlign: 'center' }}>
-              <CheckCircle sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
+              <Box 
+                sx={{ 
+                  display: 'inline-flex',
+                  p: 2,
+                  borderRadius: '50%',
+                  bgcolor: 'rgba(255, 215, 0, 0.15)',
+                  mb: 2,
+                }}
+              >
+                <CheckCircle sx={{ fontSize: 80, color: '#FFD700' }} />
+              </Box>
               <Typography variant="h4" fontWeight="bold" gutterBottom>
                 Application Submitted Successfully!
               </Typography>
@@ -760,7 +993,7 @@ const RegisterExporterPage: React.FC = () => {
               <List>
                 <ListItem>
                   <ListItemIcon>
-                    <CheckCircle color="success" />
+                    <CheckCircle sx={{ color: '#FFD700' }} />
                   </ListItemIcon>
                   <ListItemText 
                     primary="Document Verification"
@@ -769,7 +1002,7 @@ const RegisterExporterPage: React.FC = () => {
                 </ListItem>
                 <ListItem>
                   <ListItemIcon>
-                    <CheckCircle color="success" />
+                    <CheckCircle sx={{ color: '#FFD700' }} />
                   </ListItemIcon>
                   <ListItemText 
                     primary="Site Inspection"
@@ -778,7 +1011,7 @@ const RegisterExporterPage: React.FC = () => {
                 </ListItem>
                 <ListItem>
                   <ListItemIcon>
-                    <CheckCircle color="success" />
+                    <CheckCircle sx={{ color: '#FFD700' }} />
                   </ListItemIcon>
                   <ListItemText 
                     primary="License Issuance"
@@ -786,12 +1019,23 @@ const RegisterExporterPage: React.FC = () => {
                   />
                 </ListItem>
               </List>
-              <Box sx={{ mt: 4 }}>
+              <Box sx={{ mt: 4, display: 'flex', gap: 2, justifyContent: 'center' }}>
                 <Button
                   variant="contained"
                   size="large"
                   onClick={() => router.push('/')}
-                  sx={{ mr: 2 }}
+                  sx={{
+                    px: 4,
+                    py: 1.5,
+                    borderRadius: 2,
+                    textTransform: 'none',
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    bgcolor: '#9b30b7',
+                    '&:hover': {
+                      bgcolor: '#7b1fa2',
+                    },
+                  }}
                 >
                   Go to Home
                 </Button>
@@ -799,6 +1043,20 @@ const RegisterExporterPage: React.FC = () => {
                   variant="outlined"
                   size="large"
                   onClick={() => window.location.reload()}
+                  sx={{
+                    px: 4,
+                    py: 1.5,
+                    borderRadius: 2,
+                    textTransform: 'none',
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    borderColor: '#9b30b7',
+                    color: '#9b30b7',
+                    '&:hover': {
+                      borderColor: '#7b1fa2',
+                      bgcolor: 'rgba(155, 48, 183, 0.05)',
+                    },
+                  }}
                 >
                   Submit Another Application
                 </Button>
@@ -807,10 +1065,12 @@ const RegisterExporterPage: React.FC = () => {
           </Card>
         </Container>
       </Box>
+      </ThemeProvider>
     );
   }
 
   return (
+    <ThemeProvider theme={exporterTheme}>
     <>
       <Head>
         <title>Register as Coffee Exporter - CECBS</title>
@@ -820,30 +1080,107 @@ const RegisterExporterPage: React.FC = () => {
       <Box
         sx={{
           minHeight: '100vh',
-          py: 4,
-          background: `linear-gradient(135deg, ${alpha('#078930', 0.95)}, ${alpha('#6d4c41', 0.98)})`,
+          maxHeight: '100vh',
+          overflow: 'hidden',
+          py: 3,
+          background: '#9b30b7',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <Container maxWidth="lg">
+        <Container maxWidth="lg" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
-          <Box sx={{ textAlign: 'center', mb: 4, color: 'white' }}>
-            <Coffee sx={{ fontSize: 60, mb: 2 }} />
-            <Typography variant="h3" fontWeight="bold" gutterBottom>
+          <Box sx={{ textAlign: 'center', mb: 2, color: 'white' }}>
+            <Box 
+              sx={{ 
+                display: 'inline-flex',
+                p: 1.5,
+                borderRadius: '50%',
+                bgcolor: 'rgba(255, 255, 255, 0.15)',
+                mb: 1,
+              }}
+            >
+              <Coffee sx={{ fontSize: 36, color: '#FFD700' }} />
+            </Box>
+            <Typography 
+              variant="h4" 
+              fontWeight="bold" 
+              sx={{
+                color: '#FFFFFF',
+                letterSpacing: '-0.5px',
+                mb: 0.5,
+              }}
+            >
               Coffee Exporter Registration
             </Typography>
-            <Typography variant="h6" sx={{ opacity: 0.9 }}>
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                color: 'rgba(255, 255, 255, 0.9)',
+              }}
+            >
               Ethiopian Coffee & Tea Authority (ECTA)
-            </Typography>
-            <Typography variant="body1" sx={{ mt: 2, opacity: 0.8 }}>
-              Apply for your coffee export license online
             </Typography>
           </Box>
 
           {/* Main Card */}
-          <Card elevation={24} sx={{ borderRadius: 3 }}>
-            <CardContent sx={{ p: { xs: 3, md: 5 } }}>
+          <Card 
+            elevation={24} 
+            sx={{ 
+              borderRadius: 3,
+              overflow: 'hidden',
+              bgcolor: '#FFFFFF',
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <Box 
+              sx={{ 
+                height: 3, 
+                bgcolor: '#FFD700',
+              }} 
+            />
+            <CardContent sx={{ p: 3, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {/* Stepper */}
-              <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+              <Stepper 
+                activeStep={activeStep} 
+                sx={{ 
+                  mb: 2,
+                  '& .MuiStepLabel-root .Mui-completed': {
+                    color: '#FFD700',
+                  },
+                  '& .MuiStepLabel-root .Mui-active': {
+                    color: '#9b30b7',
+                  },
+                  '& .MuiStepIcon-root': {
+                    color: 'rgba(0, 0, 0, 0.3)',
+                  },
+                  '& .MuiStepIcon-root.Mui-active': {
+                    color: '#9b30b7',
+                  },
+                  '& .MuiStepIcon-root.Mui-completed': {
+                    color: '#FFD700',
+                  },
+                  '& .MuiStepConnector-line': {
+                    borderColor: 'rgba(0, 0, 0, 0.2)',
+                  },
+                  '& .Mui-completed .MuiStepConnector-line': {
+                    borderColor: '#FFD700',
+                  },
+                  '& .MuiStepLabel-label': {
+                    fontSize: '0.875rem',
+                    color: '#000000',
+                  },
+                  '& .MuiStepLabel-label.Mui-active': {
+                    fontWeight: 600,
+                    color: '#9b30b7',
+                  },
+                  '& .MuiStepLabel-label.Mui-completed': {
+                    color: '#000000',
+                  },
+                }}
+              >
                 {steps.map((label) => (
                   <Step key={label}>
                     <StepLabel>{label}</StepLabel>
@@ -852,23 +1189,35 @@ const RegisterExporterPage: React.FC = () => {
               </Stepper>
 
               {error && (
-                <Alert severity="error" sx={{ mb: 3 }}>
+                <Alert severity="error" sx={{ mb: 2 }}>
                   {error}
                 </Alert>
               )}
 
               {/* Step Content */}
-              <Box sx={{ minHeight: 400 }}>
+              <Box sx={{ flex: 1, overflow: 'auto', pr: 1 }}>
                 {renderStepContent(activeStep)}
               </Box>
 
               {/* Navigation Buttons */}
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4 }}>
+              <Box 
+                sx={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  mt: 2,
+                  pt: 2,
+                  borderTop: '1px solid rgba(0, 0, 0, 0.1)',
+                }}
+              >
                 <Button
                   disabled={activeStep === 0}
                   onClick={handleBack}
                   startIcon={<ArrowBack />}
-                  size="large"
+                  size="medium"
+                  sx={{
+                    textTransform: 'none',
+                    px: 3,
+                  }}
                 >
                   Back
                 </Button>
@@ -879,7 +1228,15 @@ const RegisterExporterPage: React.FC = () => {
                     onClick={handleSubmit}
                     disabled={loading}
                     endIcon={<Send />}
-                    size="large"
+                    size="medium"
+                    sx={{
+                      textTransform: 'none',
+                      px: 4,
+                      bgcolor: '#9b30b7',
+                      '&:hover': {
+                        bgcolor: '#7b1fa2',
+                      },
+                    }}
                   >
                     {loading ? 'Submitting...' : 'Submit Application'}
                   </Button>
@@ -888,7 +1245,15 @@ const RegisterExporterPage: React.FC = () => {
                     variant="contained"
                     onClick={handleNext}
                     endIcon={<ArrowForward />}
-                    size="large"
+                    size="medium"
+                    sx={{
+                      textTransform: 'none',
+                      px: 4,
+                      bgcolor: '#9b30b7',
+                      '&:hover': {
+                        bgcolor: '#7b1fa2',
+                      },
+                    }}
                   >
                     Next
                   </Button>
@@ -898,15 +1263,38 @@ const RegisterExporterPage: React.FC = () => {
           </Card>
 
           {/* Footer */}
-          <Typography
-            variant="caption"
-            sx={{ display: 'block', textAlign: 'center', mt: 3, color: 'white', opacity: 0.8 }}
+          <Box 
+            sx={{ 
+              textAlign: 'center', 
+              mt: 1.5, 
+              color: '#FFFFFF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 1,
+              fontSize: '0.75rem',
+            }}
           >
-            © 2026 Ethiopian Coffee & Tea Authority. All rights reserved.
-          </Typography>
+            <Typography variant="caption">
+              © 2026 Ethiopian Coffee & Tea Authority
+            </Typography>
+            <Typography variant="caption" sx={{ opacity: 0.7 }}>•</Typography>
+            <Typography variant="caption">
+              All rights reserved
+            </Typography>
+          </Box>
         </Container>
+
+        {/* Document Upload Dialog */}
+        <DocumentUploadDialog
+          open={uploadDialogOpen}
+          entityType="EXPORTER_APPLICATION"
+          onClose={() => setUploadDialogOpen(false)}
+          onUploadComplete={handleDocumentUploadComplete}
+        />
       </Box>
     </>
+    </ThemeProvider>
   );
 };
 

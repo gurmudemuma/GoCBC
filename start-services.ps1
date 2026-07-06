@@ -21,9 +21,12 @@ if ($peers -eq 0) {
 Write-Host "✓ Blockchain network running ($peers peers)" -ForegroundColor Green
 Write-Host ""
 
+# Get script directory
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
 # Start API server in new window
 Write-Host "Starting API server..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd C:\CEX\api; Write-Host 'API Server Starting...' -ForegroundColor Cyan; npm start"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ScriptDir\api'; Write-Host 'API Server Starting...' -ForegroundColor Cyan; npm start"
 Write-Host "✓ API server starting on http://localhost:3001" -ForegroundColor Green
 
 # Wait a bit for API to start
@@ -31,7 +34,7 @@ Start-Sleep -Seconds 5
 
 # Start UI in new window
 Write-Host "Starting UI..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd C:\CEX\ui; Write-Host 'UI Starting...' -ForegroundColor Cyan; npm run dev"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ScriptDir\ui'; Write-Host 'UI Starting...' -ForegroundColor Cyan; npm run dev"
 Write-Host "✓ UI starting on http://localhost:3000" -ForegroundColor Green
 
 Write-Host ""

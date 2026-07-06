@@ -58,6 +58,7 @@ export class DatabaseService {
         ecta_license TEXT,
         phone TEXT,
         bank_name TEXT,
+        bank_account_number TEXT,
         bank_branch TEXT,
         bank_branch_code TEXT,
         permissions TEXT DEFAULT '[]',
@@ -96,6 +97,7 @@ export class DatabaseService {
         bank_branch_name TEXT,
         bank_branch_code TEXT,
         comments TEXT,
+        documents TEXT DEFAULT '[]',
         status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
         submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
         approved_at TEXT,
@@ -143,6 +145,7 @@ export class DatabaseService {
         } else {
           logger.info('✅ Users table ready');
           this.createIndexes();
+          this.runMigrations();
           this.seedDefaultUsers();
         }
       });
@@ -168,6 +171,27 @@ export class DatabaseService {
           logger.error('Failed to create sessions table:', err);
         } else {
           logger.info('✅ Sessions table ready');
+        }
+      });
+    });
+  }
+
+  private runMigrations(): void {
+    if (!this.db) return;
+
+    // Add columns that may not exist in older DBs — safe to run every time (IF NOT EXISTS equivalent via error suppression)
+    const migrations = [
+      `ALTER TABLE users ADD COLUMN bank_account_number TEXT`,
+      `ALTER TABLE exporter_applications ADD COLUMN bank_branch_name TEXT`,
+      `ALTER TABLE exporter_applications ADD COLUMN bank_branch_code TEXT`,
+      `ALTER TABLE exporter_applications ADD COLUMN documents TEXT DEFAULT '[]'`,
+    ];
+
+    migrations.forEach((sql) => {
+      this.db!.run(sql, (err) => {
+        // SQLITE_ERROR "duplicate column name" is expected when column already exists — ignore it
+        if (err && !err.message.includes('duplicate column name')) {
+          logger.error(`Migration failed: ${err.message}`);
         }
       });
     });

@@ -59,44 +59,6 @@ Organizations:
         - Host: peer0.ecx.cecbs.et
           Port: 8051
 
-  - &Exporters
-      Name: ExportersMSP
-      ID: ExportersMSP
-      MSPDir: organizations/peerOrganizations/exporters.cecbs.et/msp
-      Policies:
-        Readers:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.peer', 'ExportersMSP.client')"
-        Writers:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.client')"
-        Admins:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin')"
-        Endorsement:
-          Type: Signature
-          Rule: "OR('ExportersMSP.peer')"
-
-
-  - &Exporters
-      Name: ExportersMSP
-      ID: ExportersMSP
-      MSPDir: organizations/peerOrganizations/exporters.cecbs.et/msp
-      Policies:
-        Readers:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.peer', 'ExportersMSP.client')"
-        Writers:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin', 'ExportersMSP.client')"
-        Admins:
-          Type: Signature
-          Rule: "OR('ExportersMSP.admin')"
-        Endorsement:
-          Type: Signature
-          Rule: "OR('ExportersMSP.peer')"
-
-
   - &Banks
       Name: BanksMSP
       ID: BanksMSP
@@ -278,6 +240,8 @@ Profiles:
 
   CoffeeChannel:
     <<: *ChannelDefaults
+    Consortium: CoffeeConsortium
+    Consortium: CoffeeConsortium
     Orderer:
       <<: *OrdererDefaults
       Organizations:

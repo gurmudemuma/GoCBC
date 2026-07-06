@@ -35,8 +35,8 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
     acceptanceDays: '',
     collectingBank: '',
     collectingBankBIC: '',
-    remittingBank: '',
-    remittingBankBIC: '',
+    remittingBank: 'Commercial Bank of Ethiopia',
+    remittingBankBIC: 'CBETETAA',
     instructions: 'Present documents directly to drawee. Protest if unpaid.',
   });
 
@@ -78,11 +78,31 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
 
   const handleSubmit = async () => {
     if (type === 'cad') {
-      await onSubmit('cad', cadForm);
+      // Prepare CAD data for API
+      const cadData = {
+        ...cadForm,
+        contractID: selectedContract?.contractId || '',
+        exporterID: selectedContract?.exporterId || '',
+        amount: selectedContract?.totalValue || 0,
+        currency: selectedContract?.currency || 'USD',
+        documents: ['B/L', 'Invoice', 'Packing List', 'Certificate of Origin'], // Default required documents
+      };
+      await onSubmit('cad', cadData);
     } else if (type === 'advance') {
-      await onSubmit('advance', advanceForm);
+      // Prepare advance payment data
+      const advanceData = {
+        ...advanceForm,
+        contractID: selectedContract?.contractId || '',
+        exporterID: selectedContract?.exporterId || '',
+      };
+      await onSubmit('advance', advanceData);
     } else if (type === 'consignment') {
-      await onSubmit('consignment', consignmentForm);
+      // Prepare consignment data
+      const consignmentData = {
+        ...consignmentForm,
+        exporterID: selectedContract?.exporterId || '',
+      };
+      await onSubmit('consignment', consignmentData);
     }
   };
 
@@ -153,6 +173,8 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
                   label="Collecting Bank (Foreign)"
                   value={cadForm.collectingBank}
                   onChange={(e) => setCadForm({ ...cadForm, collectingBank: e.target.value })}
+                  required
+                  helperText="Foreign bank collecting payment"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -161,6 +183,8 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
                   label="Collecting Bank BIC/SWIFT"
                   value={cadForm.collectingBankBIC}
                   onChange={(e) => setCadForm({ ...cadForm, collectingBankBIC: e.target.value })}
+                  required
+                  helperText="e.g., DEUTDEFF (Deutsche Bank)"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -169,6 +193,7 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
                   label="Remitting Bank (Ethiopian)"
                   value={cadForm.remittingBank}
                   onChange={(e) => setCadForm({ ...cadForm, remittingBank: e.target.value })}
+                  required
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -177,7 +202,8 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
                   label="Remitting Bank BIC/SWIFT"
                   value={cadForm.remittingBankBIC}
                   onChange={(e) => setCadForm({ ...cadForm, remittingBankBIC: e.target.value })}
-                  helperText="CBE SWIFT code"
+                  required
+                  helperText="Default: CBETETAA (CBE)"
                 />
               </Grid>
               <Grid item xs={12}>
@@ -195,7 +221,11 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="contained" onClick={handleSubmit}>
+            <Button 
+              variant="contained" 
+              onClick={handleSubmit}
+              disabled={!cadForm.collectingBank || !cadForm.collectingBankBIC || !cadForm.remittingBankBIC}
+            >
               Send Collection
             </Button>
           </DialogActions>

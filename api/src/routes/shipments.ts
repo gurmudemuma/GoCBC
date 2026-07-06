@@ -8,7 +8,7 @@ import { validateRequest } from '../middleware/validation';
 import { body, param, query } from 'express-validator';
 
 const router = express.Router();
-const fabricService = new FabricService();
+const fabricService = FabricService.getInstance();
 
 /**
  * @swagger
@@ -30,7 +30,6 @@ const fabricService = new FabricService();
  *               - quantity
  *               - grade
  *               - icoNumber
- *               - ecxLotNumber
  *               - channel
  *               - forexRate
  *               - valueUSD
@@ -52,6 +51,13 @@ const fabricService = new FabricService();
  *                 type: string
  *               ecxLotNumber:
  *                 type: string
+ *                 description: 'Required only when channel is ECX'
+ *               bondReference:
+ *                 type: string
+ *                 description: 'Required only when channel is Direct Export'
+ *               unionApprovalReference:
+ *                 type: string
+ *                 description: 'Required only when channel is Union/Cooperative'
  *               channel:
  *                 type: string
  *               forexRate:
@@ -78,11 +84,20 @@ router.post('/',
     body('quantity').isNumeric().withMessage('Quantity must be a number'),
     body('grade').notEmpty().withMessage('Grade is required'),
     body('icoNumber').notEmpty().withMessage('ICO number is required'),
-    body('ecxLotNumber').notEmpty().withMessage('ECX lot number is required'),
     body('channel').notEmpty().withMessage('Channel is required'),
+    body('ecxLotNumber')
+      .if(body('channel').equals('ECX'))
+      .notEmpty().withMessage('ECX lot number is required when channel is ECX'),
+    body('unionApprovalReference')
+      .if(body('channel').equals('Union'))
+      .notEmpty().withMessage('Union approval reference is required when channel is Union/Cooperative'),
+    body('bondReference')
+      .if(body('channel').equals('Direct Export'))
+      .notEmpty().withMessage('Bond reference is required when channel is Direct Export'),
     body('forexRate').isNumeric().withMessage('Forex rate must be a number'),
     body('valueUSD').isNumeric().withMessage('Value USD must be a number'),
     body('eudrCompliant').isBoolean().withMessage('EUDR compliant must be a boolean'),
+    body('documents').optional().isArray(),
   ],
   validateRequest,
   async (req, res) => {
@@ -101,29 +116,75 @@ router.post('/',
         forexRate,
         valueUSD,
         eudrCompliant,
+        documents,
       } = req.body;
+
+      // AUTO-MAPPING: Fetch contract data to auto-populate fields
+      let autoMappedData: any = {};
+      try {
+        const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID]);
+        if (contractResult.success && contractResult.data) {
+          const contract = contractResult.data;
+          autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
+          autoMappedData.buyerID = contract.BuyerID || contract.buyerID || buyerID;
+          autoMappedData.quantity = contract.Quantity || contract.quantity || quantity;
+          autoMappedData.grade = contract.CoffeeType || contract.coffeeType || grade;
+          
+          // Calculate valueUSD from contract price if not provided
+          const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+          const qty = parseFloat(autoMappedData.quantity || quantity || '0');
+          autoMappedData.calculatedValueUSD = (pricePerKg * qty).toFixed(2);
+          
+          logger.info(`[SHIPMENT] Auto-mapped from contract: exporterID=${autoMappedData.exporterID}, quantity=${autoMappedData.quantity}, valueUSD=${autoMappedData.calculatedValueUSD}`);
+        }
+      } catch (error) {
+        logger.warn('[SHIPMENT] Could not fetch contract for auto-mapping:', error);
+      }
+
+      // Use provided values or auto-mapped values
+      const finalExporterID = exporterID || autoMappedData.exporterID || '';
+      const finalBuyerID = buyerID || autoMappedData.buyerID || '';
+      const finalQuantity = quantity || autoMappedData.quantity || 0;
+      const finalGrade = grade || autoMappedData.grade || '';
+      const finalValueUSD = valueUSD || autoMappedData.calculatedValueUSD || 0;
+
+      // Extract document IDs for blockchain storage
+      let documentIDs: string[] = [];
+      if (documents && Array.isArray(documents)) {
+        documentIDs = documents.map((doc: any) => doc.documentId || doc.id).filter(Boolean);
+        logger.info(`Shipment ${shipmentID}: Linking ${documentIDs.length} documents to blockchain`);
+      }
 
       const result = await fabricService.createShipment(
         shipmentID,
         contractID,
-        exporterID,
-        buyerID,
+        finalExporterID,
+        finalBuyerID,
         origin,
-        quantity.toString(),
-        grade,
+        finalQuantity.toString(),
+        finalGrade,
         icoNumber,
         ecxLotNumber,
         channel,
         forexRate.toString(),
-        valueUSD.toString(),
-        eudrCompliant.toString()
+        finalValueUSD.toString(),
+        eudrCompliant.toString(),
+        JSON.stringify(documentIDs)
       );
 
       if (result.success) {
-        logger.info(`Shipment created successfully: ${shipmentID}`);
+        logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
         res.status(201).json({
           success: true,
           data: result.data,
+          autoMapped: {
+            exporterID: finalExporterID,
+            buyerID: finalBuyerID,
+            quantity: finalQuantity,
+            grade: finalGrade,
+            valueUSD: finalValueUSD,
+          },
+          documentsLinked: documentIDs.length,
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });
@@ -517,6 +578,219 @@ router.get('/:shipmentID/traceability',
       }
     } catch (error) {
       logger.error('Error retrieving traceability data:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ==================== SHIPPING & LOGISTICS ROUTES ====================
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/bill-of-lading:
+ *   post:
+ *     summary: Record Bill of Lading for a shipment
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - billOfLadingNo
+ *               - vesselName
+ *               - departurePort
+ *               - destinationPort
+ *               - estimatedArrival
+ *             properties:
+ *               billOfLadingNo:
+ *                 type: string
+ *               vesselName:
+ *                 type: string
+ *               departurePort:
+ *                 type: string
+ *               destinationPort:
+ *                 type: string
+ *               estimatedArrival:
+ *                 type: string
+ *                 format: date
+ *               trackingNumber:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Bill of Lading recorded successfully
+ *       400:
+ *         description: Invalid input data
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/bill-of-lading',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('billOfLadingNo').notEmpty().withMessage('B/L number is required'),
+    body('vesselName').notEmpty().withMessage('Vessel name is required'),
+    body('departurePort').notEmpty().withMessage('Departure port is required'),
+    body('destinationPort').notEmpty().withMessage('Destination port is required'),
+    body('estimatedArrival').notEmpty().withMessage('Estimated arrival is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const {
+        billOfLadingNo,
+        vesselName,
+        departurePort,
+        destinationPort,
+        estimatedArrival,
+        trackingNumber
+      } = req.body;
+
+      logger.info(`[SHIPPING] Recording B/L for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('RecordBillOfLading', [
+        shipmentID,
+        billOfLadingNo,
+        vesselName,
+        departurePort,
+        destinationPort,
+        estimatedArrival,
+        trackingNumber || ''
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] B/L recorded successfully: ${billOfLadingNo}`);
+        res.json({
+          success: true,
+          message: 'Bill of Lading recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record B/L: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RECORDING_FAILED',
+            message: result.error || 'Failed to record Bill of Lading',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording Bill of Lading:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/shipping-status:
+ *   put:
+ *     summary: Update shipping status and location
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               location:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED]
+ *     responses:
+ *       200:
+ *         description: Shipping status updated successfully
+ *       400:
+ *         description: Invalid input data
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.put('/:shipmentID/shipping-status',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('status').notEmpty().withMessage('Status is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { location, status } = req.body;
+
+      logger.info(`[SHIPPING] Updating shipping status: ${shipmentID} -> ${status}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('UpdateShipmentLocation', [
+        shipmentID,
+        location || '',
+        status
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Shipping status updated: ${shipmentID} -> ${status}`);
+        res.json({
+          success: true,
+          message: 'Shipping status updated successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to update shipping status: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'UPDATE_FAILED',
+            message: result.error || 'Failed to update shipping status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error updating shipping status:', error);
       res.status(500).json({
         success: false,
         error: {

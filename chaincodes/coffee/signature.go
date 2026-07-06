@@ -14,18 +14,18 @@ import (
 
 // TransactionSignature captures WHO did WHAT, WHEN, and HOW (with cryptographic proof)
 type TransactionSignature struct {
-	TransactionID      string    `json:"transactionId"`      // Unique blockchain transaction ID
-	ChannelID          string    `json:"channelId"`          // Channel name
-	Timestamp          time.Time `json:"timestamp"`          // When action occurred
-	FunctionName       string    `json:"functionName"`       // What action was performed
-	Arguments          []string  `json:"arguments"`          // Function parameters (sanitized)
-	Caller             Identity  `json:"caller"`             // WHO performed the action
-	DataHash           string    `json:"dataHash"`           // SHA-256 hash of the data modified
-	PreviousStateHash  string    `json:"previousStateHash"`  // Hash of previous state (for verification)
-	NewStateHash       string    `json:"newStateHash"`       // Hash of new state after modification
-	EndorsementPolicy  string    `json:"endorsementPolicy"`  // Which orgs must endorse
-	EndorsingPeers     []string  `json:"endorsingPeers"`     // Which peers endorsed this transaction
-	CreatedAt          time.Time `json:"createdAt"`
+	TransactionID     string    `json:"transactionId"`     // Unique blockchain transaction ID
+	ChannelID         string    `json:"channelId"`         // Channel name
+	Timestamp         time.Time `json:"timestamp"`         // When action occurred
+	FunctionName      string    `json:"functionName"`      // What action was performed
+	Arguments         []string  `json:"arguments"`         // Function parameters (sanitized)
+	Caller            Identity  `json:"caller"`            // WHO performed the action
+	DataHash          string    `json:"dataHash"`          // SHA-256 hash of the data modified
+	PreviousStateHash string    `json:"previousStateHash"` // Hash of previous state (for verification)
+	NewStateHash      string    `json:"newStateHash"`      // Hash of new state after modification
+	EndorsementPolicy string    `json:"endorsementPolicy"` // Which orgs must endorse
+	EndorsingPeers    []string  `json:"endorsingPeers"`    // Which peers endorsed this transaction
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 // Identity captures the cryptographic identity of the transaction submitter
@@ -180,18 +180,18 @@ func (c *CoffeeContract) CreateTransactionSignature(
 	endorsingPeers := []string{identity.MSPID + "-peer0"}
 
 	signature := &TransactionSignature{
-		TransactionID:      txID,
-		ChannelID:          channelID,
-		Timestamp:          timestamp,
-		FunctionName:       functionName,
-		Arguments:          sanitizeArgs(args), // Remove sensitive data
-		Caller:             *identity,
-		DataHash:           dataHash,
-		PreviousStateHash:  previousStateHash,
-		NewStateHash:       newStateHash,
-		EndorsementPolicy:  endorsementPolicy,
-		EndorsingPeers:     endorsingPeers,
-		CreatedAt:          timestamp,
+		TransactionID:     txID,
+		ChannelID:         channelID,
+		Timestamp:         timestamp,
+		FunctionName:      functionName,
+		Arguments:         sanitizeArgs(args), // Remove sensitive data
+		Caller:            *identity,
+		DataHash:          dataHash,
+		PreviousStateHash: previousStateHash,
+		NewStateHash:      newStateHash,
+		EndorsementPolicy: endorsementPolicy,
+		EndorsingPeers:    endorsingPeers,
+		CreatedAt:         timestamp,
 	}
 
 	return signature, nil

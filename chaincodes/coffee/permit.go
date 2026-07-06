@@ -13,14 +13,14 @@ import (
 
 type ExportPermit struct {
 	PermitID          string    `json:"permitId"`
-	PermitNumber      string    `json:"permitNumber"`      // System-generated sequential number
+	PermitNumber      string    `json:"permitNumber"` // System-generated sequential number
 	ContractID        string    `json:"contractId"`
 	ExporterID        string    `json:"exporterId"`
-	LCID              string    `json:"lcId"`              // For L/C-based permits
-	PaymentMethod     string    `json:"paymentMethod"`     // LC, CAD, ADVANCE, CONSIGNMENT
+	LCID              string    `json:"lcId"`          // For L/C-based permits
+	PaymentMethod     string    `json:"paymentMethod"` // LC, CAD, ADVANCE, CONSIGNMENT
 	Amount            float64   `json:"amount"`
 	Currency          string    `json:"currency"`
-	Description       string    `json:"description"`       // Goods description
+	Description       string    `json:"description"` // Goods description
 	Destination       string    `json:"destination"`
 	CommercialInvoice string    `json:"commercialInvoice"` // Invoice number
 	Status            string    `json:"status"`            // ISSUED, UTILIZED, EXPIRED, CANCELLED, SETTLED
@@ -28,11 +28,11 @@ type ExportPermit struct {
 	ApprovalLevel     string    `json:"approvalLevel"`     // STANDARD, BRANCH_MANAGER, NBE
 	ApprovedBy        string    `json:"approvedBy"`
 	IssueDate         time.Time `json:"issueDate"`
-	ExpiryDate        string    `json:"expiryDate"`        // End of current month
+	ExpiryDate        string    `json:"expiryDate"` // End of current month
 	UtilizationDate   string    `json:"utilizationDate"`
-	SettlementDate    string    `json:"settlementDate"`    // When proceeds repatriated
+	SettlementDate    string    `json:"settlementDate"` // When proceeds repatriated
 	RepatriatedAmount float64   `json:"repatriatedAmount"`
-	BankBranch        string    `json:"bankBranch"`        // Issuing branch
+	BankBranch        string    `json:"bankBranch"` // Issuing branch
 	Remarks           string    `json:"remarks"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
@@ -198,15 +198,15 @@ func (c *CoffeeContract) IssueCBEExportPermit(ctx contractapi.TransactionContext
 
 	// Emit event for permit issuance
 	event := map[string]interface{}{
-		"eventType":    "PermitIssued",
-		"permitID":     permitID,
-		"permitNumber": permitNumber,
-		"exporterID":   exporterID,
-		"amount":       amount,
-		"currency":     currency,
+		"eventType":     "PermitIssued",
+		"permitID":      permitID,
+		"permitNumber":  permitNumber,
+		"exporterID":    exporterID,
+		"amount":        amount,
+		"currency":      currency,
 		"paymentMethod": paymentMethod,
 		"approvalLevel": approvalLevel,
-		"timestamp":    txTime.Format(time.RFC3339),
+		"timestamp":     txTime.Format(time.RFC3339),
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("PermitIssued", eventJSON)
@@ -327,7 +327,7 @@ func (c *CoffeeContract) SettleExportPermit(ctx contractapi.TransactionContextIn
 
 	// Add remarks if amount mismatch
 	if repatriatedAmount != permit.Amount {
-		permit.Remarks = fmt.Sprintf("Amount mismatch: Permit USD %.2f, Repatriated USD %.2f", 
+		permit.Remarks = fmt.Sprintf("Amount mismatch: Permit USD %.2f, Repatriated USD %.2f",
 			permit.Amount, repatriatedAmount)
 	}
 

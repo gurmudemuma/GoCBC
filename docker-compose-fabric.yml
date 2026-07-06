@@ -79,6 +79,7 @@ services:
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ecta.cecbs.et:7051
       - CORE_PEER_LOCALMSPID=ECTAMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.ecta:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -134,6 +135,7 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ecx.cecbs.et:8051
       - CORE_PEER_LOCALMSPID=ECXMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.ecx:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -172,8 +174,8 @@ services:
     container_name: peer0.banks.cecbs.et
     image: hyperledger/fabric-peer:2.5
     environment:
-      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
       - CORE_PEER_PROFILE_ENABLED=false
@@ -189,6 +191,7 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.banks.cecbs.et:9051
       - CORE_PEER_LOCALMSPID=BanksMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.banks:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -201,6 +204,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.banks.cecbs.et:/var/hyperledger/production
     ports:
       - 9051:9051
@@ -225,8 +230,8 @@ services:
     container_name: peer0.nbe.cecbs.et
     image: hyperledger/fabric-peer:2.5
     environment:
-      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
       - CORE_PEER_PROFILE_ENABLED=false
@@ -242,6 +247,7 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.nbe.cecbs.et:10051
       - CORE_PEER_LOCALMSPID=NBEMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.nbe:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -254,6 +260,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.nbe.cecbs.et:/var/hyperledger/production
     ports:
       - 10051:10051
@@ -273,13 +281,12 @@ services:
     networks:
       - cecbs
 
-  # Customs Peer
   peer0.customs.cecbs.et:
     container_name: peer0.customs.cecbs.et
     image: hyperledger/fabric-peer:2.5
     environment:
-      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
       - CORE_PEER_PROFILE_ENABLED=false
@@ -295,6 +302,7 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.customs.cecbs.et:11051
       - CORE_PEER_LOCALMSPID=CustomsMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.customs:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -307,6 +315,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.customs.cecbs.et:/var/hyperledger/production
     ports:
       - 11051:11051
@@ -331,8 +341,8 @@ services:
     container_name: peer0.shipping.cecbs.et
     image: hyperledger/fabric-peer:2.5
     environment:
-      # - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      # - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
       - CORE_PEER_PROFILE_ENABLED=false
@@ -348,6 +358,7 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.shipping.cecbs.et:12051
       - CORE_PEER_LOCALMSPID=ShippingMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - FABRIC_CFG_PATH=/etc/hyperledger/fabric
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.shipping:5984
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
@@ -360,6 +371,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./builders:/builders
+      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.shipping.cecbs.et:/var/hyperledger/production
     ports:
       - 12051:12051
@@ -378,6 +391,25 @@ services:
       - 10984:5984
     networks:
       - cecbs
+
+  # ── Coffee Chaincode (External / Chaincode-as-a-Service) ─────────────────────
+  # The chaincode runs as an independent service. All peers connect to it at
+  # coffee-chaincode:9999 as defined in chaincodes/coffee/connection.json.
+  coffee-chaincode:
+    container_name: coffee-chaincode
+    build:
+      context: ./chaincodes/coffee
+      dockerfile: Dockerfile
+    image: cecbs/coffee-chaincode:latest
+    environment:
+      - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
+      - CORE_CHAINCODE_ID_NAME=coffee_1.25:72b7a11c500b91bc686f86338fab13f74091afd87d162614ac5a45033242ecb6
+      - CORE_CHAINCODE_LOGGING_LEVEL=INFO
+    ports:
+      - "9999:9999"
+    networks:
+      - cecbs
+    restart: unless-stopped
 
   # PostgreSQL
   postgres:

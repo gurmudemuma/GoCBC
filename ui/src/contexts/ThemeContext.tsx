@@ -42,7 +42,7 @@ export const DynamicThemeProvider: React.FC<ThemeProviderProps> = ({ children })
       BANKS: 'BANKS',
       CUSTOMS: 'CUSTOMS',
       SHIPPING: 'SHIPPING',
-      EXPORTER: 'ECTA',
+      EXPORTER: 'EXPORTER',
       ADMIN: 'BANKS', // Default admin to Banks theme
     };
 

@@ -304,6 +304,60 @@ class CECBSApi {
     const response = await this.client.get(`/quality/inspections/${inspectionID}`);
     return response.data;
   }
+
+  // NBE Portal Operations
+  async approveContractForForex(contractId: string, nbeOfficer: string): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/contracts/${contractId}/nbe-approve`, {
+      approvedBy: nbeOfficer,
+      approvalType: 'FOREX_ELIGIBILITY'
+    });
+    return response.data;
+  }
+
+  async allocateForex(forexData: {
+    forexId: string;
+    amount: number;
+    exchangeRate: number;
+    retentionRate: number;
+    nbeOfficer: string;
+    nbeApprovalRef: string;
+    expiryDate: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post('/forex/allocate', forexData);
+    return response.data;
+  }
+
+  async getForexAllocations(): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get('/forex');
+    return response.data;
+  }
+
+  async getLettersOfCredit(): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get('/banking/lc');
+    return response.data;
+  }
+
+  async updateExchangeRate(rateData: {
+    currency: string;
+    buyingRate: number;
+    sellingRate: number;
+    effectiveDate: string;
+    justification: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post('/banking/exchange-rates', rateData);
+    return response.data;
+  }
+
+  // Banking Analytics for NBE Portal
+  async getBankingMetrics(): Promise<ApiResponse<{
+    totalExports: number;
+    forexVolume: number;
+    complianceRate: number;
+    avgProcessingTime: number;
+  }>> {
+    const response = await this.client.get('/analytics/banking');
+    return response.data;
+  }
 }
 
 // Create singleton instance

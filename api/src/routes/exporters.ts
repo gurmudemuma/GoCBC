@@ -9,7 +9,7 @@ import { authMiddleware } from '../middleware/auth';
 import { body, param, query } from 'express-validator';
 
 const router = express.Router();
-const fabricService = new FabricService();
+const fabricService = FabricService.getInstance();
 
 // ============================================================================
 // APPLICATIONS ROUTES (must come BEFORE /:exporterID to avoid route conflicts)
@@ -163,9 +163,13 @@ router.post('/exporter-applications',
           registration_date, capital_requirement, professional_taster,
           taster_certificate, laboratory_facility, contact_person,
           email, phone, address, city, region, bank_name,
-          bank_account_number, comments, status, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+          bank_account_number, bank_branch_name, bank_branch_code,
+          comments, documents, status, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       `;
+      
+      // Serialize documents array to JSON
+      const documentsJSON = JSON.stringify(applicationData.documents || []);
       
       await new Promise((resolve, reject) => {
         db.run(appQuery, [
@@ -186,7 +190,10 @@ router.post('/exporter-applications',
           applicationData.region || '',
           applicationData.bankName || '',
           applicationData.bankAccountNumber || '',
+          applicationData.bankBranchName || '',
+          applicationData.bankBranchCode || '',
           applicationData.comments || '',
+          documentsJSON,
           submittedAt,
         ], (err: any) => {
           if (err) reject(err);
@@ -261,6 +268,7 @@ router.post('/exporter-applications/:applicationId/approve',
     body('ectaLicenseNumber').notEmpty(),
     body('licenseExpiryDate').isISO8601(),
     body('bankName').optional(),
+    body('bankAccountNumber').optional(),
     body('bankBranch').optional(),
     body('bankBranchCode').optional(),
   ],
@@ -268,7 +276,7 @@ router.post('/exporter-applications/:applicationId/approve',
   async (req, res) => {
     try {
       const { applicationId } = req.params;
-      const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankBranch, bankBranchCode } = req.body;
+      const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankAccountNumber, bankBranch, bankBranchCode } = req.body;
       const db = fabricService['db'];
       
       if (!db) {
@@ -283,8 +291,8 @@ router.post('/exporter-applications/:applicationId/approve',
         });
       });
       
-      if (!application || application.status !== 'pending') {
-        res.status(404).json({ success: false, error: { code: 'NOT_FOUND' }, timestamp: new Date().toISOString() });
+      if (!application || (application.status !== 'pending' && application.status !== 'approved')) {
+        res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or already rejected' }, timestamp: new Date().toISOString() });
         return;
       }
 
@@ -304,19 +312,25 @@ router.post('/exporter-applications/:applicationId/approve',
       );
       
       if (!result.success) {
-        logger.error(`❌ Blockchain registration failed for ${exporterId}:`, result.error);
-        res.status(400).json({ 
-          success: false, 
-          error: { 
-            code: 'BLOCKCHAIN_ERROR', 
-            message: `Cannot approve exporter: Blockchain registration failed. ${result.error || 'Network may be down or peers not responding.'}\n\nPlease ensure:\n• Fabric network is running\n• All peer nodes are healthy\n• Chaincode is deployed\n\nTry again or contact system administrator.`
-          }, 
-          timestamp: new Date().toISOString() 
-        });
-        return;
+        // If the exporter already exists on-chain, treat it as success (idempotent re-approval)
+        const alreadyExists = result.error && result.error.includes('already exists');
+        if (alreadyExists) {
+          logger.warn(`⚠️ Exporter ${exporterId} already exists on blockchain — proceeding with DB approval`);
+        } else {
+          logger.error(`❌ Blockchain registration failed for ${exporterId}:`, result.error);
+          res.status(400).json({ 
+            success: false, 
+            error: { 
+              code: 'BLOCKCHAIN_ERROR', 
+              message: `Cannot approve exporter: Blockchain registration failed. ${result.error || 'Network may be down or peers not responding.'}\n\nPlease ensure:\n• Fabric network is running\n• All peer nodes are healthy\n• Chaincode is deployed\n\nTry again or contact system administrator.`
+            }, 
+            timestamp: new Date().toISOString() 
+          });
+          return;
+        }
+      } else {
+        logger.info(`✅ Exporter ${exporterId} successfully registered on blockchain (TxID: ${result.txId})`);
       }
-      
-      logger.info(`✅ Exporter ${exporterId} successfully registered on blockchain (TxID: ${result.txId})`);
 
       // Step 2: Generate new password for the user
       const bcrypt = require('bcrypt');
@@ -347,12 +361,13 @@ router.post('/exporter-applications/:applicationId/approve',
                  password_hash = ?,
                  organization = ?,
                  bank_name = ?,
+                 bank_account_number = ?,
                  bank_branch = ?,
                  bank_branch_code = ?,
                  updated_at = datetime('now')
              WHERE email = ? AND role = 'EXPORTER'`,
             [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, 
-             bankName || null, bankBranch || null, bankBranchCode || null, application.email],
+             bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, application.email],
             (err: any) => { 
               if (err) {
                 logger.error('Failed to activate user account:', err);
@@ -377,8 +392,8 @@ router.post('/exporter-applications/:applicationId/approve',
             `INSERT INTO users (
               username, email, password_hash, full_name, role, organization,
               phone, permissions, status, exporter_id, ecta_license, 
-              bank_name, bank_branch, bank_branch_code, created_at
-            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, ?, ?, ?, datetime('now'))`,
+              bank_name, bank_account_number, bank_branch, bank_branch_code, created_at
+            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, datetime('now'))`,
             [
               exporterId,
               application.email,
@@ -390,6 +405,7 @@ router.post('/exporter-applications/:applicationId/approve',
               exporterId,
               ectaLicenseNumber,
               bankName || null,
+              bankAccountNumber || null,
               bankBranch || null,
               bankBranchCode || null
             ],
@@ -416,11 +432,12 @@ router.post('/exporter-applications/:applicationId/approve',
                ecta_license_number = ?,
                license_expiry_date = ?,
                bank_name = ?,
+               bank_account_number = ?,
                bank_branch_name = ?,
                bank_branch_code = ?
            WHERE application_id = ?`,
           ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate,
-           bankName || null, bankBranch || null, bankBranchCode || null, applicationId],
+           bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, applicationId],
           (err: any) => { if (err) reject(err); else resolve(true); }
         );
       });

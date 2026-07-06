@@ -13,57 +13,57 @@ import (
 // ==================== QUALITY INSPECTION STRUCTURE ====================
 
 type QualityInspection struct {
-	InspectionID       string    `json:"inspectionId"`
-	ShipmentID         string    `json:"shipmentId"`
-	ContractID         string    `json:"contractId"`
-	ExporterID         string    `json:"exporterId"`
-	InspectorID        string    `json:"inspectorId"`
-	InspectorName      string    `json:"inspectorName"`
-	InspectionDate     time.Time `json:"inspectionDate"`
-	
+	InspectionID   string    `json:"inspectionId"`
+	ShipmentID     string    `json:"shipmentId"`
+	ContractID     string    `json:"contractId"`
+	ExporterID     string    `json:"exporterId"`
+	InspectorID    string    `json:"inspectorId"`
+	InspectorName  string    `json:"inspectorName"`
+	InspectionDate time.Time `json:"inspectionDate"`
+
 	// Physical Inspection
-	SampleSize         float64   `json:"sampleSize"`         // kg
-	MoistureContent    float64   `json:"moistureContent"`    // percentage
-	DefectCount        int       `json:"defectCount"`        // per 300g sample
-	BeanSize           string    `json:"beanSize"`           // Screen size (14, 15, 16, 17, 18)
-	Color              string    `json:"color"`              // Green, Bluish, Brownish
-	Odor               string    `json:"odor"`               // Clean, Fermented, Musty, etc.
-	
+	SampleSize      float64 `json:"sampleSize"`      // kg
+	MoistureContent float64 `json:"moistureContent"` // percentage
+	DefectCount     int     `json:"defectCount"`     // per 300g sample
+	BeanSize        string  `json:"beanSize"`        // Screen size (14, 15, 16, 17, 18)
+	Color           string  `json:"color"`           // Green, Bluish, Brownish
+	Odor            string  `json:"odor"`            // Clean, Fermented, Musty, etc.
+
 	// Cupping Test (SCA 100-point scale)
-	Fragrance          float64   `json:"fragrance"`          // /10
-	Flavor             float64   `json:"flavor"`             // /10
-	Aftertaste         float64   `json:"aftertaste"`         // /10
-	Acidity            float64   `json:"acidity"`            // /10
-	Body               float64   `json:"body"`               // /10
-	Balance            float64   `json:"balance"`            // /10
-	Uniformity         float64   `json:"uniformity"`         // /10
-	CleanCup           float64   `json:"cleanCup"`           // /10
-	Sweetness          float64   `json:"sweetness"`          // /10
-	Overall            float64   `json:"overall"`            // /10
-	TotalScore         float64   `json:"totalScore"`         // Sum of above
-	
+	Fragrance  float64 `json:"fragrance"`  // /10
+	Flavor     float64 `json:"flavor"`     // /10
+	Aftertaste float64 `json:"aftertaste"` // /10
+	Acidity    float64 `json:"acidity"`    // /10
+	Body       float64 `json:"body"`       // /10
+	Balance    float64 `json:"balance"`    // /10
+	Uniformity float64 `json:"uniformity"` // /10
+	CleanCup   float64 `json:"cleanCup"`   // /10
+	Sweetness  float64 `json:"sweetness"`  // /10
+	Overall    float64 `json:"overall"`    // /10
+	TotalScore float64 `json:"totalScore"` // Sum of above
+
 	// Grading Results
-	QualityGrade       string    `json:"qualityGrade"`       // Grade 1-9
-	CuppingGrade       string    `json:"cuppingGrade"`       // Q-Grade (80+), Premium (85+), Specialty (90+)
-	Classification     string    `json:"classification"`     // WASHED, NATURAL, HONEY
-	
+	QualityGrade   string `json:"qualityGrade"`   // Grade 1-9
+	CuppingGrade   string `json:"cuppingGrade"`   // Q-Grade (80+), Premium (85+), Specialty (90+)
+	Classification string `json:"classification"` // WASHED, NATURAL, HONEY
+
 	// Compliance
-	EUDRCompliant      bool      `json:"eudrCompliant"`
-	PesticideTest      string    `json:"pesticideTest"`      // PASSED, FAILED, NOT_TESTED
-	HeavyMetalTest     string    `json:"heavyMetalTest"`     // PASSED, FAILED, NOT_TESTED
-	MycotoxinTest      string    `json:"mycotoxinTest"`      // PASSED, FAILED, NOT_TESTED
-	
+	EUDRCompliant  bool   `json:"eudrCompliant"`
+	PesticideTest  string `json:"pesticideTest"`  // PASSED, FAILED, NOT_TESTED
+	HeavyMetalTest string `json:"heavyMetalTest"` // PASSED, FAILED, NOT_TESTED
+	MycotoxinTest  string `json:"mycotoxinTest"`  // PASSED, FAILED, NOT_TESTED
+
 	// Result
-	Status             string    `json:"status"`             // PENDING, INSPECTED, APPROVED, REJECTED, REWORK
-	ExportPermitNo     string    `json:"exportPermitNo"`
-	CertificateNo      string    `json:"certificateNo"`
-	Remarks            string    `json:"remarks"`
-	RejectionReason    string    `json:"rejectionReason"`
-	
-	ApprovedBy         string    `json:"approvedBy"`
-	ApprovedDate       string    `json:"approvedDate"`
-	CreatedAt          time.Time `json:"createdAt"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	Status          string `json:"status"` // PENDING, INSPECTED, APPROVED, REJECTED, REWORK
+	ExportPermitNo  string `json:"exportPermitNo"`
+	CertificateNo   string `json:"certificateNo"`
+	Remarks         string `json:"remarks"`
+	RejectionReason string `json:"rejectionReason"`
+
+	ApprovedBy   string    `json:"approvedBy"`
+	ApprovedDate string    `json:"approvedDate"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // ==================== QUALITY INSPECTION FUNCTIONS ====================
@@ -72,13 +72,31 @@ type QualityInspection struct {
 func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID, shipmentID, contractID, exporterID string) error {
 
-	// Verify shipment exists
-	shipmentExists, err := c.ShipmentExists(ctx, shipmentID)
-	if err != nil {
-		return fmt.Errorf("failed to check shipment: %v", err)
+	// VALIDATION: IDs
+	if err := ValidateID(inspectionID, "inspectionID"); err != nil {
+		return fmt.Errorf("RequestInspection: %w", err)
 	}
-	if !shipmentExists {
-		return fmt.Errorf("shipment %s does not exist", shipmentID)
+	if contractID != "" {
+		if err := ValidateID(contractID, "contractID"); err != nil {
+			return fmt.Errorf("RequestInspection: %w", err)
+		}
+	}
+	if exporterID != "" {
+		if err := ValidateID(exporterID, "exporterID"); err != nil {
+			return fmt.Errorf("RequestInspection: %w", err)
+		}
+	}
+
+	// Shipment is optional for compatibility with earlier workflow steps.
+	// If it exists, keep the relationship; otherwise create the inspection record anyway.
+	if shipmentID != "" {
+		shipmentExists, err := c.ShipmentExists(ctx, shipmentID)
+		if err != nil {
+			return fmt.Errorf("failed to check shipment: %v", err)
+		}
+		if !shipmentExists {
+			fmt.Printf("RequestInspection: shipment %s not found, creating inspection without shipment linkage\n", shipmentID)
+		}
 	}
 
 	// Check if inspection already exists
@@ -98,13 +116,13 @@ func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInt
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	inspection := QualityInspection{
-		InspectionID:   inspectionID,
-		ShipmentID:     shipmentID,
-		ContractID:     contractID,
-		ExporterID:     exporterID,
-		Status:         "PENDING",
-		CreatedAt:      txTime,
-		UpdatedAt:      txTime,
+		InspectionID: inspectionID,
+		ShipmentID:   shipmentID,
+		ContractID:   contractID,
+		ExporterID:   exporterID,
+		Status:       "PENDING",
+		CreatedAt:    txTime,
+		UpdatedAt:    txTime,
 	}
 
 	inspectionJSON, err := json.Marshal(inspection)
@@ -112,7 +130,21 @@ func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to marshal inspection: %v", err)
 	}
 
-	return ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return err
+	}
+
+	// Update shipment status when the shipment exists.
+	if shipmentID != "" {
+		err = c.UpdateShipmentStatus(ctx, shipmentID, "INSPECTION_PENDING")
+		if err != nil {
+			// Log but don't fail — inspection record is already saved
+			fmt.Printf("WARNING: failed to update shipment status: %v\n", err)
+		}
+	}
+
+	return nil
 }
 
 // PerformInspection - ECTA inspector records inspection results
@@ -139,7 +171,7 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 	}
 
 	if inspection.Status != "PENDING" {
-		return fmt.Errorf("inspection already completed, current status: %s", inspection.Status)
+		return fmt.Errorf("PerformInspection: inspection %s already completed, current status: %s", inspectionID, inspection.Status)
 	}
 
 	// AUTO-MAP: Fetch shipment data for EUDR compliance
@@ -154,22 +186,80 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 		}
 	}
 
+	// VALIDATION: IDs
+	if err := ValidateID(inspectorID, "inspectorID"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
+	if err := ValidateNonEmptyString(inspectorName, "inspectorName", MaxStringLen); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
+
 	// Parse physical inspection parameters
-	sampleSize, _ := strconv.ParseFloat(sampleSizeStr, 64)
-	moistureContent, _ := strconv.ParseFloat(moistureContentStr, 64)
-	defectCount, _ := strconv.Atoi(defectCountStr)
+	sampleSize, err := strconv.ParseFloat(sampleSizeStr, 64)
+	if err != nil {
+		return fmt.Errorf("PerformInspection: invalid sample size: %w", err)
+	}
+	if err := ValidateQuantity(sampleSize, "sampleSize"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
+
+	moistureContent, err := strconv.ParseFloat(moistureContentStr, 64)
+	if err != nil {
+		return fmt.Errorf("PerformInspection: invalid moisture content: %w", err)
+	}
+	if err := ValidateMoistureContent(moistureContent); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
+
+	defectCount, err := strconv.Atoi(defectCountStr)
+	if err != nil {
+		return fmt.Errorf("PerformInspection: invalid defect count: %w", err)
+	}
+	if err := ValidateDefectCount(defectCount); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 
 	// Parse cupping scores
 	fragrance, _ := strconv.ParseFloat(fragranceStr, 64)
+	if err := ValidateCuppingScore(fragrance, "fragrance"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	flavor, _ := strconv.ParseFloat(flavorStr, 64)
+	if err := ValidateCuppingScore(flavor, "flavor"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	aftertaste, _ := strconv.ParseFloat(aftertasteStr, 64)
+	if err := ValidateCuppingScore(aftertaste, "aftertaste"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	acidity, _ := strconv.ParseFloat(acidityStr, 64)
+	if err := ValidateCuppingScore(acidity, "acidity"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	body, _ := strconv.ParseFloat(bodyStr, 64)
+	if err := ValidateCuppingScore(body, "body"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	balance, _ := strconv.ParseFloat(balanceStr, 64)
+	if err := ValidateCuppingScore(balance, "balance"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	uniformity, _ := strconv.ParseFloat(uniformityStr, 64)
+	if err := ValidateCuppingScore(uniformity, "uniformity"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	cleanCup, _ := strconv.ParseFloat(cleanCupStr, 64)
+	if err := ValidateCuppingScore(cleanCup, "cleanCup"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	sweetness, _ := strconv.ParseFloat(sweetnessStr, 64)
+	if err := ValidateCuppingScore(sweetness, "sweetness"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 	overall, _ := strconv.ParseFloat(overallStr, 64)
+	if err := ValidateCuppingScore(overall, "overall"); err != nil {
+		return fmt.Errorf("PerformInspection: %w", err)
+	}
 
 	// Calculate total score
 	totalScore := fragrance + flavor + aftertaste + acidity + body + balance + uniformity + cleanCup + sweetness + overall
@@ -256,23 +346,34 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID, approvedBy, certificateNo string) error {
 
+	// VALIDATION: IDs and required fields
+	if err := ValidateID(inspectionID, "inspectionID"); err != nil {
+		return fmt.Errorf("ApproveInspection: %w", err)
+	}
+	if err := ValidateNonEmptyString(approvedBy, "approvedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("ApproveInspection: %w", err)
+	}
+	if err := ValidateNonEmptyString(certificateNo, "certificateNo", MaxIDLen); err != nil {
+		return fmt.Errorf("ApproveInspection: %w", err)
+	}
+
 	// Get MSP ID for access control
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
-		return fmt.Errorf("failed to get MSP ID: %v", err)
+		return fmt.Errorf("ApproveInspection: failed to get MSP ID: %w", err)
 	}
 
 	// Only ECTA can approve inspections
 	if mspID != "ECTAMSP" {
-		return fmt.Errorf("unauthorized: only ECTA can approve inspections (caller: %s)", mspID)
+		return fmt.Errorf("ApproveInspection: unauthorized: only ECTA can approve inspections (caller: %s)", mspID)
 	}
 
 	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
 	if err != nil {
-		return fmt.Errorf("failed to read inspection: %v", err)
+		return fmt.Errorf("ApproveInspection: failed to read inspection %s: %w", inspectionID, err)
 	}
 	if inspectionJSON == nil {
-		return fmt.Errorf("inspection %s does not exist", inspectionID)
+		return fmt.Errorf("ApproveInspection: inspection %s does not exist", inspectionID)
 	}
 
 	var inspection QualityInspection
@@ -282,13 +383,13 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 	}
 
 	if inspection.Status != "INSPECTED" {
-		return fmt.Errorf("inspection must be completed before approval, current status: %s", inspection.Status)
+		return fmt.Errorf("ApproveInspection: inspection %s must be completed before approval, current status: %s", inspectionID, inspection.Status)
 	}
 
 	// Validate quality grade (only Grade 1-5 can be approved for export)
-	if inspection.QualityGrade == "Grade 6" || inspection.QualityGrade == "Grade 7" || 
-	   inspection.QualityGrade == "Grade 8" || inspection.QualityGrade == "Grade 9" {
-		return fmt.Errorf("coffee grade %s does not meet export quality standards", inspection.QualityGrade)
+	if inspection.QualityGrade == "Grade 6" || inspection.QualityGrade == "Grade 7" ||
+		inspection.QualityGrade == "Grade 8" || inspection.QualityGrade == "Grade 9" {
+		return fmt.Errorf("ApproveInspection: coffee grade %s for inspection %s does not meet export quality standards", inspection.QualityGrade, inspectionID)
 	}
 
 	// Get transaction timestamp
@@ -345,13 +446,13 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 
 	// Emit event
 	event := map[string]interface{}{
-		"eventType":     "InspectionApproved",
-		"inspectionID":  inspectionID,
-		"shipmentID":    inspection.ShipmentID,
-		"qualityGrade":  inspection.QualityGrade,
-		"cuppingGrade":  inspection.CuppingGrade,
-		"timestamp":     txTime.Format(time.RFC3339),
-		"approvedBy":    mspID,
+		"eventType":    "InspectionApproved",
+		"inspectionID": inspectionID,
+		"shipmentID":   inspection.ShipmentID,
+		"qualityGrade": inspection.QualityGrade,
+		"cuppingGrade": inspection.CuppingGrade,
+		"timestamp":    txTime.Format(time.RFC3339),
+		"approvedBy":   mspID,
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("InspectionApproved", eventJSON)
@@ -363,12 +464,23 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInterface,
 	inspectionID, exportPermitNo, issuedBy string) error {
 
+	// VALIDATION: IDs and required fields
+	if err := ValidateID(inspectionID, "inspectionID"); err != nil {
+		return fmt.Errorf("IssueExportPermit: %w", err)
+	}
+	if err := ValidateNonEmptyString(exportPermitNo, "exportPermitNo", MaxIDLen); err != nil {
+		return fmt.Errorf("IssueExportPermit: %w", err)
+	}
+	if err := ValidateNonEmptyString(issuedBy, "issuedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("IssueExportPermit: %w", err)
+	}
+
 	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
 	if err != nil {
-		return fmt.Errorf("failed to read inspection: %v", err)
+		return fmt.Errorf("IssueExportPermit: failed to read inspection %s: %w", inspectionID, err)
 	}
 	if inspectionJSON == nil {
-		return fmt.Errorf("inspection %s does not exist", inspectionID)
+		return fmt.Errorf("IssueExportPermit: inspection %s does not exist", inspectionID)
 	}
 
 	var inspection QualityInspection
@@ -378,11 +490,11 @@ func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInt
 	}
 
 	if inspection.Status != "APPROVED" {
-		return fmt.Errorf("export permit can only be issued after quality approval, current status: %s", inspection.Status)
+		return fmt.Errorf("IssueExportPermit: export permit for inspection %s can only be issued after quality approval, current status: %s", inspectionID, inspection.Status)
 	}
 
 	if inspection.ExportPermitNo != "" {
-		return fmt.Errorf("export permit already issued: %s", inspection.ExportPermitNo)
+		return fmt.Errorf("IssueExportPermit: export permit already issued for inspection %s: %s", inspectionID, inspection.ExportPermitNo)
 	}
 
 	// Get transaction timestamp

@@ -24,6 +24,8 @@ export interface SalesContract {
   exporterId: string;
   buyerId: string;
   buyerCountry: string;
+  buyerBank?: string;       // Issuing bank (buyer's bank that opens the LC)
+  exporterBank?: string;    // Advising bank (exporter's Ethiopian bank that receives the LC)
   coffeeType: string;
   quantity: number;
   pricePerKg: number;
@@ -31,7 +33,7 @@ export interface SalesContract {
   currency: string;
   minimumPriceCompliant: boolean;
   eudrRequired: boolean;
-  contractStatus: 'REGISTERED' | 'APPROVED' | 'REJECTED';
+  contractStatus: 'REGISTERED' | 'APPROVED' | 'NBE_APPROVED' | 'REJECTED';
   registrationDate: string;
   approvalDate?: string;
   createdAt: string;

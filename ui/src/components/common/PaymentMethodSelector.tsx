@@ -215,9 +215,10 @@ const PaymentMethodSelector: React.FC<PaymentMethodSelectorProps> = ({
                         <Box sx={{ display: 'flex', gap: 2, mt: 2, flexWrap: 'wrap' }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                             <MoneyIcon fontSize="small" color="action" />
-                            <Typography variant="caption">
-                              Cost: <Chip label={method.cost} size="small" color={getCostColor(method.cost)} />
+                            <Typography variant="caption" component="span">
+                              Cost: 
                             </Typography>
+                            <Chip label={method.cost} size="small" color={getCostColor(method.cost)} />
                           </Box>
                           
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

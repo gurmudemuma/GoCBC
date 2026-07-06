@@ -1,6 +1,10 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // REST API Gateway Server
 
+// Load environment variables FIRST - before any other imports that may read process.env
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,7 +15,6 @@ import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import dotenv from 'dotenv';
 import 'reflect-metadata';
 
 import { logger } from './utils/logger';
@@ -40,6 +43,10 @@ import collectionsRoutes from './routes/collections';
 import advanceRoutes from './routes/advance';
 import consignmentRoutes from './routes/consignment';
 import auditRoutes from './routes/audit';
+import phytosanitaryRoutes from './routes/phytosanitary';
+import insuranceRoutes from './routes/insurance';
+import paymentsRoutes from './routes/payments';
+import documentsRoutes from './routes/documents';
 
 // Load environment variables
 dotenv.config();
@@ -54,7 +61,7 @@ class CECBSServer {
 
   constructor() {
     this.app = express();
-    this.fabricService = new FabricService();
+    this.fabricService = FabricService.getInstance();
     this.databaseService = DatabaseService.getInstance();
     this.setupMiddleware();
     this.setupRoutes();
@@ -157,6 +164,16 @@ class CECBSServer {
     // V2.0 Cryptographic Audit Trail
     apiV1.use('/audit', authMiddleware, auditRoutes);
 
+    // V2.1 Gap Closures - Phytosanitary & Insurance Certificates
+    apiV1.use('/phytosanitary', authMiddleware, phytosanitaryRoutes);
+    apiV1.use('/insurance', authMiddleware, insuranceRoutes);
+
+    // V2.2 Payment Settlement & Verification
+    apiV1.use('/payments', authMiddleware, paymentsRoutes);
+
+    // V2.3 Document Storage (Off-chain with IPFS)
+    apiV1.use('/documents', authMiddleware, documentsRoutes);
+
     this.app.use('/api/v1', apiV1);
 
     // Root endpoint
@@ -234,7 +251,7 @@ class CECBSServer {
 
   private setupWebSocket(): void {
     this.wsServer = new WebSocketServer({ server: this.server });
-    this.wsService = new WebSocketService(this.wsServer);
+    new WebSocketService(this.wsServer);
     
     logger.info('WebSocket server initialized');
   }
@@ -242,7 +259,11 @@ class CECBSServer {
   public async start(): Promise<void> {
     try {
       // Initialize services
-      await this.fabricService.connect();
+      try {
+        await this.fabricService.connect();
+      } catch (error) {
+        logger.warn('Continuing server startup without Fabric connectivity');
+      }
 
       const port = process.env.PORT || 3001;
       

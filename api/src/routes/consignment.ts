@@ -1,7 +1,8 @@
 import express from 'express';
-import { fabricService } from '../services/fabricService';
+import { FabricService } from '../services/fabricService';
 
 const router = express.Router();
+const fabricService = FabricService.getInstance();
 
 // Issue consignment permit
 router.post('/issue-permit', async (req, res) => {

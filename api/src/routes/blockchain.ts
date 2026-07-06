@@ -6,7 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
-const fabricService = new FabricService();
+const fabricService = FabricService.getInstance();
 
 /**
  * @swagger
