@@ -202,7 +202,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
       REVOKED: { color: 'warning', icon: <CancelIcon /> }
     };
     const config = statusConfig[status] || { color: 'default', icon: null };
-    return <Chip label={status} color={config.color as any} icon={config.icon} size="small" />;
+    return <Chip label={status} color={config.color as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} icon={config.icon} size="small" />;
   };
 
   return (

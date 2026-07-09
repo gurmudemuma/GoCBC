@@ -206,7 +206,7 @@ func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInter
 	}
 
 	// VALIDATION: BIC code
-	if err := ValidateBICCode(receivingBankBIC, "receivingBankBIC"); err != nil {
+	if err := ValidateBICCode(receivingBankBIC); err != nil {
 		return fmt.Errorf("InitiatePayment: %w", err)
 	}
 
@@ -585,7 +585,7 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 	if err := ValidateNonEmptyString(payingBank, "payingBank", MaxStringLen); err != nil {
 		return fmt.Errorf("SettlePayment: %w", err)
 	}
-	if err := ValidateBICCode(payingBankBIC, "payingBankBIC"); err != nil {
+	if err := ValidateBICCode(payingBankBIC); err != nil {
 		return fmt.Errorf("SettlePayment: %w", err)
 	}
 	if err := ValidateNonEmptyString(swiftReference, "swiftReference", MaxIDLen); err != nil {
@@ -649,7 +649,7 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 	}
 
 	// VALIDATION: Exchange rate
-	if err := ValidateExchangeRate(exchangeRate, "exchangeRate"); err != nil {
+	if err := ValidateExchangeRate(exchangeRate); err != nil {
 		return fmt.Errorf("SettlePayment: %w", err)
 	}
 

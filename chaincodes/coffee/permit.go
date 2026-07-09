@@ -453,6 +453,14 @@ func (c *CoffeeContract) QueryAllPermits(ctx contractapi.TransactionContextInter
 	return permits, nil
 }
 
+// QueryPermitsByContract - Get all export permits for a specific contract
+func (c *CoffeeContract) QueryPermitsByContract(ctx contractapi.TransactionContextInterface,
+	contractID string) ([]*ExportPermit, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
+	return c.queryPermits(ctx, queryString)
+}
+
 // Helper function for querying permits
 func (c *CoffeeContract) queryPermits(ctx contractapi.TransactionContextInterface,
 	queryString string) ([]*ExportPermit, error) {

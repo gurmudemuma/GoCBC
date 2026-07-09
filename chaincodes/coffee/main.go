@@ -33,11 +33,22 @@ type CoffeeShipment struct {
 	ForexRate        float64   `json:"forexRate"`
 	ValueUSD         float64   `json:"valueUsd"`
 	EUDRCompliant    bool      `json:"eudrCompliant"`
+	// Transport Mode & Carrier
+	TransportMode    string    `json:"transportMode"`    // SEA or AIR
+	ShippingLine     string    `json:"shippingLine"`     // Carrier name (shipping line or airline)
+	// Sea Freight (B/L) fields
 	BillOfLadingNo   string    `json:"billOfLadingNo"`   // B/L number
 	BillOfLadingDate string    `json:"billOfLadingDate"` // B/L issue date
-	VesselName       string    `json:"vesselName"`       // Vessel/truck name
-	DeparturePort    string    `json:"departurePort"`    // Port of departure
-	DestinationPort  string    `json:"destinationPort"`  // Port of destination
+	VesselName       string    `json:"vesselName"`       // Vessel name
+	VoyageNumber     string    `json:"voyageNumber"`     // Voyage number
+	ContainerNumber  string    `json:"containerNumber"`  // Container number
+	ContainerType    string    `json:"containerType"`    // DRY, REEFER, OPEN_TOP
+	// Air Freight (AWB) fields
+	AirwayBill       string    `json:"airwayBill"`       // AWB number
+	FlightNumber     string    `json:"flightNumber"`     // Flight number
+	// Common fields
+	DeparturePort    string    `json:"departurePort"`    // Port/Airport of departure
+	DestinationPort  string    `json:"destinationPort"`  // Port/Airport of destination
 	EstimatedArrival string    `json:"estimatedArrival"` // ETA
 	ActualArrival    string    `json:"actualArrival"`    // Actual arrival date
 	TrackingNumber   string    `json:"trackingNumber"`   // GPS/Container tracking
@@ -129,7 +140,7 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 
 	// VALIDATION: License expiry date
 	if licenseExpiryDate != "" {
-		if err := ValidateDate(licenseExpiryDate, "licenseExpiryDate", false); err != nil {
+		if err := ValidateDate(licenseExpiryDate); err != nil {
 			return fmt.Errorf("RegisterExporter: %w", err)
 		}
 	}
@@ -937,7 +948,7 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
 }
 
-// RecordBillOfLading - Shipping company records Bill of Lading details
+// RecordBillOfLading - Shipping company records Bill of Lading details (Sea Freight)
 func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextInterface,
 	shipmentID, billOfLadingNo, vesselName, departurePort, destinationPort,
 	estimatedArrival, trackingNumber string) error {
@@ -953,6 +964,7 @@ func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextIn
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
+	shipment.TransportMode = "SEA"
 	shipment.BillOfLadingNo = billOfLadingNo
 	shipment.BillOfLadingDate = timestamp.Format(time.RFC3339)
 	shipment.VesselName = vesselName
@@ -962,6 +974,89 @@ func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextIn
 	shipment.TrackingNumber = trackingNumber
 	shipment.Status = "LOADED"
 	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return err
+	}
+
+	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+}
+
+// RecordAirwayBill - Airline records Airway Bill details (Air Freight)
+func (c *CoffeeContract) RecordAirwayBill(ctx contractapi.TransactionContextInterface,
+	shipmentID, airwayBillNo, flightNumber, airline, departureAirport, destinationAirport,
+	estimatedArrival, trackingNumber string) error {
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return err
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	shipment.TransportMode = "AIR"
+	shipment.AirwayBill = airwayBillNo
+	shipment.FlightNumber = flightNumber
+	shipment.ShippingLine = airline // Airline name
+	shipment.DeparturePort = departureAirport
+	shipment.DestinationPort = destinationAirport
+	shipment.EstimatedArrival = estimatedArrival
+	shipment.TrackingNumber = trackingNumber
+	shipment.Status = "LOADED"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return err
+	}
+
+	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+}
+
+// RecordShippingDetails - Universal function that records either B/L or AWB based on transport mode
+func (c *CoffeeContract) RecordShippingDetails(ctx contractapi.TransactionContextInterface,
+	shipmentID, transportMode, documentNo, carrierName, vesselOrFlight, 
+	departurePoint, destinationPoint, estimatedArrival, trackingNumber,
+	containerNumber, containerType, voyageNumber string) error {
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return err
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Set common fields
+	shipment.TransportMode = transportMode
+	shipment.ShippingLine = carrierName
+	shipment.DeparturePort = departurePoint
+	shipment.DestinationPort = destinationPoint
+	shipment.EstimatedArrival = estimatedArrival
+	shipment.TrackingNumber = trackingNumber
+	shipment.Status = "LOADED"
+	shipment.UpdatedAt = timestamp
+
+	// Set mode-specific fields
+	if transportMode == "SEA" {
+		shipment.BillOfLadingNo = documentNo
+		shipment.BillOfLadingDate = timestamp.Format(time.RFC3339)
+		shipment.VesselName = vesselOrFlight
+		shipment.VoyageNumber = voyageNumber
+		shipment.ContainerNumber = containerNumber
+		shipment.ContainerType = containerType
+	} else if transportMode == "AIR" {
+		shipment.AirwayBill = documentNo
+		shipment.FlightNumber = vesselOrFlight
+	}
 
 	shipmentJSON, err := json.Marshal(shipment)
 	if err != nil {
@@ -1172,6 +1267,46 @@ func (c *CoffeeContract) QueryShipmentsByExporter(ctx contractapi.TransactionCon
 		if err != nil {
 			return nil, err
 		}
+		
+		// FIX: Handle null documents array
+		if shipment.Documents == nil {
+			shipment.Documents = []string{}
+		}
+		
+		shipments = append(shipments, &shipment)
+	}
+
+	return shipments, nil
+}
+
+// QueryAllShipments - Get all shipments in the system
+func (c *CoffeeContract) QueryAllShipments(ctx contractapi.TransactionContextInterface) ([]*CoffeeShipment, error) {
+	queryString := `{"selector":{"_id":{"$regex":"^SHIPMENT_"}}}`
+
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var shipments []*CoffeeShipment
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var shipment CoffeeShipment
+		err = json.Unmarshal(queryResponse.Value, &shipment)
+		if err != nil {
+			return nil, err
+		}
+		
+		// FIX: Handle null documents array
+		if shipment.Documents == nil {
+			shipment.Documents = []string{}
+		}
+		
 		shipments = append(shipments, &shipment)
 	}
 

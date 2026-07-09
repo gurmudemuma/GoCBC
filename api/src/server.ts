@@ -5,6 +5,20 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Validate environment variables immediately after loading
+import { validateEnvironment, EnvironmentConfig } from './config/env.validation';
+import { logger } from './utils/logger';
+
+let envConfig: EnvironmentConfig;
+try {
+  envConfig = validateEnvironment();
+  logger.info('✅ Environment variables validated successfully');
+} catch (error) {
+  logger.error('❌ Environment validation failed:', error);
+  logger.error('Please check your .env file and ensure all required variables are set correctly.');
+  process.exit(1);
+}
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -17,7 +31,6 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import 'reflect-metadata';
 
-import { logger } from './utils/logger';
 import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 import { FabricService } from './services/fabricService';
@@ -111,7 +124,14 @@ class CECBSServer {
     // General middleware
     this.app.use(compression());
     this.app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
-    this.app.use(express.json({ limit: '10mb' }));
+    
+    // JSON and URL-encoded parsers - skip for file upload routes
+    this.app.use((req, res, next) => {
+      if (req.path.startsWith('/api/v1/files/upload') || req.path.startsWith('/api/v1/documents/upload')) {
+        return next(); // Skip JSON parsing for file uploads
+      }
+      express.json({ limit: '10mb' })(req, res, next);
+    });
     this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
     // Health check endpoint
@@ -172,7 +192,8 @@ class CECBSServer {
     apiV1.use('/payments', authMiddleware, paymentsRoutes);
 
     // V2.3 Document Storage (Off-chain with IPFS)
-    apiV1.use('/documents', authMiddleware, documentsRoutes);
+    // NOTE: Auth is applied per-route in documentsRoutes to allow public registration endpoint
+    apiV1.use('/documents', documentsRoutes);
 
     this.app.use('/api/v1', apiV1);
 

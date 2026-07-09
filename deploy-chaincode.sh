@@ -94,6 +94,8 @@ fi
 
 print_header "Step 2: Create Chaincode Package"
 
+# Save current directory
+SCRIPT_DIR=$(pwd)
 cd chaincodes/${CHAINCODE_NAME}
 
 # Clean up old packaging artifacts
@@ -108,10 +110,13 @@ tar -czf pkg/code.tar.gz connection.json
 print_info "Creating chaincode package..."
 cd pkg
 tar -czf ../${CHAINCODE_NAME}_${CHAINCODE_VERSION}.tgz code.tar.gz -C .. metadata.json
-cd ../..
+cd ..
+
+# Return to script directory
+cd "${SCRIPT_DIR}"
 
 PACKAGE_FILE="chaincodes/${CHAINCODE_NAME}/${CHAINCODE_NAME}_${CHAINCODE_VERSION}.tgz"
-PACKAGE_SIZE=$(ls -lh "$PACKAGE_FILE" | awk '{print $5}')
+PACKAGE_SIZE=$(ls -lh "$PACKAGE_FILE" 2>/dev/null | awk '{print $5}')
 print_success "Package created: $PACKAGE_FILE ($PACKAGE_SIZE)"
 
 # ============================================================================

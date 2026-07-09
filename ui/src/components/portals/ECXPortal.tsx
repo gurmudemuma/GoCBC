@@ -367,7 +367,7 @@ const ECXPortal: React.FC = () => {
                     <TableCell>{lot.moistureContent != null ? `${lot.moistureContent}%` : '—'}</TableCell>
                     <TableCell>{lot.qualityScore ?? '—'}</TableCell>
                     <TableCell sx={{ fontSize: 11 }}>{lot.contractId || '—'}</TableCell>
-                    <TableCell><Chip label={lot.status} size="small" color={statusColor(lot.status) as any} /></TableCell>
+                    <TableCell><Chip label={lot.status} size="small" color={statusColor(lot.status) as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} /></TableCell>
                     <TableCell>
                       <Box display="flex" gap={0.5} flexWrap="wrap">
                         <Tooltip title="Details"><IconButton size="small" onClick={() => { setSelectedLot(lot); setDetailOpen(true); }}><Visibility fontSize="small" /></IconButton></Tooltip>
@@ -713,7 +713,7 @@ const ECXPortal: React.FC = () => {
         <DialogContent>
           {selectedLot && (
             <Grid container spacing={2} sx={{ pt: 1 }}>
-              <Grid item xs={12}><Chip label={selectedLot.status} color={statusColor(selectedLot.status) as any} /></Grid>
+              <Grid item xs={12}><Chip label={selectedLot.status} color={statusColor(selectedLot.status) as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} /></Grid>
               <Grid item xs={6}><Typography variant="caption" color="textSecondary">ECX Lot Number</Typography><Typography fontWeight={600}>{selectedLot.ecxLotNumber}</Typography></Grid>
               <Grid item xs={6}><Typography variant="caption" color="textSecondary">Warehouse</Typography><Typography>{selectedLot.warehouseId}</Typography></Grid>
               <Grid item xs={6}><Typography variant="caption" color="textSecondary">Exporter</Typography><Typography>{selectedLot.exporterId}{selectedLot.exporterName ? ` — ${selectedLot.exporterName}` : ''}</Typography></Grid>

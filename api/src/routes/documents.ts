@@ -149,6 +149,76 @@ router.post('/upload',
 );
 
 /**
+ * POST /api/v1/documents/upload-registration
+ * PUBLIC endpoint for uploading documents during exporter registration
+ * No authentication required - for registration process only
+ */
+router.post('/upload-registration',
+  upload.single('document'),
+  [
+    body('category').notEmpty().withMessage('Document category is required'),
+    body('description').optional().isString(),
+    body('encrypt').optional().isBoolean(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'NO_FILE', message: 'No file uploaded' },
+        });
+      }
+
+      const { category, description, encrypt } = req.body;
+      const shouldEncrypt = encrypt === 'true' || encrypt === true;
+
+      logger.info('[REGISTRATION] Uploading document', {
+        filename: req.file.originalname,
+        size: req.file.size,
+        category,
+      });
+
+      // Upload to storage with REGISTRATION as uploader
+      const metadata = await documentStorage.uploadDocument(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        category,
+        'REGISTRATION',
+        shouldEncrypt
+      );
+
+      res.json({
+        success: true,
+        data: {
+          documentId: metadata.documentId,
+          filename: metadata.filename,
+          size: metadata.size,
+          hash: metadata.hash,
+          ipfsCID: metadata.ipfsCID,
+          uploadedAt: metadata.uploadedAt,
+          encrypted: metadata.encrypted,
+          category: metadata.category,
+        },
+        message: 'Document uploaded successfully',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('[REGISTRATION] Document upload error', { error });
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'UPLOAD_FAILED',
+          message: error instanceof Error ? error.message : 'Document upload failed',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
  * GET /api/v1/documents/:documentId
  * Download document
  */

@@ -2,7 +2,7 @@
 // Authentication Routes
 
 import { Router, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { logger } from '../utils/logger';
 import { DatabaseService } from '../services/databaseService';
@@ -81,6 +81,7 @@ router.post('/login', async (req: Request, res: Response) => {
     const permissions = JSON.parse(user.permissions || '[]');
 
     // Generate JWT token
+    const signOptions: jwt.SignOptions = { expiresIn: '24h' };
     const token = jwt.sign(
       {
         sub: user.id,
@@ -94,8 +95,8 @@ router.post('/login', async (req: Request, res: Response) => {
         permissions,
       },
       JWT_SECRET,
-      { expiresIn: JWT_EXPIRY }
-    );
+      signOptions
+    ) as string;
 
     // Update last login
     await db.run(
@@ -263,6 +264,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
     const decoded: any = jwt.verify(token, JWT_SECRET);
 
     // Generate new token
+    const refreshOptions: jwt.SignOptions = { expiresIn: '24h' };
     const newToken = jwt.sign(
       {
         sub: decoded.userId || decoded.sub,
@@ -274,8 +276,8 @@ router.post('/refresh', async (req: Request, res: Response) => {
         permissions: decoded.permissions || [],
       },
       JWT_SECRET,
-      { expiresIn: JWT_EXPIRY }
-    );
+      refreshOptions
+    ) as string;
 
     res.json({
       success: true,

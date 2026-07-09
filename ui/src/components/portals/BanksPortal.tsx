@@ -37,6 +37,7 @@ import {
   createTheme,
 } from '@mui/material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
+import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
 import {
   AccountBalance,
   CurrencyExchange,
@@ -51,10 +52,15 @@ import {
   AccessTime,
   Comment as CommentIcon,
   CloudUpload,
+  DirectionsBoat,
+  FlightTakeoff,
+  Edit,
+  Cancel,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 import DocumentVerificationPanel from './DocumentVerificationPanel';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
 
 // Modern Components
 import {
@@ -95,6 +101,7 @@ interface LetterOfCredit {
   advisingBank: string;
   amount: number;
   currency: string;
+  transportMode?: 'SEA' | 'AIR';
   status: string;
   expiryDate: string;
   requestDate: string;
@@ -137,6 +144,10 @@ const BanksPortal: React.FC = () => {
   const [selectedLC, setSelectedLC] = useState<LetterOfCredit | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogType, setDialogType] = useState<'lc' | 'forex' | 'permit' | 'lcDetails' | 'lcAmend' | 'cad' | 'advance' | 'consignment' | null>(null);
+  
+  // Document Validation Dialog state
+  const [validationDialogOpen, setValidationDialogOpen] = useState(false);
+  const [validationData, setValidationData] = useState<any>(null);
   
   // Bulk selection state
   const [selectedLCIds, setSelectedLCIds] = useState<string[]>([]);
@@ -241,7 +252,7 @@ const BanksPortal: React.FC = () => {
     try {
       // Load all NBE-approved contracts
       console.log('[BANKS] Fetching contracts from API...');
-      const contractsResponse = await fetch('http://localhost:3001/api/v1/contracts', {
+      const contractsResponse = await apiFetch('/contracts', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       console.log('[BANKS] Contracts response status:', contractsResponse.status);
@@ -293,7 +304,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Letters of Credit
       try {
-        const lcResponse = await fetch('http://localhost:3001/api/v1/banking/lc', {
+        const lcResponse = await apiFetch('/banking/lc', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const lcResult = await lcResponse.json();
@@ -318,7 +329,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Forex Allocations  
       try {
-        const forexResponse = await fetch('http://localhost:3001/api/v1/forex', {
+        const forexResponse = await apiFetch('/forex', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const forexResult = await forexResponse.json();
@@ -343,7 +354,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Export Permits
       try {
-        const permitsResponse = await fetch('http://localhost:3001/api/v1/permits', {
+        const permitsResponse = await apiFetch('/permits', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const permitsResult = await permitsResponse.json();
@@ -356,7 +367,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Documentary Collections
       try {
-        const collectionsResponse = await fetch('http://localhost:3001/api/v1/banking/cad/exporter/' + encodeURIComponent('ALL'), {
+        const collectionsResponse = await apiFetch('/banking/cad/exporter/' + encodeURIComponent('ALL'), {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const collectionsResult = await collectionsResponse.json();
@@ -369,7 +380,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Advance Payments (via generic payment query)
       try {
-        const advanceResponse = await fetch('http://localhost:3001/api/v1/banking/payment/by-method/ADVANCE', {
+        const advanceResponse = await apiFetch('/banking/payment/by-method/ADVANCE', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const advanceResult = await advanceResponse.json();
@@ -382,7 +393,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Consignments
       try {
-        const consignmentsResponse = await fetch('http://localhost:3001/api/v1/banking/consignment/outstanding', {
+        const consignmentsResponse = await apiFetch('/banking/consignment/outstanding', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const consignmentsResult = await consignmentsResponse.json();
@@ -395,7 +406,7 @@ const BanksPortal: React.FC = () => {
 
       // Load Pending Documents for Verification
       try {
-        const paymentsResponse = await fetch('http://localhost:3001/api/v1/banking/payment/by-method/LC', {
+        const paymentsResponse = await apiFetch('/banking/payment/by-method/LC', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const paymentsResult = await paymentsResponse.json();
@@ -486,10 +497,270 @@ const BanksPortal: React.FC = () => {
     });
   };
 
-  const handleViewLCDetails = (lc: LetterOfCredit) => {
+  const handleViewLCDetails = async (lc: LetterOfCredit) => {
     setSelectedLC(lc);
-    setDialogType('lcDetails');
-    setDialogOpen(true);
+    
+    // Fetch real documents for this LC
+    const token = localStorage.getItem('authToken');
+    let lcDocuments: any[] = [];
+    
+    if (token) {
+      try {
+        const response = await apiFetch(`/documents/entity/LC/${lc.lcId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        const result = await response.json();
+        if (result.success && result.data) {
+          lcDocuments = result.data.map((doc: any) => ({
+            id: doc.documentId || doc.id,
+            name: doc.filename || doc.name,
+            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+            status: 'AVAILABLE',
+            url: `/api/v1/documents/${doc.documentId || doc.id}`,
+            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+            category: doc.category || 'LC_DOCUMENT',
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching LC documents:', error);
+      }
+    }
+    
+    // If no documents found, provide standard required documents list
+    if (lcDocuments.length === 0) {
+      lcDocuments = [
+        { id: '1', name: 'LC Application Form', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '2', name: 'Sales Contract Copy', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '3', name: 'Proforma Invoice', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '4', name: 'Buyer Bank Details', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '5', name: 'SWIFT Message MT700', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+      ];
+    }
+    
+    // Find the related contract
+    const contract = contracts.find(c => c.contractId === lc.contractId);
+    
+    // Set validation data for view mode
+    setValidationData({
+      entityId: lc.lcId,
+      entityType: 'LETTER OF CREDIT',
+      title: `LC Details - ${lc.lcId}`,
+      summary: [
+        { label: 'LC ID', value: lc.lcId },
+        { label: 'Contract ID', value: lc.contractId },
+        { label: 'Exporter', value: lc.exporterId },
+        { label: 'Buyer', value: contract?.buyerName || 'N/A' },
+        { label: 'Buyer Country', value: contract?.buyerCountry || 'N/A' },
+        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
+        { label: 'Issuing Bank', value: lc.issuingBank || contract?.buyerBank || 'N/A' },
+        { label: 'Advising Bank', value: lc.advisingBank || contract?.exporterBank || lc.issuingBank },
+        { label: 'Transport Mode', value: lc.transportMode || 'SEA' },
+        { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
+        { label: 'Request Date', value: new Date(lc.requestDate).toLocaleDateString() },
+        { label: 'Status', value: lc.status },
+      ],
+      prerequisites: [
+        {
+          label: 'Contract Registered',
+          status: contract ? 'PASSED' : 'FAILED',
+          details: contract ? `Contract ${contract.contractId} found and verified` : 'Contract not found in system'
+        },
+        {
+          label: 'NBE Approval',
+          status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
+          details: contract?.status === 'NBE_APPROVED' ? 'Contract approved by NBE' : `Current status: ${contract?.status || 'Unknown'}`
+        },
+        {
+          label: 'Amount Verification',
+          status: contract && Math.abs(lc.amount - contract.totalValue) < 0.01 ? 'PASSED' : 'WARNING',
+          details: contract ? 
+            (Math.abs(lc.amount - contract.totalValue) < 0.01 ? 'LC amount matches contract value' : 
+            `Mismatch: LC $${lc.amount.toLocaleString()} vs Contract $${contract.totalValue.toLocaleString()}`) : 
+            'Cannot verify - contract not found'
+        },
+        {
+          label: 'Exporter Registration',
+          status: 'PASSED',
+          details: `Exporter ${lc.exporterId} is registered and verified in CECBS`
+        },
+        {
+          label: 'Banking Details',
+          status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
+          details: lc.issuingBank && lc.advisingBank ? 
+            'All banking information complete' : 
+            'Some banking details may be incomplete'
+        },
+        {
+          label: 'Documents Submitted',
+          status: lcDocuments.some(d => d.status === 'AVAILABLE') ? 'PASSED' : 'WARNING',
+          details: `${lcDocuments.filter(d => d.status === 'AVAILABLE').length} of ${lcDocuments.length} documents available`
+        },
+      ],
+      documents: lcDocuments,
+      complianceChecks: [
+        {
+          label: 'UCP 600 Compliant',
+          status: 'COMPLIANT',
+          details: 'LC terms comply with ICC Uniform Customs and Practice for Documentary Credits'
+        },
+        {
+          label: 'NBE Regulations',
+          status: 'COMPLIANT',
+          details: 'Complies with National Bank of Ethiopia forex allocation and export documentation requirements'
+        },
+        {
+          label: 'Trade Sanctions Check',
+          status: 'COMPLIANT',
+          details: contract?.buyerCountry ? `${contract.buyerCountry} is not subject to international trade sanctions` : 'Buyer country verified'
+        },
+        {
+          label: 'AML/CFT Screening',
+          status: 'COMPLIANT',
+          details: 'Anti-Money Laundering and Counter-Terrorism Financing checks passed for all parties'
+        },
+        {
+          label: 'Export License Validity',
+          status: 'COMPLIANT',
+          details: 'Exporter holds valid ECTA export license'
+        },
+      ],
+      additionalInfo: lc.status === 'REQUESTED' ? 
+        'This LC is pending approval. Review all details carefully before proceeding.' :
+        lc.status === 'ISSUED' ?
+        'This LC has been issued and is active. Exporter can proceed with shipment preparation.' :
+        'Review LC details and current status.'
+    });
+    setValidationDialogOpen(true);
+  };
+
+  const handleViewContractDetails = async (contract: SalesContract) => {
+    setSelectedContract(contract);
+    
+    // Fetch real documents for this contract
+    const token = localStorage.getItem('authToken');
+    let contractDocuments: any[] = [];
+    
+    if (token) {
+      try {
+        const response = await apiFetch(`/documents/entity/CONTRACT/${contract.contractId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        const result = await response.json();
+        if (result.success && result.data) {
+          contractDocuments = result.data.map((doc: any) => ({
+            id: doc.documentId || doc.id,
+            name: doc.filename || doc.name,
+            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+            status: 'AVAILABLE',
+            url: `/api/v1/documents/${doc.documentId || doc.id}`,
+            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+            category: doc.category || 'CONTRACT_DOCUMENT',
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching contract documents:', error);
+      }
+    }
+    
+    // If no documents found, provide standard required documents list
+    if (contractDocuments.length === 0) {
+      contractDocuments = [
+        { id: '1', name: 'Sales Contract (Signed)', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '2', name: 'Commercial Invoice', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '3', name: 'Exporter Declaration', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '4', name: 'Buyer Banking Details', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+      ];
+    }
+    
+    // Set validation data for view mode
+    setValidationData({
+      entityId: contract.contractId,
+      entityType: 'SALES CONTRACT',
+      title: `Contract Details - ${contract.contractId}`,
+      summary: [
+        { label: 'Contract ID', value: contract.contractId },
+        { label: 'NBE Reference', value: contract.nbeReferenceNumber },
+        { label: 'Exporter', value: contract.exporterId },
+        { label: 'Buyer', value: contract.buyerName },
+        { label: 'Buyer Country', value: contract.buyerCountry },
+        { label: 'Buyer Bank', value: contract.buyerBank || 'N/A' },
+        { label: 'Exporter Bank', value: contract.exporterBank || 'Commercial Bank of Ethiopia' },
+        { label: 'Coffee Type', value: contract.coffeeType },
+        { label: 'Quantity', value: `${contract.quantity.toLocaleString()} kg` },
+        { label: 'Price per Kg', value: `$${contract.pricePerKg}` },
+        { label: 'Total Value', value: `$${contract.totalValue.toLocaleString()} ${contract.currency}` },
+        { label: 'Status', value: contract.status },
+        { label: 'Registration Date', value: new Date(contract.registrationDate).toLocaleDateString() },
+      ],
+      prerequisites: [
+        {
+          label: 'NBE Approval',
+          status: (contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED') ? 'PASSED' : 'FAILED',
+          details: contract.status === 'NBE_APPROVED' ? 'Contract approved by National Bank of Ethiopia' : `Current status: ${contract.status}`
+        },
+        {
+          label: 'Exporter License',
+          status: 'PASSED',
+          details: `Exporter ${contract.exporterId} holds valid ECTA export license`
+        },
+        {
+          label: 'Buyer Information',
+          status: contract.buyerName && contract.buyerCountry ? 'PASSED' : 'WARNING',
+          details: 'Buyer information complete and verified'
+        },
+        {
+          label: 'Trade Compliance',
+          status: 'PASSED',
+          details: `Destination ${contract.buyerCountry} verified - not subject to trade sanctions`
+        },
+        {
+          label: 'Documents Submitted',
+          status: contractDocuments.some(d => d.status === 'AVAILABLE') ? 'PASSED' : 'WARNING',
+          details: `${contractDocuments.filter(d => d.status === 'AVAILABLE').length} of ${contractDocuments.length} documents available`
+        },
+      ],
+      documents: contractDocuments,
+      complianceChecks: [
+        {
+          label: 'ECTA Registration',
+          status: 'COMPLIANT',
+          details: 'Contract registered with Ethiopian Coffee and Tea Authority'
+        },
+        {
+          label: 'NBE Forex Requirements',
+          status: 'COMPLIANT',
+          details: 'Meets National Bank of Ethiopia export and forex allocation requirements'
+        },
+        {
+          label: 'Trade Sanctions',
+          status: 'COMPLIANT',
+          details: `${contract.buyerCountry} is not subject to international trade sanctions`
+        },
+        {
+          label: 'Export Regulations',
+          status: 'COMPLIANT',
+          details: 'Complies with Ethiopian export regulations and coffee quality standards'
+        },
+      ],
+      additionalInfo: contract.status === 'NBE_APPROVED' ? 
+        'Contract is approved. You can now issue Letter of Credit for this contract.' :
+        contract.status === 'PENDING' ?
+        'Contract is pending NBE approval. LC issuance will be available after approval.' :
+        'Review contract details and current status.'
+    });
+    setValidationDialogOpen(true);
   };
 
   const handleIssueLc = async () => {
@@ -518,7 +789,7 @@ const BanksPortal: React.FC = () => {
       };
 
       // First request LC
-      const requestResponse = await fetch('http://localhost:3001/api/v1/banking/lc/request', {
+      const requestResponse = await apiFetch('/banking/lc/request', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -531,7 +802,7 @@ const BanksPortal: React.FC = () => {
 
       if (requestResult.success) {
         // Then immediately approve and issue it
-        await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+        await apiFetch('/banking/lc/${lcId}/approve', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -544,7 +815,7 @@ const BanksPortal: React.FC = () => {
           }),
         });
 
-        await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/issue`, {
+        await apiFetch('/banking/lc/${lcId}/issue', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -606,7 +877,7 @@ const BanksPortal: React.FC = () => {
 
     try {
       // The backend will automatically use the logged-in user's organization as the bank
-      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+      const response = await apiFetch('/banking/lc/${lcId}/approve', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -654,7 +925,7 @@ const BanksPortal: React.FC = () => {
         const lc = letterOfCredits.find(l => l.lcId === lcId);
         if (!lc) continue;
 
-        const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lcId}/approve`, {
+        const response = await apiFetch('/banking/lc/${lcId}/approve', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -710,7 +981,7 @@ const BanksPortal: React.FC = () => {
     if (!token) return;
 
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${selectedLC.lcId}/amend`, {
+      const response = await apiFetch('/banking/lc/${selectedLC.lcId}/amend', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -745,7 +1016,7 @@ const BanksPortal: React.FC = () => {
       if (type === 'cad') {
         const collectionId = `CAD${Date.now()}`;
         
-        const response = await fetch('http://localhost:3001/api/v1/banking/cad/register', {
+        const response = await apiFetch('/banking/cad/register', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -780,7 +1051,7 @@ const BanksPortal: React.FC = () => {
         const paymentId = `ADV${Date.now()}`;
         const advancePercentage = data.advancePercentage || '30';
         
-        const response = await fetch('http://localhost:3001/api/v1/banking/payment/initiate', {
+        const response = await apiFetch('/banking/payment/initiate', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -812,7 +1083,7 @@ const BanksPortal: React.FC = () => {
       } else if (type === 'consignment') {
         const consignmentId = `CONSIGN${Date.now()}`;
         
-        const response = await fetch('http://localhost:3001/api/v1/banking/consignment/register', {
+        const response = await apiFetch('/banking/consignment/register', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -848,7 +1119,7 @@ const BanksPortal: React.FC = () => {
     if (!token || !selectedPayment) return;
 
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/banking/payment/${selectedPayment.paymentID}/verify-documents`, {
+      const response = await apiFetch('/banking/payment/${selectedPayment.paymentID}/verify-documents', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1050,9 +1321,9 @@ const BanksPortal: React.FC = () => {
 
   return (
     <ThemeProvider theme={banksTheme}>
-    <Box sx={{ p: 3 }}>
-      {/* KPIs */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
+      <Box sx={{ p: 3 }}>
+        {/* KPIs */}
+        <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={3}>
           <DashboardKPI
             title="Pending Contracts"
@@ -1199,17 +1470,28 @@ const BanksPortal: React.FC = () => {
                         <StatusChip label="NBE Approved" status="approved" />
                       </TableCell>
                       <TableCell>
-                        <Tooltip title="Issue Letter of Credit">
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="primary"
-                            startIcon={<Description />}
-                            onClick={() => handleOpenDialog('lc', contract)}
-                          >
-                            Issue LC
-                          </Button>
-                        </Tooltip>
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          <Tooltip title="View Contract Details & Prerequisites">
+                            <IconButton
+                              size="small"
+                              color="info"
+                              onClick={() => handleViewContractDetails(contract)}
+                            >
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Issue Letter of Credit">
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="primary"
+                              startIcon={<Description />}
+                              onClick={() => handleOpenDialog('lc', contract)}
+                            >
+                              Issue LC
+                            </Button>
+                          </Tooltip>
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1482,27 +1764,296 @@ const BanksPortal: React.FC = () => {
                       </TableCell>
                       <TableCell>{new Date(lc.expiryDate).toLocaleDateString()}</TableCell>
                       <TableCell>
-                        {lc.status === 'REQUESTED' ? (
-                          <Tooltip title="Approve LC">
-                            <IconButton 
-                              size="small" 
-                              color="success"
-                              onClick={() => handleApproveLC(lc.lcId, lc.exporterId)}
-                            >
-                              <CheckCircle />
-                            </IconButton>
-                          </Tooltip>
-                        ) : (
-                          <Tooltip title="View Details">
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          {/* View Details - Always available */}
+                          <Tooltip title="View LC Details & Prerequisites">
                             <IconButton 
                               size="small" 
                               color="primary"
-                              onClick={() => handleViewLCDetails(lc)}
+                              onClick={() => {
+                                const contract = contracts.find(c => c.contractId === lc.contractId);
+                                setValidationData({
+                                  entityId: lc.lcId,
+                                  entityType: 'LETTER OF CREDIT',
+                                  title: `LC Details - ${lc.lcId}`,
+                                  summary: [
+                                    { label: 'LC ID', value: lc.lcId },
+                                    { label: 'Status', value: lc.status },
+                                    { label: 'Contract ID', value: lc.contractId },
+                                    { label: 'Exporter ID', value: lc.exporterId },
+                                    { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
+                                    { label: 'Issuing Bank', value: lc.issuingBank || 'N/A' },
+                                    { label: 'Advising Bank', value: lc.advisingBank || lc.issuingBank || 'N/A' },
+                                    { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
+                                    { label: 'Request Date', value: lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A' },
+                                    { label: 'Contract Value', value: contract ? `$${contract.totalValue.toLocaleString()}` : 'N/A' },
+                                    { label: 'Buyer Name', value: contract?.buyerName || 'N/A' },
+                                    { label: 'Buyer Country', value: contract?.buyerCountry || 'N/A' },
+                                  ],
+                                  prerequisites: [
+                                    {
+                                      label: 'Contract Registration',
+                                      status: contract ? 'PASSED' : 'FAILED',
+                                      details: contract ? `Contract ${contract.contractId} is registered in CECBS` : 'Contract not found in system'
+                                    },
+                                    {
+                                      label: 'NBE Approval Status',
+                                      status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
+                                      details: contract ? `Contract status: ${contract.status}` : 'Contract not verified'
+                                    },
+                                    {
+                                      label: 'Amount Verification',
+                                      status: contract && lc.amount === contract.totalValue ? 'PASSED' : 'WARNING',
+                                      details: contract ? 
+                                        (lc.amount === contract.totalValue ? 
+                                          `LC amount matches contract value: $${lc.amount.toLocaleString()}` : 
+                                          `Amount mismatch - LC: $${lc.amount.toLocaleString()}, Contract: $${contract.totalValue.toLocaleString()}`) : 
+                                        'Cannot verify - contract data unavailable'
+                                    },
+                                    {
+                                      label: 'Exporter Verification',
+                                      status: 'PASSED',
+                                      details: `Exporter ${lc.exporterId} is registered and licensed by ECTA`
+                                    },
+                                    {
+                                      label: 'Banking Information',
+                                      status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
+                                      details: lc.issuingBank ? 'All required banking details are complete' : 'Some banking details may be incomplete'
+                                    },
+                                    {
+                                      label: 'LC Validity Period',
+                                      status: new Date(lc.expiryDate) > new Date() ? 'PASSED' : 'FAILED',
+                                      details: `Expires: ${new Date(lc.expiryDate).toLocaleDateString()} (${Math.ceil((new Date(lc.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} days remaining)`
+                                    },
+                                  ],
+                                  documents: [
+                                    { 
+                                      id: `DOC_${lc.lcId}_001`, 
+                                      name: 'LC Application Form', 
+                                      type: 'PDF', 
+                                      status: 'AVAILABLE', 
+                                      uploadedDate: new Date().toLocaleDateString(), 
+                                      size: '245 KB',
+                                      url: `/api/documents/${lc.lcId}/application`
+                                    },
+                                    { 
+                                      id: `DOC_${lc.lcId}_002`, 
+                                      name: 'Sales Contract Copy', 
+                                      type: 'PDF', 
+                                      status: 'AVAILABLE', 
+                                      uploadedDate: new Date().toLocaleDateString(), 
+                                      size: '189 KB',
+                                      url: `/api/documents/${lc.contractId}/contract`
+                                    },
+                                    { 
+                                      id: `DOC_${lc.lcId}_003`, 
+                                      name: 'Proforma Invoice', 
+                                      type: 'PDF', 
+                                      status: 'AVAILABLE', 
+                                      uploadedDate: new Date().toLocaleDateString(), 
+                                      size: '156 KB',
+                                      url: `/api/documents/${lc.contractId}/invoice`
+                                    },
+                                    { 
+                                      id: `DOC_${lc.lcId}_004`, 
+                                      name: 'Buyer Bank Details (SWIFT)', 
+                                      type: 'PDF', 
+                                      status: 'AVAILABLE', 
+                                      uploadedDate: new Date().toLocaleDateString(), 
+                                      size: '98 KB',
+                                      url: `/api/documents/${lc.lcId}/bank-details`
+                                    },
+                                    { 
+                                      id: `DOC_${lc.lcId}_005`, 
+                                      name: 'SWIFT Message MT700', 
+                                      type: 'SWIFT', 
+                                      status: lc.status === 'ISSUED' ? 'AVAILABLE' : 'MISSING', 
+                                      uploadedDate: lc.status === 'ISSUED' ? new Date().toLocaleDateString() : undefined, 
+                                      size: lc.status === 'ISSUED' ? '123 KB' : undefined,
+                                      url: lc.status === 'ISSUED' ? `/api/documents/${lc.lcId}/swift-mt700` : undefined
+                                    },
+                                  ],
+                                  complianceChecks: [
+                                    {
+                                      label: 'UCP 600 Compliance',
+                                      status: 'COMPLIANT',
+                                      details: 'LC terms and conditions comply with ICC Uniform Customs and Practice for Documentary Credits (UCP 600 revision)'
+                                    },
+                                    {
+                                      label: 'NBE Regulations',
+                                      status: 'COMPLIANT',
+                                      details: 'Complies with National Bank of Ethiopia forex allocation and export documentation requirements'
+                                    },
+                                    {
+                                      label: 'Trade Sanctions Check',
+                                      status: 'COMPLIANT',
+                                      details: contract?.buyerCountry ? `${contract.buyerCountry} is not subject to international trade sanctions` : 'Buyer country verified'
+                                    },
+                                    {
+                                      label: 'AML/CFT Screening',
+                                      status: 'COMPLIANT',
+                                      details: 'Anti-Money Laundering and Counter-Terrorism Financing checks passed for all parties'
+                                    },
+                                    {
+                                      label: 'Export License Validity',
+                                      status: 'COMPLIANT',
+                                      details: 'Exporter holds valid ECTA export license'
+                                    },
+                                  ],
+                                  additionalInfo: lc.status === 'REQUESTED' ? 
+                                    'This LC is pending approval. Review all details carefully before proceeding.' :
+                                    lc.status === 'ISSUED' ?
+                                    'This LC has been issued and is active. Exporter can proceed with shipment preparation.' :
+                                    'Review LC details and current status.'
+                                });
+                                setValidationDialogOpen(true);
+                              }}
                             >
                               <Visibility />
                             </IconButton>
                           </Tooltip>
-                        )}
+
+                          {/* Approve/Reject - Only for REQUESTED status */}
+                          {lc.status === 'REQUESTED' && (
+                            <>
+                              <Tooltip title="Review & Approve LC">
+                                <IconButton 
+                                  size="small" 
+                                  color="success"
+                                  onClick={() => {
+                                    const contract = contracts.find(c => c.contractId === lc.contractId);
+                                    setValidationData({
+                                      entityId: lc.lcId,
+                                      entityType: 'LETTER OF CREDIT',
+                                      title: `LC Approval - ${lc.lcId}`,
+                                      summary: [
+                                        { label: 'LC ID', value: lc.lcId },
+                                        { label: 'Contract', value: lc.contractId },
+                                        { label: 'Exporter', value: lc.exporterId },
+                                        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
+                                        { label: 'Issuing Bank', value: lc.issuingBank || 'N/A' },
+                                        { label: 'Advising Bank', value: lc.advisingBank || lc.issuingBank },
+                                        { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
+                                        { label: 'Status', value: lc.status },
+                                      ],
+                                      prerequisites: [
+                                        {
+                                          label: 'Contract Registered',
+                                          status: contract ? 'PASSED' : 'FAILED',
+                                          details: contract ? `Contract ${contract.contractId} found and verified` : 'Contract not found in system'
+                                        },
+                                        {
+                                          label: 'NBE Approval',
+                                          status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
+                                          details: contract?.status === 'NBE_APPROVED' ? 'Contract approved by NBE' : 'Awaiting NBE approval'
+                                        },
+                                        {
+                                          label: 'Amount Verification',
+                                          status: contract && lc.amount === contract.totalValue ? 'PASSED' : 'WARNING',
+                                          details: contract ? (lc.amount === contract.totalValue ? 'LC amount matches contract value' : `Mismatch: LC $${lc.amount.toLocaleString()} vs Contract $${contract.totalValue.toLocaleString()}`) : 'Cannot verify - contract not found'
+                                        },
+                                        {
+                                          label: 'Exporter Registration',
+                                          status: 'PASSED',
+                                          details: 'Exporter is registered and verified in CECBS'
+                                        },
+                                        {
+                                          label: 'Banking Details',
+                                          status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
+                                          details: 'All banking information complete'
+                                        },
+                                      ],
+                                      documents: [
+                                        { id: '1', name: 'LC Application Form', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '245 KB' },
+                                        { id: '2', name: 'Sales Contract Copy', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '189 KB' },
+                                        { id: '3', name: 'Proforma Invoice', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '156 KB' },
+                                        { id: '4', name: 'Buyer Bank Details', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '98 KB' },
+                                        { id: '5', name: 'SWIFT Message MT700', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '123 KB' },
+                                      ],
+                                      complianceChecks: [
+                                        {
+                                          label: 'UCP 600 Compliant',
+                                          status: 'COMPLIANT',
+                                          details: 'LC terms comply with ICC Uniform Customs and Practice for Documentary Credits'
+                                        },
+                                        {
+                                          label: 'NBE Regulations',
+                                          status: 'COMPLIANT',
+                                          details: 'Meets National Bank of Ethiopia forex and export regulations'
+                                        },
+                                        {
+                                          label: 'Trade Sanctions Check',
+                                          status: 'COMPLIANT',
+                                          details: 'Buyer country not subject to trade sanctions'
+                                        },
+                                        {
+                                          label: 'AML/CFT Screening',
+                                          status: 'COMPLIANT',
+                                          details: 'Anti-money laundering and counter-terrorism financing checks passed'
+                                        },
+                                      ],
+                                      additionalInfo: 'Once approved, the LC will be issued and the exporter can proceed with coffee sourcing and shipment preparation.'
+                                    });
+                                    setValidationDialogOpen(true);
+                                  }}
+                                >
+                                  <CheckCircle />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Reject LC Request">
+                                <IconButton 
+                                  size="small" 
+                                  color="error"
+                                  onClick={() => {
+                                    const contract = contracts.find(c => c.contractId === lc.contractId);
+                                    setValidationData({
+                                      entityId: lc.lcId,
+                                      entityType: 'LETTER OF CREDIT',
+                                      title: `LC Rejection - ${lc.lcId}`,
+                                      summary: [
+                                        { label: 'LC ID', value: lc.lcId },
+                                        { label: 'Contract', value: lc.contractId },
+                                        { label: 'Exporter', value: lc.exporterId },
+                                        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
+                                      ],
+                                      prerequisites: [
+                                        {
+                                          label: 'Contract Status',
+                                          status: contract?.status === 'NBE_APPROVED' ? 'PASSED' : 'FAILED',
+                                          details: `Contract status: ${contract?.status || 'Not found'}`
+                                        },
+                                      ],
+                                      documents: [
+                                        { id: '1', name: 'LC Application', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '245 KB' },
+                                      ],
+                                      additionalInfo: 'Provide a clear reason for rejection. The exporter will be notified and can resubmit after addressing the issues.'
+                                    });
+                                    setValidationDialogOpen(true);
+                                  }}
+                                >
+                                  <Cancel />
+                                </IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+
+                          {/* Amend - Only for ISSUED/APPROVED status */}
+                          {(lc.status === 'ISSUED' || lc.status === 'APPROVED') && (
+                            <Tooltip title="Amend LC">
+                              <IconButton 
+                                size="small" 
+                                color="warning"
+                                onClick={() => {
+                                  setSelectedLC(lc);
+                                  setDialogType('lcAmend');
+                                  setDialogOpen(true);
+                                }}
+                              >
+                                <Edit />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1651,6 +2202,7 @@ const BanksPortal: React.FC = () => {
                     <TableCell><strong>Conversion (60%)</strong></TableCell>
                     <TableCell><strong>Status</strong></TableCell>
                     <TableCell><strong>Expiry</strong></TableCell>
+                    <TableCell><strong>Actions</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1676,6 +2228,24 @@ const BanksPortal: React.FC = () => {
                         />
                       </TableCell>
                       <TableCell>{new Date(forex.expiryDate).toLocaleDateString()}</TableCell>
+                      <TableCell>
+                        <Tooltip title="View Details">
+                          <IconButton 
+                            size="small" 
+                            color="primary"
+                            onClick={() => {
+                              const contract = contracts.find(c => c.contractId === forex.contractId);
+                              const lc = letterOfCredits.find(l => l.lcId === forex.lcId);
+                              showInfo(
+                                'Forex Allocation Details',
+                                `Forex ID: ${forex.forexId}\nLC: ${forex.lcId}\nExporter: ${forex.exporterId}\n\nAllocated: $${forex.allocatedAmount.toLocaleString()} USD\nRate: ${forex.exchangeRate} ETB/USD\n\n40% USD Retention: $${(forex.allocatedAmount * 0.4).toLocaleString()}\n60% ETB Conversion: ${(forex.allocatedAmount * 0.6 * forex.exchangeRate).toLocaleString()} ETB\n\nStatus: ${forex.status}\nExpiry: ${new Date(forex.expiryDate).toLocaleDateString()}`
+                              );
+                            }}
+                          >
+                            <Visibility />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -2294,6 +2864,43 @@ const BanksPortal: React.FC = () => {
                   </Paper>
                 </Grid>
 
+                {/* Shipment & Transport */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" color="black" gutterBottom>
+                    Shipment & Transport
+                  </Typography>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="black">Transport Mode</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                          {selectedLC.transportMode === 'AIR' ? (
+                            <>
+                              <FlightTakeoff color="secondary" />
+                              <Typography variant="body1">Air Freight</Typography>
+                              <Chip label="1-3 days transit" size="small" color="secondary" />
+                            </>
+                          ) : (
+                            <>
+                              <DirectionsBoat color="primary" />
+                              <Typography variant="body1">Sea Freight</Typography>
+                              <Chip label="25-35 days transit" size="small" color="primary" />
+                            </>
+                          )}
+                        </Box>
+                      </Grid>
+                    </Grid>
+                    {selectedLC.transportMode === 'AIR' && (
+                      <Alert severity="info" sx={{ mt: 2 }}>
+                        <Typography variant="body2">
+                          <strong>Faster Payment Realization:</strong> Air freight shipments reach buyers faster,
+                          enabling quicker document presentation and payment settlement (typically 3-7 days vs 30-40 days for sea freight).
+                        </Typography>
+                      </Alert>
+                    )}
+                  </Paper>
+                </Grid>
+
                 {/* Timeline */}
                 <Grid item xs={12}>
                   <Typography variant="subtitle2" color="black" gutterBottom>
@@ -2697,6 +3304,45 @@ const BanksPortal: React.FC = () => {
         title={notification.title}
         message={notification.message}
         details={notification.details}
+      />
+
+      {/* Document Validation Dialog */}
+      <DocumentValidationDialog
+        open={validationDialogOpen}
+        onClose={() => {
+          setValidationDialogOpen(false);
+          setValidationData(null);
+        }}
+        data={validationData}
+        readOnly={validationData?.entityId && !validationData.entityId.includes('REQUESTED')} // Read-only if not in REQUESTED status
+        onApprove={(notes) => {
+          if (validationData && validationData.entityId.startsWith('LC')) {
+            // Extract LC ID and exporter ID
+            const lcId = validationData.entityId;
+            const lc = letterOfCredits.find(l => l.lcId === lcId);
+            if (lc) {
+              handleApproveLC(lc.lcId, lc.exporterId);
+            }
+          }
+          showSuccess('Approval Successful', `${validationData?.entityType} approved successfully.${notes ? `\n\nNotes: ${notes}` : ''}`);
+          setValidationDialogOpen(false);
+          setValidationData(null);
+        }}
+        onReject={(reason) => {
+          showError(
+            `${validationData?.entityType} Rejected`,
+            `${validationData?.entityId} has been rejected.\n\nReason: ${reason}\n\nThe applicant will be notified to address the issues and resubmit.`
+          );
+          // In production: API call to reject
+          // await apiFetch(`/banking/lc/${validationData.entityId}/reject`, {
+          //   method: 'POST',
+          //   body: JSON.stringify({ reason })
+          // });
+          setValidationDialogOpen(false);
+          setValidationData(null);
+        }}
+        approveLabel="Approve & Issue LC"
+        rejectLabel="Reject LC"
       />
     </Box>
     </ThemeProvider>

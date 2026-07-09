@@ -1573,9 +1573,11 @@ router.post('/applications/:applicationId/approve',
         exporterId,
         application.company_name,
         ectaLicenseNumber,
+        application.exporter_type || 'private',
         application.capital_requirement,
         application.professional_taster,
         application.taster_certificate,
+        application.laboratory_certificate_number || '',
         licenseExpiryDate
       );
       

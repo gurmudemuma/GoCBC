@@ -25,16 +25,50 @@ import {
   Assignment,
   CheckCircle,
   Cancel as CancelIcon,
+  DirectionsBoat,
+  FlightTakeoff,
 } from '@mui/icons-material';
 import { AnimatedButton } from '@/components/modern';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import api from '@/utils/api';
 
+// Transport Mode Type
+type TransportMode = 'SEA' | 'AIR';
+
+// Default Transport Mode
+const DEFAULT_TRANSPORT_MODE: TransportMode = 'SEA';
+
 interface QualityInspectionWorkflowProps {
   shipment: any;
   onClose: () => void;
   onSuccess: () => void;
+}
+
+interface InspectionFormData {
+  inspectorName: string;
+  transportMode: TransportMode;
+  sampleSize: string;
+  moistureContent: string;
+  defectCount: string;
+  beanSize: string;
+  color: string;
+  odor: string;
+  fragrance: string;
+  flavor: string;
+  aftertaste: string;
+  acidity: string;
+  body: string;
+  balance: string;
+  uniformity: string;
+  cleanCup: string;
+  sweetness: string;
+  overall: string;
+  classification: string;
+  pesticideTest: string;
+  heavyMetalTest: string;
+  mycotoxinTest: string;
+  remarks: string;
 }
 
 export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps> = ({
@@ -50,8 +84,9 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
   const [loadingExporter, setLoadingExporter] = useState(true);
 
   // Perform Inspection Form Data
-  const [inspectionForm, setInspectionForm] = useState({
+  const [inspectionForm, setInspectionForm] = useState<InspectionFormData>({
     inspectorName: '',
+    transportMode: DEFAULT_TRANSPORT_MODE,
     sampleSize: '300',
     moistureContent: '11.5',
     defectCount: '2',
@@ -169,8 +204,8 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     const scores = [
       'fragrance', 'flavor', 'aftertaste', 'acidity', 'body',
       'balance', 'uniformity', 'cleanCup', 'sweetness', 'overall',
-    ];
-    return scores.reduce((sum, key) => sum + parseFloat(inspectionForm[key as keyof typeof inspectionForm] || '0'), 0);
+    ] as const;
+    return scores.reduce((sum, key) => sum + parseFloat(inspectionForm[key] || '0'), 0);
   };
 
   const getQualityGrade = () => {
@@ -254,6 +289,59 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
                     </FormHelperText>
                   </FormControl>
                 </Grid>
+
+                {/* Transport Mode Selector */}
+                <Grid item xs={12} md={6}>
+                  <FormControl fullWidth>
+                    <InputLabel>Intended Transport Mode</InputLabel>
+                    <Select
+                      value={inspectionForm.transportMode || 'SEA'}
+                      onChange={(e) => setInspectionForm({
+                        ...inspectionForm, 
+                        transportMode: e.target.value as TransportMode
+                      })}
+                      label="Intended Transport Mode"
+                    >
+                      <MenuItem value="SEA">
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <DirectionsBoat /> Sea Freight (Bulk Commercial)
+                        </Box>
+                      </MenuItem>
+                      <MenuItem value="AIR">
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <FlightTakeoff /> Air Freight (Premium Specialty)
+                        </Box>
+                      </MenuItem>
+                    </Select>
+                    <FormHelperText>
+                      Transport method affects packaging requirements and quality standards
+                    </FormHelperText>
+                  </FormControl>
+                </Grid>
+
+                {/* Air Freight Quality Standards Alert */}
+                {inspectionForm.transportMode === 'AIR' && (
+                  <Grid item xs={12} md={6}>
+                    <Alert severity="info" sx={{ height: '100%', display: 'flex', alignItems: 'center' }}>
+                      <Typography variant="body2">
+                        <strong>Air Freight Quality Standards:</strong> Premium specialty coffee. 
+                        Ensure packaging meets airline cargo requirements and maintains freshness 
+                        for rapid transit (1-3 days).
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
+                
+                {inspectionForm.transportMode === 'SEA' && (
+                  <Grid item xs={12} md={6}>
+                    <Alert severity="info" sx={{ height: '100%', display: 'flex', alignItems: 'center' }}>
+                      <Typography variant="body2">
+                        <strong>Sea Freight Packaging:</strong> Bulk commercial grade. 
+                        Standard packaging for long transit (25-35 days). Moisture protection required.
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
 
                 <Grid item xs={12}>
                   <Divider sx={{ my: 1 }}>

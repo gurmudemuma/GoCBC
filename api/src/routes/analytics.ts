@@ -48,6 +48,9 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       
       // Trends
       exportTrends: [] as any[],
+      
+      // Quality distribution
+      qualityDistribution: [] as any[],
     };
 
     // Add NBE Banking Analytics endpoint
@@ -56,7 +59,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
         logger.info('[ANALYTICS] Fetching NBE banking metrics');
 
         // Fetch contracts data for calculations
-        const contractsResult = await fabricService.queryAllContracts();
+        const contractsResult = await fabricService.getAllContracts();
         const contracts = contractsResult.success ? contractsResult.data || [] : [];
 
         // Fetch forex data

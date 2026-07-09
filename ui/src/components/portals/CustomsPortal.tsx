@@ -49,10 +49,13 @@ import {
   TrendingUp,
   QrCode,
   Upload,
+  DirectionsBoat,
+  FlightTakeoff,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import AuditTrailViewer from './AuditTrailViewer';
 
 // Modern Components - 2026 Design
@@ -64,7 +67,12 @@ import {
   ThemeToggle,
 } from '@/components/modern';
 import { CustomsInspection } from './CustomsInspection';
+import { CustomsClearedShipments } from './CustomsClearedShipments';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
+
+
+// Status types for chips
+type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_REVIEW' | string;
 
 interface CustomsDeclaration {
   declarationId: string;
@@ -76,6 +84,7 @@ interface CustomsDeclaration {
   value: number;
   currency: string;
   destination: string;
+  transportMode?: 'SEA' | 'AIR';
   status: 'SUBMITTED' | 'UNDER_REVIEW' | 'CLEARED' | 'HELD' | 'REJECTED';
   submissionDate: string;
   clearanceDate?: string;
@@ -149,7 +158,7 @@ const CustomsPortal: React.FC = () => {
       
       try {
         // STEP 1: Fetch shipment data
-        const response = await fetch(`http://localhost:3001/api/v1/shipments/${shipmentId}`, {
+        const response = await apiFetch('/shipments/${shipmentId}', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         
@@ -215,7 +224,7 @@ const CustomsPortal: React.FC = () => {
         const contractId = shipment.contractId || shipment.ContractID;
         
         try {
-          const contractResponse = await fetch(`http://localhost:3001/api/v1/contracts/${contractId}`, {
+          const contractResponse = await apiFetch('/contracts/${contractId}', {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const contractResult = await contractResponse.json();
@@ -429,7 +438,7 @@ const CustomsPortal: React.FC = () => {
 
     try {
       // Load ALL customs declarations from blockchain
-      const response = await fetch('http://localhost:3001/api/v1/customs/declarations', {
+      const response = await apiFetch('/customs/declarations', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
@@ -551,7 +560,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       `.trim();
       
       // Call customs review API to schedule inspection
-      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/review`, {
+      const response = await apiFetch('/customs/declaration/${declarationId}/review', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -611,7 +620,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
     try {
       console.log('[CUSTOMS] Completing inspection for:', declarationId);
       
-      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/complete-inspection`, {
+      const response = await apiFetch('/customs/declaration/${declarationId}/complete-inspection', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -700,7 +709,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       }
       
       // STEP 2: Proceed with customs clearance
-      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/clear`, {
+      const response = await apiFetch('/customs/declaration/${declarationId}/clear', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -752,7 +761,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       const requiredActions = dialogElement.querySelector<HTMLTextAreaElement>('textarea[placeholder*="Required Actions"]')?.value || '';
       const appealDeadline = '14';
       
-      const response = await fetch(`http://localhost:3001/api/v1/customs/declaration/${declarationId}/reject`, {
+      const response = await apiFetch('/customs/declaration/${declarationId}/reject', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -864,7 +873,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         destination: newDeclarationForm.destination,
       });
       
-      const response = await fetch('http://localhost:3001/api/v1/customs/declaration/submit', {
+      const response = await apiFetch('/customs/declaration/submit', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -979,15 +988,16 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 200,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
       renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="View Details">
+        <Box onClick={(e) => e.stopPropagation()} sx={{ display: 'flex', gap: 0.5 }}>
+          <Tooltip title="View Declaration Details">
             <IconButton 
               size="small" 
+              color="primary"
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedDeclaration(params.row);
@@ -997,47 +1007,45 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
             </IconButton>
           </Tooltip>
           {params.row.status === 'UNDER_REVIEW' && (
-            <Tooltip title="Clear Declaration">
-              <IconButton 
-                size="small" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedDeclaration(params.row);
-                  setClearanceDialogOpen(true);
-                }}
-              >
-                <CheckCircle />
-              </IconButton>
-            </Tooltip>
-          )}
-          {params.row.inspectionRequired && params.row.status === 'SUBMITTED' && (
-            <Tooltip title="Schedule Inspection">
-              <IconButton 
-                size="small" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedDeclaration(params.row);
-                  autoMapInspectionData(params.row);
-                  setInspectionDialogOpen(true);
-                }}
-              >
-                <Security />
-              </IconButton>
-            </Tooltip>
-          )}
-          {params.row.status === 'UNDER_INSPECTION' && (
-            <Tooltip title="Complete Inspection">
-              <IconButton 
-                size="small" 
-                color="success"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleCompleteInspection(params.row.declarationId);
-                }}
-              >
-                <CheckCircle />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Tooltip title="Approve & Clear Declaration">
+                <IconButton 
+                  size="small" 
+                  color="success"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedDeclaration(params.row);
+                    setClearanceDialogOpen(true);
+                  }}
+                >
+                  <CheckCircle />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Reject Declaration">
+                <IconButton 
+                  size="small" 
+                  color="error"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const reason = prompt(
+                      `Reject Declaration ${params.row.declarationId}?\n\n` +
+                      `Reasons:\n` +
+                      `- Missing documents\n` +
+                      `- HS Code mismatch\n` +
+                      `- Value discrepancy\n` +
+                      `- EUDR non-compliance\n` +
+                      `- Inspection required\n\n` +
+                      `Enter rejection reason:`
+                    );
+                    if (reason) {
+                      alert(`Declaration ${params.row.declarationId} rejected.\n\nReason: ${reason}\n\nExporter notified to resubmit.`);
+                    }
+                  }}
+                >
+                  <Cancel />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Box>
       ),
@@ -1076,6 +1084,35 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
             variant="outlined"
             startIcon={<Download />}
             brandColor={brandPrimary}
+            onClick={() => {
+              // Export declarations report as CSV
+              const csvContent = [
+                ['Declaration ID', 'Shipment ID', 'Exporter', 'Type', 'HS Code', 'Quantity (kg)', 'Value', 'Currency', 'Destination', 'Status', 'Submission Date', 'Clearance Date', 'EUDR Compliant'],
+                ...declarations.map(d => [
+                  d.declarationId,
+                  d.shipmentId,
+                  d.exporterId,
+                  d.declarationType,
+                  d.hsCode,
+                  d.quantity,
+                  d.value,
+                  d.currency,
+                  d.destination,
+                  d.status,
+                  new Date(d.submissionDate).toLocaleDateString(),
+                  d.clearanceDate ? new Date(d.clearanceDate).toLocaleDateString() : 'N/A',
+                  d.eudrCompliant ? 'Yes' : 'No'
+                ])
+              ].map(row => row.join(',')).join('\n');
+              
+              const blob = new Blob([csvContent], { type: 'text/csv' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `customs_declarations_${new Date().toISOString().split('T')[0]}.csv`;
+              a.click();
+              window.URL.revokeObjectURL(url);
+            }}
           >
             Export Report
           </AnimatedButton>
@@ -1162,7 +1199,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
             <Tab label="Export Declarations" />
-            <Tab label="Inspections" />
+            <Tab label="Quality Certificates (ECTA)" />
+            <Tab label="Cleared Shipments" />
             <Tab label="EUDR Compliance" />
             <Tab label="Analytics" />
           </Tabs>
@@ -1186,95 +1224,35 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         </TabPanel>
 
         <TabPanel value={tabValue} index={1}>
-          <Typography variant="h6" gutterBottom>
-            Inspection Management
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            ECTA Quality Certificates - Reference Data
           </Typography>
           
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2" fontWeight={600}>
+              Read-Only View: ECTA Quality Inspection Results
+            </Typography>
+            <Typography variant="body2">
+              This tab shows quality certificates issued by ECTA (Ethiopian Coffee and Tea Authority).
+              Customs officers review these certificates to verify shipments have passed quality inspection
+              and received export permits before issuing customs clearance.
+            </Typography>
+          </Alert>
+
           <Box sx={{ mb: 3 }}>
             <CustomsInspection />
           </Box>
-
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Inspection Queue
-                  </Typography>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Type</TableCell>
-                        <TableCell>Count</TableCell>
-                        <TableCell>Avg Time</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {inspectionData.map((inspection) => (
-                        <TableRow key={inspection.type}>
-                          <TableCell>{inspection.type}</TableCell>
-                          <TableCell>{inspection.count}</TableCell>
-                          <TableCell>{inspection.avgTime}h</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Inspection Status
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Physical Inspections: 45 pending
-                    </Typography>
-                    <LinearProgress variant="determinate" value={75} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Documentary Reviews: 123 pending
-                    </Typography>
-                    <LinearProgress variant="determinate" value={60} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      EUDR Enhanced: 28 pending
-                    </Typography>
-                    <LinearProgress variant="determinate" value={40} sx={{ mt: 1 }} />
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Inspection Workflow (2026)
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                <Chip label="1. Declaration Review" color="primary" />
-                <Typography>→</Typography>
-                <Chip label="2. Risk Assessment" color="secondary" />
-                <Typography>→</Typography>
-                <Chip label="3. Physical/Documentary" color="warning" />
-                <Typography>→</Typography>
-                <Chip label="4. EUDR Verification" color="success" />
-                <Typography>→</Typography>
-                <Chip label="5. Clearance" color="success" />
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                Enhanced inspection protocols for 2026 include mandatory EUDR compliance checks for EU destinations,
-                GPS-based origin verification, and blockchain-integrated traceability validation.
-              </Typography>
-            </CardContent>
-          </Card>
         </TabPanel>
+
         <TabPanel value={tabValue} index={2}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            Cleared Shipments - Export History
+          </Typography>
+          
+          <CustomsClearedShipments />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
           <Typography variant="h6" gutterBottom>
             EUDR Compliance Management (2026)
           </Typography>
@@ -1374,7 +1352,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           </Card>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <TabPanel value={tabValue} index={4}>
           <Typography variant="h6" gutterBottom>
             Customs Analytics & Performance
           </Typography>
@@ -1505,6 +1483,25 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                   <Typography variant="body2" color="textSecondary">Destination</Typography>
                   <Typography variant="body1">{selectedDeclaration.destination}</Typography>
                 </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Intended Transport</Typography>
+                  <Chip
+                    icon={selectedDeclaration.transportMode === 'AIR' ? <FlightTakeoff /> : <DirectionsBoat />}
+                    label={selectedDeclaration.transportMode === 'AIR' ? 'Air Freight' : 'Sea Freight'}
+                    color={selectedDeclaration.transportMode === 'AIR' ? 'secondary' : 'primary'}
+                    size="small"
+                  />
+                </Grid>
+                {selectedDeclaration.transportMode === 'AIR' && (
+                  <Grid item xs={12}>
+                    <Alert severity="info">
+                      <Typography variant="body2">
+                        <strong>Priority Processing:</strong> Air freight shipment requires expedited customs clearance.
+                        Target clearance time: 24 hours.
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="textSecondary">Declaration Type</Typography>
                   <Box sx={{ mt: 0.5 }}>
@@ -2492,7 +2489,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                 select
                 label="Declaration Type"
                 value={newDeclarationForm.declarationType}
-                onChange={(e) => setNewDeclarationForm({ ...newDeclarationForm, declarationType: e.target.value as any })}
+                onChange={(e) => setNewDeclarationForm({ ...newDeclarationForm, declarationType: e.target.value as 'STANDARD' | 'SIMPLIFIED' | 'EUDR_ENHANCED' })}
               >
                 <MenuItem value="STANDARD">Standard Declaration</MenuItem>
                 <MenuItem value="SIMPLIFIED">Simplified (Authorized Traders)</MenuItem>

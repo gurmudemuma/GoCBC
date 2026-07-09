@@ -327,7 +327,7 @@ router.get('/:contractID',
  */
 router.post('/approve',
   authMiddleware,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { contractId, approvedBy, comments } = req.body;
       
@@ -393,7 +393,7 @@ router.post('/:contractID/approve',
   authMiddleware,
   [param('contractID').notEmpty().withMessage('Contract ID is required')],
   validateRequest,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { contractID } = req.params;
       const user = (req as any).user; // Get authenticated user info
@@ -467,7 +467,7 @@ router.post('/:contractID/nbe-approve',
     body('approvalType').optional().isString(),
   ],
   validateRequest,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { contractID } = req.params;
       const { approvedBy, approvalType, comments } = req.body;

@@ -27,6 +27,7 @@ import {
   Close as CloseIcon,
 } from '@mui/icons-material';
 import PaymentMethodSelector, { PaymentMethodType } from '../common/PaymentMethodSelector';
+import { apiFetch } from '@/config/api.config';
 
 interface Contract {
   contractId: string;
@@ -148,7 +149,7 @@ const PaymentInitiationDialog: React.FC<PaymentInitiationDialogProps> = ({
       const token = localStorage.getItem('authToken');
       if (!token) throw new Error('Not authenticated');
       
-      const response = await fetch('http://localhost:3001/api/v1/banking/payment/initiate', {
+      const response = await apiFetch('/banking/payment/initiate', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -197,7 +198,7 @@ const PaymentInitiationDialog: React.FC<PaymentInitiationDialogProps> = ({
       const token = localStorage.getItem('authToken');
       if (!token || !contract) return;
       
-      await fetch(`http://localhost:3001/api/v1/banking/payment/${paymentID}/status`, {
+      await apiFetch('/banking/payment/${paymentID}/status', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
