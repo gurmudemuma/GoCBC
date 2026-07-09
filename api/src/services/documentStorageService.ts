@@ -46,7 +46,13 @@ class DocumentStorageService {
     
     // Encryption key from environment or generate
     const keyString = process.env.DOCUMENT_ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
-    this.encryptionKey = Buffer.from(keyString.slice(0, 64), 'hex');
+    // Convert string to 32-byte buffer (use UTF-8 encoding, pad or hash if needed)
+    if (keyString.length >= 32) {
+      this.encryptionKey = Buffer.from(keyString.slice(0, 32), 'utf-8');
+    } else {
+      // If key is too short, hash it to get 32 bytes
+      this.encryptionKey = crypto.createHash('sha256').update(keyString).digest();
+    }
     
     // IPFS configuration
     this.useIPFS = process.env.USE_IPFS === 'true';

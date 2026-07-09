@@ -1,5 +1,6 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -40,7 +41,7 @@ router.post('/issue-permit', async (req, res) => {
 
     res.json({ success: true, message: 'Consignment permit issued successfully' });
   } catch (error: any) {
-    console.error('Issue consignment permit error:', error);
+    logger.error('Issue consignment permit error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -58,7 +59,7 @@ router.post('/record-shipment', async (req, res) => {
 
     res.json({ success: true, message: 'Consignment shipment recorded successfully' });
   } catch (error: any) {
-    console.error('Record consignment shipment error:', error);
+    logger.error('Record consignment shipment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -78,7 +79,7 @@ router.post('/partial-payment', async (req, res) => {
 
     res.json({ success: true, message: 'Partial payment recorded successfully' });
   } catch (error: any) {
-    console.error('Record partial payment error:', error);
+    logger.error('Record partial payment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -88,9 +89,9 @@ router.get('/:consignmentId', async (req, res) => {
   try {
     const { consignmentId } = req.params;
     const result = await fabricService.evaluateTransaction('ReadConsignmentPayment', consignmentId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Read consignment error:', error);
+    logger.error('Read consignment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -100,9 +101,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
   try {
     const { exporterId } = req.params;
     const result = await fabricService.evaluateTransaction('QueryConsignmentsByExporter', exporterId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query consignments error:', error);
+    logger.error('Query consignments error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -111,9 +112,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
 router.get('/outstanding/all', async (req, res) => {
   try {
     const result = await fabricService.evaluateTransaction('QueryOutstandingConsignments');
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query outstanding consignments error:', error);
+    logger.error('Query outstanding consignments error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -122,9 +123,9 @@ router.get('/outstanding/all', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const result = await fabricService.evaluateTransaction('QueryAllConsignments');
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query all consignments error:', error);
+    logger.error('Query all consignments error:', error);
     res.status(500).json({ error: error.message });
   }
 });

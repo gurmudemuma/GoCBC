@@ -163,7 +163,7 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	}
 
 	// VALIDATION: Exchange rate
-	if err := ValidateExchangeRate(exchangeRate, "exchangeRate"); err != nil {
+	if err := ValidateExchangeRate(exchangeRate); err != nil {
 		return fmt.Errorf("AllocateForex: %w", err)
 	}
 
@@ -179,7 +179,7 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 
 	// VALIDATION: Expiry date
 	if expiryDate != "" {
-		if err := ValidateDate(expiryDate, "expiryDate", false); err != nil {
+		if err := ValidateDate(expiryDate); err != nil {
 			return fmt.Errorf("AllocateForex: %w", err)
 		}
 	}
@@ -371,6 +371,14 @@ func (c *CoffeeContract) ForexExists(ctx contractapi.TransactionContextInterface
 		return false, fmt.Errorf("failed to read forex: %v", err)
 	}
 	return forexJSON != nil, nil
+}
+
+// QueryForexByContract - Get all forex allocations for a specific contract
+func (c *CoffeeContract) QueryForexByContract(ctx contractapi.TransactionContextInterface,
+	contractID string) ([]*ForexAllocation, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
+	return c.queryForex(ctx, queryString)
 }
 
 // Helper function for querying forex

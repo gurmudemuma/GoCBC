@@ -71,7 +71,7 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 
 	// VALIDATION: Expiry date
 	if expiryDate != "" {
-		if err := ValidateDate(expiryDate, "expiryDate", false); err != nil {
+		if err := ValidateDate(expiryDate); err != nil {
 			return fmt.Errorf("RequestLC: %w", err)
 		}
 	}

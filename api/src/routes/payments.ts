@@ -1132,4 +1132,191 @@ router.post('/:paymentID/forex-repatriation',
   }
 );
 
+// ==================== ADVANCE PAYMENT METHODS ====================
+
+/**
+ * @swagger
+ * /api/v1/payments/{paymentID}/advance:
+ *   post:
+ *     summary: Receive advance payment
+ *     tags: [Payments]
+ */
+router.post('/:paymentID/advance',
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('advancePercentage').notEmpty().withMessage('Advance percentage is required'),
+    body('amountReceived').notEmpty().withMessage('Amount received is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const { advancePercentage, amountReceived } = req.body;
+
+      logger.info(`[PAYMENT] Receiving advance payment: ${paymentID}`);
+
+      await fabricService.connectAsOrg('BanksMSP');
+
+      const result = await fabricService.invokeChaincode('ReceiveAdvancePayment', [
+        paymentID,
+        advancePercentage.toString(),
+        amountReceived.toString(),
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [PAYMENT] Advance payment received: ${paymentID}`);
+        res.json({
+          success: true,
+          message: 'Advance payment received successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [PAYMENT] Failed to receive advance: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'ADVANCE_FAILED',
+            message: result.error || 'Failed to receive advance payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[PAYMENT] Error receiving advance:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/payments/{paymentID}/balance:
+ *   post:
+ *     summary: Receive balance payment
+ *     tags: [Payments]
+ */
+router.post('/:paymentID/balance',
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('amountReceived').notEmpty().withMessage('Amount received is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const { amountReceived } = req.body;
+
+      logger.info(`[PAYMENT] Receiving balance payment: ${paymentID}`);
+
+      await fabricService.connectAsOrg('BanksMSP');
+
+      const result = await fabricService.invokeChaincode('ReceiveBalancePayment', [
+        paymentID,
+        amountReceived.toString(),
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [PAYMENT] Balance payment received: ${paymentID}`);
+        res.json({
+          success: true,
+          message: 'Balance payment received successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [PAYMENT] Failed to receive balance: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'BALANCE_FAILED',
+            message: result.error || 'Failed to receive balance payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[PAYMENT] Error receiving balance:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/payments/{paymentID}/status:
+ *   post:
+ *     summary: Update payment status
+ *     tags: [Payments]
+ */
+router.post('/:paymentID/status',
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('status').notEmpty().withMessage('Status is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const { status } = req.body;
+
+      logger.info(`[PAYMENT] Updating payment status: ${paymentID} to ${status}`);
+
+      await fabricService.connectAsOrg('BanksMSP');
+
+      const result = await fabricService.invokeChaincode('UpdatePaymentStatus', [
+        paymentID,
+        status,
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [PAYMENT] Status updated: ${paymentID}`);
+        res.json({
+          success: true,
+          message: 'Payment status updated successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [PAYMENT] Failed to update status: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'STATUS_UPDATE_FAILED',
+            message: result.error || 'Failed to update payment status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[PAYMENT] Error updating status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
 export default router;

@@ -47,6 +47,7 @@ import {
   Info,
   DeleteSweep,
 } from '@mui/icons-material';
+import { apiFetch, publicApiFetch, buildApiUrl } from '@/config/api.config';
 
 interface DocumentUploadDialogProps {
   open: boolean;
@@ -287,7 +288,13 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
 
   const uploadFiles = async () => {
     setUploading(true);
-    const token = localStorage.getItem('authToken');
+    
+    // Use public endpoint for registration, authenticated endpoint for others
+    const uploadEndpoint = entityType === 'EXPORTER_APPLICATION' 
+      ? '/documents/upload-registration'
+      : '/documents/upload';
+    
+    const isRegistration = entityType === 'EXPORTER_APPLICATION';
 
     for (let i = 0; i < files.length; i++) {
       const fileData = files[i];
@@ -303,18 +310,21 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
         if (fileData.description) {
           formData.append('description', fileData.description);
         }
-        if (entityId) {
-          formData.append('entityId', entityId);
-        }
-        if (entityType) {
-          formData.append('entityType', entityType);
+        // Only include entityId/entityType for authenticated uploads
+        if (!isRegistration) {
+          if (entityId) {
+            formData.append('entityId', entityId);
+          }
+          if (entityType) {
+            formData.append('entityType', entityType);
+          }
         }
 
-        const response = await fetch('http://localhost:3001/api/v1/documents/upload', {
+        // Use publicApiFetch for registration (no auth), apiFetch for authenticated uploads
+        const fetchFunction = isRegistration ? publicApiFetch : apiFetch;
+        const response = await fetchFunction(uploadEndpoint, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
+          headers: {},  // Empty headers - apiFetch will add auth if needed, publicApiFetch won't
           body: formData,
         });
 

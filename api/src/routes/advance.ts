@@ -1,5 +1,6 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -42,7 +43,7 @@ router.post('/record', async (req, res) => {
 
     res.json({ success: true, message: 'Advance payment recorded successfully' });
   } catch (error: any) {
-    console.error('Record advance payment error:', error);
+    logger.error('Record advance payment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -61,7 +62,7 @@ router.post('/issue-permit', async (req, res) => {
 
     res.json({ success: true, message: 'Permit issued for advance payment successfully' });
   } catch (error: any) {
-    console.error('Issue permit for advance error:', error);
+    logger.error('Issue permit for advance error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -75,7 +76,7 @@ router.post('/link-shipment', async (req, res) => {
 
     res.json({ success: true, message: 'Shipment linked to advance payment successfully' });
   } catch (error: any) {
-    console.error('Link shipment error:', error);
+    logger.error('Link shipment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -89,7 +90,7 @@ router.post('/settle', async (req, res) => {
 
     res.json({ success: true, message: 'Advance payment settled successfully' });
   } catch (error: any) {
-    console.error('Settle advance payment error:', error);
+    logger.error('Settle advance payment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -99,9 +100,9 @@ router.get('/:paymentId', async (req, res) => {
   try {
     const { paymentId } = req.params;
     const result = await fabricService.evaluateTransaction('ReadAdvancePayment', paymentId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Read advance payment error:', error);
+    logger.error('Read advance payment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -111,9 +112,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
   try {
     const { exporterId } = req.params;
     const result = await fabricService.evaluateTransaction('QueryAdvancePaymentsByExporter', exporterId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query advance payments error:', error);
+    logger.error('Query advance payments error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -122,9 +123,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const result = await fabricService.evaluateTransaction('QueryAllAdvancePayments');
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query all advance payments error:', error);
+    logger.error('Query all advance payments error:', error);
     res.status(500).json({ error: error.message });
   }
 });

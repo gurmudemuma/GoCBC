@@ -231,6 +231,7 @@ const RegisterExporterPage = () => {
   const handleSubmit = async () => {
     setLoading(true);
     setError('');
+    setSuccess(false);
 
     try {
       // Prepare documents data for submission
@@ -245,16 +246,27 @@ const RegisterExporterPage = () => {
       }));
 
       // Submit application to API with documents
-      await api.post('/exporters/exporter-applications', {
+      const response = await api.post('/exporters/exporter-applications', {
         ...formData,
         documents: documentsData,
       });
       
       setSuccess(true);
       setLoading(false);
+      
+      // Scroll to top to show success message
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to submit application');
+      const errorMessage = err.response?.data?.error?.message 
+        || err.response?.data?.message 
+        || err.message 
+        || 'Failed to submit application. Please check all required fields.';
+      
+      setError(errorMessage);
       setLoading(false);
+      
+      // Scroll to top to show error message
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -669,6 +681,27 @@ const RegisterExporterPage = () => {
                   ),
                 }}
                 helperText="Include country code (e.g., +251)"
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                required
+                label="Physical Address"
+                value={formData.address}
+                onChange={handleChange('address')}
+                size="small"
+                multiline
+                rows={2}
+                placeholder="Street address, building name, floor, etc."
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <LocationOn sx={{ color: '#9b30b7' }} />
+                    </InputAdornment>
+                  ),
+                }}
               />
             </Grid>
 
@@ -1191,6 +1224,28 @@ const RegisterExporterPage = () => {
               {error && (
                 <Alert severity="error" sx={{ mb: 2 }}>
                   {error}
+                </Alert>
+              )}
+
+              {success && (
+                <Alert 
+                  severity="success" 
+                  sx={{ 
+                    mb: 2,
+                    '& .MuiAlert-icon': {
+                      color: '#FFD700',
+                    },
+                  }}
+                >
+                  <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+                    ✅ Application Submitted Successfully!
+                  </Typography>
+                  <Typography variant="caption" display="block">
+                    Your exporter registration application has been submitted and is pending ECTA approval.
+                  </Typography>
+                  <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+                    You will receive an email notification once your application is reviewed.
+                  </Typography>
                 </Alert>
               )}
 

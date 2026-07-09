@@ -1,5 +1,6 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -59,7 +60,7 @@ router.post('/issue', async (req, res) => {
       });
     }
   } catch (error: any) {
-    console.error('Issue permit error:', error);
+    logger.error('Issue permit error:', error);
     res.status(500).json({ 
       success: false,
       error: { message: error.message }
@@ -80,7 +81,7 @@ router.post('/utilize', async (req, res) => {
       res.status(400).json({ success: false, error: { message: result.error } });
     }
   } catch (error: any) {
-    console.error('Utilize permit error:', error);
+    logger.error('Utilize permit error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -101,7 +102,7 @@ router.post('/settle', async (req, res) => {
       res.status(400).json({ success: false, error: { message: result.error } });
     }
   } catch (error: any) {
-    console.error('Settle permit error:', error);
+    logger.error('Settle permit error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -118,7 +119,7 @@ router.get('/:permitId', async (req, res) => {
       res.status(404).json({ error: result.error });
     }
   } catch (error: any) {
-    console.error('Read permit error:', error);
+    logger.error('Read permit error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -135,7 +136,7 @@ router.get('/exporter/:exporterId', async (req, res) => {
       res.status(500).json({ error: result.error });
     }
   } catch (error: any) {
-    console.error('Query permits error:', error);
+    logger.error('Query permits error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -151,7 +152,7 @@ router.get('/outstanding/all', async (req, res) => {
       res.status(500).json({ error: result.error });
     }
   } catch (error: any) {
-    console.error('Query outstanding permits error:', error);
+    logger.error('Query outstanding permits error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -167,7 +168,7 @@ router.get('/', async (req, res) => {
       res.status(500).json({ error: result.error });
     }
   } catch (error: any) {
-    console.error('Query all permits error:', error);
+    logger.error('Query all permits error:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -16,7 +16,7 @@ const fabricService = FabricService.getInstance();
  */
 router.post('/:inspectionID/certify',
   authMiddleware,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { inspectionID } = req.params;
       const body = req.body || {};
@@ -63,7 +63,6 @@ router.post('/:inspectionID/certify',
         beanSize,
         color,
         odor,
-        normalizedScore.toString(),
         normalizedScore.toString(),
         normalizedScore.toString(),
         normalizedScore.toString(),
@@ -127,7 +126,7 @@ router.post('/inspections',
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
   ],
   validateRequest,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { inspectionID, shipmentID, contractID, exporterID } = req.body;
 
@@ -483,7 +482,7 @@ router.post('/inspections/:inspectionID/reject',
 /**
  * GET /api/v1/quality/inspections - Get all inspections
  */
-router.get('/inspections', authMiddleware, async (req: Request, res: Response) => {
+router.get('/inspections', authMiddleware, async (req, res) => {
   try {
     const { status, exporterID, limit = 50, offset = 0 } = req.query;
 
@@ -546,7 +545,7 @@ router.get('/inspections/:inspectionID',
   authMiddleware,
   [param('inspectionID').notEmpty().withMessage('Inspection ID is required')],
   validateRequest,
-  async (req: Request, res: Response) => {
+  async (req, res) => {
     try {
       const { inspectionID } = req.params;
       const result = await fabricService.getInspection(inspectionID);

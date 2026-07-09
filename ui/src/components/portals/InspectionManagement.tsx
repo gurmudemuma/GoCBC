@@ -244,7 +244,7 @@ export const InspectionManagement: React.FC = () => {
                 <TableCell>
                   <Chip
                     label={insp.status}
-                    color={statusColor(insp.status) as any}
+                    color={statusColor(insp.status) as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'}
                     size="small"
                   />
                 </TableCell>

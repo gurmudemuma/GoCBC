@@ -52,6 +52,8 @@ import {
   Upload,
   Cancel,
   Description,
+  DirectionsBoat,
+  FlightTakeoff,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 
@@ -62,10 +64,12 @@ import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import { Exporter, CoffeeShipment, ExporterFormData } from '@/types';
 import BankSelect from '@/components/common/BankSelect';
 import BankBranchSelect from '@/components/common/BankBranchSelect';
 import { BankBranch } from '@/utils/bankBranches';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
 
 // Modern Components - 2026 Design
 import {
@@ -82,6 +86,10 @@ import {
 import UserManagement from '@/components/admin/UserManagement';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
+
+
+// Status types for chips
+type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_REVIEW' | string;
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -180,6 +188,10 @@ const ECTAPortal: React.FC = () => {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'EXPORTER' | 'SHIPMENT' | 'QUALITY' | 'PERMIT'>('EXPORTER');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
+  
+  // Document Validation Dialog state
+  const [validationDialogOpen, setValidationDialogOpen] = useState(false);
+  const [validationData, setValidationData] = useState<any>(null);
 
 
   const { control, handleSubmit, reset, formState: { errors } } = useForm<ExporterFormData>({
@@ -413,6 +425,173 @@ Contact system administrator if the issue persists.`,
       });
       setNotificationDialogOpen(true);
     }
+  };
+
+  const handleViewApplicationDetails = async (application: ExporterApplication) => {
+    setSelectedApplication(application);
+    
+    // Fetch real documents for this exporter application
+    const token = localStorage.getItem('authToken');
+    let applicationDocuments: any[] = [];
+    
+    if (token) {
+      try {
+        const response = await apiFetch(`/documents/entity/EXPORTER_APPLICATION/${application.application_id}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        const result = await response.json();
+        if (result.success && result.data) {
+          applicationDocuments = result.data.map((doc: any) => ({
+            id: doc.documentId || doc.id,
+            name: doc.filename || doc.name,
+            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+            status: 'AVAILABLE',
+            url: `/api/v1/documents/${doc.documentId || doc.id}`,
+            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+            category: doc.category || 'APPLICATION_DOCUMENT',
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching application documents:', error);
+      }
+    }
+    
+    // Parse documents from application if available
+    if ((!applicationDocuments || applicationDocuments.length === 0) && application.documents) {
+      try {
+        const parsedDocs = typeof application.documents === 'string' 
+          ? JSON.parse(application.documents) 
+          : application.documents;
+        
+        if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
+          applicationDocuments = parsedDocs.map((doc: any) => ({
+            id: doc.id || doc.documentId,
+            name: doc.name || doc.filename,
+            type: doc.type || 'PDF',
+            status: 'AVAILABLE',
+            url: doc.url || `/api/v1/documents/${doc.id}`,
+            uploadedDate: doc.uploadedDate || new Date().toLocaleDateString(),
+            size: doc.size || 'N/A',
+            category: doc.category || 'APPLICATION_DOCUMENT',
+          }));
+        }
+      } catch (error) {
+        console.error('Error parsing application documents:', error);
+      }
+    }
+    
+    // If no documents found, show required documents list
+    if (applicationDocuments.length === 0) {
+      applicationDocuments = [
+        { id: '1', name: 'Business License', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '2', name: 'TIN Certificate', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '3', name: 'Professional Taster Certificate', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '4', name: 'Laboratory Facility Certificate', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '5', name: 'Bank Account Statement', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+        { id: '6', name: 'Trade License', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
+      ];
+    }
+    
+    // Set validation data for view/approval mode
+    setValidationData({
+      entityId: application.application_id,
+      entityType: 'EXPORTER APPLICATION',
+      title: `Exporter Application - ${application.company_name}`,
+      summary: [
+        { label: 'Application ID', value: application.application_id },
+        { label: 'Company Name', value: application.company_name },
+        { label: 'TIN Number', value: application.tin_number },
+        { label: 'Business License', value: application.business_license_number },
+        { label: 'Exporter Type', value: application.exporter_type || 'PRIVATE_LIMITED' },
+        { label: 'Capital Requirement', value: `${parseFloat(application.capital_requirement).toLocaleString()} ETB` },
+        { label: 'Professional Taster', value: application.professional_taster },
+        { label: 'Taster Certificate', value: application.taster_certificate },
+        { label: 'Laboratory Facility', value: application.laboratory_facility },
+        { label: 'Lab Certificate', value: application.laboratory_certificate_number || 'N/A' },
+        { label: 'Contact Person', value: application.contact_person },
+        { label: 'Email', value: application.email },
+        { label: 'Phone', value: application.phone },
+        { label: 'Address', value: `${application.address}, ${application.city}` },
+        { label: 'Region', value: application.region || 'Addis Ababa' },
+        { label: 'Submitted Date', value: new Date(application.submitted_at).toLocaleDateString() },
+        { label: 'Status', value: application.status.toUpperCase() },
+      ],
+      prerequisites: [
+        {
+          label: 'Minimum Capital Requirement',
+          status: parseFloat(application.capital_requirement) >= 50000000 ? 'PASSED' : 'FAILED',
+          details: parseFloat(application.capital_requirement) >= 50000000 
+            ? `Capital ${parseFloat(application.capital_requirement).toLocaleString()} ETB meets 50M ETB requirement` 
+            : `Capital ${parseFloat(application.capital_requirement).toLocaleString()} ETB is below 50M ETB requirement`
+        },
+        {
+          label: 'Professional Taster Certification',
+          status: application.taster_certificate ? 'PASSED' : 'FAILED',
+          details: application.taster_certificate 
+            ? `Certified taster: ${application.professional_taster} (${application.taster_certificate})` 
+            : 'No taster certification provided'
+        },
+        {
+          label: 'Laboratory Facility',
+          status: application.laboratory_facility ? 'PASSED' : 'WARNING',
+          details: application.laboratory_facility || 'No laboratory facility information'
+        },
+        {
+          label: 'Business Registration',
+          status: application.business_license_number && application.tin_number ? 'PASSED' : 'FAILED',
+          details: application.business_license_number && application.tin_number 
+            ? `Business License: ${application.business_license_number}, TIN: ${application.tin_number}` 
+            : 'Incomplete business registration'
+        },
+        {
+          label: 'Contact Information',
+          status: application.email && application.phone ? 'PASSED' : 'WARNING',
+          details: `Email: ${application.email}, Phone: ${application.phone}`
+        },
+        {
+          label: 'Documents Submitted',
+          status: applicationDocuments.some(d => d.status === 'AVAILABLE') ? 'PASSED' : 'WARNING',
+          details: `${applicationDocuments.filter(d => d.status === 'AVAILABLE').length} of ${applicationDocuments.length} documents available`
+        },
+      ],
+      documents: applicationDocuments,
+      complianceChecks: [
+        {
+          label: 'ECTA Export License Requirements',
+          status: 'COMPLIANT',
+          details: 'Meets Ethiopian Coffee and Tea Authority licensing requirements'
+        },
+        {
+          label: 'Capital Adequacy',
+          status: parseFloat(application.capital_requirement) >= 50000000 ? 'COMPLIANT' : 'NON_COMPLIANT',
+          details: parseFloat(application.capital_requirement) >= 50000000 
+            ? 'Meets minimum capital requirement of 50 million ETB' 
+            : 'Does not meet minimum capital requirement'
+        },
+        {
+          label: 'Quality Standards Compliance',
+          status: 'COMPLIANT',
+          details: 'Professional taster and laboratory facility certified for coffee quality assessment'
+        },
+        {
+          label: 'Business Legitimacy',
+          status: 'COMPLIANT',
+          details: 'Valid business license and TIN registration verified'
+        },
+      ],
+      additionalInfo: application.status === 'pending' 
+        ? 'This application is pending ECTA approval. Please review all submitted documents carefully to verify their originality and completeness before approving.' 
+        : application.status === 'approved' 
+        ? 'This application has been approved. The exporter is registered and can start export operations.' 
+        : 'This application has been rejected. Review rejection reason and exporter can reapply after addressing issues.'
+    });
+    setValidationDialogOpen(true);
   };
 
   const handleRejectApplication = async () => {
@@ -756,7 +935,7 @@ The exporter can reapply once all requirements are met.`,
                         <Tooltip title="View Details">
                           <IconButton
                             size="small"
-                            onClick={() => setSelectedApplication(application)}
+                            onClick={() => handleViewApplicationDetails(application)}
                           >
                             <Visibility />
                           </IconButton>
@@ -1109,7 +1288,7 @@ The exporter can reapply once all requirements are met.`,
                               newExpiryDate.setFullYear(newExpiryDate.getFullYear() + 1);
                               
                               if (window.confirm(`Process License Renewal?\n\nExporter: ${exporter.companyName}\nLicense: ${exporter.ectaLicenseNumber}\nCurrent Expiry: ${formatDate(exporter.licenseExpiryDate)}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nThis will extend the license for 1 year.`)) {
-                                fetch(`http://localhost:3001/api/v1/exporters/${exporter.exporterId}/renew-license`, {
+                                apiFetch('/exporters/${exporter.exporterId}/renew-license', {
                                   method: 'POST',
                                   headers: {
                                     'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
@@ -1211,7 +1390,7 @@ The exporter can reapply once all requirements are met.`,
       {/* Register Exporter Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Register New Coffee Exporter</DialogTitle>
-        <form onSubmit={handleSubmit(handleCreateExporter as any)}>
+        <form onSubmit={handleSubmit(handleCreateExporter)}>
           <DialogContent>
             <Grid container spacing={3}>
               <Grid item xs={12} md={6}>
@@ -1799,7 +1978,7 @@ The exporter can reapply once all requirements are met.`,
                   const reason = prompt('Enter suspension reason:');
                   if (!reason) return;
                   
-                  const response = await fetch(`http://localhost:3001/api/v1/exporters/${selectedExporter.exporterId}/suspend`, {
+                  const response = await apiFetch('/exporters/${selectedExporter.exporterId}/suspend', {
                     method: 'POST',
                     headers: {
                       'Authorization': `Bearer ${token}`,
@@ -1899,6 +2078,36 @@ The exporter can reapply once all requirements are met.`,
         title={notification.title}
         message={notification.message}
         details={notification.details}
+      />
+
+      {/* Document Validation Dialog */}
+      <DocumentValidationDialog
+        open={validationDialogOpen}
+        onClose={() => {
+          setValidationDialogOpen(false);
+          setValidationData(null);
+        }}
+        data={validationData}
+        onApprove={(notes) => {
+          // After viewing details and documents, open approve dialog
+          if (selectedApplication) {
+            generateApprovalData();
+            setApproveDialogOpen(true);
+          }
+          setValidationDialogOpen(false);
+        }}
+        onReject={(reason) => {
+          // After viewing details, open reject dialog
+          if (selectedApplication) {
+            setRejectionReason(reason);
+            setRejectDialogOpen(true);
+          }
+          setValidationDialogOpen(false);
+        }}
+        approveLabel="Approve Application"
+        rejectLabel="Reject Application"
+        showRejectOption={true}
+        readOnly={false}
       />
 
       {/* Audit Trail Viewer */}

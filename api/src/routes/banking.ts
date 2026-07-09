@@ -230,10 +230,10 @@ router.post('/lc/issue',
   async (req: Request, res: Response) => {
     try {
       const {
-        lcId,
+        lcId, lcID,
         lcNumber,
-        contractId,
-        exporterId,
+        contractId, contractID,
+        exporterId, exporterID,
         issuingBank,
         advisingBank,
         beneficiary,
@@ -246,25 +246,56 @@ router.post('/lc/issue',
         portOfDischarge,
         paymentTerms,
         partialShipment,
-        transhipment
+        transhipment,
+        lcType,
+        bankName,
+        shippingTerms
       } = req.body;
 
-      logger.info('[BANKING] Issuing LC:', { lcId, contractId, exporterId, amount, currency });
+      // Support both camelCase and uppercase ID variants
+      const _lcId = lcId || lcID;
+      const _contractId = contractId || contractID;
+      const _exporterId = exporterId || exporterID;
+      
+      // Validate required fields
+      if (!_lcId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'LC ID is required'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      if (!amount || isNaN(Number(amount))) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Valid amount is required'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info('[BANKING] Issuing LC:', { lcId: _lcId, contractId: _contractId, exporterId: _exporterId, amount, currency });
 
       const result = await fabricService.submitTransaction(
         'IssueLC',
-        lcId,
-        lcNumber || lcId,
-        contractId,
-        exporterId,
-        issuingBank,
+        _lcId,
+        lcNumber || _lcId,
+        _contractId || '',
+        _exporterId || '',
+        issuingBank || '',
         advisingBank || '',
-        beneficiary,
-        applicant,
-        amount.toString(),
-        currency,
-        expiryDate,
-        latestShipmentDate || expiryDate,
+        beneficiary || _exporterId || '',
+        applicant || 'Buyer',
+        Number(amount).toString(),
+        currency || 'USD',
+        expiryDate || '',
+        latestShipmentDate || expiryDate || '',
         portOfLoading || '',
         portOfDischarge || '',
         paymentTerms || 'Sight LC',
@@ -272,12 +303,12 @@ router.post('/lc/issue',
         transhipment ? 'true' : 'false'
       );
 
-      logger.info('[BANKING] LC issued successfully:', lcId);
+      logger.info('[BANKING] LC issued successfully:', _lcId);
       
       res.status(201).json({
         success: true,
         message: 'LC issued successfully',
-        data: { lcId },
+        data: { lcId: _lcId },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -633,7 +664,6 @@ router.post('/payment/:paymentID/verify-documents',
   }
 );
 
-export default router;
 
 // ==================== PAYMENT METHOD-SPECIFIC ROUTES ====================
 // Added June 26, 2026 for payment method differentiation
@@ -1095,30 +1125,10 @@ router.post('/payment/:paymentID/settle',
   }
 );
 
-// ==================== HELPER FUNCTIONS ====================
-
 /**
- * Get risk profile for payment method
+ * POST /api/v1/banking/cad - Register documentary collection
  */
-function getRiskProfile(method: string): string {
-  const riskProfiles: { [key: string]: string } = {
-    LC: 'LOW',
-    CAD: 'MEDIUM',
-    TT_ADVANCE: 'LOW',
-    TT_POST: 'HIGH',
-    ADVANCE: 'LOW',
-  };
-  return riskProfiles[method] || 'UNKNOWN';
-}
-
-// ==================== DOCUMENTARY COLLECTION (CAD) ROUTES ====================
-// Added July 2, 2026 - CBE Section 3.2.ii
-
-/**
- * POST /api/v1/banking/cad/register
- * Register Documentary Collection (Cash Against Documents)
- */
-router.post('/cad/register',
+router.post('/cad',
   authMiddleware,
   [
     body('collectionID').notEmpty().withMessage('Collection ID is required'),
@@ -1127,7 +1137,7 @@ router.post('/cad/register',
     body('drawerName').notEmpty().withMessage('Drawer name is required'),
     body('draweeName').notEmpty().withMessage('Drawee name is required'),
     body('draweeAddress').notEmpty().withMessage('Drawee address is required'),
-    body('amount').isFloat({ min: 0 }).withMessage('Amount must be positive'),
+    body('amount').isNumeric().withMessage('Amount must be numeric'),
     body('currency').notEmpty().withMessage('Currency is required'),
     body('paymentTerm').isIn(['SIGHT', 'ACCEPTANCE']).withMessage('Payment term must be SIGHT or ACCEPTANCE'),
     body('remittingBank').notEmpty().withMessage('Remitting bank is required'),

@@ -221,43 +221,43 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 
 	// Parse cupping scores
 	fragrance, _ := strconv.ParseFloat(fragranceStr, 64)
-	if err := ValidateCuppingScore(fragrance, "fragrance"); err != nil {
+	if err := ValidateCuppingScore(fragrance); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	flavor, _ := strconv.ParseFloat(flavorStr, 64)
-	if err := ValidateCuppingScore(flavor, "flavor"); err != nil {
+	if err := ValidateCuppingScore(flavor); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	aftertaste, _ := strconv.ParseFloat(aftertasteStr, 64)
-	if err := ValidateCuppingScore(aftertaste, "aftertaste"); err != nil {
+	if err := ValidateCuppingScore(aftertaste); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	acidity, _ := strconv.ParseFloat(acidityStr, 64)
-	if err := ValidateCuppingScore(acidity, "acidity"); err != nil {
+	if err := ValidateCuppingScore(acidity); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	body, _ := strconv.ParseFloat(bodyStr, 64)
-	if err := ValidateCuppingScore(body, "body"); err != nil {
+	if err := ValidateCuppingScore(body); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	balance, _ := strconv.ParseFloat(balanceStr, 64)
-	if err := ValidateCuppingScore(balance, "balance"); err != nil {
+	if err := ValidateCuppingScore(balance); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	uniformity, _ := strconv.ParseFloat(uniformityStr, 64)
-	if err := ValidateCuppingScore(uniformity, "uniformity"); err != nil {
+	if err := ValidateCuppingScore(uniformity); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	cleanCup, _ := strconv.ParseFloat(cleanCupStr, 64)
-	if err := ValidateCuppingScore(cleanCup, "cleanCup"); err != nil {
+	if err := ValidateCuppingScore(cleanCup); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	sweetness, _ := strconv.ParseFloat(sweetnessStr, 64)
-	if err := ValidateCuppingScore(sweetness, "sweetness"); err != nil {
+	if err := ValidateCuppingScore(sweetness); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 	overall, _ := strconv.ParseFloat(overallStr, 64)
-	if err := ValidateCuppingScore(overall, "overall"); err != nil {
+	if err := ValidateCuppingScore(overall); err != nil {
 		return fmt.Errorf("PerformInspection: %w", err)
 	}
 

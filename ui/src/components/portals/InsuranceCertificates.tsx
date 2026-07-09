@@ -175,7 +175,7 @@ export const InsuranceCertificates: React.FC = () => {
       EXPIRED: { color: 'default', icon: null }
     };
     const c = config[status] || { color: 'default', icon: null };
-    return <Chip label={status} color={c.color as any} icon={c.icon} size="small" />;
+    return <Chip label={status} color={c.color as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} icon={c.icon} size="small" />;
   };
 
   return (

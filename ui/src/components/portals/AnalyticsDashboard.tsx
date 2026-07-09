@@ -24,6 +24,7 @@ import {
   LinearProgress,
   Divider,
 } from '@mui/material';
+import { apiFetch } from '@/config/api.config';
 import {
   TrendingUp,
   Assessment,
@@ -161,7 +162,7 @@ const AnalyticsDashboard: React.FC = () => {
     try {
       console.log('[ANALYTICS] Fetching dashboard data');
       
-      const response = await fetch('http://localhost:3001/api/v1/analytics/dashboard', {
+      const response = await apiFetch('/analytics/dashboard', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       

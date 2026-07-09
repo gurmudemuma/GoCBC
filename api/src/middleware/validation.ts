@@ -20,13 +20,13 @@ export const validateRequest = (
       body: req.body,
     });
 
-    return res.status(400).json({
+    return void res.status(400).json({
       success: false,
       error: {
         code: 'VALIDATION_ERROR',
         message: 'Invalid input data',
-        details: errors.array().map(error => ({
-          field: error.param,
+        details: errors.array().map((error: any) => ({
+          field: error.path || error.param || 'unknown',
           message: error.msg,
           value: error.value,
         })),

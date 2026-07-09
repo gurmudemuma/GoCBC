@@ -1,5 +1,6 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -52,7 +53,7 @@ router.post('/send', async (req, res) => {
 
     res.json({ success: true, message: 'Documentary collection sent successfully' });
   } catch (error: any) {
-    console.error('Send collection error:', error);
+    logger.error('Send collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -66,7 +67,7 @@ router.post('/present', async (req, res) => {
 
     res.json({ success: true, message: 'Documentary collection presented successfully' });
   } catch (error: any) {
-    console.error('Present collection error:', error);
+    logger.error('Present collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -80,7 +81,7 @@ router.post('/accept', async (req, res) => {
 
     res.json({ success: true, message: 'Documentary collection accepted successfully' });
   } catch (error: any) {
-    console.error('Accept collection error:', error);
+    logger.error('Accept collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -98,7 +99,7 @@ router.post('/settle', async (req, res) => {
 
     res.json({ success: true, message: 'Documentary collection settled successfully' });
   } catch (error: any) {
-    console.error('Settle collection error:', error);
+    logger.error('Settle collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -116,7 +117,7 @@ router.post('/return', async (req, res) => {
 
     res.json({ success: true, message: 'Documentary collection returned successfully' });
   } catch (error: any) {
-    console.error('Return collection error:', error);
+    logger.error('Return collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -130,7 +131,7 @@ router.post('/reminder', async (req, res) => {
 
     res.json({ success: true, message: 'Reminder sent successfully' });
   } catch (error: any) {
-    console.error('Send reminder error:', error);
+    logger.error('Send reminder error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -140,9 +141,9 @@ router.get('/:collectionId', async (req, res) => {
   try {
     const { collectionId } = req.params;
     const result = await fabricService.evaluateTransaction('ReadDocumentaryCollection', collectionId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Read collection error:', error);
+    logger.error('Read collection error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -152,9 +153,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
   try {
     const { exporterId } = req.params;
     const result = await fabricService.evaluateTransaction('QueryCollectionsByExporter', exporterId);
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query collections error:', error);
+    logger.error('Query collections error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -163,9 +164,9 @@ router.get('/exporter/:exporterId', async (req, res) => {
 router.get('/outstanding/all', async (req, res) => {
   try {
     const result = await fabricService.evaluateTransaction('QueryOutstandingCollections');
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query outstanding collections error:', error);
+    logger.error('Query outstanding collections error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -174,9 +175,9 @@ router.get('/outstanding/all', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const result = await fabricService.evaluateTransaction('QueryAllCollections');
-    res.json(JSON.parse(result));
+    res.json(JSON.parse(result.toString()));
   } catch (error: any) {
-    console.error('Query all collections error:', error);
+    logger.error('Query all collections error:', error);
     res.status(500).json({ error: error.message });
   }
 });

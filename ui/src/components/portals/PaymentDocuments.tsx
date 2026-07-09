@@ -34,7 +34,7 @@ import {
   Divider,
 } from '@mui/material';
 import { Upload, CheckCircle, Visibility, Delete, Warning, Info, AccessTime } from '@mui/icons-material';
-import { AnimatedButton, StatusChip } from '@/components/modern';
+import { AnimatedButton, StatusChip, StatusType } from '@/components/modern';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import api from '@/utils/api';
@@ -44,6 +44,7 @@ import {
   getDeadlineInfo,
   getWorkflowStageMessage,
 } from '@/utils/workflowEnforcement';
+
 
 interface Payment {
   paymentId: string;
@@ -211,7 +212,7 @@ export const PaymentDocuments: React.FC = () => {
                   {payment.currency} {payment.amount.toLocaleString()}
                 </TableCell>
                 <TableCell>
-                  <StatusChip status={payment.status as any} label={payment.status} />
+                  <StatusChip status={payment.status as StatusType} label={payment.status} />
                 </TableCell>
                 <TableCell>
                   {payment.documents?.length || 0} docs

@@ -29,6 +29,7 @@ import {
 import {
   Add,
   CheckCircle,
+  Cancel,
   TrendingUp,
   AccountBalance,
   CurrencyExchange,
@@ -36,10 +37,20 @@ import {
   Visibility,
   Download,
   Warning,
+  DirectionsBoat,
+  FlightTakeoff,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { SalesContract } from '@/types';
+
+// Transport Mode Type
+type TransportMode = 'SEA' | 'AIR';
+
+// Extended SalesContract with transport mode
+interface ContractWithTransport extends SalesContract {
+  transportMode?: TransportMode;
+}
 
 interface ForexAllocation {
   forexId: string;
@@ -51,6 +62,7 @@ interface ForexAllocation {
   exchangeRate: number;
   officialRate: number;
   retentionRate: number;
+  transportMode?: TransportMode;
   status: 'REQUESTED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED';
   requestDate: string;
   approvalDate?: string;
@@ -116,7 +128,7 @@ const NBEPortal: React.FC = () => {
     avgProcessingTime: 0
   });
   const [loading, setLoading] = useState(false);
-  const [selectedContract, setSelectedContract] = useState<SalesContract | null>(null);
+  const [selectedContract, setSelectedContract] = useState<ContractWithTransport | null>(null);
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const [forexDialogOpen, setForexDialogOpen] = useState(false);
@@ -215,7 +227,7 @@ const NBEPortal: React.FC = () => {
       // Calculate banking metrics
       try {
         const metricsRes = await api.getBankingMetrics();
-        if (metricsRes.success) {
+        if (metricsRes.success && metricsRes.data) {
           setBankingMetrics(metricsRes.data);
           console.log('Loaded banking metrics from analytics API:', metricsRes.data);
         } else {
@@ -254,7 +266,7 @@ const NBEPortal: React.FC = () => {
     return { total, approved, pending, totalValue };
   };
 
-  const handleApproveContract = async (contract: SalesContract) => {
+  const handleApproveContract = async (contract: ContractWithTransport) => {
     if (!contract) return;
     
     try {
@@ -385,15 +397,16 @@ const NBEPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 200,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
       renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="View Details">
+        <Box onClick={(e) => e.stopPropagation()} sx={{ display: 'flex', gap: 0.5 }}>
+          <Tooltip title="View Contract Details">
             <IconButton 
-              size="small" 
+              size="small"
+              color="primary"
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedContract(params.row);
@@ -403,18 +416,49 @@ const NBEPortal: React.FC = () => {
             </IconButton>
           </Tooltip>
           {params.row.contractStatus === 'REGISTERED' && (
-            <Tooltip title="Approve for Forex Allocation">
-              <IconButton 
-                size="small" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedContract(params.row);
-                  setApprovalDialogOpen(true);
-                }}
-              >
-                <CheckCircle />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Tooltip title="Approve for Forex Allocation">
+                <IconButton 
+                  size="small"
+                  color="success"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedContract(params.row);
+                    setApprovalDialogOpen(true);
+                  }}
+                >
+                  <CheckCircle />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Reject Contract">
+                <IconButton 
+                  size="small"
+                  color="error"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const reason = prompt(
+                      `Reject Contract ${params.row.contractId}?\n\n` +
+                      `Reasons:\n` +
+                      `- Insufficient documentation\n` +
+                      `- Value exceeds exporter capacity\n` +
+                      `- Buyer country restrictions\n` +
+                      `- Regulatory non-compliance\n` +
+                      `- Incorrect contract terms\n\n` +
+                      `Enter rejection reason:`
+                    );
+                    if (reason) {
+                      alert(
+                        `Contract ${params.row.contractId} rejected.\n\n` +
+                        `Reason: ${reason}\n\n` +
+                        `Exporter and bank will be notified.`
+                      );
+                    }
+                  }}
+                >
+                  <Cancel />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Box>
       ),
@@ -471,15 +515,16 @@ const NBEPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 200,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
       renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="View Details">
+        <Box onClick={(e) => e.stopPropagation()} sx={{ display: 'flex', gap: 0.5 }}>
+          <Tooltip title="View Forex Details">
             <IconButton 
-              size="small" 
+              size="small"
+              color="primary"
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedForex(params.row);
@@ -489,18 +534,49 @@ const NBEPortal: React.FC = () => {
             </IconButton>
           </Tooltip>
           {params.row.status === 'REQUESTED' && (
-            <Tooltip title="Allocate Forex">
-              <IconButton 
-                size="small" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedForex(params.row);
-                  setForexDialogOpen(true);
-                }}
-              >
-                <CheckCircle />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Tooltip title="Allocate Forex">
+                <IconButton 
+                  size="small"
+                  color="success"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedForex(params.row);
+                    setForexDialogOpen(true);
+                  }}
+                >
+                  <CheckCircle />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Reject Forex Request">
+                <IconButton 
+                  size="small"
+                  color="error"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const reason = prompt(
+                      `Reject Forex Request ${params.row.forexId}?\n\n` +
+                      `Reasons:\n` +
+                      `- Insufficient reserves\n` +
+                      `- Amount exceeds limits\n` +
+                      `- Contract not approved\n` +
+                      `- Missing LC documentation\n` +
+                      `- Policy restrictions\n\n` +
+                      `Enter rejection reason:`
+                    );
+                    if (reason) {
+                      alert(
+                        `Forex Request ${params.row.forexId} rejected.\n\n` +
+                        `Reason: ${reason}\n\n` +
+                        `Bank and exporter will be notified.`
+                      );
+                    }
+                  }}
+                >
+                  <Cancel />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Box>
       ),
@@ -1208,6 +1284,50 @@ const NBEPortal: React.FC = () => {
                     disabled
                   />
                 </Grid>
+                
+                {/* Transport Mode Display */}
+                {selectedContract?.transportMode && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary" gutterBottom>
+                      Transport Method & Timeline
+                    </Typography>
+                    <Box>
+                      <Chip 
+                        icon={selectedContract.transportMode === 'AIR' ? 
+                          <FlightTakeoff /> : <DirectionsBoat />}
+                        label={selectedContract.transportMode === 'AIR' ? 
+                          'Air Freight' : 'Sea Freight'}
+                        size="small"
+                        color={selectedContract.transportMode === 'AIR' ? 
+                          'secondary' : 'primary'}
+                        sx={{ fontWeight: 600 }}
+                      />
+                      <Typography variant="caption" sx={{ 
+                        display: 'block', 
+                        mt: 0.5,
+                        color: 'text.secondary'
+                      }}>
+                        Expected export completion: {
+                          selectedContract.transportMode === 'AIR' ? 
+                          '5-10 days' : '35-45 days'
+                        }
+                      </Typography>
+                    </Box>
+                  </Grid>
+                )}
+                
+                {/* Air Freight Forex Realization Alert */}
+                {selectedContract?.transportMode === 'AIR' && (
+                  <Grid item xs={12}>
+                    <Alert severity="success">
+                      <Typography variant="body2">
+                        <strong>Faster Forex Realization:</strong> Air freight enables rapid export completion and payment 
+                        receipt, improving forex retention timeline and exporter liquidity (typically 12-15 days vs 40-45 days for sea freight).
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
+                
                 <Grid item xs={12}>
                   <TextField
                     fullWidth
@@ -1335,6 +1455,44 @@ const NBEPortal: React.FC = () => {
                     helperText="Forex allocation validity"
                   />
                 </Grid>
+                
+                {/* Transport Mode Display in Forex Dialog */}
+                {selectedForex.transportMode && (
+                  <Grid item xs={12}>
+                    <Box sx={{ 
+                      p: 2, 
+                      bgcolor: selectedForex.transportMode === 'AIR' ? '#fff3e0' : '#e3f2fd',
+                      borderRadius: 1,
+                      border: '1px solid',
+                      borderColor: selectedForex.transportMode === 'AIR' ? '#ffb74d' : '#90caf9'
+                    }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        {selectedForex.transportMode === 'AIR' ? (
+                          <FlightTakeoff color="secondary" />
+                        ) : (
+                          <DirectionsBoat color="primary" />
+                        )}
+                        <Typography variant="subtitle2" fontWeight={600}>
+                          {selectedForex.transportMode === 'AIR' ? 'Air Freight Export' : 'Sea Freight Export'}
+                        </Typography>
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        <strong>Expected Timeline:</strong> {
+                          selectedForex.transportMode === 'AIR' ? 
+                          '12-15 days total (1-3 days transit + 3-7 days document processing + 5 days settlement)' :
+                          '40-45 days total (25-35 days transit + 30-40 days document processing)'
+                        }
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                        <strong>Forex Realization:</strong> {
+                          selectedForex.transportMode === 'AIR' ? 
+                          'Faster payment settlement enables quicker forex retention compliance' :
+                          'Standard timeline for document presentation and payment'
+                        }
+                      </Typography>
+                    </Box>
+                  </Grid>
+                )}
               </Grid>
             </Box>
           )}

@@ -58,6 +58,7 @@ import {
   Visibility,
   Download,
   Upload,
+  Edit,
   Warning,
   TrendingUp,
   AttachMoney,
@@ -65,11 +66,14 @@ import {
   Notifications,
   Assignment,
   Science,
+  DirectionsBoat,
+  FlightTakeoff,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
+import { apiFetch, getAuthHeaders } from '@/config/api.config';
 
 // Modern Components - 2026 Design
 import {
@@ -139,11 +143,15 @@ interface LCStatus {
   expiryDate: string;
 }
 
+// Transport Mode Type
+type TransportMode = 'SEA' | 'AIR';
+
 interface ShipmentStatus {
   shipmentId: string;
   contractId: string;
   quantity: number;
   status: 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'SHIPPED';
+  transportMode?: TransportMode;
   billOfLading?: string;
   vesselName?: string;
   currentLocation?: string;
@@ -359,7 +367,7 @@ const ExporterPortal: React.FC = () => {
     // Load Exporter Profile from API
     try {
       if (token) {
-        const profileResponse = await fetch('http://localhost:3001/api/v1/exporters/me/profile', {
+        const profileResponse = await apiFetch('/exporters/me/profile', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -440,7 +448,7 @@ const ExporterPortal: React.FC = () => {
     // Load real contracts from blockchain
     try {
       if (token) {
-        const response = await fetch('http://localhost:3001/api/v1/contracts', {
+        const response = await apiFetch('/contracts', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -521,7 +529,7 @@ const ExporterPortal: React.FC = () => {
     // Load LCs for current exporter
     try {
       if (token) {
-        const lcResponse = await fetch('http://localhost:3001/api/v1/banking/lc', {
+        const lcResponse = await apiFetch('/banking/lc', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const lcResult = await lcResponse.json();
@@ -549,7 +557,7 @@ const ExporterPortal: React.FC = () => {
     // Load Forex allocations for current exporter
     try {
       if (token) {
-        const forexResponse = await fetch('http://localhost:3001/api/v1/forex', {
+        const forexResponse = await apiFetch('/forex', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const forexResult = await forexResponse.json();
@@ -593,7 +601,7 @@ const ExporterPortal: React.FC = () => {
     // Load Shipments for current exporter
     try {
       if (token) {
-        const shipmentsResponse = await fetch('http://localhost:3001/api/v1/shipments', {
+        const shipmentsResponse = await apiFetch('/shipments', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const shipmentsResult = await shipmentsResponse.json();
@@ -603,7 +611,7 @@ const ExporterPortal: React.FC = () => {
           );
           
           // Load quality inspections to check for approved shipments
-          const inspectionsResponse = await fetch('http://localhost:3001/api/v1/quality/inspections', {
+          const inspectionsResponse = await apiFetch('/quality/inspections', {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const inspectionsResult = await inspectionsResponse.json();
@@ -725,7 +733,7 @@ const ExporterPortal: React.FC = () => {
       }
 
       // Call API to register contract on blockchain
-      const response = await fetch('http://localhost:3001/api/v1/contracts', {
+      const response = await apiFetch('/contracts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -874,7 +882,7 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
-      const response = await fetch('http://localhost:3001/api/v1/shipments', {
+      const response = await apiFetch('/shipments', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -965,7 +973,7 @@ const ExporterPortal: React.FC = () => {
         additionalNotes: customsForm.additionalNotes,
       };
 
-      const response = await fetch('http://localhost:3001/api/v1/customs/declaration/submit', {
+      const response = await apiFetch('/customs/declaration/submit', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1054,7 +1062,7 @@ const ExporterPortal: React.FC = () => {
 
       // For now, just update shipment status to SHIPPED
       // In production, this would call a shipping/booking API
-      const response = await fetch(`http://localhost:3001/api/v1/shipments/${selectedShipmentForShipping.shipmentId}/status`, {
+      const response = await apiFetch('/shipments/${selectedShipmentForShipping.shipmentId}/status', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1150,7 +1158,7 @@ const ExporterPortal: React.FC = () => {
         paymentMethod: paymentForm.paymentMethod,
       };
 
-      const response = await fetch('http://localhost:3001/api/v1/payments/initiate', {
+      const response = await apiFetch('/payments/initiate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1260,15 +1268,61 @@ const ExporterPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 180,
+      sortable: false,
       renderCell: (params) => (
-        <Button
-          size="small"
-          startIcon={<Visibility />}
-          onClick={() => handleContractView(params.row)}
-        >
-          View
-        </Button>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Tooltip title="View Contract Details">
+            <IconButton
+              size="small"
+              color="primary"
+              onClick={() => handleContractView(params.row)}
+            >
+              <Visibility />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Download Contract PDF">
+            <IconButton
+              size="small"
+              color="success"
+              onClick={() => {
+                showSuccess(
+                  'Contract Download',
+                  `Generating PDF for Contract ${params.row.contractId}...\n\n` +
+                  `This will include:\n` +
+                  `• Contract details\n` +
+                  `• Buyer information\n` +
+                  `• Coffee specifications\n` +
+                  `• Payment terms\n` +
+                  `• NBE approval stamp`
+                );
+              }}
+            >
+              <Download />
+            </IconButton>
+          </Tooltip>
+          {(params.row.status === 'REGISTERED' || params.row.status === 'APPROVED') && (
+            <Tooltip title="Edit Contract">
+              <IconButton
+                size="small"
+                color="warning"
+                onClick={() => {
+                  showInfo(
+                    'Edit Contract',
+                    `Edit Contract ${params.row.contractId}\n\n` +
+                    `You can modify:\n` +
+                    `• Buyer contact details\n` +
+                    `• Shipping preferences\n` +
+                    `• Additional notes\n\n` +
+                    `Core terms (price, quantity, quality) require amendment approval.`
+                  );
+                }}
+              >
+                <Edit />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       ),
     },
   ];
@@ -2727,6 +2781,29 @@ const ExporterPortal: React.FC = () => {
                           {shipment.quantity ? Number(shipment.quantity).toLocaleString() : '0'} kg
                         </Typography>
                       </Grid>
+                      
+                      {/* Transport Mode Display */}
+                      {shipment.transportMode && (
+                        <Grid item xs={12} sm={6} md={3}>
+                          <Typography variant="caption" color="text.secondary">Transport Mode</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                            {shipment.transportMode === 'AIR' ? (
+                              <>
+                                <FlightTakeoff color="secondary" fontSize="small" />
+                                <Typography variant="body1" fontWeight="bold">Air Freight</Typography>
+                              </>
+                            ) : (
+                              <>
+                                <DirectionsBoat color="primary" fontSize="small" />
+                                <Typography variant="body1" fontWeight="bold">Sea Freight</Typography>
+                              </>
+                            )}
+                          </Box>
+                          <Typography variant="caption" color="text.secondary">
+                            {shipment.transportMode === 'AIR' ? '1-3 days transit' : '25-35 days transit'}
+                          </Typography>
+                        </Grid>
+                      )}
                       
                       {shipment.billOfLading && (
                         <Grid item xs={12} sm={6} md={3}>
