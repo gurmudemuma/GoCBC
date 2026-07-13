@@ -403,7 +403,7 @@ services:
     image: cecbs/coffee-chaincode:latest
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_1.28:a94b75399ec6574957be7b04f89264294f1a52e9517a9b0b1ec375595762cd06
+      - CORE_CHAINCODE_ID_NAME=coffee_1.30:df38eb2f47a3d9d6286b040d5750431eb99aef29717015d21fc97805a9e037ab
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
     ports:
       - "9999:9999"

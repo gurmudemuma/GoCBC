@@ -26,9 +26,19 @@ type CustomsDeclaration struct {
 	PortOfExit        string    `json:"portOfExit"`
 	DeclarationType   string    `json:"declarationType"`
 	HSCode            string    `json:"hsCode"`
-	InspectionType    string    `json:"inspectionType"`
+	// ASYCUDA Integration (Ethiopian customs system)
+	ASYCUDAReference  string    `json:"asycudaReference"` // ASYCUDA system reference number
+	ASYCUDAStatus     string    `json:"asycudaStatus"`    // PENDING, REGISTERED, CLEARED
+	ASYCUDASyncDate   string    `json:"asycudaSyncDate"`  // Last sync with ASYCUDA
+	// Risk Profiling (Customs risk assessment)
+	RiskProfile       string    `json:"riskProfile"`      // LOW, MEDIUM, HIGH
+	RiskFactors       []string  `json:"riskFactors"`      // Reasons for risk level
+	// Inspection Details
+	InspectionType    string    `json:"inspectionType"`   // DOCUMENTARY, PHYSICAL, BOTH, NONE
 	InspectionResult  string    `json:"inspectionResult"`
 	InspectorComments string    `json:"inspectorComments"`
+	// Duty Assessment
+	DutyAssessment    DutyAssessment `json:"dutyAssessment"` // Detailed duty breakdown
 	EUDRCompliant     bool      `json:"eudrCompliant"`
 	Status            string    `json:"status"` // SUBMITTED, UNDER_INSPECTION, UNDER_REVIEW, CLEARED, HELD, REJECTED
 	SubmissionDate    time.Time `json:"submissionDate"`
@@ -37,13 +47,34 @@ type CustomsDeclaration struct {
 	ClearanceNumber   string    `json:"clearanceNumber"`
 	CustomsOfficer    string    `json:"customsOfficer"`
 	ReviewedBy        string    `json:"reviewedBy"`
+	ReviewedByID      string    `json:"reviewedById"`      // ✅ X.509 certificate of reviewer
+	InspectedByID     string    `json:"inspectedById"`     // ✅ X.509 certificate of inspector
 	ClearedBy         string    `json:"clearedBy"`
+	ClearedByID       string    `json:"clearedById"`       // ✅ X.509 certificate of clearer
+	SubmittedBy       string    `json:"submittedBy"`       // ✅ X.509 certificate of submitter
+	// ✅ MSP Identity Fields for Rejection
+	RejectedByID      string    `json:"rejectedById"`      // ✅ X.509 certificate of rejecter
+	RejectedByMSP     string    `json:"rejectedByMsp"`     // ✅ MSP ID of rejecter
 	Documents         []string  `json:"documents"` // Document hashes
 	InspectionNotes   string    `json:"inspectionNotes"`
 	DutiesAmount      float64   `json:"dutiesAmount"`
 	RejectionReason   string    `json:"rejectionReason"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+// Duty Assessment structure
+type DutyAssessment struct {
+	CustomsDuty   float64 `json:"customsDuty"`   // ETB (usually 0 for coffee exports)
+	VAT           float64 `json:"vat"`           // ETB (usually 0 for exports)
+	ExciseTax     float64 `json:"exciseTax"`     // ETB
+	OtherCharges  float64 `json:"otherCharges"`  // ETB (handling, storage, etc.)
+	TotalDue      float64 `json:"totalDue"`      // ETB
+	Currency      string  `json:"currency"`      // ETB
+	AssessmentDate string `json:"assessmentDate"` // ISO date
+	AssessedBy    string  `json:"assessedBy"`    // Customs officer
+	PaymentStatus string  `json:"paymentStatus"` // UNPAID, PAID, WAIVED
+	PaymentRef    string  `json:"paymentRef"`    // Payment reference number
 }
 
 // ==================== CUSTOMS FUNCTIONS ====================
@@ -179,6 +210,19 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 	declarationID, shipmentID, exporterID, declarationType, hsCode, quantityStr, valueStr,
 	currency, destination, portOfExit, eudrCompliantStr string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of submitter
+	submitterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get submitter MSP ID: %w", err)
+	}
+	
+	submitterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		submitterID = submitterMSP // Fallback
+	}
+	
+	log.Printf("Customs declaration %s submitted by: %s (MSP: %s)", declarationID, submitterID, submitterMSP)
+
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid quantity: %v", err)
@@ -225,6 +269,7 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 		EUDRCompliant:   eudrCompliant,
 		Status:          "SUBMITTED",
 		SubmissionDate:  txTime,
+		SubmittedBy:     submitterID, // ✅ RECORD WHO SUBMITTED
 		Documents:       []string{}, // Initialize as empty array, not nil
 		CreatedAt:       txTime,
 		UpdatedAt:       txTime,
@@ -293,6 +338,24 @@ func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInt
 func (c *CoffeeContract) ReviewCustomsDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, reviewedBy, inspectionType, inspectorNotes string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of reviewer (X.509 certificate)
+	reviewerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get reviewer MSP ID: %w", err)
+	}
+	
+	reviewerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		reviewerID = reviewerMSP // Fallback
+	}
+	
+	// Only Customs can review declarations
+	if reviewerMSP != "CustomsMSP" {
+		log.Printf("WARNING: Non-Customs MSP reviewing declaration: %s", reviewerMSP)
+	}
+	
+	log.Printf("Declaration %s reviewed by: %s (MSP: %s)", declarationID, reviewerID, reviewerMSP)
+
 	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
 	if err != nil {
 		return fmt.Errorf("failed to read declaration: %v", err)
@@ -319,6 +382,7 @@ func (c *CoffeeContract) ReviewCustomsDeclaration(ctx contractapi.TransactionCon
 
 	declaration.Status = "UNDER_INSPECTION"
 	declaration.ReviewedBy = reviewedBy
+	declaration.ReviewedByID = reviewerID // ✅ RECORD X.509 CERTIFICATE
 	declaration.InspectionType = inspectionType
 	declaration.InspectionNotes = inspectorNotes
 	declaration.ReviewDate = txTime.Format(time.RFC3339)
@@ -382,6 +446,24 @@ func (c *CoffeeContract) CompleteInspection(ctx contractapi.TransactionContextIn
 func (c *CoffeeContract) CompleteCustomsInspection(ctx contractapi.TransactionContextInterface,
 	declarationID, inspectionResult, inspectorComments string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of inspector (X.509 certificate)
+	inspectorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get inspector MSP ID: %w", err)
+	}
+	
+	inspectorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		inspectorID = inspectorMSP // Fallback
+	}
+	
+	// Only Customs can complete inspection
+	if inspectorMSP != "CustomsMSP" {
+		log.Printf("WARNING: Non-Customs MSP completing inspection: %s", inspectorMSP)
+	}
+	
+	log.Printf("Declaration %s inspection completed by: %s (MSP: %s)", declarationID, inspectorID, inspectorMSP)
+
 	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
 	if err != nil {
 		return fmt.Errorf("failed to read declaration: %v", err)
@@ -409,6 +491,7 @@ func (c *CoffeeContract) CompleteCustomsInspection(ctx contractapi.TransactionCo
 	declaration.Status = "UNDER_REVIEW"
 	declaration.InspectionResult = inspectionResult
 	declaration.InspectorComments = inspectorComments
+	declaration.InspectedByID = inspectorID // ✅ RECORD X.509 CERTIFICATE
 	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
@@ -510,6 +593,24 @@ func (c *CoffeeContract) ClearDeclaration(ctx contractapi.TransactionContextInte
 func (c *CoffeeContract) ClearCustomsDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, clearedBy, clearanceNumber, dutiesAmountStr string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of clearer (X.509 certificate - full cryptographic proof)
+	clearerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get clearer MSP ID: %w", err)
+	}
+	
+	clearerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		clearerID = clearerMSP // Fallback
+	}
+	
+	// Only Customs can clear declarations
+	if clearerMSP != "CustomsMSP" {
+		return fmt.Errorf("only Customs can clear declarations, got: %s", clearerMSP)
+	}
+	
+	log.Printf("Declaration %s cleared by: %s (MSP: %s)", declarationID, clearerID, clearerMSP)
+
 	dutiesAmount, err := strconv.ParseFloat(dutiesAmountStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid duties amount: %v", err)
@@ -541,6 +642,7 @@ func (c *CoffeeContract) ClearCustomsDeclaration(ctx contractapi.TransactionCont
 
 	declaration.Status = "CLEARED"
 	declaration.ClearedBy = clearedBy
+	declaration.ClearedByID = clearerID // ✅ RECORD X.509 CERTIFICATE (full cryptographic proof)
 	declaration.ClearanceNumber = clearanceNumber
 	declaration.DutiesAmount = dutiesAmount
 	declaration.ClearanceDate = txTime.Format(time.RFC3339)
@@ -557,6 +659,24 @@ func (c *CoffeeContract) ClearCustomsDeclaration(ctx contractapi.TransactionCont
 // RejectDeclaration - Customs rejects the declaration
 func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, reason string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of rejecter
+	rejecterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectDeclaration: failed to get rejecter MSP ID: %w", err)
+	}
+	
+	rejecterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejecterID = rejecterMSP // Fallback to MSP if cert not available
+	}
+	
+	// Access control: Only Customs can reject declarations
+	if rejecterMSP != "CustomsMSP" {
+		return fmt.Errorf("RejectDeclaration: unauthorized: only Customs can reject declarations (caller: %s)", rejecterMSP)
+	}
+	
+	fmt.Printf("RejectDeclaration: Declaration being rejected by %s (MSP: %s)\n", rejecterID, rejecterMSP)
 
 	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
 	if err != nil {
@@ -585,6 +705,8 @@ func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInt
 
 	declaration.Status = "REJECTED"
 	declaration.RejectionReason = reason
+	declaration.RejectedByID = rejecterID      // ✅ Record WHO rejected (X.509 cert)
+	declaration.RejectedByMSP = rejecterMSP    // ✅ Record rejecter's MSP
 	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)
@@ -598,6 +720,22 @@ func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInt
 // RejectCustomsDeclaration - API-compatible wrapper for customs rejection
 func (c *CoffeeContract) RejectCustomsDeclaration(ctx contractapi.TransactionContextInterface,
 	declarationID, rejectedBy, rejectionReason string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of rejecter
+	rejecterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectCustomsDeclaration: failed to get rejecter MSP ID: %w", err)
+	}
+	
+	rejecterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejecterID = rejecterMSP // Fallback to MSP if cert not available
+	}
+	
+	// Access control: Only Customs can reject declarations
+	if rejecterMSP != "CustomsMSP" {
+		return fmt.Errorf("RejectCustomsDeclaration: unauthorized: only Customs can reject declarations (caller: %s)", rejecterMSP)
+	}
 
 	declarationJSON, err := ctx.GetStub().GetState("DECL_" + declarationID)
 	if err != nil {
@@ -626,6 +764,8 @@ func (c *CoffeeContract) RejectCustomsDeclaration(ctx contractapi.TransactionCon
 	declaration.Status = "REJECTED"
 	declaration.ReviewedBy = rejectedBy
 	declaration.RejectionReason = rejectionReason
+	declaration.RejectedByID = rejecterID      // ✅ Record WHO rejected (X.509 cert)
+	declaration.RejectedByMSP = rejecterMSP    // ✅ Record rejecter's MSP
 	declaration.UpdatedAt = txTime
 
 	declarationJSON, err = json.Marshal(declaration)

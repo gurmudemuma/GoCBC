@@ -23,6 +23,18 @@ type ForexAllocation struct {
 	OfficialRate    float64   `json:"officialRate"`  // NBE official rate
 	MarketRate      float64   `json:"marketRate"`    // Parallel market rate (if tracked)
 	RetentionRate   float64   `json:"retentionRate"` // Percentage to be retained (NBE FXD/01/2024: 100% allowed)
+	// Retention Policy Compliance (NBE Directive: 30-40% USD retention)
+	RetentionPercentage float64 `json:"retentionPercentage"` // 30-40% as per NBE policy
+	RetentionAmountUSD  float64 `json:"retentionAmountUsd"`  // Calculated retention amount
+	FCYAccountNumber    string  `json:"fcyAccountNumber"`    // Foreign currency account
+	RetentionStatus     string  `json:"retentionStatus"`     // PENDING, COMPLIED, NON_COMPLIANT
+	RetentionDate       string  `json:"retentionDate"`       // Date retention was enforced
+	// Sanction Screening (OFAC, UN, EU compliance)
+	SanctionScreeningStatus string   `json:"sanctionScreeningStatus"` // PENDING, CLEARED, FLAGGED
+	ScreenedAgainst         []string `json:"screenedAgainst"`         // [OFAC, UN, EU]
+	ScreeningDate           string   `json:"screeningDate"`           // ISO date
+	ScreeningOfficer        string   `json:"screeningOfficer"`        // NBE officer
+	ScreeningNotes          string   `json:"screeningNotes"`          // Any flags or notes
 	Status          string    `json:"status"`        // REQUESTED, APPROVED, ALLOCATED, UTILIZED, EXPIRED
 	RequestDate     time.Time `json:"requestDate"`
 	ApprovalDate    string    `json:"approvalDate"`
@@ -30,6 +42,10 @@ type ForexAllocation struct {
 	UtilizationDate string    `json:"utilizationDate"`
 	ExpiryDate      string    `json:"expiryDate"` // Forex allocation expiry
 	UtilizedAmount  float64   `json:"utilizedAmount"`
+	UtilizedBy      string    `json:"utilizedBy"`      // ✅ X.509 cert of utilizer
+	UtilizedByMSP   string    `json:"utilizedByMsp"`   // ✅ MSP of utilizer
+	VerifiedBy      string    `json:"verifiedBy"`      // ✅ X.509 cert of NBE verifier
+	VerifiedByMSP   string    `json:"verifiedByMsp"`   // ✅ MSP of NBE verifier
 	NBEOfficer      string    `json:"nbeOfficer"`
 	NBEApprovalRef  string    `json:"nbeApprovalRef"` // NBE reference number
 	Comments        string    `json:"comments"`
@@ -279,6 +295,17 @@ func (c *CoffeeContract) UtilizeForex(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("utilized amount exceeds allocated amount")
 	}
 
+	// ✅ BLOCKCHAIN FEATURE: Capture MSP identity for non-repudiation
+	utilizerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %w", err)
+	}
+
+	utilizerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		utilizerID = utilizerMSP // Fallback to MSP name if X.509 cert unavailable
+	}
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -289,6 +316,8 @@ func (c *CoffeeContract) UtilizeForex(ctx contractapi.TransactionContextInterfac
 	forex.Status = "UTILIZED"
 	forex.UtilizedAmount = utilizedAmount
 	forex.UtilizationDate = txTime.Format(time.RFC3339)
+	forex.UtilizedBy = utilizerID         // ✅ Record WHO utilized
+	forex.UtilizedByMSP = utilizerMSP     // ✅ Record organization
 	forex.UpdatedAt = txTime
 
 	forexJSON, err = json.Marshal(forex)
@@ -658,6 +687,22 @@ func (c *CoffeeContract) GetCurrentRetentionPolicy(ctx contractapi.TransactionCo
 func (c *CoffeeContract) ApprovePaymentSettlement(ctx contractapi.TransactionContextInterface,
 	paymentID, nbeOfficer, approvalRef string) error {
 
+	// ✅ BLOCKCHAIN FEATURE: Capture MSP identity for non-repudiation
+	approverMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %w", err)
+	}
+
+	approverID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		approverID = approverMSP // Fallback to MSP name
+	}
+
+	// ✅ Access control: Only NBE can approve payment settlement
+	if approverMSP != "NBEMSP" {
+		return fmt.Errorf("only NBE can approve payment settlement (caller: %s)", approverMSP)
+	}
+
 	paymentJSON, err := ctx.GetStub().GetState("PAYMENT_" + paymentID)
 	if err != nil {
 		return fmt.Errorf("failed to read payment: %v", err)
@@ -676,10 +721,19 @@ func (c *CoffeeContract) ApprovePaymentSettlement(ctx contractapi.TransactionCon
 		return fmt.Errorf("payment cannot be approved for settlement, current status: %s", payment.Status)
 	}
 
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
 	payment.NBEApprovalRef = approvalRef
+	payment.ApprovedBy = approverID      // ✅ Record WHO approved (X.509)
+	payment.ApprovedByMSP = approverMSP  // ✅ Record organization
 	payment.VerifiedBy = nbeOfficer
 	payment.Comments = "NBE approved for settlement"
-	payment.UpdatedAt = time.Now()
+	payment.UpdatedAt = txTime
 
 	paymentJSON, err = json.Marshal(payment)
 	if err != nil {
@@ -692,6 +746,22 @@ func (c *CoffeeContract) ApprovePaymentSettlement(ctx contractapi.TransactionCon
 // VerifyForexUtilization - NBE verifies forex was properly utilized
 func (c *CoffeeContract) VerifyForexUtilization(ctx contractapi.TransactionContextInterface,
 	forexID, paymentID string) error {
+
+	// ✅ BLOCKCHAIN FEATURE: Capture MSP identity for non-repudiation
+	verifierMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %w", err)
+	}
+
+	verifierID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		verifierID = verifierMSP // Fallback to MSP name
+	}
+
+	// ✅ Access control: Only NBE can verify forex utilization
+	if verifierMSP != "NBEMSP" {
+		return fmt.Errorf("only NBE can verify forex utilization (caller: %s)", verifierMSP)
+	}
 
 	// Read forex allocation
 	forexJSON, err := ctx.GetStub().GetState("FOREX_" + forexID)
@@ -745,6 +815,8 @@ func (c *CoffeeContract) VerifyForexUtilization(ctx contractapi.TransactionConte
 	forex.Status = "UTILIZED"
 	forex.UtilizedAmount = payment.Amount
 	forex.UtilizationDate = txTime.Format(time.RFC3339)
+	forex.VerifiedBy = verifierID      // ✅ Record WHO verified (X.509)
+	forex.VerifiedByMSP = verifierMSP  // ✅ Record organization
 	forex.UpdatedAt = txTime
 
 	forexJSON, err = json.Marshal(forex)

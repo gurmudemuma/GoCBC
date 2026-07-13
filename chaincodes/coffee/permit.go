@@ -30,7 +30,11 @@ type ExportPermit struct {
 	IssueDate         time.Time `json:"issueDate"`
 	ExpiryDate        string    `json:"expiryDate"` // End of current month
 	UtilizationDate   string    `json:"utilizationDate"`
-	SettlementDate    string    `json:"settlementDate"` // When proceeds repatriated
+	UtilizedBy        string    `json:"utilizedBy"`        // ✅ X.509 cert of utilizer
+	UtilizedByMSP     string    `json:"utilizedByMsp"`     // ✅ MSP of utilizer
+	SettlementDate    string    `json:"settlementDate"`    // When proceeds repatriated
+	SettledBy         string    `json:"settledBy"`         // ✅ X.509 cert of settler
+	SettledByMSP      string    `json:"settledByMsp"`      // ✅ MSP of settler
 	RepatriatedAmount float64   `json:"repatriatedAmount"`
 	BankBranch        string    `json:"bankBranch"` // Issuing branch
 	Remarks           string    `json:"remarks"`
@@ -224,6 +228,12 @@ func (c *CoffeeContract) UtilizeExportPermit(ctx contractapi.TransactionContextI
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
 
+	// ✅ Capture full MSP identity for non-repudiation
+	utilizerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		utilizerID = mspID // Fallback to MSP name
+	}
+
 	// Banks and Customs can mark permit as utilized
 	if mspID != "BanksMSP" && mspID != "CustomsMSP" {
 		return fmt.Errorf("unauthorized: only Banks or Customs can utilize permits")
@@ -265,6 +275,8 @@ func (c *CoffeeContract) UtilizeExportPermit(ctx contractapi.TransactionContextI
 
 	permit.Status = "UTILIZED"
 	permit.UtilizationDate = txTime.Format(time.RFC3339)
+	permit.UtilizedBy = utilizerID      // ✅ Record WHO utilized
+	permit.UtilizedByMSP = mspID        // ✅ Record organization
 	permit.UpdatedAt = txTime
 
 	permitJSON, err = json.Marshal(permit)
@@ -283,6 +295,12 @@ func (c *CoffeeContract) SettleExportPermit(ctx contractapi.TransactionContextIn
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// ✅ Capture full MSP identity for non-repudiation
+	settlerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		settlerID = mspID // Fallback to MSP name
 	}
 
 	// Only Banks can settle permits
@@ -323,6 +341,8 @@ func (c *CoffeeContract) SettleExportPermit(ctx contractapi.TransactionContextIn
 	permit.Outstanding = false
 	permit.RepatriatedAmount = repatriatedAmount
 	permit.SettlementDate = txTime.Format(time.RFC3339)
+	permit.SettledBy = settlerID        // ✅ Record WHO settled
+	permit.SettledByMSP = mspID         // ✅ Record organization
 	permit.UpdatedAt = txTime
 
 	// Add remarks if amount mismatch

@@ -29,9 +29,46 @@ type LetterOfCredit struct {
 	UtilizationDate string                   `json:"utilizationDate"`
 	Documents       []string                 `json:"documents"` // Required documents
 	Terms           string                   `json:"terms"`
-	Amendments      []map[string]interface{} `json:"amendments"` // Amendment history
+	// LC Amendments (real-world LCs frequently amended)
+	Amendments      []LCAmendment            `json:"amendments"` // Amendment history
+	AmendmentCount  int                      `json:"amendmentCount"` // Total amendments
+	// Document Discrepancies (common in LC negotiations)
+	Discrepancies   []LCDiscrepancy          `json:"discrepancies"` // Document issues
+	DiscrepancyResolved bool                 `json:"discrepancyResolved"` // All resolved?
+	// Negotiation Status
+	NegotiationStatus string                 `json:"negotiationStatus"` // NOT_STARTED, UNDER_NEGOTIATION, ACCEPTED, REJECTED
+	NegotiationDate   string                 `json:"negotiationDate"` // Date negotiation started
+	NegotiatingBank   string                 `json:"negotiatingBank"` // Bank negotiating documents
+	// ✅ MSP Identity Fields
+	ApprovedBy      string                   `json:"approvedBy"`      // X.509 certificate of approver
+	ApprovedByMSP   string                   `json:"approvedByMsp"`   // MSP ID of approver
+	IssuedBy        string                   `json:"issuedBy"`        // X.509 certificate of issuer
+	IssuedByMSP     string                   `json:"issuedByMsp"`     // MSP ID of issuer
+	LastUpdatedBy   string                   `json:"lastUpdatedBy"`   // X.509 certificate of last updater
+	LastUpdatedByMSP string                  `json:"lastUpdatedByMsp"` // MSP ID of last updater
 	CreatedAt       time.Time                `json:"createdAt"`
 	UpdatedAt       time.Time                `json:"updatedAt"`
+}
+
+// LC Amendment structure
+type LCAmendment struct {
+	AmendmentNo   int       `json:"amendmentNo"`
+	AmendmentDate time.Time `json:"amendmentDate"`
+	Changes       string    `json:"changes"` // Description of changes
+	Status        string    `json:"status"`  // PENDING, ACCEPTED, REJECTED
+	RequestedBy   string    `json:"requestedBy"` // Buyer or Seller
+	ApprovedBy    string    `json:"approvedBy"` // Bank officer
+}
+
+// LC Discrepancy structure
+type LCDiscrepancy struct {
+	DiscrepancyID string    `json:"discrepancyId"`
+	Document      string    `json:"document"` // Which document has issue
+	Issue         string    `json:"issue"` // Description of problem
+	ReportedDate  time.Time `json:"reportedDate"`
+	ResolvedDate  string    `json:"resolvedDate"` // ISO date when resolved
+	Resolution    string    `json:"resolution"` // How it was resolved
+	Status        string    `json:"status"` // OPEN, RESOLVED, WAIVED
 }
 
 // ==================== LC FUNCTIONS ====================
@@ -235,6 +272,19 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 
 	fmt.Printf("=== ApproveLC called: lcID=%s ===\n", lcID)
 
+	// ✅ CAPTURE MSP IDENTITY of approver
+	approverMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ApproveLC: failed to get approver MSP ID: %w", err)
+	}
+	
+	approverID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		approverID = approverMSP // Fallback to MSP if cert not available
+	}
+	
+	fmt.Printf("ApproveLC: LC being approved by %s (MSP: %s)\n", approverID, approverMSP)
+
 	// Read existing LC
 	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
 	if err != nil {
@@ -285,6 +335,8 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 	lc.Status = "APPROVED"
 	lc.Beneficiary = mappedBeneficiary
 	lc.ApprovalDate = txTime.Format(time.RFC3339)
+	lc.ApprovedBy = approverID      // ✅ Record WHO approved (X.509 cert)
+	lc.ApprovedByMSP = approverMSP  // ✅ Record approver's MSP
 	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
@@ -297,7 +349,8 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 		return fmt.Errorf("failed to save LC: %v", err)
 	}
 
-	fmt.Printf("ApproveLC: LC approved with IssuingBank=%s, AdvisingBank=%s\n", lc.IssuingBank, lc.AdvisingBank)
+	fmt.Printf("ApproveLC: LC approved by %s with IssuingBank=%s, AdvisingBank=%s\n", 
+		approverMSP, lc.IssuingBank, lc.AdvisingBank)
 
 	// AUTO-TRIGGER: Create forex allocation
 	forexID := "FOREX_" + lcID
@@ -382,6 +435,19 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 func (c *CoffeeContract) IssueLC(ctx contractapi.TransactionContextInterface,
 	lcID, terms string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of issuer
+	issuerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("IssueLC: failed to get issuer MSP ID: %w", err)
+	}
+	
+	issuerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		issuerID = issuerMSP // Fallback to MSP if cert not available
+	}
+	
+	fmt.Printf("IssueLC: LC being issued by %s (MSP: %s)\n", issuerID, issuerMSP)
+
 	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
 	if err != nil {
 		return fmt.Errorf("failed to read LC: %v", err)
@@ -410,6 +476,8 @@ func (c *CoffeeContract) IssueLC(ctx contractapi.TransactionContextInterface,
 	lc.Status = "ISSUED"
 	lc.Terms = terms
 	lc.IssueDate = txTime.Format(time.RFC3339)
+	lc.IssuedBy = issuerID       // ✅ Record WHO issued (X.509 cert)
+	lc.IssuedByMSP = issuerMSP   // ✅ Record issuer's MSP
 	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
@@ -467,7 +535,11 @@ func (c *CoffeeContract) ReadLC(ctx contractapi.TransactionContextInterface,
 
 	// Ensure Amendments is never nil (backward compatibility)
 	if lc.Amendments == nil {
-		lc.Amendments = []map[string]interface{}{}
+		lc.Amendments = []LCAmendment{}
+	}
+	// Ensure Discrepancies is never nil
+	if lc.Discrepancies == nil {
+		lc.Discrepancies = []LCDiscrepancy{}
 	}
 	// Ensure Documents is never nil (backward compatibility)
 	if lc.Documents == nil {
@@ -480,6 +552,17 @@ func (c *CoffeeContract) ReadLC(ctx contractapi.TransactionContextInterface,
 // UpdateLCStatus - Update LC status
 func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterface,
 	lcID, newStatus string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of updater
+	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("UpdateLCStatus: failed to get updater MSP ID: %w", err)
+	}
+	
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = updaterMSP // Fallback to MSP if cert not available
+	}
 
 	validStatuses := map[string]bool{
 		"REQUESTED": true, "APPROVED": true, "ISSUED": true,
@@ -520,6 +603,8 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 		return fmt.Errorf("failed to get tx timestamp: %v", err)
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+	lc.LastUpdatedBy = updaterID       // ✅ Record WHO updated (X.509 cert)
+	lc.LastUpdatedByMSP = updaterMSP   // ✅ Record updater's MSP
 	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
@@ -562,14 +647,8 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
-	// Store amendment history
-	amendment := map[string]interface{}{
-		"amendmentNumber": len(lc.Amendments) + 1,
-		"amendmentDate":   txTime.Format(time.RFC3339),
-		"amendedBy":       amendedBy,
-		"reason":          amendmentReason,
-		"changes":         make(map[string]interface{}),
-	}
+	// Track what changed
+	var changesDescription string
 
 	// Update amount if provided
 	if newAmountStr != "" {
@@ -580,10 +659,7 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 		if newAmount <= 0 {
 			return fmt.Errorf("amount must be positive")
 		}
-		amendment["changes"].(map[string]interface{})["amount"] = map[string]interface{}{
-			"from": lc.Amount,
-			"to":   newAmount,
-		}
+		changesDescription += fmt.Sprintf("Amount changed from %.2f to %.2f %s; ", lc.Amount, newAmount, lc.Currency)
 		lc.Amount = newAmount
 	}
 
@@ -594,24 +670,29 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 		if err != nil {
 			return fmt.Errorf("invalid expiry date format (use YYYY-MM-DD): %v", err)
 		}
-		amendment["changes"].(map[string]interface{})["expiryDate"] = map[string]interface{}{
-			"from": lc.ExpiryDate,
-			"to":   newExpiryDate,
-		}
+		changesDescription += fmt.Sprintf("Expiry changed from %s to %s; ", lc.ExpiryDate, newExpiryDate)
 		lc.ExpiryDate = newExpiryDate
 	}
 
 	// Update terms if provided
 	if newTerms != "" {
-		amendment["changes"].(map[string]interface{})["terms"] = map[string]interface{}{
-			"from": lc.Terms,
-			"to":   newTerms,
-		}
+		changesDescription += fmt.Sprintf("Terms updated; ")
 		lc.Terms = newTerms
+	}
+
+	// Create amendment record
+	amendment := LCAmendment{
+		AmendmentNo:   lc.AmendmentCount + 1,
+		AmendmentDate: txTime,
+		Changes:       changesDescription,
+		Status:        "ACCEPTED", // Auto-accepted in this implementation
+		RequestedBy:   amendedBy,
+		ApprovedBy:    amendedBy,
 	}
 
 	// Add amendment to history
 	lc.Amendments = append(lc.Amendments, amendment)
+	lc.AmendmentCount = lc.AmendmentCount + 1
 	lc.UpdatedAt = txTime
 
 	// Save amended LC
@@ -673,7 +754,11 @@ func (c *CoffeeContract) QueryAllLCs(ctx contractapi.TransactionContextInterface
 		
 		// Ensure Amendments is never nil (backward compatibility)
 		if lc.Amendments == nil {
-			lc.Amendments = []map[string]interface{}{}
+			lc.Amendments = []LCAmendment{}
+		}
+		// Ensure Discrepancies is never nil
+		if lc.Discrepancies == nil {
+			lc.Discrepancies = []LCDiscrepancy{}
 		}
 		// Ensure Documents is never nil (backward compatibility)
 		if lc.Documents == nil {
@@ -731,4 +816,154 @@ func (c *CoffeeContract) queryLCs(ctx contractapi.TransactionContextInterface,
 	}
 
 	return lcs, nil
+}
+
+
+// ExamineLCDocuments - Bank examines shipping documents against LC terms
+// Workflow: Bank verifies document compliance (UCP 600 Article 14)
+func (c *CoffeeContract) ExamineLCDocuments(ctx contractapi.TransactionContextInterface,
+	lcID string, compliant string, discrepancies string, examinationDate string, examiner string) error {
+
+	fmt.Printf("=== ExamineLCDocuments called: lcID=%s, compliant=%s ===\n", lcID, compliant)
+
+	// Validate inputs
+	if err := ValidateID(lcID, "lcID"); err != nil {
+		return fmt.Errorf("ExamineLCDocuments: %w", err)
+	}
+
+	// Fetch LC
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC %s: %w", lcID, err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	if err := json.Unmarshal(lcJSON, &lc); err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %w", err)
+	}
+
+	// Only ISSUED LCs can have documents examined
+	if lc.Status != "ISSUED" {
+		return fmt.Errorf("LC must be in ISSUED status for document examination (current: %s)", lc.Status)
+	}
+
+	// Update LC with examination results
+	lc.Status = compliant // "true" = COMPLIANT, "false" = DISCREPANT
+	if compliant == "true" {
+		lc.Status = "DOCUMENTS_VERIFIED"
+		fmt.Printf("ExamineLCDocuments: Documents COMPLIANT for LC %s\n", lcID)
+	} else {
+		lc.Status = "DOCUMENTS_DISCREPANT"
+		fmt.Printf("ExamineLCDocuments: Documents DISCREPANT for LC %s: %s\n", lcID, discrepancies)
+	}
+
+	lc.UpdatedAt = time.Now()
+
+	// Save updated LC
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %w", err)
+	}
+
+	if err := ctx.GetStub().PutState("LC_"+lcID, lcJSON); err != nil {
+		return fmt.Errorf("failed to update LC: %w", err)
+	}
+
+	// Emit event
+	eventPayload := map[string]interface{}{
+		"lcID":            lcID,
+		"compliant":       compliant,
+		"discrepancies":   discrepancies,
+		"examinationDate": examinationDate,
+		"examiner":        examiner,
+		"status":          lc.Status,
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("DocumentExaminationCompleted", eventJSON)
+
+	fmt.Printf("ExamineLCDocuments: LC %s documents examined, status=%s\n", lcID, lc.Status)
+	return nil
+}
+
+// ReleaseLCPayment - Bank releases payment to exporter after document compliance
+// Workflow: Final step - bank transfers funds via SWIFT (UCP 600 Article 7)
+func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInterface,
+	lcID string, amount string, currency string, paymentDate string, payingBank string) error {
+
+	fmt.Printf("=== ReleaseLCPayment called: lcID=%s, amount=%s %s ===\n", lcID, amount, currency)
+
+	// Validate inputs
+	if err := ValidateID(lcID, "lcID"); err != nil {
+		return fmt.Errorf("ReleaseLCPayment: %w", err)
+	}
+
+	paymentAmount, err := strconv.ParseFloat(amount, 64)
+	if err != nil {
+		return fmt.Errorf("invalid amount: %w", err)
+	}
+
+	if err := ValidateAmount(paymentAmount, "amount"); err != nil {
+		return fmt.Errorf("ReleaseLCPayment: %w", err)
+	}
+
+	if err := ValidateCurrency(currency); err != nil {
+		return fmt.Errorf("ReleaseLCPayment: %w", err)
+	}
+
+	// Fetch LC
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC %s: %w", lcID, err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	if err := json.Unmarshal(lcJSON, &lc); err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %w", err)
+	}
+
+	// Only DOCUMENTS_VERIFIED LCs can proceed to payment
+	if lc.Status != "DOCUMENTS_VERIFIED" {
+		return fmt.Errorf("documents must be verified before payment release (current status: %s)", lc.Status)
+	}
+
+	// Verify amount does not exceed LC amount
+	if paymentAmount > lc.Amount {
+		return fmt.Errorf("payment amount (%.2f) exceeds LC amount (%.2f)", paymentAmount, lc.Amount)
+	}
+
+	// Update LC status to PAID
+	lc.Status = "PAID"
+	lc.UtilizationDate = paymentDate
+	lc.UpdatedAt = time.Now()
+
+	// Save updated LC
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %w", err)
+	}
+
+	if err := ctx.GetStub().PutState("LC_"+lcID, lcJSON); err != nil {
+		return fmt.Errorf("failed to update LC: %w", err)
+	}
+
+	// Emit payment event
+	eventPayload := map[string]interface{}{
+		"lcID":        lcID,
+		"amount":      paymentAmount,
+		"currency":    currency,
+		"paymentDate": paymentDate,
+		"payingBank":  payingBank,
+		"status":      "PAID",
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("LCPaymentReleased", eventJSON)
+
+	fmt.Printf("ReleaseLCPayment: Payment released for LC %s: %s %.2f\n", lcID, currency, paymentAmount)
+	return nil
 }

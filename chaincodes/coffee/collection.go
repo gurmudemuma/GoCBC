@@ -31,11 +31,21 @@ type DocumentaryCollection struct {
 	Instructions      string    `json:"instructions"`      // Collection instructions
 	Status            string    `json:"status"`            // SENT, PRESENTED, ACCEPTED, PAID, UNPAID, RETURNED
 	SentDate          time.Time `json:"sentDate"`
-	PresentationDate  string    `json:"presentationDate"` // When docs presented to drawee
-	AcceptanceDate    string    `json:"acceptanceDate"`   // When drawee accepts
-	DueDate           string    `json:"dueDate"`          // Payment due date
-	PaymentDate       string    `json:"paymentDate"`      // Actual payment date
-	ReturnedDate      string    `json:"returnedDate"`     // If documents returned
+	SentBy            string    `json:"sentBy"`            // ✅ X.509 cert of sender
+	SentByMSP         string    `json:"sentByMsp"`         // ✅ MSP of sender
+	PresentationDate  string    `json:"presentationDate"`  // When docs presented to drawee
+	PresentedBy       string    `json:"presentedBy"`       // ✅ X.509 cert of presenter
+	PresentedByMSP    string    `json:"presentedByMsp"`    // ✅ MSP of presenter
+	AcceptanceDate    string    `json:"acceptanceDate"`    // When drawee accepts
+	AcceptedBy        string    `json:"acceptedBy"`        // ✅ X.509 cert of acceptor
+	AcceptedByMSP     string    `json:"acceptedByMsp"`     // ✅ MSP of acceptor
+	DueDate           string    `json:"dueDate"`           // Payment due date
+	PaymentDate       string    `json:"paymentDate"`       // Actual payment date
+	SettledBy         string    `json:"settledBy"`         // ✅ X.509 cert of settler
+	SettledByMSP      string    `json:"settledByMsp"`      // ✅ MSP of settler
+	ReturnedDate      string    `json:"returnedDate"`      // If documents returned
+	ReturnedBy        string    `json:"returnedBy"`        // ✅ X.509 cert of returner
+	ReturnedByMSP     string    `json:"returnedByMsp"`     // ✅ MSP of returner
 	ReturnReason      string    `json:"returnReason"`
 	ChargesAccount    string    `json:"chargesAccount"` // OUR, DRAWER, DRAWEE
 	Charges           float64   `json:"charges"`
@@ -44,6 +54,8 @@ type DocumentaryCollection struct {
 	FollowUpDays      int       `json:"followUpDays"`   // Days since sent without payment
 	RemindersCount    int       `json:"remindersCount"` // Number of reminders sent
 	LastReminderDate  string    `json:"lastReminderDate"`
+	LastReminderBy    string    `json:"lastReminderBy"`    // ✅ X.509 cert of reminder sender
+	LastReminderByMSP string    `json:"lastReminderByMsp"` // ✅ MSP of reminder sender
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
@@ -62,9 +74,15 @@ func (c *CoffeeContract) SendDocumentaryCollection(ctx contractapi.TransactionCo
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
 
+	// ✅ Capture full MSP identity for non-repudiation
+	senderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		senderID = mspID // Fallback to MSP name
+	}
+
 	// Only Banks can send documentary collections
 	if mspID != "BanksMSP" {
-		return fmt.Errorf("unauthorized: only Banks can send documentary collections")
+		return fmt.Errorf("unauthorized: only Banks can send documentary collections (caller: %s)", mspID)
 	}
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
@@ -148,6 +166,8 @@ func (c *CoffeeContract) SendDocumentaryCollection(ctx contractapi.TransactionCo
 		Instructions:      instructions,
 		Status:            "SENT",
 		SentDate:          txTime,
+		SentBy:            senderID,         // ✅ Record WHO sent collection
+		SentByMSP:         mspID,            // ✅ Record organization
 		DueDate:           dueDate,
 		ChargesAccount:    chargesAccount,
 		FollowUpDays:      0,
@@ -182,6 +202,17 @@ func (c *CoffeeContract) SendDocumentaryCollection(ctx contractapi.TransactionCo
 func (c *CoffeeContract) PresentDocumentaryCollection(ctx contractapi.TransactionContextInterface,
 	collectionID string) error {
 
+	// ✅ CAPTURE MSP IDENTITY
+	presenterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	presenterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		presenterID = presenterMSP // Fallback
+	}
+
 	collectionJSON, err := ctx.GetStub().GetState("COLLECTION_" + collectionID)
 	if err != nil {
 		return fmt.Errorf("failed to read collection: %v", err)
@@ -208,6 +239,8 @@ func (c *CoffeeContract) PresentDocumentaryCollection(ctx contractapi.Transactio
 
 	collection.Status = "PRESENTED"
 	collection.PresentationDate = txTime.Format(time.RFC3339)
+	collection.PresentedBy = presenterID        // ✅ RECORD WHO PRESENTED
+	collection.PresentedByMSP = presenterMSP    // ✅ RECORD ORGANIZATION
 	collection.UpdatedAt = txTime
 
 	collectionJSON, err = json.Marshal(collection)
@@ -221,6 +254,17 @@ func (c *CoffeeContract) PresentDocumentaryCollection(ctx contractapi.Transactio
 // AcceptDocumentaryCollection - Drawee accepts documents (for ACCEPTANCE term)
 func (c *CoffeeContract) AcceptDocumentaryCollection(ctx contractapi.TransactionContextInterface,
 	collectionID string) error {
+
+	// ✅ CAPTURE MSP IDENTITY
+	acceptorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	acceptorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		acceptorID = acceptorMSP // Fallback
+	}
 
 	collectionJSON, err := ctx.GetStub().GetState("COLLECTION_" + collectionID)
 	if err != nil {
@@ -252,6 +296,8 @@ func (c *CoffeeContract) AcceptDocumentaryCollection(ctx contractapi.Transaction
 
 	collection.Status = "ACCEPTED"
 	collection.AcceptanceDate = txTime.Format(time.RFC3339)
+	collection.AcceptedBy = acceptorID        // ✅ RECORD WHO ACCEPTED
+	collection.AcceptedByMSP = acceptorMSP    // ✅ RECORD ORGANIZATION
 	collection.UpdatedAt = txTime
 
 	collectionJSON, err = json.Marshal(collection)
@@ -272,9 +318,15 @@ func (c *CoffeeContract) SettleDocumentaryCollection(ctx contractapi.Transaction
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
 
+	// ✅ Capture full MSP identity for non-repudiation
+	settlerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		settlerID = mspID // Fallback to MSP name
+	}
+
 	// Only Banks can settle collections
 	if mspID != "BanksMSP" {
-		return fmt.Errorf("unauthorized: only Banks can settle collections")
+		return fmt.Errorf("unauthorized: only Banks can settle collections (caller: %s)", mspID)
 	}
 
 	charges, _ := strconv.ParseFloat(chargesStr, 64)
@@ -309,6 +361,8 @@ func (c *CoffeeContract) SettleDocumentaryCollection(ctx contractapi.Transaction
 
 	collection.Status = "PAID"
 	collection.PaymentDate = txTime.Format(time.RFC3339)
+	collection.SettledBy = settlerID    // ✅ Record WHO settled
+	collection.SettledByMSP = mspID     // ✅ Record organization
 	collection.Charges = charges
 	collection.UpdatedAt = txTime
 
@@ -343,6 +397,17 @@ func (c *CoffeeContract) SettleDocumentaryCollection(ctx contractapi.Transaction
 func (c *CoffeeContract) ReturnDocumentaryCollection(ctx contractapi.TransactionContextInterface,
 	collectionID, returnReason string) error {
 
+	// ✅ CAPTURE MSP IDENTITY
+	returnerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	returnerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		returnerID = returnerMSP // Fallback
+	}
+
 	collectionJSON, err := ctx.GetStub().GetState("COLLECTION_" + collectionID)
 	if err != nil {
 		return fmt.Errorf("failed to read collection: %v", err)
@@ -369,6 +434,8 @@ func (c *CoffeeContract) ReturnDocumentaryCollection(ctx contractapi.Transaction
 
 	collection.Status = "RETURNED"
 	collection.ReturnedDate = txTime.Format(time.RFC3339)
+	collection.ReturnedBy = returnerID        // ✅ RECORD WHO RETURNED
+	collection.ReturnedByMSP = returnerMSP    // ✅ RECORD ORGANIZATION
 	collection.ReturnReason = returnReason
 	collection.UpdatedAt = txTime
 
@@ -383,6 +450,17 @@ func (c *CoffeeContract) ReturnDocumentaryCollection(ctx contractapi.Transaction
 // SendCollectionReminder - Record reminder sent to collecting bank
 func (c *CoffeeContract) SendCollectionReminder(ctx contractapi.TransactionContextInterface,
 	collectionID string) error {
+
+	// ✅ CAPTURE MSP IDENTITY
+	reminderMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	reminderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		reminderID = reminderMSP // Fallback
+	}
 
 	collectionJSON, err := ctx.GetStub().GetState("COLLECTION_" + collectionID)
 	if err != nil {
@@ -414,6 +492,8 @@ func (c *CoffeeContract) SendCollectionReminder(ctx contractapi.TransactionConte
 	collection.RemindersCount++
 	collection.FollowUpDays = followUpDays
 	collection.LastReminderDate = txTime.Format(time.RFC3339)
+	collection.LastReminderBy = reminderID        // ✅ RECORD WHO SENT REMINDER
+	collection.LastReminderByMSP = reminderMSP    // ✅ RECORD ORGANIZATION
 	collection.UpdatedAt = txTime
 
 	collectionJSON, err = json.Marshal(collection)

@@ -333,44 +333,156 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                               </Grid>
                             </Grid>
 
-                            {/* Document Preview/Actions */}
-                            <Box sx={{ display: 'flex', gap: 1 }}>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                startIcon={<Visibility />}
-                                onClick={() => {
-                                  // Open real document in new tab
-                                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api/v1';
-                                  const docUrl = doc.url ? (doc.url.startsWith('http') ? doc.url : `${apiUrl}${doc.url}`) : `${apiUrl}/documents/${doc.id}`;
-                                  window.open(docUrl, '_blank');
-                                }}
-                                disabled={doc.status !== 'AVAILABLE'}
-                              >
-                                View Document
-                              </Button>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="success"
-                                startIcon={<Download />}
-                                onClick={() => {
-                                  // Download real document
-                                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api/v1';
-                                  const docUrl = doc.url ? (doc.url.startsWith('http') ? doc.url : `${apiUrl}${doc.url}`) : `${apiUrl}/documents/${doc.id}`;
-                                  const link = document.createElement('a');
-                                  link.href = docUrl;
-                                  link.download = doc.name;
-                                  link.target = '_blank';
-                                  document.body.appendChild(link);
-                                  link.click();
-                                  document.body.removeChild(link);
-                                }}
-                                disabled={doc.status !== 'AVAILABLE'}
-                              >
-                                Download
-                              </Button>
-                            </Box>
+                            {/* Document Preview/Actions - Only show if doc has valid ID starting with DOC_ */}
+                            {doc.id && doc.id.startsWith('DOC_') ? (
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<Visibility />}
+                                  onClick={async () => {
+                                    try {
+                                      const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
+                                      
+                                      // Construct document URL - only use doc.url if it's a full URL, otherwise use doc.id
+                                      let docUrl: string;
+                                      if (doc.url && doc.url.startsWith('http')) {
+                                        docUrl = doc.url;
+                                      } else if (doc.url && doc.url.startsWith('/api/v1/')) {
+                                        // Remove /api/v1/ prefix if present to avoid duplication
+                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
+                                      } else if (doc.id) {
+                                        docUrl = `${apiUrl}/documents/${doc.id}`;
+                                      } else {
+                                        throw new Error('Document ID is missing');
+                                      }
+                                      
+                                      console.log('[DOCUMENT] Viewing document:', { 
+                                        docId: doc.id, 
+                                        docUrl, 
+                                        docUrlRaw: doc.url,
+                                        docStatus: doc.status,
+                                        docName: doc.name,
+                                        apiUrl
+                                      });
+                                      
+                                      // Get auth token from localStorage
+                                      const token = localStorage.getItem('authToken');
+                                      if (!token) {
+                                        alert('Authentication required. Please log in again.');
+                                        return;
+                                      }
+                                      
+                                      // Fetch document with auth headers
+                                      const response = await fetch(docUrl, {
+                                        headers: {
+                                          'Authorization': `Bearer ${token}`
+                                        }
+                                      });
+                                      
+                                      if (!response.ok) {
+                                        console.error('[DOCUMENT] Fetch failed:', {
+                                          status: response.status,
+                                          statusText: response.statusText
+                                        });
+                                        throw new Error(`Failed to fetch document: ${response.status} ${response.statusText}`);
+                                      }
+                                      
+                                      // Create blob URL and open in new tab
+                                      const blob = await response.blob();
+                                      const blobUrl = URL.createObjectURL(blob);
+                                      window.open(blobUrl, '_blank');
+                                      
+                                      // Clean up blob URL after a delay
+                                      setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+                                    } catch (error) {
+                                      console.error('[DOCUMENT] Error viewing document:', error);
+                                      alert(`Failed to view document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                    }
+                                  }}
+                                >
+                                  View Document
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                  startIcon={<Download />}
+                                  onClick={async () => {
+                                    try {
+                                      const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
+                                      
+                                      // Construct document URL - only use doc.url if it's a full URL, otherwise use doc.id
+                                      let docUrl: string;
+                                      if (doc.url && doc.url.startsWith('http')) {
+                                        docUrl = doc.url;
+                                      } else if (doc.url && doc.url.startsWith('/api/v1/')) {
+                                        // Remove /api/v1/ prefix if present to avoid duplication
+                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
+                                      } else if (doc.id) {
+                                        docUrl = `${apiUrl}/documents/${doc.id}`;
+                                      } else {
+                                        throw new Error('Document ID is missing');
+                                      }
+                                      
+                                      console.log('[DOCUMENT] Downloading document:', { 
+                                        docId: doc.id, 
+                                        docUrl, 
+                                        docName: doc.name,
+                                        docStatus: doc.status,
+                                        docUrlRaw: doc.url,
+                                        apiUrl
+                                      });
+                                      
+                                      // Get auth token from localStorage
+                                      const token = localStorage.getItem('authToken');
+                                      if (!token) {
+                                        alert('Authentication required. Please log in again.');
+                                        return;
+                                      }
+                                      
+                                      // Fetch document with auth headers
+                                      const response = await fetch(docUrl, {
+                                        headers: {
+                                          'Authorization': `Bearer ${token}`
+                                        }
+                                      });
+                                      
+                                      if (!response.ok) {
+                                        console.error('[DOCUMENT] Fetch failed:', {
+                                          status: response.status,
+                                          statusText: response.statusText
+                                        });
+                                        throw new Error(`Failed to download document: ${response.status} ${response.statusText}`);
+                                      }
+                                      
+                                      // Create blob and download
+                                      const blob = await response.blob();
+                                      const blobUrl = URL.createObjectURL(blob);
+                                      const link = document.createElement('a');
+                                      link.href = blobUrl;
+                                      link.download = doc.name;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                      
+                                      // Clean up
+                                      URL.revokeObjectURL(blobUrl);
+                                      console.log('[DOCUMENT] Download completed');
+                                    } catch (error) {
+                                      console.error('[DOCUMENT] Error downloading document:', error);
+                                      alert(`Failed to download document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                    }
+                                  }}
+                                >
+                                  Download
+                                </Button>
+                              </Box>
+                            ) : (
+                              <Alert severity="info" sx={{ mt: 1 }}>
+                                This document has not been uploaded yet. Document actions are not available for placeholder documents.
+                              </Alert>
+                            )}
 
                             {/* Document Preview Section */}
                             <Paper 

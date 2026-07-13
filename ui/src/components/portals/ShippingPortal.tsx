@@ -55,6 +55,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsToolti
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import AuditTrailViewer from './AuditTrailViewer';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
 
 // Modern Components - 2026 Design
 import {
@@ -199,71 +200,85 @@ const ShippingPortal: React.FC = () => {
         })));
         
         // Filter for shipments that are cleared by customs (ready for shipping)
+        // RELAXED FILTER: Show all shipments for debugging, will filter properly once customs workflow is complete
         const readyShipments = shipmentsResult.data.filter((s: any) => {
           const status = s.Status || s.status || s.shipmentStatus || '';
+          // Show shipments that are either:
+          // 1. Customs cleared (ready for shipping)
+          // 2. Already shipped
+          // 3. Delivered
+          // 4. Any shipment with customs info (for testing)
           return status === 'CUSTOMS_CLEARED' || 
                  status === 'SHIPPED' || 
                  status === 'DELIVERED' ||
                  status === 'CLEARED' ||
                  status.includes('CLEARED') ||
-                 s.customsStatus === 'CLEARED';
+                 s.customsStatus === 'CLEARED' ||
+                 // TEMPORARY: Show all shipments for testing
+                 true;
         });
         
         console.log(`[SHIPPING] Ready for shipping: ${readyShipments.length}`);
         
+        // DEBUG: Log first shipment to see actual structure
+        if (readyShipments.length > 0) {
+          console.log('[SHIPPING] First shipment raw data:', readyShipments[0]);
+          console.log('[SHIPPING] First shipment keys:', Object.keys(readyShipments[0]));
+        }
+        
         // Map blockchain shipments to shipping records - USE ACTUAL DATA
         const mappedRecords = readyShipments.map((s: any) => {
-          // Handle both PascalCase (blockchain) and camelCase (API) field names
-          const shipmentId = s.ShipmentID || s.shipmentId;
-          const exporterId = s.ExporterID || s.exporterId;
-          const status = s.Status || s.status || s.shipmentStatus;
+          // Blockchain uses camelCase: shipmentId, exporterId, transportMode, etc.
+          const shipmentId = s.shipmentId || s.ShipmentID || 'UNKNOWN';
+          const exporterId = s.exporterId || s.ExporterID || 'UNKNOWN';
+          const status = s.status || s.Status || 'PENDING';
           
-          // Transport mode from blockchain (NEW)
-          const transportMode = s.TransportMode || s.transportMode || 'SEA';
+          // Transport mode from blockchain
+          const transportMode = s.transportMode || s.TransportMode || 'SEA';
           
           // Map shipment status to shipping status
           let shippingStatus = 'BOOKED';
           if (status === 'DELIVERED') shippingStatus = 'DELIVERED';
           else if (status === 'SHIPPED' || status === 'IN_TRANSIT') shippingStatus = 'IN_TRANSIT';
-          else if (s.BillOfLadingNo || s.billOfLadingNo || s.AirwayBill || s.airwayBill) shippingStatus = 'LOADED';
+          else if (s.billOfLadingNo || s.airwayBill) shippingStatus = 'LOADED';
           
           return {
             shippingId: `SH-${shipmentId}`,
-            shipmentId: shipmentId,
-            exporterId: exporterId,
+            shipmentId: shipmentId || 'N/A',
+            exporterId: exporterId || 'N/A',
             
-            // Transport mode - from blockchain (NEW)
+            // Transport mode from blockchain
             transportMode: transportMode as 'SEA' | 'AIR',
             
-            // Carrier name - from blockchain (NEW)
-            shippingLine: s.ShippingLine || s.shippingLine || 
+            // Carrier name from blockchain
+            shippingLine: s.shippingLine || 
                          (transportMode === 'AIR' ? 'Ethiopian Airlines Cargo' : 'Maersk Line'),
             
-            // Sea Freight fields - from blockchain
-            containerNumber: s.ContainerNumber || s.containerNumber,
-            vesselName: s.VesselName || s.vesselName,
-            voyageNumber: s.VoyageNumber || s.voyageNumber,
-            billOfLading: s.BillOfLadingNo || s.billOfLadingNo,
-            containerType: (s.ContainerType || s.containerType) as 'DRY' | 'REEFER' | 'OPEN_TOP',
+            // Sea Freight fields from blockchain (camelCase)
+            containerNumber: s.containerNumber || undefined,
+            vesselName: s.vesselName || undefined,
+            voyageNumber: s.voyageNumber || undefined,
+            billOfLading: s.billOfLadingNo || undefined,
+            containerType: (s.containerType || 'DRY') as 'DRY' | 'REEFER' | 'OPEN_TOP',
             
-            // Air Freight fields - from blockchain (NEW)
-            airwayBill: s.AirwayBill || s.airwayBill,
-            flightNumber: s.FlightNumber || s.flightNumber,
+            // Air Freight fields from blockchain (camelCase)
+            airwayBill: s.airwayBill || undefined,
+            flightNumber: s.flightNumber || undefined,
             
-            // Common fields - from blockchain
-            portOfLoading: s.DeparturePort || s.departurePort || 
+            // Common fields from blockchain (camelCase)
+            portOfLoading: s.departurePort || 
                           (transportMode === 'AIR' ? 'Addis Ababa Airport' : 'Djibouti'),
-            portOfDischarge: s.DestinationPort || s.destinationPort || 
-                            (s.Destination || s.destination) || 'Hamburg',
-            estimatedDeparture: s.EstimatedDeparture || s.estimatedDeparture || 
+            portOfDischarge: s.destinationPort || 
+                            (s.destination) || 'Hamburg',
+            estimatedDeparture: s.estimatedDeparture || 
                                new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-            estimatedArrival: s.EstimatedArrival || s.estimatedArrival || 
+            estimatedArrival: s.estimatedArrival || 
                              new Date(Date.now() + (transportMode === 'AIR' ? 1 : 30) * 24 * 60 * 60 * 1000).toISOString(),
-            actualArrival: s.ActualArrival || s.actualArrival,
+            actualArrival: s.actualArrival || undefined,
             status: shippingStatus as 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED',
-            trackingNumber: s.TrackingNumber || s.trackingNumber || `TRK-${shipmentId}`,
-            weight: s.Quantity || s.quantity || 20000,
-            volume: ((s.Quantity || s.quantity || 20000) / 600), // kg to m³ approximation
+            trackingNumber: s.trackingNumber || `TRK-${shipmentId}`,
+            weight: s.quantity || 20000, // quantity from blockchain is in kg
+            volume: ((s.quantity || 20000) / 600), // kg to m³ approximation
           };
         });
         

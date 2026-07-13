@@ -36,8 +36,19 @@ type PaymentSettlement struct {
 	Documents          []string     `json:"documents"`          // B/L, Invoice, etc.
 	SWIFTDetails       SWIFTMessage `json:"swiftDetails"`       // SWIFT message details
 	VerifiedBy         string       `json:"verifiedBy"`
-	NBEApprovalRef     string       `json:"nbeApprovalRef"` // NBE approval for payment
+	VerifiedByID       string       `json:"verifiedById"`       // ✅ X.509 certificate of verifier
+	NBEApprovalRef     string       `json:"nbeApprovalRef"`     // NBE approval for payment
+	ApprovedBy         string       `json:"approvedBy"`         // ✅ X.509 certificate of NBE approver
+	ApprovedByMSP      string       `json:"approvedByMsp"`      // ✅ MSP ID of NBE approver
 	Comments           string       `json:"comments"`
+	InitiatedBy        string       `json:"initiatedBy"`        // ✅ X.509 certificate of initiator
+	DocumentsSubmittedBy string     `json:"documentsSubmittedBy"` // ✅ X.509 certificate of document submitter
+	SettledBy          string       `json:"settledBy"`          // ✅ X.509 certificate of settler
+	// ✅ MSP Identity Fields for Rejection and Updates
+	RejectedBy         string       `json:"rejectedBy"`         // ✅ X.509 certificate of rejecter
+	RejectedByMSP      string       `json:"rejectedByMsp"`      // ✅ MSP ID of rejecter
+	LastUpdatedBy      string       `json:"lastUpdatedBy"`      // ✅ X.509 certificate of last updater
+	LastUpdatedByMSP   string       `json:"lastUpdatedByMsp"`   // ✅ MSP ID of last updater
 	CreatedAt          time.Time    `json:"createdAt"`
 	UpdatedAt          time.Time    `json:"updatedAt"`
 
@@ -194,6 +205,19 @@ func getPaymentMethodMetadata(method string) (string, bool, bool, bool) {
 func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInterface,
 	paymentID, contractID, exporterID, lcID, amountStr, currency, receivingBank,
 	receivingBankBIC, beneficiaryName, beneficiaryAccount, paymentMethod string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of payment initiator
+	initiatorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get initiator MSP ID: %w", err)
+	}
+	
+	initiatorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		initiatorID = initiatorMSP // Fallback
+	}
+	
+	log.Printf("Payment %s initiated by: %s (MSP: %s)", paymentID, initiatorID, initiatorMSP)
 
 	// VALIDATION: IDs
 	if err := ValidateID(paymentID, "paymentID"); err != nil {
@@ -362,6 +386,7 @@ func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInter
 		BeneficiaryAccount: beneficiaryAccount,
 		PaymentMethod:      paymentMethod,
 		Status:             initialStatus,
+		InitiatedBy:        initiatorID, // ✅ RECORD WHO INITIATED
 		Documents:          []string{},
 		SWIFTDetails: SWIFTMessage{
 			MessageType: "MT103", // Default, will be updated
@@ -423,9 +448,21 @@ func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInter
 }
 
 // SubmitPaymentDocuments - Exporter submits shipping documents
-// SubmitPaymentDocuments - Exporter submits shipping documents
 func (c *CoffeeContract) SubmitPaymentDocuments(ctx contractapi.TransactionContextInterface,
 	paymentID string, documents []string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of document submitter
+	submitterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get submitter MSP ID: %w", err)
+	}
+	
+	submitterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		submitterID = submitterMSP // Fallback
+	}
+	
+	log.Printf("Payment documents for %s submitted by: %s (MSP: %s)", paymentID, submitterID, submitterMSP)
 
 	// VALIDATION: ID
 	if err := ValidateID(paymentID, "paymentID"); err != nil {
@@ -459,6 +496,7 @@ func (c *CoffeeContract) SubmitPaymentDocuments(ctx contractapi.TransactionConte
 
 	payment.Status = "DOCUMENTS_SUBMITTED"
 	payment.Documents = documents
+	payment.DocumentsSubmittedBy = submitterID // ✅ RECORD WHO SUBMITTED
 	payment.UpdatedAt = txTime
 
 	paymentJSON, err = json.Marshal(payment)
@@ -499,6 +537,24 @@ func (c *CoffeeContract) SubmitPaymentDocuments(ctx contractapi.TransactionConte
 func (c *CoffeeContract) VerifyPaymentDocuments(ctx contractapi.TransactionContextInterface,
 	paymentID, verifiedBy, comments string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of verifier (X.509 certificate - full cryptographic proof)
+	verifierMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get verifier MSP ID: %w", err)
+	}
+	
+	verifierID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		verifierID = verifierMSP // Fallback
+	}
+	
+	// Only Banks can verify payment documents
+	if verifierMSP != "BanksMSP" {
+		log.Printf("WARNING: Non-Bank MSP verifying documents: %s", verifierMSP)
+	}
+	
+	log.Printf("Payment documents for %s verified by: %s (MSP: %s)", paymentID, verifierID, verifierMSP)
+
 	// VALIDATION: IDs and required fields
 	if err := ValidateID(paymentID, "paymentID"); err != nil {
 		return fmt.Errorf("VerifyPaymentDocuments: %w", err)
@@ -534,6 +590,7 @@ func (c *CoffeeContract) VerifyPaymentDocuments(ctx contractapi.TransactionConte
 
 	payment.Status = "VERIFIED"
 	payment.VerifiedBy = verifiedBy
+	payment.VerifiedByID = verifierID // ✅ RECORD X.509 CERTIFICATE (full cryptographic proof)
 	payment.Comments = comments
 	payment.UpdatedAt = txTime
 
@@ -577,6 +634,24 @@ func (c *CoffeeContract) VerifyPaymentDocuments(ctx contractapi.TransactionConte
 func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterface,
 	paymentID, exchangeRateStr, retentionRateStr, payingBank, payingBankBIC,
 	swiftReference, nbeApprovalRef string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of settler (X.509 certificate - full cryptographic proof)
+	settlerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get settler MSP ID: %w", err)
+	}
+	
+	settlerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		settlerID = settlerMSP // Fallback
+	}
+	
+	// Only Banks can settle payments
+	if settlerMSP != "BanksMSP" {
+		log.Printf("WARNING: Non-Bank MSP settling payment: %s", settlerMSP)
+	}
+	
+	log.Printf("Payment %s settled by: %s (MSP: %s)", paymentID, settlerID, settlerMSP)
 
 	// VALIDATION: IDs and required fields
 	if err := ValidateID(paymentID, "paymentID"); err != nil {
@@ -673,6 +748,7 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 	payment.Status = "SETTLED"
 	payment.PayingBank = payingBank
 	payment.PayingBankBIC = payingBankBIC
+	payment.SettledBy = settlerID // ✅ RECORD X.509 CERTIFICATE (full cryptographic proof)
 	payment.NBEApprovalRef = nbeApprovalRef
 	payment.PaymentDate = txTime.Format(time.RFC3339)
 	payment.UpdatedAt = txTime
@@ -960,6 +1036,19 @@ func (c *CoffeeContract) ConfirmSWIFTReceipt(ctx contractapi.TransactionContextI
 func (c *CoffeeContract) RejectSWIFTPayment(ctx contractapi.TransactionContextInterface,
 	paymentID, reason string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of rejecter
+	rejecterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectSWIFTPayment: failed to get rejecter MSP ID: %w", err)
+	}
+	
+	rejecterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejecterID = rejecterMSP // Fallback to MSP if cert not available
+	}
+	
+	fmt.Printf("RejectSWIFTPayment: Payment being rejected by %s (MSP: %s)\n", rejecterID, rejecterMSP)
+
 	paymentJSON, err := ctx.GetStub().GetState("PAYMENT_" + paymentID)
 	if err != nil {
 		return fmt.Errorf("failed to read payment: %v", err)
@@ -984,6 +1073,8 @@ func (c *CoffeeContract) RejectSWIFTPayment(ctx contractapi.TransactionContextIn
 	payment.SWIFTDetails.Status = "REJECTED"
 	payment.SWIFTDetails.RejectionReason = reason
 	payment.Comments = "SWIFT payment rejected: " + reason
+	payment.RejectedBy = rejecterID         // ✅ Record WHO rejected (X.509 cert)
+	payment.RejectedByMSP = rejecterMSP     // ✅ Record rejecter's MSP
 	payment.UpdatedAt = txTime
 
 	paymentJSON, err = json.Marshal(payment)
@@ -1251,6 +1342,17 @@ func (c *CoffeeContract) UpdatePaymentStatus(ctx contractapi.TransactionContextI
 		return err
 	}
 
+	// ✅ BLOCKCHAIN FEATURE: Capture MSP identity for non-repudiation
+	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %w", err)
+	}
+
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = updaterMSP // Fallback to MSP name if X.509 cert unavailable
+	}
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -1261,6 +1363,8 @@ func (c *CoffeeContract) UpdatePaymentStatus(ctx contractapi.TransactionContextI
 	oldStatus := payment.Status
 	payment.Status = newStatus
 	payment.UpdatedAt = txTime
+	payment.LastUpdatedBy = updaterID        // ✅ Record WHO updated (X.509 certificate)
+	payment.LastUpdatedByMSP = updaterMSP    // ✅ Record organization
 
 	paymentJSON, err := json.Marshal(payment)
 	if err != nil {

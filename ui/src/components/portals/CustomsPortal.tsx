@@ -69,6 +69,7 @@ import {
 import { CustomsInspection } from './CustomsInspection';
 import { CustomsClearedShipments } from './CustomsClearedShipments';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
 
 
 // Status types for chips

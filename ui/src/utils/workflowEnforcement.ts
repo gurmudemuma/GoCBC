@@ -492,3 +492,299 @@ export const getRequiredDocuments = (stage: 'registration' | 'contract' | 'shipm
       return [];
   }
 };
+
+// ============================================================================
+// PAYMENT METHOD WORKFLOW ENFORCEMENT
+// Added: July 2026 - Payment method differentiation
+// ============================================================================
+
+export type PaymentMethod = 'LC' | 'CAD' | 'TT_ADVANCE' | 'TT_POST' | 'ADVANCE';
+
+export const PAYMENT_METHODS = {
+  LC: 'LC',
+  CAD: 'CAD',
+  TT_ADVANCE: 'TT_ADVANCE',
+  TT_POST: 'TT_POST',
+  ADVANCE: 'ADVANCE',
+} as const;
+
+/**
+ * Check if LC is required for this payment method
+ */
+export const isLCRequired = (paymentMethod: PaymentMethod): boolean => {
+  return paymentMethod === PAYMENT_METHODS.LC;
+};
+
+/**
+ * Check if advance payment is required before shipment
+ */
+export const isAdvanceRequired = (paymentMethod: PaymentMethod): boolean => {
+  return paymentMethod === PAYMENT_METHODS.TT_ADVANCE || paymentMethod === PAYMENT_METHODS.ADVANCE;
+};
+
+/**
+ * Check if documents go through banks
+ */
+export const documentsViaBanks = (paymentMethod: PaymentMethod): boolean => {
+  return paymentMethod === PAYMENT_METHODS.LC || paymentMethod === PAYMENT_METHODS.CAD;
+};
+
+/**
+ * Get payment method workflow description
+ */
+export const getPaymentMethodWorkflow = (paymentMethod: PaymentMethod): {
+  name: string;
+  description: string;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'LOWEST';
+  requiresLC: boolean;
+  requiresAdvance: boolean;
+  bankInvolvement: 'GUARANTEED' | 'FACILITATOR' | 'NONE';
+  workflowSteps: string[];
+} => {
+  switch (paymentMethod) {
+    case PAYMENT_METHODS.LC:
+      return {
+        name: 'Letter of Credit (LC)',
+        description: 'Bank-guaranteed payment with UCP 600 compliance',
+        riskLevel: 'LOW',
+        requiresLC: true,
+        requiresAdvance: false,
+        bankInvolvement: 'GUARANTEED',
+        workflowSteps: [
+          '1. Contract NBE Approval',
+          '2. Forex Request & Allocation',
+          '3. LC Request → Approval → Issuance',
+          '4. Shipment & Quality Inspection',
+          '5. Customs Clearance',
+          '6. Goods Shipped → Documents to Bank',
+          '7. Bank Verifies Documents',
+          '8. SWIFT Payment Initiated',
+          '9. Payment Settlement & Forex Utilization',
+        ],
+      };
+
+    case PAYMENT_METHODS.CAD:
+      return {
+        name: 'Cash Against Documents (CAD)',
+        description: 'Payment through banks without guarantee (URC 522)',
+        riskLevel: 'MEDIUM',
+        requiresLC: false,
+        requiresAdvance: false,
+        bankInvolvement: 'FACILITATOR',
+        workflowSteps: [
+          '1. Contract NBE Approval',
+          '2. Forex Request & Allocation',
+          '3. Shipment & Quality Inspection',
+          '4. Customs Clearance',
+          '5. Goods Shipped → Documents to Exporter Bank',
+          '6. Exporter Bank Forwards to Buyer Bank',
+          '7. Buyer Notified → Payment Required',
+          '8. Payment Received → Documents Released',
+          '9. Settlement & Forex Utilization',
+        ],
+      };
+
+    case PAYMENT_METHODS.TT_ADVANCE:
+      return {
+        name: 'Telegraphic Transfer - Advance',
+        description: 'Partial payment before shipment via wire transfer',
+        riskLevel: 'LOW',
+        requiresLC: false,
+        requiresAdvance: true,
+        bankInvolvement: 'NONE',
+        workflowSteps: [
+          '1. Contract NBE Approval',
+          '2. Advance Payment Requested (30-50%)',
+          '3. Advance Received → Forex Request',
+          '4. Forex Allocation',
+          '5. Shipment & Quality Inspection',
+          '6. Customs Clearance',
+          '7. Goods Shipped → Documents Sent Directly',
+          '8. Balance Payment Received',
+          '9. Settlement & Forex Utilization',
+        ],
+      };
+
+    case PAYMENT_METHODS.TT_POST:
+      return {
+        name: 'Telegraphic Transfer - Post-Shipment',
+        description: 'Payment after shipment via wire transfer',
+        riskLevel: 'HIGH',
+        requiresLC: false,
+        requiresAdvance: false,
+        bankInvolvement: 'NONE',
+        workflowSteps: [
+          '1. Contract NBE Approval',
+          '2. Forex Request & Allocation',
+          '3. Shipment & Quality Inspection',
+          '4. Customs Clearance',
+          '5. Goods Shipped → Documents Sent Directly',
+          '6. Await Payment from Buyer',
+          '7. Payment Received via SWIFT',
+          '8. Settlement & Forex Utilization',
+        ],
+      };
+
+    case PAYMENT_METHODS.ADVANCE:
+      return {
+        name: 'Advance Payment (Pre-Production)',
+        description: 'Payment before production starts',
+        riskLevel: 'LOWEST',
+        requiresLC: false,
+        requiresAdvance: true,
+        bankInvolvement: 'NONE',
+        workflowSteps: [
+          '1. Proforma Invoice Issued',
+          '2. Advance Payment Received (40-100%)',
+          '3. Contract Registration',
+          '4. Contract NBE Approval',
+          '5. Forex Request & Allocation',
+          '6. Coffee Sourcing from Farmers',
+          '7. Quality Inspection at Warehouse',
+          '8. Shipment & Customs Clearance',
+          '9. Goods Shipped → Balance Payment (if any)',
+          '10. Settlement & Forex Utilization',
+        ],
+      };
+
+    default:
+      return {
+        name: 'Unknown',
+        description: 'Unknown payment method',
+        riskLevel: 'HIGH',
+        requiresLC: false,
+        requiresAdvance: false,
+        bankInvolvement: 'NONE',
+        workflowSteps: [],
+      };
+  }
+};
+
+/**
+ * Check if LC request is allowed for this payment method
+ */
+export const canRequestLCForPaymentMethod = (
+  paymentMethod: PaymentMethod,
+  contractStatus: string
+): {
+  allowed: boolean;
+  reason?: string;
+} => {
+  // Only LC payment method requires LC
+  if (!isLCRequired(paymentMethod)) {
+    return {
+      allowed: false,
+      reason: `LC not required for ${paymentMethod} payment method. This contract uses direct payment without bank guarantee.`,
+    };
+  }
+
+  // Standard LC validation
+  return canRequestLC(contractStatus);
+};
+
+/**
+ * Check if shipment can be created based on payment method requirements
+ */
+export const canCreateShipmentForPaymentMethod = (
+  paymentMethod: PaymentMethod,
+  contractStatus: string,
+  advancePaymentReceived: boolean,
+  lcStatus?: string,
+  licenseStatus?: string
+): {
+  allowed: boolean;
+  reason?: string;
+  warning?: string;
+} => {
+  // Check basic contract approval
+  if (contractStatus !== CONTRACT_STATUS.NBE_APPROVED && contractStatus !== CONTRACT_STATUS.APPROVED) {
+    return {
+      allowed: false,
+      reason: 'Contract must be NBE-approved before creating shipment. Current status: ' + contractStatus,
+    };
+  }
+
+  // Check license
+  if (licenseStatus === LICENSE_STATUS.SUSPENDED) {
+    return {
+      allowed: false,
+      reason: 'Cannot create shipment. Your license is suspended.',
+    };
+  }
+
+  // TT_ADVANCE and ADVANCE require advance payment first
+  if (isAdvanceRequired(paymentMethod) && !advancePaymentReceived) {
+    return {
+      allowed: false,
+      reason: `${paymentMethod} payment method requires advance payment before shipment. Wait for buyer to send advance payment (30-50% of contract value).`,
+    };
+  }
+
+  // LC method - recommend LC but don't block (exporter might source coffee first)
+  if (isLCRequired(paymentMethod) && (!lcStatus || lcStatus === LC_STATUS.REQUESTED)) {
+    return {
+      allowed: true,
+      warning: 'LC not yet issued. Ensure LC is issued before shipping to guarantee payment.',
+    };
+  }
+
+  return { allowed: true };
+};
+
+/**
+ * Get payment instructions based on payment method
+ */
+export const getPaymentInstructions = (
+  paymentMethod: PaymentMethod,
+  currentStage: 'contract' | 'forex' | 'lc' | 'shipment' | 'customs' | 'documents' | 'payment'
+): string => {
+  const instructions: Record<PaymentMethod, Record<string, string>> = {
+    LC: {
+      contract: '✓ Contract approved. Next: Request forex allocation from NBE.',
+      forex: '✓ Forex allocated. Next: Request Letter of Credit from bank.',
+      lc: '✓ LC issued by bank. Next: Source coffee and create shipment.',
+      shipment: '✓ Shipment created. Next: Get quality inspection and customs clearance.',
+      customs: '✓ Customs cleared. Next: Ship goods and submit documents to bank within 21 days.',
+      documents: '⏳ Documents with bank for verification. Wait 5-7 business days.',
+      payment: '💰 Payment processing via SWIFT. Funds arrive in 2-5 business days.',
+    },
+    CAD: {
+      contract: '✓ Contract approved. Next: Request forex allocation from NBE.',
+      forex: '✓ Forex allocated. Next: Source coffee and create shipment (no LC needed).',
+      lc: 'N/A - CAD does not use Letter of Credit',
+      shipment: '✓ Shipment created. Next: Get quality inspection and customs clearance.',
+      customs: '✓ Customs cleared. Next: Ship goods and send documents to your bank.',
+      documents: '📄 Bank forwards documents to buyer\'s bank. Buyer pays to receive documents.',
+      payment: '💰 Payment received. Documents released to buyer for cargo pickup.',
+    },
+    TT_ADVANCE: {
+      contract: '✓ Contract approved. Next: Request advance payment (30-50%) from buyer.',
+      forex: '✓ Advance received. Request forex allocation from NBE.',
+      lc: 'N/A - TT Advance uses direct wire transfer',
+      shipment: '✓ Shipment created with advance payment. Next: Quality inspection and customs.',
+      customs: '✓ Customs cleared. Next: Ship goods and send documents directly to buyer.',
+      documents: '📄 Documents sent directly to buyer. No bank involvement.',
+      payment: '💰 Awaiting balance payment (50-70%) from buyer after shipment.',
+    },
+    TT_POST: {
+      contract: '✓ Contract approved. Next: Request forex allocation from NBE.',
+      forex: '✓ Forex allocated. Next: Source coffee and create shipment.',
+      lc: 'N/A - TT Post uses direct wire transfer after shipment',
+      shipment: '✓ Shipment created. Next: Quality inspection and customs clearance.',
+      customs: '✓ Customs cleared. Next: Ship goods and send documents to buyer.',
+      documents: '📄 Documents sent directly to buyer. Awaiting payment confirmation.',
+      payment: '⚠️ HIGH RISK: Payment depends entirely on buyer trust. No bank guarantee.',
+    },
+    ADVANCE: {
+      contract: '⏳ Awaiting advance payment (40-100%) before contract registration.',
+      forex: '✓ Advance received. Contract registered. Request forex allocation from NBE.',
+      lc: 'N/A - Advance Payment method does not use LC',
+      shipment: '✓ Coffee sourced and inspected. Next: Create shipment and customs clearance.',
+      customs: '✓ Customs cleared. Next: Ship goods to buyer.',
+      documents: '📄 Documents sent directly. Balance payment (if any) expected.',
+      payment: '💰 Lowest risk method. Payment received before production started.',
+    },
+  };
+
+  return instructions[paymentMethod]?.[currentStage] || 'Follow standard export procedure.';
+};

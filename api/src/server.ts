@@ -60,6 +60,10 @@ import phytosanitaryRoutes from './routes/phytosanitary';
 import insuranceRoutes from './routes/insurance';
 import paymentsRoutes from './routes/payments';
 import documentsRoutes from './routes/documents';
+import landTransportRoutes from './routes/land-transport';
+import retentionRoutes from './routes/retention';
+import lcAmendmentsRoutes from './routes/lc-amendments';
+import swiftRoutes from './routes/swift';
 
 // Load environment variables
 dotenv.config();
@@ -146,6 +150,11 @@ class CECBSServer {
         },
       });
     });
+
+    // Favicon endpoint - prevent 404 errors
+    this.app.get('/favicon.ico', (_req, res) => {
+      res.status(204).end(); // No content
+    });
   }
 
   private setupRoutes(): void {
@@ -194,6 +203,14 @@ class CECBSServer {
     // V2.3 Document Storage (Off-chain with IPFS)
     // NOTE: Auth is applied per-route in documentsRoutes to allow public registration endpoint
     apiV1.use('/documents', documentsRoutes);
+
+    // V2.4 Real-World Workflow Alignment
+    apiV1.use('/shipments', authMiddleware, landTransportRoutes); // Land transport tracking
+    apiV1.use('/forex', authMiddleware, retentionRoutes); // NBE retention policy
+    apiV1.use('/lc', authMiddleware, lcAmendmentsRoutes); // LC amendments & discrepancies
+
+    // V2.5 SWIFT Message Management
+    apiV1.use('/swift', authMiddleware, swiftRoutes); // SWIFT message operations
 
     this.app.use('/api/v1', apiV1);
 

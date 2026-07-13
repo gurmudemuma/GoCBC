@@ -316,6 +316,7 @@ class CECBSApi {
 
   async allocateForex(forexData: {
     forexId: string;
+    lcId: string;
     amount: number;
     exchangeRate: number;
     retentionRate: number;

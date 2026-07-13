@@ -1727,3 +1727,133 @@ function getRiskProfile(paymentMethod: string): string {
 }
 
 export default router;
+
+
+/**
+ * POST /api/v1/banking/lc/:lcID/examine-documents
+ * Bank examines shipping documents against LC terms (UCP 600 Article 14)
+ * Workflow: After shipment, bank verifies documents comply with LC requirements
+ */
+router.post('/lc/:lcID/examine-documents',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('compliant').isBoolean().withMessage('Compliance status is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { compliant, discrepancies, examinationDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`Examining LC documents for ${lcID}`, {
+        userId: user?.sub,
+        compliant,
+        discrepancies: discrepancies || 'none',
+      });
+
+      const result = await fabricService.invokeChaincode('ExamineLCDocuments', [
+        lcID,
+        compliant.toString(),
+        discrepancies || '',
+        examinationDate || new Date().toISOString(),
+        user?.org || 'BANK',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ LC documents examined: ${lcID}, compliant: ${compliant}`);
+        res.json({
+          success: true,
+          data: result.data,
+          message: compliant ? 'Documents comply with LC terms' : 'Discrepancies found in documents',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'EXAMINATION_FAILED',
+            message: result.error || 'Failed to examine documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error examining LC documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/release-payment
+ * Bank releases payment to exporter after document compliance (UCP 600 Article 7)
+ * Workflow: Final step - bank transfers funds via SWIFT after all checks pass
+ */
+router.post('/lc/:lcID/release-payment',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('amount').notEmpty().withMessage('Payment amount is required'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { amount, currency, paymentDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`Releasing payment for LC ${lcID}`, {
+        userId: user?.sub,
+        amount,
+        currency,
+      });
+
+      const result = await fabricService.invokeChaincode('ReleaseLCPayment', [
+        lcID,
+        amount.toString(),
+        currency,
+        paymentDate || new Date().toISOString(),
+        user?.org || 'BANK',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Payment released for LC ${lcID}: ${currency} ${amount}`);
+        res.json({
+          success: true,
+          data: result.data,
+          message: 'Payment released successfully via SWIFT',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PAYMENT_RELEASE_FAILED',
+            message: result.error || 'Failed to release payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error releasing LC payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
