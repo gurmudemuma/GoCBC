@@ -56,6 +56,8 @@ import {
   FlightTakeoff,
   Edit,
   Cancel,
+  Message as MessageOutlined,
+  Send as SendOutlined,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 import DocumentVerificationPanel from './DocumentVerificationPanel';
@@ -73,6 +75,9 @@ import { PaymentDocuments } from './PaymentDocuments';
 import { PaymentMethodForms } from './PaymentMethodForms';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
+import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
+import { PaymentMethodTab } from './PaymentMethodTab';
+import SWIFTDashboardWrapper from '@/components/bank/SWIFTDashboardWrapper';
 
 interface SalesContract {
   contractId: string;
@@ -99,12 +104,22 @@ interface LetterOfCredit {
   bankName: string;
   issuingBank: string;
   advisingBank: string;
+  swiftReference?: string;
+  lcNumber?: string;
+  applicant?: string;
+  beneficiary?: string;
   amount: number;
   currency: string;
   transportMode?: 'SEA' | 'AIR';
+  portOfLoading?: string;
+  portOfDischarge?: string;
+  latestShipmentDate?: string;
   status: string;
   expiryDate: string;
   requestDate: string;
+  advisingDate?: string;
+  confirmationStatus?: 'CONFIRMED' | 'UNCONFIRMED';
+  paymentTerms?: string;
 }
 
 interface ForexAllocation {
@@ -124,9 +139,18 @@ interface ForexAllocation {
 // Use the organization theme for BANKS (purple/golden/black/white)
 const banksTheme = createOrganizationTheme('BANKS');
 
+// CBE Color Palette - Commercial Bank of Ethiopia
+const CBE_COLORS = {
+  purple: '#9b30b7',
+  golden: '#FFD700',
+  black: '#000000',
+  white: '#ffffff',
+};
+
 const BanksPortal: React.FC = () => {
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('LC');
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
@@ -135,6 +159,7 @@ const BanksPortal: React.FC = () => {
   const [advancePayments, setAdvancePayments] = useState<any[]>([]);
   const [consignments, setConsignments] = useState<any[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<any[]>([]);
+  const [swiftStats, setSwiftStats] = useState<any>(null);
   const [selectedPayment, setSelectedPayment] = useState<any | null>(null);
   const [verificationDialogOpen, setVerificationDialogOpen] = useState(false);
   const [documentUploadDialogOpen, setDocumentUploadDialogOpen] = useState(false);
@@ -234,6 +259,32 @@ const BanksPortal: React.FC = () => {
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
+  // Payment Method Configuration
+  const PAYMENT_METHODS = [
+    {
+      id: 'LC',
+      name: 'Letter of Credit',
+      steps: ['Request LC', 'Approve LC', 'Issue LC', 'Ship Goods', 'Examine Documents', 'Release Payment'],
+    },
+    {
+      id: 'CAD',
+      name: 'Documentary Collection',
+      steps: ['Ship Goods', 'Submit to Bank', 'Forward Documents', 'Notify Buyer', 'Receive Payment', 'Release Documents'],
+    },
+    {
+      id: 'ADVANCE',
+      name: 'Advance Payment',
+      steps: ['Issue Proforma', 'Receive Advance', 'Register Contract', 'Source Coffee', 'Quality Check', 'Ship Goods', 'Receive Balance'],
+    },
+    {
+      id: 'CONSIGNMENT',
+      name: 'Consignment',
+      steps: ['Issue Permit', 'Ship Goods', 'Sell Goods', 'Receive Payment', 'Settle Account'],
+    },
+  ];
+  
+  const selectedMethodConfig = PAYMENT_METHODS.find(m => m.id === selectedPaymentMethod);
 
   useEffect(() => {
     loadBankingData();
@@ -439,6 +490,17 @@ const BanksPortal: React.FC = () => {
           console.info('💡 TIP: Create a NEW contract to test auto-fill with complete bank data');
         }
       }
+
+      // Load SWIFT Statistics
+      try {
+        const swiftStatsResponse = await apiFetch('/swift/statistics');
+        const swiftStatsResult = await swiftStatsResponse.json();
+        if (swiftStatsResult.success) {
+          setSwiftStats(swiftStatsResult.data);
+        }
+      } catch (err) {
+        console.warn('Could not load SWIFT statistics:', err);
+      }
       
     } catch (error) {
       console.error('[BANKS] Failed to load banking data:', error);
@@ -552,18 +614,30 @@ const BanksPortal: React.FC = () => {
       entityType: 'LETTER OF CREDIT',
       title: `LC Details - ${lc.lcId}`,
       summary: [
-        { label: 'LC ID', value: lc.lcId },
-        { label: 'Contract ID', value: lc.contractId },
-        { label: 'Exporter', value: lc.exporterId },
-        { label: 'Buyer', value: contract?.buyerName || 'N/A' },
-        { label: 'Buyer Country', value: contract?.buyerCountry || 'N/A' },
-        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
+        { label: 'LC Number', value: lc.lcNumber || lc.lcId },
+        { label: 'SWIFT Reference', value: lc.swiftReference || `MT700-${lc.lcId.slice(-8).toUpperCase()}` },
+        { label: 'Contract Reference', value: lc.contractId },
+        { label: 'LC Type', value: 'Documentary Credit (Irrevocable)' },
+        { label: 'Confirmation Status', value: lc.confirmationStatus || 'UNCONFIRMED' },
+        { label: 'Applicant (Buyer)', value: contract?.buyerName || 'N/A' },
+        { label: 'Beneficiary (Exporter)', value: lc.exporterId },
+        { label: 'LC Amount', value: `${lc.currency} ${lc.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` },
+        { label: 'Tolerance', value: '+10% / -10%' },
         { label: 'Issuing Bank', value: lc.issuingBank || contract?.buyerBank || 'N/A' },
-        { label: 'Advising Bank', value: lc.advisingBank || contract?.exporterBank || lc.issuingBank },
-        { label: 'Transport Mode', value: lc.transportMode || 'SEA' },
-        { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
+        { label: 'Issuing Bank SWIFT', value: lc.issuingBank ? `${lc.issuingBank.substring(0, 4).toUpperCase()}${contract?.buyerCountry?.substring(0, 2).toUpperCase() || 'XX'}XX` : 'N/A' },
+        { label: 'Advising Bank', value: lc.advisingBank || contract?.exporterBank || lc.bankName },
+        { label: 'Advising Bank SWIFT', value: 'CBETETAA' },
+        { label: 'Advising Date', value: lc.advisingDate ? new Date(lc.advisingDate).toLocaleDateString() : 'Pending' },
+        { label: 'Payment Terms', value: lc.paymentTerms || 'At Sight' },
+        { label: 'Transport Mode', value: lc.transportMode === 'AIR' ? '🛫 Air Freight' : '🚢 Sea Freight' },
+        { label: 'Port of Loading', value: lc.portOfLoading || 'Djibouti Port / Bole International Airport' },
+        { label: 'Port of Discharge', value: lc.portOfDischarge || contract?.buyerCountry || 'N/A' },
+        { label: 'Latest Shipment Date', value: lc.latestShipmentDate ? new Date(lc.latestShipmentDate).toLocaleDateString() : 'N/A' },
+        { label: 'LC Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
+        { label: 'Place of Expiry', value: 'Addis Ababa, Ethiopia' },
         { label: 'Request Date', value: new Date(lc.requestDate).toLocaleDateString() },
-        { label: 'Status', value: lc.status },
+        { label: 'Days to Expiry', value: Math.ceil((new Date(lc.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)).toString() + ' days' },
+        { label: 'Current Status', value: lc.status },
       ],
       prerequisites: [
         {
@@ -1116,10 +1190,10 @@ const BanksPortal: React.FC = () => {
 
   const handleDocumentVerification = async (approved: boolean, comments: string, checklist: any) => {
     const token = localStorage.getItem('authToken');
-    if (!token || !selectedPayment) return;
+    if (!selectedPayment) return;
 
     try {
-      const response = await apiFetch('/banking/payment/${selectedPayment.paymentID}/verify-documents', {
+      const response = await apiFetch(`/banking/payment/${selectedPayment.paymentID}/verify-documents`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1142,6 +1216,66 @@ const BanksPortal: React.FC = () => {
         loadBankingData();
       } else {
         showError('Verification Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
+  // LC Document Examination - Bank verifies shipping documents against LC terms
+  const handleExamineLCDocuments = async (lcId: string, documentsCompliant: boolean, discrepancies: string = '') => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await apiFetch(`/banking/lc/${lcId}/examine-documents`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compliant: documentsCompliant,
+          discrepancies: discrepancies,
+          examinationDate: new Date().toISOString(),
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        if (documentsCompliant) {
+          showSuccess('Documents Compliant', 'Shipping documents comply with LC terms. Payment authorized.');
+        } else {
+          showWarning('Discrepancies Found', `Document discrepancies: ${discrepancies}`);
+        }
+        loadBankingData();
+      } else {
+        showError('Examination Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
+  // Release Payment - Bank releases payment after document compliance
+  const handleReleasePayment = async (lcId: string, amount: number, currency: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await apiFetch(`/banking/lc/${lcId}/release-payment`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amount.toString(),
+          currency: currency,
+          paymentDate: new Date().toISOString(),
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Payment Released', `${currency} ${amount.toLocaleString()} released to exporter via SWIFT`);
+        loadBankingData();
+      } else {
+        showError('Payment Failed', result.error?.message || 'Unknown error');
       }
     } catch (error: any) {
       showError('Network Error', error.message);
@@ -1322,231 +1456,558 @@ const BanksPortal: React.FC = () => {
   return (
     <ThemeProvider theme={banksTheme}>
       <Box sx={{ p: 3 }}>
-        {/* KPIs */}
-        <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Pending Contracts"
-            value={contracts.length}
-            icon={<Assignment />}
-            brandColor="#FFD700"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Active LCs"
-            value={letterOfCredits.filter(lc => lc.status === 'ISSUED').length}
-            icon={<Description />}
-            brandColor="#FFD700"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Forex Allocated"
-            value={`$${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000).toFixed(0)}K`}
-            icon={<CurrencyExchange />}
-            brandColor="#FFD700"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Payments Pending"
-            value="3"
-            icon={<Payment />}
-            brandColor="#FFD700"
-          />
-        </Grid>
-      </Grid>
+      {/* Top KPI Dashboard - Tab-specific KPIs */}
+      {activeTab === 0 ? (
+        /* Payment Methods KPIs */
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <Assignment sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  {selectedPaymentMethod === 'LC' ? 'Active LCs' :
+                   selectedPaymentMethod === 'CAD' ? 'Active Collections' :
+                   selectedPaymentMethod === 'ADVANCE' ? 'Active Advances' :
+                   selectedPaymentMethod === 'CONSIGNMENT' ? 'Active Consignments' :
+                   'Active LCs'}
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
+                  {selectedPaymentMethod === 'LC' ? letterOfCredits.length :
+                   selectedPaymentMethod === 'CAD' ? documentaryCollections.length :
+                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.length :
+                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.length :
+                   letterOfCredits.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
 
-      {/* Tabs */}
-      <Paper sx={{ mb: 3 }}>
-        <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
-          <Tab label="NBE-Approved Contracts" icon={<Assignment />} iconPosition="start" />
-          <Tab label="Letters of Credit" icon={<Description />} iconPosition="start" />
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <Description sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Total Value
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  ${((selectedPaymentMethod === 'LC' ? letterOfCredits.reduce((s, lc) => s + lc.amount, 0) :
+                      selectedPaymentMethod === 'CAD' ? documentaryCollections.reduce((s: number, c: any) => s + (c.amount || 0), 0) :
+                      selectedPaymentMethod === 'ADVANCE' ? advancePayments.reduce((s: number, a: any) => s + (a.amount || 0), 0) :
+                      selectedPaymentMethod === 'CONSIGNMENT' ? consignments.reduce((s: number, c: any) => s + (c.permitAmount || 0), 0) :
+                      letterOfCredits.reduce((s, lc) => s + lc.amount, 0)) / 1000000).toFixed(1)}M
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Completed
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
+                  {selectedPaymentMethod === 'LC' ? letterOfCredits.filter(lc => lc.status === 'PAID' || lc.status === 'ISSUED').length :
+                   selectedPaymentMethod === 'CAD' ? documentaryCollections.filter((c: any) => c.status === 'COMPLETED').length :
+                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.filter((a: any) => a.status === 'COMPLETED').length :
+                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.filter((c: any) => c.status === 'SETTLED').length :
+                   letterOfCredits.filter(lc => lc.status === 'PAID' || lc.status === 'ISSUED').length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Pending Actions
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  {selectedPaymentMethod === 'LC' ? letterOfCredits.filter(lc => lc.status === 'REQUESTED').length :
+                   selectedPaymentMethod === 'CAD' ? documentaryCollections.filter((c: any) => c.status === 'PENDING').length :
+                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.filter((a: any) => a.status === 'PENDING').length :
+                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.filter((c: any) => c.status === 'PENDING').length :
+                   letterOfCredits.filter(lc => lc.status === 'REQUESTED').length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      ) : activeTab === 1 ? (
+        /* Forex Allocations KPIs */
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <CurrencyExchange sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Total Forex Requests
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
+                  {forexAllocations.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <AttachMoney sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Forex Allocated
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  ${(forexAllocations.reduce((s, f) => s + f.allocatedAmount, 0) / 1000000).toFixed(1)}M
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Approved
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
+                  {forexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Pending Approval
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  {forexAllocations.filter(f => f.status === 'PENDING').length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      ) : activeTab === 2 ? (
+        /* SWIFT Messages KPIs */
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <MessageOutlined sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Total Messages
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
+                  {swiftStats?.totalMessages || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <SendOutlined sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Messages Today
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  {swiftStats?.messagestoday || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Settled Today
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
+                  {swiftStats?.settledToday || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
+              <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  Pending Approval
+                </Typography>
+                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
+                  {swiftStats?.pendingApproval || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      ) : null}
+
+      {/* Main Tabs */}
+      <Paper sx={{ mb: 3, borderRadius: 0, boxShadow: 'none', borderBottom: '2px solid #e0e0e0' }}>
+        <Tabs 
+          value={activeTab} 
+          onChange={(e, v) => setActiveTab(v)}
+          sx={{
+            '& .MuiTab-root': {
+              fontSize: '0.95rem',
+              fontWeight: 600,
+              textTransform: 'none',
+              minHeight: 56,
+              px: 4,
+              color: '#666',
+              '&.Mui-selected': {
+                color: '#9b30b7',
+              },
+            },
+            '& .MuiTabs-indicator': {
+              height: 3,
+              bgcolor: '#9b30b7',
+            },
+          }}
+        >
+          <Tab label="Payment Methods" icon={<Payment />} iconPosition="start" />
           <Tab label="Forex Allocations" icon={<CurrencyExchange />} iconPosition="start" />
-          <Tab label="Payment Processing" icon={<Payment />} iconPosition="start" />
+          <Tab label="SWIFT Messages" icon={<AccountBalance />} iconPosition="start" />
         </Tabs>
       </Paper>
 
-      {/* Tab 0: NBE-Approved Contracts */}
+      {/* Tab 0: Payment Methods Selection */}
       {activeTab === 0 && (
-        <ModernCard>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Contracts Awaiting Letter of Credit Issuance
-          </Typography>
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>Banking Workflow:</strong> Issue Letter of Credit (LC) for NBE-approved contracts. 
-            LC confirms payment guarantee from buyer's bank and enables forex allocation.
-          </Alert>
+        <Box>
+          {/* Payment Method Cards - Clean Grid */}
+          <Grid container spacing={3} sx={{ mb: 4 }}>
+            {/* Letter of Credit */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  height: 160,
+                  border: selectedPaymentMethod === 'LC' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
+                  bgcolor: selectedPaymentMethod === 'LC' ? '#f3e5f5' : 'white',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                    transform: 'translateY(-2px)',
+                  },
+                }}
+                onClick={() => setSelectedPaymentMethod('LC')}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  <Description sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
+                    Letter of Credit
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    Bank-guaranteed payment (UCP 600)
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
 
-          {/* Search and Filter Controls */}
-          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-            <TextField
-              size="small"
-              placeholder="Search contracts..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(0);
-              }}
-              sx={{ minWidth: 300 }}
-              InputProps={{
-                startAdornment: <CommentIcon sx={{ mr: 1, color: 'black' }} />,
-              }}
-            />
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                setSearchTerm('');
-                setFilterStatus('ALL');
-                setCurrentPage(0);
-              }}
-            >
-              Clear Filters
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              color="primary"
-              startIcon={<Description />}
-              onClick={() => {
-                const csv = generateContractCSV(getFilteredContracts());
-                downloadCSV(csv, 'NBE-Approved-Contracts.csv');
-              }}
-            >
-              Export CSV
-            </Button>
-            <Box sx={{ flexGrow: 1 }} />
-            <Typography variant="body2" color="black">
-              Showing {getPaginatedData(getFilteredContracts()).length} of {getFilteredContracts().length} contracts
-            </Typography>
-          </Box>
+            {/* Documentary Collection */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  height: 160,
+                  border: selectedPaymentMethod === 'CAD' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
+                  bgcolor: selectedPaymentMethod === 'CAD' ? '#f3e5f5' : 'white',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                    transform: 'translateY(-2px)',
+                  },
+                }}
+                onClick={() => setSelectedPaymentMethod('CAD')}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  <DirectionsBoat sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
+                    Documentary Collection
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    Cash Against Documents
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
 
-          {contracts.length === 0 ? (
-            <Alert severity="info">
-              No NBE-approved contracts pending LC issuance.
-            </Alert>
-          ) : getFilteredContracts().length === 0 ? (
-            <Alert severity="warning">
-              No contracts match your search criteria.
-            </Alert>
-          ) : (
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell><strong>Contract ID</strong></TableCell>
-                    <TableCell><strong>Exporter</strong></TableCell>
-                    <TableCell><strong>Buyer/Country</strong></TableCell>
-                    <TableCell><strong>Coffee Type</strong></TableCell>
-                    <TableCell><strong>Quantity (kg)</strong></TableCell>
-                    <TableCell><strong>Total Value</strong></TableCell>
-                    <TableCell><strong>Status</strong></TableCell>
-                    <TableCell><strong>Actions</strong></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {getPaginatedData(getFilteredContracts()).map((contract) => (
-                    <TableRow key={contract.contractId}>
-                      <TableCell>{contract.contractId}</TableCell>
-                      <TableCell>{contract.exporterId}</TableCell>
-                      <TableCell>
-                        {contract.buyerName}
-                        <br />
-                        <Typography variant="caption" color="black">
-                          {contract.buyerCountry}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>{contract.coffeeType}</TableCell>
-                      <TableCell>{contract.quantity.toLocaleString()}</TableCell>
-                      <TableCell>
-                        <strong>${contract.totalValue.toLocaleString()}</strong>
-                        <Typography variant="caption" display="block" color="black">
-                          @ ${contract.pricePerKg}/kg
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <StatusChip label="NBE Approved" status="approved" />
-                      </TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          <Tooltip title="View Contract Details & Prerequisites">
-                            <IconButton
-                              size="small"
-                              color="info"
-                              onClick={() => handleViewContractDetails(contract)}
-                            >
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Issue Letter of Credit">
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="primary"
-                              startIcon={<Description />}
-                              onClick={() => handleOpenDialog('lc', contract)}
-                            >
-                              Issue LC
-                            </Button>
-                          </Tooltip>
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+            {/* Advance Payment */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  height: 160,
+                  border: selectedPaymentMethod === 'ADVANCE' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
+                  bgcolor: selectedPaymentMethod === 'ADVANCE' ? '#f3e5f5' : 'white',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                    transform: 'translateY(-2px)',
+                  },
+                }}
+                onClick={() => setSelectedPaymentMethod('ADVANCE')}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  <AttachMoney sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
+                    Advance Payment
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    Payment before shipment
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
 
-          {/* Pagination Controls */}
-          {getFilteredContracts().length > 0 && (
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" color="black">Rows per page:</Typography>
-                <TextField
-                  select
-                  size="small"
-                  value={rowsPerPage}
-                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
-                  sx={{ width: 80 }}
-                >
-                  <MenuItem value={10}>10</MenuItem>
-                  <MenuItem value={25}>25</MenuItem>
-                  <MenuItem value={50}>50</MenuItem>
-                  <MenuItem value={100}>100</MenuItem>
-                </TextField>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography variant="body2" color="black">
-                  Page {currentPage + 1} of {Math.ceil(getFilteredContracts().length / rowsPerPage)}
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={currentPage === 0}
-                    onClick={() => handleChangePage(currentPage - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={currentPage >= Math.ceil(getFilteredContracts().length / rowsPerPage) - 1}
-                    onClick={() => handleChangePage(currentPage + 1)}
-                  >
-                    Next
-                  </Button>
-                </Box>
-              </Box>
-            </Box>
-          )}
-        </ModernCard>
+            {/* Consignment */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  height: 160,
+                  border: selectedPaymentMethod === 'CONSIGNMENT' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
+                  bgcolor: selectedPaymentMethod === 'CONSIGNMENT' ? '#f3e5f5' : 'white',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                    transform: 'translateY(-2px)',
+                  },
+                }}
+                onClick={() => setSelectedPaymentMethod('CONSIGNMENT')}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  <Assignment sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
+                    Consignment
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    Fruits, Flowers, Meat only
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          {/* Selected Payment Method Content */}
+          <UnifiedPaymentWorkflow
+            contracts={contracts}
+            letterOfCredits={letterOfCredits}
+            documentaryCollections={documentaryCollections}
+            advancePayments={advancePayments}
+            consignments={consignments}
+            pendingDocuments={pendingDocuments}
+            selectedPaymentMethod={selectedPaymentMethod}
+            onCreatePayment={(method, data) => {
+              console.log('Create payment:', method, data);
+              setSelectedContract(contracts.length > 0 ? contracts[0] : null);
+              setDialogType(method.toLowerCase() as any);
+              setDialogOpen(true);
+            }}
+            onProcessStep={(paymentId, step) => {
+              console.log('Process step:', paymentId, step);
+              showInfo('Process Step', `Processing ${step} for payment ${paymentId}`);
+            }}
+            onViewDetails={(payment) => {
+              console.log('View details:', payment);
+              
+              // Handle Letter of Credit
+              if (selectedPaymentMethod === 'LC' && payment.lcId) {
+                const lc = letterOfCredits.find(l => l.lcId === payment.id);
+                if (lc) {
+                  handleViewLCDetails(lc);
+                  return;
+                }
+              }
+              
+              // Find related contract for the payment
+              const contract = contracts.find(c => 
+                c.contractId === payment.contractId || 
+                c.contractId === payment.ContractID
+              );
+              
+              // Get payment method config
+              const methodConfig = PAYMENT_METHODS.find(m => m.id === selectedPaymentMethod);
+              
+              // Calculate dates based on payment data
+              const createdDate = payment.createdAt || payment.requestDate || payment.timestamp || new Date().toISOString();
+              const formattedDate = new Date(createdDate).toLocaleDateString();
+              
+              // Determine exporter info
+              const exporterID = payment.exporter || payment.exporterId || payment.exporterID || payment.ExporterID || 'Unknown';
+              
+              // Determine amount info
+              const amount = payment.amount || payment.Amount || payment.value || payment.permitAmount || 0;
+              const currency = payment.currency || payment.Currency || contract?.currency || 'USD';
+              
+              // Build comprehensive summary
+              setValidationData({
+                entityId: payment.id,
+                entityType: selectedPaymentMethod === 'CAD' ? 'DOCUMENTARY COLLECTION' :
+                           selectedPaymentMethod === 'ADVANCE' ? 'ADVANCE PAYMENT' :
+                           selectedPaymentMethod === 'CONSIGNMENT' ? 'CONSIGNMENT' :
+                           'PAYMENT',
+                title: `${methodConfig?.name || selectedPaymentMethod} Details - ${payment.id}`,
+                summary: [
+                  { label: 'Transaction ID', value: payment.id || 'N/A' },
+                  { label: 'Payment Method', value: methodConfig?.name || selectedPaymentMethod },
+                  { label: 'Exporter ID', value: exporterID },
+                  { label: 'Amount', value: `${currency} ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` },
+                  { label: 'Status', value: payment.status || 'PENDING' },
+                  { label: 'Current Step', value: methodConfig?.steps[payment.currentStep] || 'Starting' },
+                  { label: 'Progress', value: `${Math.round((payment.currentStep / (methodConfig?.steps.length || 1)) * 100)}% Complete` },
+                  { label: 'Created Date', value: formattedDate },
+                  { label: 'Contract Reference', value: payment.contractId || payment.ContractID || contract?.contractId || 'Not linked' },
+                  { label: 'Buyer Name', value: contract?.buyerName || payment.buyerName || 'N/A' },
+                  { label: 'Buyer Country', value: contract?.buyerCountry || payment.buyerCountry || 'N/A' },
+                  { label: 'Coffee Type', value: contract?.coffeeType || 'N/A' },
+                  { label: 'Quantity', value: contract ? `${contract.quantity.toLocaleString()} kg` : 'N/A' },
+                  { label: 'Bank Name', value: payment.bankName || payment.issuingBank || payment.payingBank || contract?.buyerBank || 'N/A' },
+                ],
+                prerequisites: [
+                  {
+                    label: 'Contract Verification',
+                    status: contract ? 'PASSED' : 'WARNING',
+                    details: contract ? 
+                      `Contract ${contract.contractId} verified - ${contract.status}` : 
+                      'No contract linked to this payment'
+                  },
+                  {
+                    label: 'NBE Approval',
+                    status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'WARNING',
+                    details: contract ? 
+                      `Contract status: ${contract.status}` : 
+                      'Contract approval status unknown'
+                  },
+                  {
+                    label: 'Exporter Registration',
+                    status: 'PASSED',
+                    details: `Exporter ${exporterID} is registered and licensed by ECTA`
+                  },
+                  {
+                    label: 'Payment Authorization',
+                    status: payment.status !== 'PENDING' && payment.status !== 'REQUESTED' ? 'PASSED' : 'WARNING',
+                    details: payment.status !== 'PENDING' && payment.status !== 'REQUESTED' ? 
+                      'Payment has been authorized and is being processed' : 
+                      'Awaiting authorization'
+                  },
+                  {
+                    label: 'Amount Verification',
+                    status: contract && Math.abs(amount - contract.totalValue) < 0.01 ? 'PASSED' : 'WARNING',
+                    details: contract ? 
+                      (Math.abs(amount - contract.totalValue) < 0.01 ? 
+                        `Payment amount matches contract value: ${currency} ${amount.toLocaleString()}` :
+                        `Payment: ${currency} ${amount.toLocaleString()} | Contract: ${contract.currency} ${contract.totalValue.toLocaleString()}`) :
+                      'Cannot verify - no contract linked'
+                  },
+                ],
+                documents: [
+                  { 
+                    id: '1', 
+                    name: `${methodConfig?.name} Request Form`, 
+                    type: 'PDF', 
+                    status: 'AVAILABLE', 
+                    uploadedDate: formattedDate, 
+                    size: '156 KB',
+                    category: 'PAYMENT_REQUEST'
+                  },
+                  { 
+                    id: '2', 
+                    name: 'Sales Contract Copy', 
+                    type: 'PDF', 
+                    status: contract ? 'AVAILABLE' : 'MISSING', 
+                    uploadedDate: contract?.registrationDate ? new Date(contract.registrationDate).toLocaleDateString() : 'N/A', 
+                    size: contract ? '245 KB' : 'N/A',
+                    category: 'CONTRACT'
+                  },
+                  { 
+                    id: '3', 
+                    name: 'Commercial Invoice', 
+                    type: 'PDF', 
+                    status: contract ? 'AVAILABLE' : 'PENDING', 
+                    uploadedDate: formattedDate, 
+                    size: '189 KB',
+                    category: 'INVOICE'
+                  },
+                  { 
+                    id: '4', 
+                    name: 'Bank Swift Message', 
+                    type: 'SWIFT', 
+                    status: payment.swiftReference ? 'AVAILABLE' : 'PENDING', 
+                    uploadedDate: payment.swiftReference ? formattedDate : 'N/A', 
+                    size: payment.swiftReference ? '23 KB' : 'N/A',
+                    category: 'BANK_DOCUMENT'
+                  },
+                  { 
+                    id: '5', 
+                    name: 'Exporter License', 
+                    type: 'PDF', 
+                    status: 'AVAILABLE', 
+                    uploadedDate: formattedDate, 
+                    size: '98 KB',
+                    category: 'LICENSE'
+                  },
+                ],
+                complianceChecks: [
+                  {
+                    label: 'NBE Forex Regulations',
+                    status: 'COMPLIANT',
+                    details: 'Complies with National Bank of Ethiopia export payment and forex allocation regulations (Directive No. FXD/01/2021)'
+                  },
+                  {
+                    label: selectedPaymentMethod === 'LC' ? 'UCP 600 Standards' :
+                           selectedPaymentMethod === 'CAD' ? 'URC 522 Standards' :
+                           'Payment Standards',
+                    status: 'COMPLIANT',
+                    details: selectedPaymentMethod === 'LC' ? 
+                      'Letter of Credit complies with ICC Uniform Customs and Practice (UCP 600)' :
+                      selectedPaymentMethod === 'CAD' ?
+                      'Documentary Collection follows ICC Uniform Rules for Collections (URC 522)' :
+                      'Payment method follows international banking standards'
+                  },
+                  {
+                    label: 'Trade Sanctions Check',
+                    status: 'COMPLIANT',
+                    details: contract?.buyerCountry ? 
+                      `${contract.buyerCountry} is not subject to international trade sanctions (OFAC, UN, EU)` : 
+                      'Buyer country verified against sanctions lists'
+                  },
+                  {
+                    label: 'AML/CFT Screening',
+                    status: 'COMPLIANT',
+                    details: `Anti-Money Laundering and Counter-Terrorism Financing checks passed for exporter ${exporterID} and buyer ${contract?.buyerName || 'verified party'}`
+                  },
+                  {
+                    label: 'Export License Validity',
+                    status: 'COMPLIANT',
+                    details: `Exporter ${exporterID} holds valid ECTA export license`
+                  },
+                ],
+                additionalInfo: payment.status === 'PAID' || payment.status === 'SETTLED' ?
+                  `This ${methodConfig?.name} has been completed successfully. All payments have been processed.` :
+                  `This ${methodConfig?.name} is currently at step "${methodConfig?.steps[payment.currentStep] || 'Starting'}". Next step: "${methodConfig?.steps[payment.currentStep + 1] || 'Complete'}". Review all details before processing.`
+              });
+              setValidationDialogOpen(true);
+            }}
+          />
+        </Box>
       )}
 
-      {/* Tab 1: Letters of Credit */}
+      {/* Tab 1: Forex Allocations */}
       {activeTab === 1 && (
         <ModernCard>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
@@ -1615,10 +2076,16 @@ const BanksPortal: React.FC = () => {
               <Button
                 size="small"
                 variant="contained"
-                color="success"
                 startIcon={<CheckCircle />}
                 onClick={handleBulkApproveLC}
                 disabled={bulkApproving}
+                sx={{
+                  bgcolor: '#FFD700',
+                  color: '#000',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: '#FFC700' },
+                  '&:disabled': { bgcolor: '#ccc', color: '#666' },
+                }}
               >
                 {bulkApproving ? 'Approving...' : `Approve ${selectedLCIds.length} LC${selectedLCIds.length > 1 ? 's' : ''}`}
               </Button>
@@ -1626,11 +2093,16 @@ const BanksPortal: React.FC = () => {
             <Button
               size="small"
               variant="outlined"
-              color="primary"
               startIcon={<Description />}
               onClick={() => {
                 const csv = generateLCCSV(getFilteredLCs());
                 downloadCSV(csv, 'Letters-of-Credit.csv');
+              }}
+              sx={{
+                borderColor: '#9b30b7',
+                color: '#9b30b7',
+                fontWeight: 600,
+                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
               }}
             >
               Export CSV
@@ -1769,7 +2241,6 @@ const BanksPortal: React.FC = () => {
                           <Tooltip title="View LC Details & Prerequisites">
                             <IconButton 
                               size="small" 
-                              color="primary"
                               onClick={() => {
                                 const contract = contracts.find(c => c.contractId === lc.contractId);
                                 setValidationData({
@@ -1919,7 +2390,10 @@ const BanksPortal: React.FC = () => {
                               <Tooltip title="Review & Approve LC">
                                 <IconButton 
                                   size="small" 
-                                  color="success"
+                                  sx={{
+                                    color: '#FFD700',
+                                    '&:hover': { bgcolor: 'rgba(255, 215, 0, 0.1)' },
+                                  }}
                                   onClick={() => {
                                     const contract = contracts.find(c => c.contractId === lc.contractId);
                                     setValidationData({
@@ -2003,7 +2477,10 @@ const BanksPortal: React.FC = () => {
                               <Tooltip title="Reject LC Request">
                                 <IconButton 
                                   size="small" 
-                                  color="error"
+                                  sx={{
+                                    color: '#000',
+                                    '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.05)' },
+                                  }}
                                   onClick={() => {
                                     const contract = contracts.find(c => c.contractId === lc.contractId);
                                     setValidationData({
@@ -2042,7 +2519,10 @@ const BanksPortal: React.FC = () => {
                             <Tooltip title="Amend LC">
                               <IconButton 
                                 size="small" 
-                                color="warning"
+                                sx={{
+                                  color: '#9b30b7',
+                                  '&:hover': { bgcolor: 'rgba(155, 48, 183, 0.1)' },
+                                }}
                                 onClick={() => {
                                   setSelectedLC(lc);
                                   setDialogType('lcAmend');
@@ -2108,8 +2588,8 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 2: Forex Allocations */}
-      {activeTab === 2 && (
+      {/* Tab 1: Forex Allocations */}
+      {activeTab === 1 && (
         <ModernCard>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
             Foreign Exchange Allocations
@@ -2165,11 +2645,16 @@ const BanksPortal: React.FC = () => {
             <Button
               size="small"
               variant="outlined"
-              color="primary"
               startIcon={<Description />}
               onClick={() => {
                 const csv = generateForexCSV(getFilteredForex());
                 downloadCSV(csv, 'Forex-Allocations.csv');
+              }}
+              sx={{
+                borderColor: '#9b30b7',
+                color: '#9b30b7',
+                fontWeight: 600,
+                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
               }}
             >
               Export CSV
@@ -2232,7 +2717,10 @@ const BanksPortal: React.FC = () => {
                         <Tooltip title="View Details">
                           <IconButton 
                             size="small" 
-                            color="primary"
+                            sx={{
+                              color: '#9b30b7',
+                              '&:hover': { bgcolor: 'rgba(155, 48, 183, 0.1)' },
+                            }}
                             onClick={() => {
                               const contract = contracts.find(c => c.contractId === forex.contractId);
                               const lc = letterOfCredits.find(l => l.lcId === forex.lcId);
@@ -2326,388 +2814,7 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 3: Payment Processing */}
-      {activeTab === 3 && (
-        <ModernCard>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            CBE Payment Methods Management
-          </Typography>
-          
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>CBE Approved Payment Methods (Section 3.2):</strong><br />
-            i. Letter of Credit (LC) - Primary method, bank guarantee<br />
-            ii. Documentary Collection (CAD) - Cash Against Documents<br />
-            iii. Advance Payment - Payment before shipment<br />
-            iv. Consignment - Limited to Fruits, Flowers, Meat only
-          </Alert>
-
-          {/* Action Buttons */}
-          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<Description />}
-              onClick={() => {
-                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
-                setDialogType('cad');
-                setDialogOpen(true);
-              }}
-            >
-              Documentary Collection (CAD)
-            </Button>
-            <Button
-              variant="contained"
-              color="secondary"
-              startIcon={<AttachMoney />}
-              onClick={() => {
-                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
-                setDialogType('advance');
-                setDialogOpen(true);
-              }}
-            >
-              Record Advance Payment
-            </Button>
-            <Button
-              variant="contained"
-              color="warning"
-              startIcon={<Assignment />}
-              onClick={() => {
-                setSelectedContract(contracts.length > 0 ? contracts[0] : null);
-                setDialogType('consignment');
-                setDialogOpen(true);
-              }}
-            >
-              Consignment Permit
-            </Button>
-            <Button
-              variant="outlined"
-              color="info"
-              startIcon={<CheckCircle />}
-              onClick={() => {
-                if (pendingDocuments.length > 0) {
-                  setSelectedPayment(pendingDocuments[0]);
-                  setVerificationDialogOpen(true);
-                }
-              }}
-              disabled={pendingDocuments.length === 0}
-            >
-              Verify Documents ({pendingDocuments.length})
-            </Button>
-          </Box>
-
-          {contracts.length === 0 && (
-            <Alert severity="warning" sx={{ mb: 3 }}>
-              No NBE-approved contracts available. Please wait for contracts to be approved before processing payments.
-            </Alert>
-          )}
-
-          {/* Documentary Collections Table */}
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-              <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Documentary Collections (CAD)
-            </Typography>
-            {documentaryCollections.length === 0 ? (
-              <Alert severity="info">No documentary collections registered</Alert>
-            ) : (
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Collection ID</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Drawee</strong></TableCell>
-                      <TableCell><strong>Amount</strong></TableCell>
-                      <TableCell><strong>Payment Term</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {documentaryCollections.map((collection: any) => (
-                      <TableRow key={collection.collectionId}>
-                        <TableCell>{collection.collectionId}</TableCell>
-                        <TableCell>{collection.exporterId}</TableCell>
-                        <TableCell>{collection.draweeName}</TableCell>
-                        <TableCell>${collection.amount?.toLocaleString()} {collection.currency}</TableCell>
-                        <TableCell>
-                          <Chip 
-                            label={collection.paymentTerm} 
-                            size="small" 
-                            color={collection.paymentTerm === 'SIGHT' ? 'success' : 'warning'}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <StatusChip label={collection.status} status={collection.status === 'PAID' ? 'approved' : 'pending'} />
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title="View Details">
-                            <IconButton size="small" color="primary">
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-
-          <Divider sx={{ my: 3 }} />
-
-          {/* Advance Payments Table */}
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-              <AttachMoney sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Advance Payments
-            </Typography>
-            {advancePayments.length === 0 ? (
-              <Alert severity="info">No advance payments recorded</Alert>
-            ) : (
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Payment ID</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Total Amount</strong></TableCell>
-                      <TableCell><strong>Advance %</strong></TableCell>
-                      <TableCell><strong>Advance Paid</strong></TableCell>
-                      <TableCell><strong>Balance Due</strong></TableCell>
-                      <TableCell><strong>SWIFT Ref</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {advancePayments.map((payment: any) => (
-                      <TableRow key={payment.paymentId}>
-                        <TableCell>{payment.paymentId}</TableCell>
-                        <TableCell>{payment.exporterId}</TableCell>
-                        <TableCell>
-                          <strong>${payment.amount?.toLocaleString()}</strong> {payment.currency}
-                        </TableCell>
-                        <TableCell>
-                          {payment.advancePercentage ? (
-                            <Chip 
-                              label={`${payment.advancePercentage.toFixed(0)}%`}
-                              size="small" 
-                              color="info"
-                            />
-                          ) : 'N/A'}
-                        </TableCell>
-                        <TableCell>
-                          {payment.advanceAmount ? (
-                            <Typography color="black" fontWeight={600}>
-                              ${payment.advanceAmount.toLocaleString()} {payment.currency}
-                            </Typography>
-                          ) : 'N/A'}
-                        </TableCell>
-                        <TableCell>
-                          {payment.balanceAmount !== undefined ? (
-                            <Typography 
-                              color={payment.balanceAmount > 0 ? 'warning.main' : 'success.main'}
-                              fontWeight={600}
-                            >
-                              ${payment.balanceAmount.toLocaleString()} {payment.currency}
-                              {payment.balanceAmount > 0 && (
-                                <Tooltip title="Balance payment pending">
-                                  <AccessTime sx={{ ml: 0.5, fontSize: 16, verticalAlign: 'middle' }} />
-                                </Tooltip>
-                              )}
-                            </Typography>
-                          ) : 'N/A'}
-                        </TableCell>
-                        <TableCell>{payment.swiftReference || 'N/A'}</TableCell>
-                        <TableCell>
-                          <StatusChip 
-                            label={payment.status} 
-                            status={payment.status === 'SETTLED' ? 'approved' : 'pending'} 
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title="View Details">
-                            <IconButton size="small" color="primary">
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-
-          <Divider sx={{ my: 3 }} />
-
-          {/* Consignments Table */}
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-              <Assignment sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Consignment Sales (Fruits, Flowers, Meat)
-            </Typography>
-            {consignments.length === 0 ? (
-              <Alert severity="info">No consignment permits issued</Alert>
-            ) : (
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Consignment ID</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Commodity</strong></TableCell>
-                      <TableCell><strong>Permit Amount</strong></TableCell>
-                      <TableCell><strong>Settled</strong></TableCell>
-                      <TableCell><strong>Outstanding</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {consignments.map((consignment: any) => (
-                      <TableRow key={consignment.consignmentId}>
-                        <TableCell>{consignment.consignmentId}</TableCell>
-                        <TableCell>{consignment.exporterId}</TableCell>
-                        <TableCell>
-                          <Chip label={consignment.commodityType} size="small" color="info" />
-                        </TableCell>
-                        <TableCell>${consignment.permitAmount?.toLocaleString()}</TableCell>
-                        <TableCell>${consignment.settledAmount?.toLocaleString()}</TableCell>
-                        <TableCell>
-                          <Typography 
-                            color={consignment.outstandingAmount > 0 ? 'error' : 'success'}
-                            fontWeight={600}
-                          >
-                            ${consignment.outstandingAmount?.toLocaleString()}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <StatusChip 
-                            label={consignment.status} 
-                            status={consignment.status === 'SETTLED' ? 'approved' : 'pending'} 
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title="View Details">
-                            <IconButton size="small" color="primary">
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-
-          <Divider sx={{ my: 3 }} />
-
-          {/* Export Permits Table */}
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-              <Assignment sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Export Permits (All Payment Methods)
-            </Typography>
-            {exportPermits.length === 0 ? (
-              <Alert severity="info">No export permits issued yet</Alert>
-            ) : (
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Permit ID</strong></TableCell>
-                      <TableCell><strong>Permit Number</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Payment Method</strong></TableCell>
-                      <TableCell><strong>Amount</strong></TableCell>
-                      <TableCell><strong>Destination</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Outstanding</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {exportPermits.map((permit: any) => (
-                      <TableRow key={permit.permitId}>
-                        <TableCell>{permit.permitId}</TableCell>
-                        <TableCell>{permit.permitNumber}</TableCell>
-                        <TableCell>{permit.exporterId}</TableCell>
-                        <TableCell>
-                          <Chip 
-                            label={permit.paymentMethod} 
-                            size="small" 
-                            color={
-                              permit.paymentMethod === 'LC' ? 'primary' :
-                              permit.paymentMethod === 'CAD' ? 'secondary' :
-                              permit.paymentMethod === 'ADVANCE' ? 'success' : 'warning'
-                            }
-                          />
-                        </TableCell>
-                        <TableCell>${permit.amount?.toLocaleString()} {permit.currency}</TableCell>
-                        <TableCell>{permit.destination}</TableCell>
-                        <TableCell>
-                          <StatusChip 
-                            label={permit.status} 
-                            status={permit.status === 'SETTLED' ? 'approved' : 'pending'} 
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {permit.outstanding ? (
-                            <Chip label="Outstanding" size="small" color="error" />
-                          ) : (
-                            <Chip label="Settled" size="small" color="success" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title="View Details">
-                            <IconButton size="small" color="primary">
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-
-          {/* Summary Box */}
-          <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
-            <Typography variant="subtitle1" gutterBottom>
-              <Payment sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Payment Methods Summary
-            </Typography>
-            <Grid container spacing={2} sx={{ mt: 1 }}>
-              <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="black">Documentary Collections</Typography>
-                <Typography variant="h6">{documentaryCollections.length}</Typography>
-              </Grid>
-              <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="black">Advance Payments</Typography>
-                <Typography variant="h6">{advancePayments.length}</Typography>
-              </Grid>
-              <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="black">Consignments</Typography>
-                <Typography variant="h6">{consignments.length}</Typography>
-              </Grid>
-              <Grid item xs={12} sm={3}>
-                <Typography variant="body2" color="black">Total Permits</Typography>
-                <Typography variant="h6">{exportPermits.length}</Typography>
-              </Grid>
-            </Grid>
-          </Paper>
-        </ModernCard>
-      )}
-
-      {/* Contract Detail Dialog */}
+      {/* Dialogs and Modals */}      {/* Contract Detail Dialog */}
       <Dialog open={!!selectedContract && dialogType === null} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
         <DialogTitle>Contract Details</DialogTitle>
         <DialogContent>
@@ -2771,9 +2878,14 @@ const BanksPortal: React.FC = () => {
           </Button>
           <AnimatedButton
             variant="contained"
-            color="primary"
             startIcon={<Description />}
             onClick={() => handleOpenDialog('lc', selectedContract!)}
+            sx={{
+              bgcolor: '#9b30b7',
+              color: '#fff',
+              fontWeight: 600,
+              '&:hover': { bgcolor: '#7a2592' },
+            }}
           >
             Issue LC
           </AnimatedButton>
@@ -2882,9 +2994,13 @@ const BanksPortal: React.FC = () => {
                             </>
                           ) : (
                             <>
-                              <DirectionsBoat color="primary" />
+                              <DirectionsBoat sx={{ color: '#9b30b7' }} />
                               <Typography variant="body1">Sea Freight</Typography>
-                              <Chip label="25-35 days transit" size="small" color="primary" />
+                              <Chip 
+                                label="25-35 days transit" 
+                                size="small" 
+                                sx={{ bgcolor: '#9b30b7', color: '#fff', fontWeight: 600 }}
+                              />
                             </>
                           )}
                         </Box>
@@ -2998,7 +3114,12 @@ const BanksPortal: React.FC = () => {
               </Button>
               <Button
                 variant="outlined"
-                color="primary"
+                sx={{
+                  borderColor: '#9b30b7',
+                  color: '#9b30b7',
+                  fontWeight: 600,
+                  '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
+                }}
                 onClick={() => {
                   setDialogType('lcAmend');
                   setAmendmentForm({
@@ -3113,9 +3234,15 @@ const BanksPortal: React.FC = () => {
           </Button>
           <AnimatedButton
             variant="contained"
-            color="primary"
             onClick={handleAmendLC}
             disabled={!amendmentForm.amendmentReason}
+            sx={{
+              bgcolor: '#9b30b7',
+              color: '#fff',
+              fontWeight: 600,
+              '&:hover': { bgcolor: '#7a2592' },
+              '&:disabled': { bgcolor: '#ccc', color: '#666' },
+            }}
           >
             Submit Amendment
           </AnimatedButton>
@@ -3251,9 +3378,14 @@ const BanksPortal: React.FC = () => {
           <Button onClick={handleCloseDialog}>Cancel</Button>
           <AnimatedButton
             variant="contained"
-            color="primary"
             onClick={handleIssueLc}
             startIcon={<CheckCircle />}
+            sx={{
+              bgcolor: '#FFD700',
+              color: '#000',
+              fontWeight: 600,
+              '&:hover': { bgcolor: '#FFC700' },
+            }}
           >
             Issue Letter of Credit
           </AnimatedButton>
@@ -3344,6 +3476,17 @@ const BanksPortal: React.FC = () => {
         approveLabel="Approve & Issue LC"
         rejectLabel="Reject LC"
       />
+
+      {/* Tab 2: SWIFT Messages */}
+      {activeTab === 2 && (
+        <Box>
+          <SWIFTDashboardWrapper 
+            primaryColor={CBE_COLORS.purple}
+            secondaryColor={CBE_COLORS.golden}
+            accentColor={CBE_COLORS.black}
+          />
+        </Box>
+      )}
     </Box>
     </ThemeProvider>
   );

@@ -72,6 +72,7 @@ router.post('/',
     body('quantity').isNumeric().withMessage('Quantity must be a number'),
     body('pricePerKg').isNumeric().withMessage('Price per kg must be a number'),
     body('currency').notEmpty().withMessage('Currency is required'),
+    body('paymentMethod').optional().isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE']).withMessage('Payment method must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
     body('eudrRequired').isBoolean().withMessage('EUDR required must be a boolean'),
     body('documents').optional().isArray(),
   ],
@@ -89,6 +90,7 @@ router.post('/',
         quantity,
         pricePerKg,
         currency,
+        paymentMethod,
         eudrRequired,
         documents,
       } = req.body;
@@ -100,23 +102,43 @@ router.post('/',
         logger.info(`Contract ${contractID}: Linking ${documentIDs.length} documents to blockchain`);
       }
 
-      const result = await fabricService.registerSalesContract(
-        contractID,
-        exporterID,
-        buyerID,
-        buyerCountry,
-        coffeeType,
-        quantity.toString(),
-        pricePerKg.toString(),
-        currency,
-        eudrRequired.toString(),
-        buyerBank || '',
-        exporterBank || '',
-        JSON.stringify(documentIDs)
-      );
+      // Use new function if payment method is provided, otherwise use old function (backward compatibility)
+      let result;
+      if (paymentMethod) {
+        result = await fabricService.invokeChaincode('RegisterSalesContractWithPaymentMethod', [
+          contractID,
+          exporterID,
+          buyerID,
+          buyerCountry,
+          coffeeType,
+          quantity.toString(),
+          pricePerKg.toString(),
+          currency,
+          eudrRequired.toString(),
+          buyerBank || '',
+          exporterBank || '',
+          paymentMethod,
+          JSON.stringify(documentIDs)
+        ]);
+      } else {
+        result = await fabricService.registerSalesContract(
+          contractID,
+          exporterID,
+          buyerID,
+          buyerCountry,
+          coffeeType,
+          quantity.toString(),
+          pricePerKg.toString(),
+          currency,
+          eudrRequired.toString(),
+          buyerBank || '',
+          exporterBank || '',
+          JSON.stringify(documentIDs)
+        );
+      }
 
       if (result.success) {
-        logger.info(`Sales contract registered successfully: ${contractID}, txId: ${result.txId}, documents: ${documentIDs.length}`);
+        logger.info(`Sales contract registered successfully: ${contractID}, paymentMethod: ${paymentMethod || 'LC (default)'}, txId: ${result.txId}, documents: ${documentIDs.length}`);
         
         // Try to read back the contract immediately to verify
         setTimeout(async () => {
@@ -129,6 +151,7 @@ router.post('/',
           data: result.data,
           txId: result.txId,
           documentsLinked: documentIDs.length,
+          paymentMethod: paymentMethod || 'LC',
           timestamp: new Date().toISOString(),
         });
       } else {

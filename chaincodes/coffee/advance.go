@@ -28,10 +28,16 @@ type AdvancePayment struct {
 	BeneficiaryAccount string    `json:"beneficiaryAccount"`
 	Status             string    `json:"status"` // RECEIVED, PERMIT_ISSUED, SHIPPED, SETTLED
 	ReceivedDate       time.Time `json:"receivedDate"`
+	RecordedBy         string    `json:"recordedBy"`         // ✅ X.509 cert of recorder
+	RecordedByMSP      string    `json:"recordedByMsp"`      // ✅ MSP of recorder
 	PermitIssueDate    string    `json:"permitIssueDate"`
 	ShipmentDate       string    `json:"shipmentDate"`
+	LinkedBy           string    `json:"linkedBy"`           // ✅ X.509 cert of linker
+	LinkedByMSP        string    `json:"linkedByMsp"`        // ✅ MSP of linker
 	SettlementDate     string    `json:"settlementDate"`
-	ShipmentID         string    `json:"shipmentId"` // Link to actual shipment
+	SettledBy          string    `json:"settledBy"`          // ✅ X.509 cert of settler
+	SettledByMSP       string    `json:"settledByMsp"`       // ✅ MSP of settler
+	ShipmentID         string    `json:"shipmentId"`         // Link to actual shipment
 	ShippedQuantity    float64   `json:"shippedQuantity"`
 	ShippedValue       float64   `json:"shippedValue"`
 	BalanceAmount      float64   `json:"balanceAmount"` // If shipment < advance
@@ -53,6 +59,12 @@ func (c *CoffeeContract) RecordAdvancePayment(ctx contractapi.TransactionContext
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// ✅ Capture full MSP identity for non-repudiation
+	recorderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		recorderID = mspID // Fallback to MSP name
 	}
 
 	// Only Banks can record advance payments
@@ -119,6 +131,8 @@ func (c *CoffeeContract) RecordAdvancePayment(ctx contractapi.TransactionContext
 		BeneficiaryAccount: beneficiaryAccount,
 		Status:             "RECEIVED",
 		ReceivedDate:       txTime,
+		RecordedBy:         recorderID,       // ✅ Record WHO recorded
+		RecordedByMSP:      mspID,            // ✅ Record organization
 		CreatedAt:          txTime,
 		UpdatedAt:          txTime,
 	}
@@ -255,6 +269,17 @@ func (c *CoffeeContract) IssuePermitForAdvance(ctx contractapi.TransactionContex
 func (c *CoffeeContract) LinkShipmentToAdvance(ctx contractapi.TransactionContextInterface,
 	paymentID, shipmentID string) error {
 
+	// ✅ Capture MSP identity for non-repudiation
+	linkerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	linkerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		linkerID = linkerMSP // Fallback to MSP name
+	}
+
 	paymentJSON, err := ctx.GetStub().GetState("ADVANCE_" + paymentID)
 	if err != nil {
 		return fmt.Errorf("failed to read advance payment: %v", err)
@@ -291,6 +316,8 @@ func (c *CoffeeContract) LinkShipmentToAdvance(ctx contractapi.TransactionContex
 	payment.ShipmentDate = txTime.Format(time.RFC3339)
 	payment.ShippedQuantity = shipment.Quantity
 	payment.ShippedValue = shipment.ValueUSD
+	payment.LinkedBy = linkerID      // ✅ Record WHO linked shipment
+	payment.LinkedByMSP = linkerMSP  // ✅ Record organization
 
 	// Calculate balance (if shipped value < advance amount)
 	if payment.ShippedValue < payment.Amount {
@@ -328,9 +355,15 @@ func (c *CoffeeContract) SettleAdvancePayment(ctx contractapi.TransactionContext
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
 
+	// ✅ Capture full MSP identity for non-repudiation
+	settlerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		settlerID = mspID // Fallback to MSP name
+	}
+
 	// Only Banks can settle advance payments
 	if mspID != "BanksMSP" {
-		return fmt.Errorf("unauthorized: only Banks can settle advance payments")
+		return fmt.Errorf("unauthorized: only Banks can settle advance payments (caller: %s)", mspID)
 	}
 
 	paymentJSON, err := ctx.GetStub().GetState("ADVANCE_" + paymentID)
@@ -360,6 +393,8 @@ func (c *CoffeeContract) SettleAdvancePayment(ctx contractapi.TransactionContext
 
 	payment.Status = "SETTLED"
 	payment.SettlementDate = txTime.Format(time.RFC3339)
+	payment.SettledBy = settlerID    // ✅ Record WHO settled
+	payment.SettledByMSP = mspID     // ✅ Record organization
 	payment.UpdatedAt = txTime
 
 	// If there's a balance payment due from buyer

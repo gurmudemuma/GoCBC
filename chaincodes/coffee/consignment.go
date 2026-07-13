@@ -12,26 +12,28 @@ import (
 // ==================== CONSIGNMENT PAYMENT STRUCTURE ====================
 
 type ConsignmentPayment struct {
-	ConsignmentID     string           `json:"consignmentId"`
-	ExporterID        string           `json:"exporterId"`
-	PermitID          string           `json:"permitId"`
-	CommodityType     string           `json:"commodityType"` // Only: FRUITS, FLOWERS, MEAT
-	Description       string           `json:"description"`
-	Destination       string           `json:"destination"`
-	BuyerName         string           `json:"buyerName"`
-	BuyerAddress      string           `json:"buyerAddress"`
-	PermitAmount      float64          `json:"permitAmount"` // Initial permit amount
-	Currency          string           `json:"currency"`
-	ShippedValue      float64          `json:"shippedValue"`      // Total value shipped
-	SettledAmount     float64          `json:"settledAmount"`     // Amount repatriated
-	OutstandingAmount float64          `json:"outstandingAmount"` // Awaiting repatriation
-	Status            string           `json:"status"`            // PERMIT_ISSUED, SHIPPED, PARTIAL, SETTLED
-	ShippedDate       string           `json:"shippedDate"`
-	PartialPayments   []PartialPayment `json:"partialPayments"` // Track multiple payments
-	BankBranch        string           `json:"bankBranch"`
-	Remarks           string           `json:"remarks"`
-	CreatedAt         time.Time        `json:"createdAt"`
-	UpdatedAt         time.Time        `json:"updatedAt"`
+	ConsignmentID           string           `json:"consignmentId"`
+	ExporterID              string           `json:"exporterId"`
+	PermitID                string           `json:"permitId"`
+	CommodityType           string           `json:"commodityType"` // Only: FRUITS, FLOWERS, MEAT
+	Description             string           `json:"description"`
+	Destination             string           `json:"destination"`
+	BuyerName               string           `json:"buyerName"`
+	BuyerAddress            string           `json:"buyerAddress"`
+	PermitAmount            float64          `json:"permitAmount"` // Initial permit amount
+	Currency                string           `json:"currency"`
+	ShippedValue            float64          `json:"shippedValue"`            // Total value shipped
+	ShipmentRecordedBy      string           `json:"shipmentRecordedBy"`      // ✅ X.509 cert of shipment recorder
+	ShipmentRecordedByMSP   string           `json:"shipmentRecordedByMsp"`   // ✅ MSP of shipment recorder
+	SettledAmount           float64          `json:"settledAmount"`           // Amount repatriated
+	OutstandingAmount       float64          `json:"outstandingAmount"`       // Awaiting repatriation
+	Status                  string           `json:"status"`                  // PERMIT_ISSUED, SHIPPED, PARTIAL, SETTLED
+	ShippedDate             string           `json:"shippedDate"`
+	PartialPayments         []PartialPayment `json:"partialPayments"` // Track multiple payments
+	BankBranch              string           `json:"bankBranch"`
+	Remarks                 string           `json:"remarks"`
+	CreatedAt               time.Time        `json:"createdAt"`
+	UpdatedAt               time.Time        `json:"updatedAt"`
 }
 
 // Track individual payments for consignment
@@ -41,6 +43,7 @@ type PartialPayment struct {
 	Currency       string  `json:"currency"`
 	SWIFTReference string  `json:"swiftReference"`
 	ReceivedBy     string  `json:"receivedBy"`
+	ReceivedByMSP  string  `json:"receivedByMsp"`  // ✅ MSP of receiver
 }
 
 // ==================== CONSIGNMENT PAYMENT FUNCTIONS ====================
@@ -196,6 +199,17 @@ func (c *CoffeeContract) IssueConsignmentPermit(ctx contractapi.TransactionConte
 func (c *CoffeeContract) RecordConsignmentShipment(ctx contractapi.TransactionContextInterface,
 	consignmentID, shippedValueStr string) error {
 
+	// ✅ CAPTURE MSP IDENTITY
+	recorderMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	recorderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		recorderID = recorderMSP // Fallback
+	}
+
 	shippedValue, err := strconv.ParseFloat(shippedValueStr, 64)
 	if err != nil {
 		return fmt.Errorf("invalid shipped value: %v", err)
@@ -230,6 +244,8 @@ func (c *CoffeeContract) RecordConsignmentShipment(ctx contractapi.TransactionCo
 	consignment.ShippedValue = shippedValue
 	consignment.OutstandingAmount = shippedValue
 	consignment.ShippedDate = txTime.Format(time.RFC3339)
+	consignment.ShipmentRecordedBy = recorderID        // ✅ RECORD WHO RECORDED SHIPMENT
+	consignment.ShipmentRecordedByMSP = recorderMSP    // ✅ RECORD ORGANIZATION
 	consignment.UpdatedAt = txTime
 
 	// Utilize the permit
@@ -258,9 +274,15 @@ func (c *CoffeeContract) RecordPartialPayment(ctx contractapi.TransactionContext
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
 
+	// ✅ Capture full MSP identity for non-repudiation
+	receiverID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		receiverID = mspID // Fallback to MSP name
+	}
+
 	// Only Banks can record payments
 	if mspID != "BanksMSP" {
-		return fmt.Errorf("unauthorized: only Banks can record consignment payments")
+		return fmt.Errorf("unauthorized: only Banks can record consignment payments (caller: %s)", mspID)
 	}
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
@@ -303,7 +325,8 @@ func (c *CoffeeContract) RecordPartialPayment(ctx contractapi.TransactionContext
 		Amount:         amount,
 		Currency:       consignment.Currency,
 		SWIFTReference: swiftReference,
-		ReceivedBy:     receivedBy,
+		ReceivedBy:     receiverID,        // ✅ Record WHO received payment
+		ReceivedByMSP:  mspID,             // ✅ Record organization
 	}
 	consignment.PartialPayments = append(consignment.PartialPayments, partialPayment)
 

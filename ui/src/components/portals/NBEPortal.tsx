@@ -43,6 +43,9 @@ import {
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { SalesContract } from '@/types';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
+import { apiFetch } from '@/config/api.config';
+import SWIFTMonitoringWrapper from '@/components/nbe/SWIFTMonitoringWrapper';
 
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
@@ -117,6 +120,12 @@ const NBEPortal: React.FC = () => {
   const BRAND_COLOR = '#8B6F47';  // Bronze
   const SECONDARY_COLOR = '#C4A574';  // Light Bronze
   
+  // CBE Colors (for banking/forex context)
+  const CBE_PURPLE = '#9b30b7';
+  const CBE_GOLDEN = '#FFD700';
+  const CBE_BLACK = '#000000';
+  const CBE_WHITE = '#ffffff';
+  
   const [tabValue, setTabValue] = useState(0);
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
@@ -133,6 +142,10 @@ const NBEPortal: React.FC = () => {
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const [forexDialogOpen, setForexDialogOpen] = useState(false);
   const [rateDialogOpen, setRateDialogOpen] = useState(false);
+
+  // Document Validation Dialog state
+  const [validationDialogOpen, setValidationDialogOpen] = useState(false);
+  const [validationData, setValidationData] = useState<any>(null);
 
   const [approvalNotification, setApprovalNotification] = useState<{open: boolean, success: boolean, message: string}>({
     open: false, success: false, message: ''
@@ -311,8 +324,35 @@ const NBEPortal: React.FC = () => {
       setLoading(true);
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       
+      // Find the LC associated with this contract
+      let lcId = '';
+      try {
+        const lcResponse = await api.get('/banking/lc');
+        if (lcResponse.data.success && lcResponse.data.data) {
+          const matchingLC = lcResponse.data.data.find((lc: any) => 
+            (lc.ContractID || lc.contractId) === selectedForex.contractId
+          );
+          if (matchingLC) {
+            lcId = matchingLC.LCID || matchingLC.lcId || '';
+          }
+        }
+      } catch (error) {
+        console.warn('Could not fetch LC for contract:', error);
+      }
+
+      if (!lcId) {
+        setApprovalNotification({
+          open: true,
+          success: false,
+          message: 'No Letter of Credit found for this contract. Please ensure an LC is issued first.'
+        });
+        setLoading(false);
+        return;
+      }
+      
       const allocationData = {
         forexId: selectedForex.forexId,
+        lcId: lcId,
         amount: parseFloat(forexForm.allocatedAmount),
         exchangeRate: parseFloat(forexForm.exchangeRate),
         retentionRate: parseFloat(forexForm.retentionRate),
@@ -351,7 +391,7 @@ const NBEPortal: React.FC = () => {
         open: true,
         success: false,
         message: error.response?.data?.error?.message || 'Failed to allocate forex'
-      });
+        });
     } finally {
       setLoading(false);
       setForexDialogOpen(false);
@@ -733,12 +773,12 @@ const NBEPortal: React.FC = () => {
             <Grid item xs={12} md={3}>
               <Card sx={{ 
                 bgcolor: 'white',
-                border: '1px solid #e0e0e0',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                border: `2px solid ${CBE_PURPLE}`,
+                boxShadow: '0 4px 8px rgba(155,48,183,0.15)'
               }}>
                 <CardContent>
                   <Box display="flex" alignItems="center" gap={1} mb={1}>
-                    <Warning sx={{ fontSize: 20, color: '#f57c00' }} />
+                    <Warning sx={{ fontSize: 20, color: CBE_PURPLE }} />
                     <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
                       Pending Requests
                     </Typography>
@@ -746,7 +786,7 @@ const NBEPortal: React.FC = () => {
                   <Typography variant="caption" color="textSecondary" display="block">
                     Awaiting allocation
                   </Typography>
-                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: CBE_PURPLE }}>
                     {forexAllocations.filter(f => f.status === 'REQUESTED').length}
                   </Typography>
                 </CardContent>
@@ -755,12 +795,12 @@ const NBEPortal: React.FC = () => {
             <Grid item xs={12} md={3}>
               <Card sx={{ 
                 bgcolor: 'white',
-                border: '1px solid #e0e0e0',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                border: `2px solid ${CBE_GOLDEN}`,
+                boxShadow: '0 4px 8px rgba(255,215,0,0.15)'
               }}>
                 <CardContent>
                   <Box display="flex" alignItems="center" gap={1} mb={1}>
-                    <CurrencyExchange sx={{ fontSize: 20, color: '#2e7d32' }} />
+                    <CurrencyExchange sx={{ fontSize: 20, color: CBE_GOLDEN }} />
                     <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
                       Total Allocated
                     </Typography>
@@ -768,7 +808,7 @@ const NBEPortal: React.FC = () => {
                   <Typography variant="caption" color="textSecondary" display="block">
                     USD amount
                   </Typography>
-                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: CBE_GOLDEN, textShadow: '0 0 1px rgba(0,0,0,0.3)' }}>
                     {formatCurrency(forexAllocations
                       .filter(f => f.status === 'ALLOCATED')
                       .reduce((sum, f) => sum + f.allocatedAmount, 0))}
@@ -784,21 +824,21 @@ const NBEPortal: React.FC = () => {
             </Grid>
             <Grid item xs={12} md={3}>
               <Card sx={{ 
-                bgcolor: 'white',
-                border: '1px solid #e0e0e0',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                bgcolor: CBE_BLACK,
+                border: `2px solid ${CBE_GOLDEN}`,
+                boxShadow: '0 4px 8px rgba(0,0,0,0.3)'
               }}>
                 <CardContent>
                   <Box display="flex" alignItems="center" gap={1} mb={1}>
-                    <TrendingUp sx={{ fontSize: 20, color: '#1565c0' }} />
-                    <Typography variant="caption" color="textSecondary" textTransform="uppercase" fontWeight={600}>
+                    <TrendingUp sx={{ fontSize: 20, color: CBE_GOLDEN }} />
+                    <Typography variant="caption" sx={{ color: CBE_WHITE }} textTransform="uppercase" fontWeight={600}>
                       Utilization Rate
                     </Typography>
                   </Box>
-                  <Typography variant="caption" color="textSecondary" display="block">
+                  <Typography variant="caption" sx={{ color: CBE_WHITE }} display="block">
                     Efficiency metric
                   </Typography>
-                  <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
+                  <Typography variant="h4" fontWeight={700} sx={{ color: CBE_GOLDEN }}>
                     87.5%
                   </Typography>
                 </CardContent>
@@ -807,7 +847,7 @@ const NBEPortal: React.FC = () => {
             <Grid item xs={12} md={3}>
               <Card sx={{ 
                 bgcolor: 'white',
-                border: '1px solid #e0e0e0',
+                border: `2px solid ${CBE_PURPLE}`,
                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
               }}>
                 <CardContent>
@@ -974,6 +1014,7 @@ const NBEPortal: React.FC = () => {
             <Tab label="Contract Approvals" />
             <Tab label="Forex Allocations" />
             <Tab label="Exchange Rates" />
+            <Tab label="SWIFT Monitoring" />
             <Tab label="Compliance" />
             <Tab label="Analytics" />
           </Tabs>
@@ -1057,19 +1098,19 @@ const NBEPortal: React.FC = () => {
                 pagination: { paginationModel: { pageSize: 25 } },
               }}
               sx={{
-                border: 'none',
+                border: `2px solid ${CBE_PURPLE}`,
                 '& .MuiDataGrid-columnHeaders': {
-                  bgcolor: '#fafafa',
+                  bgcolor: CBE_BLACK,
                   fontWeight: 700,
                   fontSize: '13px',
-                  color: '#666',
-                  borderBottom: '2px solid #e0e0e0',
+                  color: CBE_GOLDEN,
+                  borderBottom: `2px solid ${CBE_PURPLE}`,
                 },
                 '& .MuiDataGrid-cell': {
                   borderBottom: '1px solid #f5f5f5',
                 },
                 '& .MuiDataGrid-row:hover': {
-                  bgcolor: '#f9f9f9',
+                  bgcolor: 'rgba(155, 48, 183, 0.05)',
                 },
               }}
             />
@@ -1128,6 +1169,15 @@ const NBEPortal: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
+          {/* SWIFT Monitoring Tab - Uses NBE colors (Bronze) not CBE colors */}
+          <SWIFTMonitoringWrapper 
+            primaryColor={BRAND_COLOR}
+            secondaryColor={SECONDARY_COLOR}
+            accentColor="#333333"
+          />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={4}>
           <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Assignment sx={{ fontSize: 24, color: BRAND_COLOR }} />
             Regulatory Compliance Dashboard
@@ -1166,7 +1216,7 @@ const NBEPortal: React.FC = () => {
             </Grid>
           </Grid>
         </TabPanel>
-        <TabPanel value={tabValue} index={4}>
+        <TabPanel value={tabValue} index={5}>
           <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <TrendingUp sx={{ fontSize: 24, color: BRAND_COLOR }} />
             Banking Analytics & Insights
@@ -1361,11 +1411,13 @@ const NBEPortal: React.FC = () => {
       </Dialog>
       {/* Forex Allocation Dialog */}
       <Dialog open={forexDialogOpen} onClose={() => setForexDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Allocate Foreign Exchange</DialogTitle>
+        <DialogTitle sx={{ bgcolor: CBE_BLACK, color: CBE_GOLDEN, fontWeight: 700 }}>
+          Allocate Foreign Exchange
+        </DialogTitle>
         <DialogContent>
           {selectedForex && (
             <Box sx={{ pt: 2 }}>
-              <Alert severity="warning" sx={{ mb: 3 }}>
+              <Alert severity="warning" sx={{ mb: 3, bgcolor: 'rgba(155, 48, 183, 0.1)', borderLeft: `4px solid ${CBE_PURPLE}` }}>
                 <Typography variant="body2">
                   <strong>NBE Forex Allocation:</strong> This will allocate foreign exchange for the approved export contract.
                   Ensure all details are correct as this cannot be easily reversed.
@@ -1498,15 +1550,18 @@ const NBEPortal: React.FC = () => {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setForexDialogOpen(false)} variant="outlined">
+          <Button onClick={() => setForexDialogOpen(false)} variant="outlined" sx={{ borderColor: CBE_PURPLE, color: CBE_PURPLE }}>
             Cancel
           </Button>
           <Button 
             variant="contained"
             disabled={!forexForm.allocatedAmount || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
             sx={{ 
-              bgcolor: BRAND_COLOR, 
-              '&:hover': { bgcolor: SECONDARY_COLOR } 
+              bgcolor: CBE_PURPLE, 
+              color: CBE_WHITE,
+              fontWeight: 600,
+              '&:hover': { bgcolor: '#7a2692' },
+              '&:disabled': { bgcolor: '#cccccc' }
             }}
             onClick={handleAllocateForex}
           >
@@ -1587,6 +1642,17 @@ const NBEPortal: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Document Validation Dialog */}
+      <DocumentValidationDialog
+        open={validationDialogOpen}
+        onClose={() => {
+          setValidationDialogOpen(false);
+          setValidationData(null);
+        }}
+        data={validationData}
+        readOnly={true}
+      />
     </Box>
   );
 };

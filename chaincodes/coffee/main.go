@@ -26,16 +26,36 @@ type CoffeeShipment struct {
 	Quantity         float64   `json:"quantity"`
 	Grade            string    `json:"grade"`
 	ICONumber        string    `json:"icoNumber"`
-	ECXLotNumber     string    `json:"ecxLotNumber"`
-	Documents        []string  `json:"documents"` // Document IDs linked to this shipment
+	ECXLotNumber     string    `json:"ecxLotNumber"`     // Primary ECX lot (backward compatibility)
+	ECXLots          []string  `json:"ecxLots"`          // Multiple ECX lots for blended shipments
+	Documents        []string  `json:"documents"`        // Document IDs linked to this shipment
 	Status           string    `json:"status"`
 	Channel          string    `json:"channel"`
 	ForexRate        float64   `json:"forexRate"`
 	ValueUSD         float64   `json:"valueUsd"`
 	EUDRCompliant    bool      `json:"eudrCompliant"`
+	// Packaging details
+	PackagingType    string    `json:"packagingType"`    // JUTE, GRAINPRO, VACUUM
+	BagWeight        float64   `json:"bagWeight"`        // kg per bag (typically 60kg)
+	TotalBags        int       `json:"totalBags"`
+	NetWeight        float64   `json:"netWeight"`        // kg
+	GrossWeight      float64   `json:"grossWeight"`      // kg (with bags)
+	// Insurance
+	InsurancePolicy  string    `json:"insurancePolicy"`  // Policy number
+	InsuranceCompany string    `json:"insuranceCompany"` // Insurance provider
+	InsuranceAmount  float64   `json:"insuranceAmount"`  // USD
 	// Transport Mode & Carrier
 	TransportMode    string    `json:"transportMode"`    // SEA or AIR
 	ShippingLine     string    `json:"shippingLine"`     // Carrier name (shipping line or airline)
+	// Land Transport (Addis → Djibouti, 3-5 days)
+	LandTransportCompany  string `json:"landTransportCompany"`
+	TruckPlateNumber      string `json:"truckPlateNumber"`
+	DriverName            string `json:"driverName"`
+	DepartureFromAddis    string `json:"departureFromAddis"`    // ISO date
+	ArrivalAtDjibouti     string `json:"arrivalAtDjibouti"`     // ISO date
+	BorderCrossingTime    string `json:"borderCrossingTime"`    // ISO date
+	LandTransportSeal     string `json:"landTransportSeal"`     // Seal number
+	LandTransportStatus   string `json:"landTransportStatus"`   // NOT_STARTED, IN_TRANSIT, ARRIVED
 	// Sea Freight (B/L) fields
 	BillOfLadingNo   string    `json:"billOfLadingNo"`   // B/L number
 	BillOfLadingDate string    `json:"billOfLadingDate"` // B/L issue date
@@ -43,6 +63,12 @@ type CoffeeShipment struct {
 	VoyageNumber     string    `json:"voyageNumber"`     // Voyage number
 	ContainerNumber  string    `json:"containerNumber"`  // Container number
 	ContainerType    string    `json:"containerType"`    // DRY, REEFER, OPEN_TOP
+	// Container Stuffing
+	StuffingDate     string    `json:"stuffingDate"`     // ISO date
+	StuffingLocation string    `json:"stuffingLocation"` // Addis or Djibouti
+	StuffedBy        string    `json:"stuffedBy"`        // Company name
+	ContainerCondition string  `json:"containerCondition"` // GOOD, DAMAGED
+	StuffingSealNumber string  `json:"stuffingSealNumber"` // Container seal
 	// Air Freight (AWB) fields
 	AirwayBill       string    `json:"airwayBill"`       // AWB number
 	FlightNumber     string    `json:"flightNumber"`     // Flight number
@@ -52,6 +78,11 @@ type CoffeeShipment struct {
 	EstimatedArrival string    `json:"estimatedArrival"` // ETA
 	ActualArrival    string    `json:"actualArrival"`    // Actual arrival date
 	TrackingNumber   string    `json:"trackingNumber"`   // GPS/Container tracking
+	// Document Courier Tracking
+	CourierCompany   string    `json:"courierCompany"`   // FedEx, DHL, UPS
+	CourierTracking  string    `json:"courierTracking"`  // Tracking number
+	DocumentsSentDate string   `json:"documentsSentDate"` // ISO date
+	DocumentsReceivedDate string `json:"documentsReceivedDate"` // ISO date
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
@@ -69,6 +100,14 @@ type Exporter struct {
 	ProfessionalTaster          string    `json:"professionalTaster"`
 	TasterCertificate           string    `json:"tasterCertificate"`
 	LicenseExpiryDate           string    `json:"licenseExpiryDate"` // Using string to avoid schema issues
+	RegistrationDate            string    `json:"registrationDate"`  // ISO date format
+	RegisteredBy                string    `json:"registeredBy"`      // ✅ X.509 certificate of registrar
+	StatusUpdatedBy             string    `json:"statusUpdatedBy"`   // ✅ X.509 cert of status updater
+	StatusUpdatedByMSP          string    `json:"statusUpdatedByMsp"` // ✅ MSP of status updater
+	LabUpdatedBy                string    `json:"labUpdatedBy"`      // ✅ X.509 cert of lab cert updater
+	LabUpdatedByMSP             string    `json:"labUpdatedByMsp"`   // ✅ MSP of lab cert updater
+	SuspendedBy                 string    `json:"suspendedBy"`       // ✅ X.509 cert of suspender
+	SuspendedByMSP              string    `json:"suspendedByMsp"`    // ✅ MSP of suspender
 	CreatedAt                   time.Time `json:"createdAt"`
 	UpdatedAt                   time.Time `json:"updatedAt"`
 }
@@ -86,12 +125,16 @@ type SalesContract struct {
 	PricePerKg            float64   `json:"pricePerKg"`
 	TotalValue            float64   `json:"totalValue"`
 	Currency              string    `json:"currency"`
+	PaymentMethod         string    `json:"paymentMethod"` // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE (default: LC)
 	MinimumPriceCompliant bool      `json:"minimumPriceCompliant"`
 	EUDRRequired          bool      `json:"eudrRequired"`
 	Documents             []string  `json:"documents"` // Document IDs linked to this contract
 	ContractStatus        string    `json:"contractStatus"`
-	RegistrationDate      time.Time `json:"registrationDate"`
-	ApprovalDate          string    `json:"approvalDate"` // Using string to avoid schema issues
+	RegistrationDate      string    `json:"registrationDate"` // ISO date format
+	ApprovalDate          string    `json:"approvalDate"`     // ISO date format
+	RegisteredBy          string    `json:"registeredBy"`     // ✅ X.509 certificate of registrar
+	RegisteredByMSP       string    `json:"registeredByMsp"`  // ✅ MSP of registrar
+	ApprovedBy            string    `json:"approvedBy"`       // ✅ X.509 certificate of approver
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
@@ -105,6 +148,22 @@ func (c *CoffeeContract) InitLedger(ctx contractapi.TransactionContextInterface)
 func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInterface,
 	exporterID, companyName, ectaLicenseNumber, exporterType, capitalRequirementStr,
 	professionalTaster, tasterCertificate, laboratoryCertificateNumber, licenseExpiryDate string) error {
+
+	// ✅ CAPTURE MSP IDENTITY of registrar
+	registrarMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get registrar MSP ID: %w", err)
+	}
+	
+	// Only ECTA can register exporters
+	if registrarMSP != "ECTAMSP" {
+		return fmt.Errorf("only ECTA can register exporters, got: %s", registrarMSP)
+	}
+	
+	registrarID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		registrarID = registrarMSP // Fallback
+	}
 
 	// VALIDATION: IDs and required fields
 	if err := ValidateID(exporterID, "exporterID"); err != nil {
@@ -173,6 +232,8 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		ProfessionalTaster:          professionalTaster,
 		TasterCertificate:           tasterCertificate,
 		LicenseExpiryDate:           licenseExpiryDate,
+		RegistrationDate:            timestamp.Format(time.RFC3339),
+		RegisteredBy:                registrarID, // ✅ RECORD WHO REGISTERED
 		CreatedAt:                   timestamp,
 		UpdatedAt:                   timestamp,
 	}
@@ -249,6 +310,19 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, documentsJSON string) error {
 
 	log.Printf("=== RegisterSalesContract called: contractID=%s, exporterID=%s ===", contractID, exporterID)
+
+	// ✅ CAPTURE MSP IDENTITY of contract creator
+	creatorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get creator MSP ID: %w", err)
+	}
+	
+	creatorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		creatorID = creatorMSP // Fallback
+	}
+	
+	log.Printf("Contract registered by: %s (MSP: %s)", creatorID, creatorMSP)
 
 	// VALIDATION: IDs
 	if err := ValidateID(contractID, "contractID"); err != nil {
@@ -340,6 +414,9 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 	totalValue := quantity * pricePerKg
 	minimumPriceCompliant := pricePerKg >= 5.0 // Simplified minimum price check
 
+	// Default payment method to LC for backward compatibility
+	paymentMethod := "LC"
+
 	contract := SalesContract{
 		ContractID:            contractID,
 		NBEReferenceNumber:    nbeReferenceNumber,
@@ -353,11 +430,13 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		PricePerKg:            pricePerKg,
 		TotalValue:            totalValue,
 		Currency:              currency,
+		PaymentMethod:         paymentMethod, // Default to LC
 		MinimumPriceCompliant: minimumPriceCompliant,
 		EUDRRequired:          eudrRequired,
 		Documents:             documents, // Add documents
 		ContractStatus:        "REGISTERED",
-		RegistrationDate:      timestamp,
+		RegistrationDate:      timestamp.Format(time.RFC3339),
+		RegisteredBy:          creatorID, // ✅ RECORD WHO REGISTERED
 		ApprovalDate:          "",
 		CreatedAt:             timestamp,
 		UpdatedAt:             timestamp,
@@ -377,6 +456,163 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 	}
 
 	log.Printf("=== RegisterSalesContract completed successfully: %s ===", key)
+	return nil
+}
+
+// RegisterSalesContractWithPaymentMethod - Register contract with payment method specification
+// Added: Payment method support for LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
+func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.TransactionContextInterface,
+	contractID, exporterID, buyerID, buyerCountry, coffeeType, quantityStr,
+	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, paymentMethod, documentsJSON string) error {
+
+	log.Printf("=== RegisterSalesContractWithPaymentMethod called: contractID=%s, paymentMethod=%s ===", contractID, paymentMethod)
+
+	// ✅ CAPTURE MSP IDENTITY of registrar
+	registrarMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get registrar MSP ID: %w", err)
+	}
+
+	registrarID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		registrarID = registrarMSP // Fallback
+	}
+
+	// VALIDATION: Payment method
+	if err := validatePaymentMethod(paymentMethod); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	// VALIDATION: IDs
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+	if err := ValidateID(exporterID, "exporterID"); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+	if err := ValidateID(buyerID, "buyerID"); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	// VALIDATION: Required fields
+	if err := ValidateNonEmptyString(buyerCountry, "buyerCountry", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+	if err := ValidateNonEmptyString(coffeeType, "coffeeType", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+	if err := ValidateNonEmptyString(buyerBank, "buyerBank", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+	if err := ValidateNonEmptyString(exporterBank, "exporterBank", MaxStringLen); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	// VALIDATION: Currency
+	if err := ValidateCurrency(currency); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	// Convert parameters
+	quantity, err := strconv.ParseFloat(quantityStr, 64)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid quantity: %w", err)
+	}
+
+	// VALIDATION: Quantity
+	if err := ValidateQuantity(quantity, "quantity"); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	pricePerKg, err := strconv.ParseFloat(pricePerKgStr, 64)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid price per kg: %w", err)
+	}
+
+	// VALIDATION: Price
+	if err := ValidateAmount(pricePerKg, "pricePerKg"); err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: %w", err)
+	}
+
+	eudrRequired, err := strconv.ParseBool(eudrRequiredStr)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid EUDR required flag: %w", err)
+	}
+
+	// Parse documents array
+	var documents []string
+	if documentsJSON != "" && documentsJSON != "[]" {
+		err = json.Unmarshal([]byte(documentsJSON), &documents)
+		if err != nil {
+			return fmt.Errorf("invalid documents JSON: %v", err)
+		}
+	}
+	if documents == nil {
+		documents = []string{} // Ensure non-nil empty array
+	}
+
+	// Check if contract already exists
+	exists, err := c.SalesContractExists(ctx, contractID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("sales contract %s already exists", contractID)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Generate NBE reference number
+	nbeReferenceNumber := fmt.Sprintf("NBE-%s-%d", contractID, timestamp.Unix())
+
+	totalValue := quantity * pricePerKg
+	minimumPriceCompliant := pricePerKg >= 5.0 // Simplified minimum price check
+
+	contract := SalesContract{
+		ContractID:            contractID,
+		NBEReferenceNumber:    nbeReferenceNumber,
+		ExporterID:            exporterID,
+		BuyerID:               buyerID,
+		BuyerCountry:          buyerCountry,
+		BuyerBank:             buyerBank,
+		ExporterBank:          exporterBank,
+		CoffeeType:            coffeeType,
+		Quantity:              quantity,
+		PricePerKg:            pricePerKg,
+		TotalValue:            totalValue,
+		Currency:              currency,
+		PaymentMethod:         paymentMethod,
+		MinimumPriceCompliant: minimumPriceCompliant,
+		EUDRRequired:          eudrRequired,
+		Documents:             documents,
+		ContractStatus:        "REGISTERED",
+		RegistrationDate:      timestamp.Format(time.RFC3339),
+		RegisteredBy:          registrarID,    // ✅ RECORD WHO REGISTERED
+		RegisteredByMSP:       registrarMSP,   // ✅ RECORD ORGANIZATION
+		ApprovalDate:          "",
+		CreatedAt:             timestamp,
+		UpdatedAt:             timestamp,
+	}
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+
+	key := "CONTRACT_" + contractID
+	log.Printf("Storing contract with key: %s, paymentMethod: %s", key, paymentMethod)
+	err = ctx.GetStub().PutState(key, contractJSON)
+	if err != nil {
+		log.Printf("ERROR: PutState failed for key %s: %v", key, err)
+		return err
+	}
+
+	log.Printf("=== RegisterSalesContractWithPaymentMethod completed successfully: %s ===", key)
 	return nil
 }
 
@@ -413,13 +649,23 @@ func (c *CoffeeContract) SalesContractExists(ctx contractapi.TransactionContextI
 }
 
 func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContextInterface, contractID string) error {
-	// Get MSP ID for access control
+	// ✅ CAPTURE MSP IDENTITY of approver
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
+	
+	approverID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		approverID = mspID // Fallback
+	}
 
 	// Only NBE can approve sales contracts
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("only NBE can approve sales contracts, got: %s", mspID)
+	}
+	
+	log.Printf("Contract %s being approved by: %s (MSP: %s)", contractID, approverID, mspID)
 	if mspID != "NBEMSP" {
 		return fmt.Errorf("unauthorized: only NBE can approve sales contracts (caller: %s)", mspID)
 	}
@@ -441,6 +687,7 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 
 	contract.ContractStatus = "APPROVED"
 	contract.ApprovalDate = timestamp.Format(time.RFC3339)
+	contract.ApprovedBy = approverID // ✅ RECORD WHO APPROVED
 	contract.UpdatedAt = timestamp
 
 	contractJSON, err := json.Marshal(contract)
@@ -491,6 +738,17 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 }
 
 func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionContextInterface, exporterID string, certifiedStr string) error {
+	// ✅ CAPTURE MSP IDENTITY
+	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = updaterMSP // Fallback
+	}
+
 	exporter, err := c.ReadExporter(ctx, exporterID)
 	if err != nil {
 		return err
@@ -509,6 +767,8 @@ func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionCon
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	exporter.LaboratoryCertified = certified
+	exporter.LabUpdatedBy = updaterID        // ✅ RECORD WHO UPDATED
+	exporter.LabUpdatedByMSP = updaterMSP    // ✅ RECORD ORGANIZATION
 	exporter.UpdatedAt = timestamp
 
 	exporterJSON, err := json.Marshal(exporter)
@@ -520,6 +780,17 @@ func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionCon
 }
 
 func (c *CoffeeContract) UpdateExporterStatus(ctx contractapi.TransactionContextInterface, exporterID string, status string) error {
+	// ✅ CAPTURE MSP IDENTITY
+	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = updaterMSP // Fallback
+	}
+
 	exporter, err := c.ReadExporter(ctx, exporterID)
 	if err != nil {
 		return err
@@ -545,6 +816,8 @@ func (c *CoffeeContract) UpdateExporterStatus(ctx contractapi.TransactionContext
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	exporter.LicenseStatus = status
+	exporter.StatusUpdatedBy = updaterID        // ✅ RECORD WHO UPDATED
+	exporter.StatusUpdatedByMSP = updaterMSP    // ✅ RECORD ORGANIZATION
 	exporter.UpdatedAt = timestamp
 
 	exporterJSON, err := json.Marshal(exporter)
@@ -563,6 +836,12 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// ✅ CAPTURE FULL MSP IDENTITY
+	suspenderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		suspenderID = mspID // Fallback
 	}
 
 	// Only ECTA can suspend exporters
@@ -589,6 +868,8 @@ func (c *CoffeeContract) SuspendExporter(ctx contractapi.TransactionContextInter
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	exporter.LicenseStatus = "SUSPENDED"
+	exporter.SuspendedBy = suspenderID        // ✅ RECORD WHO SUSPENDED
+	exporter.SuspendedByMSP = mspID           // ✅ RECORD ORGANIZATION
 	exporter.UpdatedAt = timestamp
 
 	exporterJSON, err := json.Marshal(exporter)

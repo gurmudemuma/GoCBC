@@ -33,9 +33,17 @@ type ECXLot struct {
 	ContractID           string    `json:"contractId"` // Linked sales contract
 	Status               string    `json:"status"`     // WAREHOUSED | GRADED | ASSIGNED | RELEASED | REJECTED
 	WarehouseReceiptDate string    `json:"warehouseReceiptDate"`
+	RegisteredBy         string    `json:"registeredBy"`    // ✅ X.509 cert of registrar
+	RegisteredByMSP      string    `json:"registeredByMsp"` // ✅ MSP of registrar
 	GradingDate          string    `json:"gradingDate"`
+	GradedBy             string    `json:"gradedBy"`        // ✅ X.509 cert of grader
+	GradedByMSP          string    `json:"gradedByMsp"`     // ✅ MSP of grader
 	AssignmentDate       string    `json:"assignmentDate"`
+	AssignedBy           string    `json:"assignedBy"`      // ✅ X.509 cert of assigner
+	AssignedByMSP        string    `json:"assignedByMsp"`   // ✅ MSP of assigner
 	ReleaseDate          string    `json:"releaseDate"`
+	ReleasedBy           string    `json:"releasedBy"`      // ✅ X.509 cert of releaser
+	ReleasedByMSP        string    `json:"releasedByMsp"`   // ✅ MSP of releaser
 	ReleaseNote          string    `json:"releaseNote"`
 	RejectionReason      string    `json:"rejectionReason"`
 	CreatedAt            time.Time `json:"createdAt"`
@@ -49,6 +57,17 @@ func (c *CoffeeContract) RegisterECXLot(ctx contractapi.TransactionContextInterf
 	lotID, ecxLotNumber, exporterID, exporterName, warehouseID,
 	origin, subRegion, quantityStr, bagsStr,
 	processingMethod, harvestSeason, receiptDate string) error {
+
+	// ✅ CAPTURE MSP IDENTITY
+	registrarMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	registrarID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		registrarID = registrarMSP // Fallback
+	}
 
 	// Check duplicate
 	existing, err := ctx.GetStub().GetState("ECXLOT_" + lotID)
@@ -88,6 +107,8 @@ func (c *CoffeeContract) RegisterECXLot(ctx contractapi.TransactionContextInterf
 		HarvestSeason:        harvestSeason,
 		Status:               "WAREHOUSED",
 		WarehouseReceiptDate: receiptDate,
+		RegisteredBy:         registrarID,    // ✅ RECORD WHO REGISTERED
+		RegisteredByMSP:      registrarMSP,   // ✅ RECORD ORGANIZATION
 		CreatedAt:            txTime,
 		UpdatedAt:            txTime,
 	}
@@ -103,6 +124,17 @@ func (c *CoffeeContract) RegisterECXLot(ctx contractapi.TransactionContextInterf
 func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface,
 	lotID, grade, qualityScoreStr, moistureStr, defectCountStr,
 	gradingOfficer, remarks, gradingDate string) error {
+
+	// ✅ CAPTURE MSP IDENTITY
+	graderMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	graderID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		graderID = graderMSP // Fallback
+	}
 
 	lotJSON, err := ctx.GetStub().GetState("ECXLOT_" + lotID)
 	if err != nil || lotJSON == nil {
@@ -128,6 +160,8 @@ func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface
 		lot.MoistureContent = moisture
 		lot.GradingOfficer = gradingOfficer
 		lot.GradingDate = gradingDate
+		lot.GradedBy = graderID        // ✅ RECORD WHO GRADED
+		lot.GradedByMSP = graderMSP    // ✅ RECORD ORGANIZATION
 	} else {
 		qualityScore, _ := strconv.ParseFloat(qualityScoreStr, 64)
 		defectCount, _ := strconv.Atoi(defectCountStr)
@@ -138,6 +172,8 @@ func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface
 		lot.GradingOfficer = gradingOfficer
 		lot.GradingRemarks = remarks
 		lot.GradingDate = gradingDate
+		lot.GradedBy = graderID        // ✅ RECORD WHO GRADED
+		lot.GradedByMSP = graderMSP    // ✅ RECORD ORGANIZATION
 		lot.Status = "GRADED"
 	}
 
@@ -154,6 +190,17 @@ func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface
 // AssignECXLot — Step 3: Link graded lot to a sales contract
 func (c *CoffeeContract) AssignECXLot(ctx contractapi.TransactionContextInterface,
 	lotID, contractID, pricePerKgStr, assignmentDate string) error {
+
+	// ✅ CAPTURE MSP IDENTITY
+	assignerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	assignerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		assignerID = assignerMSP // Fallback
+	}
 
 	lotJSON, err := ctx.GetStub().GetState("ECXLOT_" + lotID)
 	if err != nil || lotJSON == nil {
@@ -185,6 +232,8 @@ func (c *CoffeeContract) AssignECXLot(ctx contractapi.TransactionContextInterfac
 	lot.ContractID = contractID
 	lot.PricePerKg = pricePerKg
 	lot.AssignmentDate = assignmentDate
+	lot.AssignedBy = assignerID        // ✅ RECORD WHO ASSIGNED
+	lot.AssignedByMSP = assignerMSP    // ✅ RECORD ORGANIZATION
 	lot.Status = "ASSIGNED"
 
 	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
@@ -201,6 +250,17 @@ func (c *CoffeeContract) AssignECXLot(ctx contractapi.TransactionContextInterfac
 func (c *CoffeeContract) ReleaseECXLot(ctx contractapi.TransactionContextInterface,
 	lotID, releaseDate, note string) error {
 
+	// ✅ CAPTURE MSP IDENTITY
+	releaserMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	releaserID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		releaserID = releaserMSP // Fallback
+	}
+
 	lotJSON, err := ctx.GetStub().GetState("ECXLOT_" + lotID)
 	if err != nil || lotJSON == nil {
 		return fmt.Errorf("ECX lot %s not found", lotID)
@@ -216,6 +276,8 @@ func (c *CoffeeContract) ReleaseECXLot(ctx contractapi.TransactionContextInterfa
 
 	lot.Status = "RELEASED"
 	lot.ReleaseDate = releaseDate
+	lot.ReleasedBy = releaserID        // ✅ RECORD WHO RELEASED
+	lot.ReleasedByMSP = releaserMSP    // ✅ RECORD ORGANIZATION
 	lot.ReleaseNote = note
 
 	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
@@ -295,6 +357,17 @@ func (c *CoffeeContract) QueryECXLotsByExporter(ctx contractapi.TransactionConte
 func (c *CoffeeContract) ReleaseECXLotForShipment(ctx contractapi.TransactionContextInterface,
 	shipmentID, ecxLotNumber, releasedBy string) error {
 
+	// ✅ CAPTURE MSP IDENTITY
+	releaserMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	releaserID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		releaserID = releaserMSP // Fallback
+	}
+
 	// Verify shipment exists and is customs cleared
 	shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
 	if err != nil {
@@ -357,6 +430,8 @@ func (c *CoffeeContract) ReleaseECXLotForShipment(ctx contractapi.TransactionCon
 	// Release lot
 	lot.Status = "RELEASED"
 	lot.ReleaseDate = txTime.Format(time.RFC3339)
+	lot.ReleasedBy = releaserID        // ✅ RECORD WHO RELEASED
+	lot.ReleasedByMSP = releaserMSP    // ✅ RECORD ORGANIZATION
 	lot.ReleaseNote = fmt.Sprintf("Auto-released for shipment %s after customs clearance by %s", shipmentID, releasedBy)
 	lot.UpdatedAt = txTime
 

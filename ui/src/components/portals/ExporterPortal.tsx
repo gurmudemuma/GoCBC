@@ -26,6 +26,7 @@ import {
   LinearProgress,
   Divider,
   FormControl,
+  FormHelperText,
   InputLabel,
   Select,
   MenuItem,
@@ -68,6 +69,7 @@ import {
   Science,
   DirectionsBoat,
   FlightTakeoff,
+  Payment,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
@@ -86,6 +88,8 @@ import {
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import AuditTrailViewer from './AuditTrailViewer';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
+import SWIFTMessagesViewWrapper from '@/components/exporter/SWIFTMessagesViewWrapper';
 
 interface ExporterProfile {
   exporterId: string;
@@ -259,6 +263,7 @@ const ExporterPortal: React.FC = () => {
     quantity: '',
     pricePerKg: '',
     currency: 'USD',
+    paymentMethod: 'LC',     // Default to Letter of Credit
     incoterm: 'FOB',
     portOfLoading: 'Djibouti',
     portOfDestination: '',
@@ -711,6 +716,7 @@ const ExporterPortal: React.FC = () => {
         quantity,
         pricePerKg,
         currency: newContract.currency,
+        paymentMethod: newContract.paymentMethod,   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
         eudrRequired: newContract.eudrRequired,
         documents: contractDocuments.map(doc => ({
           documentId: doc.documentId,
@@ -765,6 +771,7 @@ const ExporterPortal: React.FC = () => {
           quantity: '',
           pricePerKg: '',
           currency: 'USD',
+          paymentMethod: 'LC',
           incoterm: 'FOB',
           portOfLoading: 'Djibouti',
           portOfDestination: '',
@@ -1455,6 +1462,7 @@ const ExporterPortal: React.FC = () => {
             <Tab label="Forex & Banking" icon={<AccountBalance />} iconPosition="start" />
             <Tab label="Shipments" icon={<LocalShipping />} iconPosition="start" />
             <Tab label="Documents" icon={<Description />} iconPosition="start" />
+            <Tab label="LC & Payments" icon={<AttachMoney />} iconPosition="start" />
             <Tab label="Reports" icon={<TrendingUp />} iconPosition="start" />
           </Tabs>
         </Box>
@@ -2167,6 +2175,73 @@ const ExporterPortal: React.FC = () => {
                     <MenuItem value="CFR">CFR - Cost and Freight</MenuItem>
                     <MenuItem value="EXW">EXW - Ex Works</MenuItem>
                   </Select>
+                </FormControl>
+              </Grid>
+
+              {/* Payment Method Section */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: brandPrimary, mt: 2 }}>
+                  <Payment /> Payment Method
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12}>
+                <FormControl fullWidth required>
+                  <InputLabel>Payment Method</InputLabel>
+                  <Select
+                    value={newContract.paymentMethod}
+                    label="Payment Method"
+                    onChange={(e) => setNewContract({...newContract, paymentMethod: e.target.value})}
+                  >
+                    <MenuItem value="LC">
+                      <Box>
+                        <Typography variant="body1" fontWeight="bold">LC - Letter of Credit</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Bank guaranteed payment | Lowest risk | UCP 600 compliant
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="CAD">
+                      <Box>
+                        <Typography variant="body1" fontWeight="bold">CAD - Cash Against Documents</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Payment through banks, no guarantee | Medium risk | URC 522
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="TT_ADVANCE">
+                      <Box>
+                        <Typography variant="body1" fontWeight="bold">TT Advance - Telegraphic Transfer (Advance)</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Partial payment before shipment | Low risk
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="TT_POST">
+                      <Box>
+                        <Typography variant="body1" fontWeight="bold">TT Post - Telegraphic Transfer (Post-shipment)</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Payment after shipment | High risk | Direct transfer
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="ADVANCE">
+                      <Box>
+                        <Typography variant="body1" fontWeight="bold">ADVANCE - Advance Payment</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Full/partial payment before production | Lowest risk
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  </Select>
+                  <FormHelperText>
+                    {newContract.paymentMethod === 'LC' && '✓ Recommended: Bank guarantee ensures payment security'}
+                    {newContract.paymentMethod === 'CAD' && '⚠️ Medium risk: Documents released only after payment'}
+                    {newContract.paymentMethod === 'TT_ADVANCE' && '✓ Low risk: Advance payment reduces exporter risk'}
+                    {newContract.paymentMethod === 'TT_POST' && '⚠️ High risk: Payment depends on buyer trust'}
+                    {newContract.paymentMethod === 'ADVANCE' && '✓ Lowest risk: Payment received before work begins'}
+                  </FormHelperText>
                 </FormControl>
               </Grid>
 
@@ -3093,6 +3168,11 @@ const ExporterPortal: React.FC = () => {
       </TabPanel>
 
       <TabPanel value={tabValue} index={5}>
+        {/* LC & Payments (SWIFT Messages) Tab */}
+        <SWIFTMessagesViewWrapper />
+      </TabPanel>
+
+      <TabPanel value={tabValue} index={6}>
         {/* Reports Tab */}
         <Grid container spacing={3}>
           <Grid item xs={12}>

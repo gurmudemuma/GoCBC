@@ -20,6 +20,8 @@ import { ModernCard, AnimatedButton, DashboardKPI, StatusChip, ThemeToggle } fro
 import { useNotification } from '@/hooks/useNotification';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import AuditTrailViewer from './AuditTrailViewer';
+import { DocumentValidationDialog } from './DocumentValidationDialog';
+import { apiFetch } from '@/config/api.config';
 
 
 interface CoffeeLot {

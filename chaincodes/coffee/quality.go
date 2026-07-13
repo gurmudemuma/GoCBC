@@ -47,6 +47,19 @@ type QualityInspection struct {
 	CuppingGrade   string `json:"cuppingGrade"`   // Q-Grade (80+), Premium (85+), Specialty (90+)
 	Classification string `json:"classification"` // WASHED, NATURAL, HONEY
 
+	// Laboratory Test Results (ECTA certified labs)
+	LaboratoryTestResults LaboratoryTestResults `json:"laboratoryTestResults"`
+	LabCertificateNumber  string                `json:"labCertificateNumber"` // Lab certificate no
+	LabTestDate           string                `json:"labTestDate"`          // ISO date
+
+	// Phytosanitary Certificate (Plant health certificate)
+	PhytosanitaryCertificate     string `json:"phytosanitaryCertificate"`     // Certificate number
+	PhytosanitaryIssueDate       string `json:"phytosanitaryIssueDate"`       // ISO date
+	PhytosanitaryExpiryDate      string `json:"phytosanitaryExpiryDate"`      // ISO date
+	PhytosanitaryTreatment       string `json:"phytosanitaryTreatment"`       // Treatment applied (if any)
+	PhytosanitaryDeclaration     string `json:"phytosanitaryDeclaration"`     // Free from pests/diseases
+	PhytosanitaryIssuingOfficer  string `json:"phytosanitaryIssuingOfficer"`  // ECTA officer name
+
 	// Compliance
 	EUDRCompliant  bool   `json:"eudrCompliant"`
 	PesticideTest  string `json:"pesticideTest"`  // PASSED, FAILED, NOT_TESTED
@@ -62,8 +75,25 @@ type QualityInspection struct {
 
 	ApprovedBy   string    `json:"approvedBy"`
 	ApprovedDate string    `json:"approvedDate"`
+	// ✅ MSP Identity Fields for Rejection
+	RejectedBy    string    `json:"rejectedBy"`    // X.509 certificate of rejecter
+	RejectedByMSP string    `json:"rejectedByMsp"` // MSP ID of rejecter
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// Laboratory Test Results structure
+type LaboratoryTestResults struct {
+	MoistureContent float64 `json:"moistureContent"` // % (max 12.5% for green coffee)
+	DefectCount     int     `json:"defectCount"`     // per 300g sample
+	ScreenSize      string  `json:"screenSize"`      // 14, 15, 16, 17, 18
+	Density         float64 `json:"density"`         // g/ml
+	WaterActivity   float64 `json:"waterActivity"`   // aw (max 0.70 for storage stability)
+	Ochratoxin      float64 `json:"ochratoxin"`      // ppb (max 5 ppb EU limit)
+	Aflatoxin       float64 `json:"aflatoxin"`       // ppb (max 10 ppb)
+	PesticideResidues string `json:"pesticideResidues"` // BELOW_MRL, ABOVE_MRL, NOT_DETECTED
+	HeavyMetals     string  `json:"heavyMetals"`     // PASS, FAIL (Pb, Cd, As, Hg)
+	TestCompliant   bool    `json:"testCompliant"`   // Overall lab compliance
 }
 
 // ==================== QUALITY INSPECTION FUNCTIONS ====================
@@ -550,6 +580,24 @@ func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInt
 func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID, rejectedBy, rejectionReason string) error {
 
+	// ✅ CAPTURE MSP IDENTITY of rejecter
+	rejecterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectInspection: failed to get rejecter MSP ID: %w", err)
+	}
+	
+	rejecterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejecterID = rejecterMSP // Fallback to MSP if cert not available
+	}
+	
+	// Access control: Only ECTA can reject inspections
+	if rejecterMSP != "ECTAMSP" {
+		return fmt.Errorf("RejectInspection: unauthorized: only ECTA can reject inspections (caller: %s)", rejecterMSP)
+	}
+	
+	fmt.Printf("RejectInspection: Inspection being rejected by %s (MSP: %s)\n", rejecterID, rejecterMSP)
+
 	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
 	if err != nil {
 		return fmt.Errorf("failed to read inspection: %v", err)
@@ -579,6 +627,8 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 	inspection.ApprovedBy = rejectedBy
 	inspection.ApprovedDate = txTime.Format(time.RFC3339)
 	inspection.RejectionReason = rejectionReason
+	inspection.RejectedBy = rejecterID       // ✅ Record WHO rejected (X.509 cert)
+	inspection.RejectedByMSP = rejecterMSP   // ✅ Record rejecter's MSP
 	inspection.UpdatedAt = txTime
 
 	inspectionJSON, err = json.Marshal(inspection)
