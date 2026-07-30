@@ -447,22 +447,26 @@ const LoginPage2026: React.FC = () => {
                         sx={{ opacity: darkMode ? 0.5 : 0.6 }}
                       >
                         <Tooltip title="Face ID (Coming Soon)">
-                          <IconButton 
-                            size="small" 
-                            disabled
-                            sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
-                          >
-                            <FaceRetouchingNatural />
-                          </IconButton>
+                          <span>
+                            <IconButton 
+                              size="small" 
+                              disabled
+                              sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
+                            >
+                              <FaceRetouchingNatural />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                         <Tooltip title="Fingerprint (Coming Soon)">
-                          <IconButton 
-                            size="small" 
-                            disabled
-                            sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
-                          >
-                            <Fingerprint />
-                          </IconButton>
+                          <span>
+                            <IconButton 
+                              size="small" 
+                              disabled
+                              sx={{ color: darkMode ? 'rgba(255, 255, 255, 0.3)' : undefined }}
+                            >
+                              <Fingerprint />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </Stack>
                     </Box>

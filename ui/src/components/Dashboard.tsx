@@ -179,18 +179,20 @@ const Dashboard: React.FC = () => {
           </Typography>
         </Box>
         <Tooltip title="Refresh Dashboard">
-          <IconButton 
-            onClick={loadDashboardData} 
-            disabled={refreshing}
-            sx={{
-              backgroundColor: alpha(theme.palette.primary.main, 0.1),
-              '&:hover': {
-                backgroundColor: alpha(theme.palette.primary.main, 0.2),
-              },
-            }}
-          >
-            <Refresh className={refreshing ? 'rotating' : ''} />
-          </IconButton>
+          <span>
+            <IconButton 
+              onClick={loadDashboardData} 
+              disabled={refreshing}
+              sx={{
+                backgroundColor: alpha(theme.palette.primary.main, 0.1),
+                '&:hover': {
+                  backgroundColor: alpha(theme.palette.primary.main, 0.2),
+                },
+              }}
+            >
+              <Refresh className={refreshing ? 'rotating' : ''} />
+            </IconButton>
+          </span>
         </Tooltip>
       </Box>
 

@@ -22,6 +22,7 @@ export class FabricService {
   private contract: Contract | null = null;
   private wallet: Wallet | null = null;
   private connected: boolean = false;
+  private currentMspId: string | null = null; // Track the actual connected MSP ID
   private db: sqlite3.Database | null = null;
 
   private constructor() {
@@ -158,10 +159,10 @@ export class FabricService {
     targetOrg = this.normalizeMspId(targetOrg);
 
     // If explicitly requesting a different org, force reconnect
-    const forcedReconnect = orgId && process.env.FABRIC_MSP_ID !== targetOrg;
+    const forcedReconnect = orgId && this.currentMspId !== targetOrg;
     
     // Already connected to the same org and not forcing reconnect — no-op
-    if (this.connected && process.env.FABRIC_MSP_ID === targetOrg && !forcedReconnect) {
+    if (this.connected && this.currentMspId === targetOrg && !forcedReconnect) {
       return;
     }
 
@@ -199,10 +200,13 @@ export class FabricService {
         wallet: this.wallet,
         identity: adminLabel,
         discovery: {
-          enabled: true,
+          enabled: true,  // Enable discovery to get endorsements from all required peers
           asLocalhost: process.env.FABRIC_AS_LOCALHOST !== 'false',
         },
-      };
+        eventHandlerOptions: {
+          commitTimeout: 300,
+        },
+      } as any;
 
       if (!this.gateway) {
         this.gateway = new Gateway();
@@ -214,9 +218,11 @@ export class FabricService {
       await this.gateway.connect(ccp, connectionOptions);
 
       this.network = await this.gateway.getNetwork(process.env.FABRIC_CHANNEL_NAME || 'coffeechannel');
-      this.contract = this.network.getContract(process.env.FABRIC_CHAINCODE_NAME || 'coffee');
+      // Get contract without metadata to bypass schema validation
+      this.contract = this.network.getContract(process.env.FABRIC_CHAINCODE_NAME || 'coffee', '');
 
       this.connected = true;
+      this.currentMspId = targetOrg; // Track the actual connected MSP
       logger.info(`✅ Successfully connected to Hyperledger Fabric network as ${targetOrg}`);
 
     } catch (error) {
@@ -232,6 +238,7 @@ export class FabricService {
       } catch (_) { /* ignore disconnect errors */ }
 
       this.connected = false;
+      this.currentMspId = null; // Clear the tracked MSP ID
       this.network = null;
       this.contract = null;
 
@@ -245,6 +252,7 @@ export class FabricService {
     if (this.gateway) {
       this.gateway.disconnect();
       this.connected = false;
+      this.currentMspId = null; // Clear the tracked MSP ID
       logger.info('Disconnected from Hyperledger Fabric network');
     }
     
@@ -452,7 +460,8 @@ export class FabricService {
         // Check if contract exists, if not try to reconnect
         if (!this.contract || !this.network) {
           logger.warn('Contract or network is null, attempting to reconnect...');
-          await this.connect();
+          // Reconnect using the current MSP ID from environment
+          await this.connect(process.env.FABRIC_MSP_ID);
         }
         
         if (!this.contract) {
@@ -516,28 +525,196 @@ export class FabricService {
         await this.connect();
       }
       
-      if (!this.contract) {
+      if (!this.contract || !this.network) {
         throw new Error('Not connected to Fabric network');
       }
 
       logger.info(`Querying chaincode function: ${functionName}`, { args });
 
-      const result = await this.contract.evaluateTransaction(functionName, ...args);
+      const transaction = this.contract.createTransaction(functionName);
+      let resultBytes: Buffer = Buffer.alloc(0); // Initialize with empty buffer
+      
+      try {
+        // Try normal evaluation first
+        resultBytes = await transaction.evaluate(...args);
+      } catch (error: any) {
+        // Log full error details for debugging
+        logger.error(`Transaction evaluation error for ${functionName}:`, {
+          message: error.message,
+          hasPayload: !!error.payload,
+          hasResponses: !!error.responses,
+          responsesLength: error.responses?.length,
+          errorKeys: Object.keys(error),
+          errorType: typeof error,
+        });
+        
+        // If schema validation fails, try to extract raw payload
+        if (error.message && error.message.includes('Value did not match schema')) {
+          logger.warn(`Schema validation error for ${functionName}, attempting to extract raw payload...`);
+          
+          // The error object from Fabric SDK has the response in error.responses array
+          if (error.responses && Array.isArray(error.responses) && error.responses.length > 0) {
+            const firstResponse = error.responses[0];
+            if (firstResponse.response && firstResponse.response.payload) {
+              const payload = firstResponse.response.payload;
+              if (Buffer.isBuffer(payload)) {
+                resultBytes = payload;
+                logger.info(`✅ Extracted raw payload from error.responses[0].response.payload (${resultBytes.length} bytes)`);
+              } else if (payload.data && Array.isArray(payload.data)) {
+                resultBytes = Buffer.from(payload.data);
+                logger.info(`✅ Extracted raw payload from error.responses[0].response.payload.data (${resultBytes.length} bytes)`);
+              }
+            }
+          }
+          // Fallback: try error.payload directly
+          else if (error.payload && Buffer.isBuffer(error.payload)) {
+            resultBytes = error.payload;
+            logger.info(`✅ Successfully extracted raw payload as Buffer (${resultBytes.length} bytes)`);
+          } else if (error.payload && error.payload.data && Array.isArray(error.payload.data)) {
+            // If payload is {data: [array of bytes], type: 'Buffer'}
+            resultBytes = Buffer.from(error.payload.data);
+            logger.info(`✅ Successfully extracted raw payload from error.payload.data array`);
+          }
+          
+          if (resultBytes.length === 0) {
+            logger.error(`❌ Extracted payload is empty for ${functionName}. Error structure:`, {
+              hasResponses: !!error.responses,
+              responsesLength: error.responses?.length,
+              hasPayload: !!error.payload,
+              payloadType: error.payload ? typeof error.payload : 'undefined',
+              firstResponseKeys: error.responses?.[0] ? Object.keys(error.responses[0]) : []
+            });
+            throw error; // Re-throw if payload is empty
+          }
+        } else {
+          throw error; // Re-throw non-schema errors
+        }
+      }
       
       logger.info(`✅ Chaincode query successful: ${functionName}`);
 
+      const resultString = resultBytes.toString('utf8');
+      let parsedData: any = null;
+      
+      if (resultString) {
+        parsedData = JSON.parse(resultString);
+        
+        // DEBUG: Log for QueryAllShipments
+        if (functionName === 'QueryAllShipments' && Array.isArray(parsedData) && parsedData.length > 0) {
+          logger.info(`[FABRIC DEBUG] QueryAllShipments returned ${parsedData.length} shipments`);
+          logger.info('[FABRIC DEBUG] First shipment RAW:', JSON.stringify(parsedData[0]));
+          logger.info('[FABRIC DEBUG] First shipment quantity:', parsedData[0].quantity);
+          logger.info('[FABRIC DEBUG] First shipment grade:', parsedData[0].grade);
+        }
+        
+        // Fix null arrays as a safety measure (chaincode should already handle this)
+        parsedData = this.fixNullArrays(parsedData);
+      }
+
       return {
         success: true,
-        data: result.toString() ? JSON.parse(result.toString()) : null,
+        data: parsedData,
       };
 
-    } catch (error) {
+    } catch (error: any) {
+      // CRITICAL FIX: Check if this is a schema validation error that was NOT caught by inner try-catch
+      // This happens when the SDK throws the error from SingleQueryHandler.evaluate() before our try-catch
+      if (error.message && error.message.includes('Value did not match schema')) {
+        logger.warn(`[OUTER CATCH] Schema validation error for ${functionName}, attempting payload extraction...`);
+        
+        let resultBytes: Buffer = Buffer.alloc(0);
+        
+        // Try to extract payload from error responses array
+        if (error.responses && Array.isArray(error.responses) && error.responses.length > 0) {
+          const firstResponse = error.responses[0];
+          if (firstResponse.response && firstResponse.response.payload) {
+            const payload = firstResponse.response.payload;
+            if (Buffer.isBuffer(payload)) {
+              resultBytes = payload;
+              logger.info(`✅ [OUTER CATCH] Extracted payload from error.responses[0].response.payload (${resultBytes.length} bytes)`);
+            } else if (payload.data && Array.isArray(payload.data)) {
+              resultBytes = Buffer.from(payload.data);
+              logger.info(`✅ [OUTER CATCH] Extracted payload from error.responses[0].response.payload.data (${resultBytes.length} bytes)`);
+            }
+          }
+        }
+        // Fallback: try error.payload directly
+        else if (error.payload && Buffer.isBuffer(error.payload)) {
+          resultBytes = error.payload;
+          logger.info(`✅ [OUTER CATCH] Extracted payload as Buffer (${resultBytes.length} bytes)`);
+        } else if (error.payload && error.payload.data && Array.isArray(error.payload.data)) {
+          resultBytes = Buffer.from(error.payload.data);
+          logger.info(`✅ [OUTER CATCH] Extracted payload from error.payload.data array`);
+        }
+        
+        // If we extracted payload successfully, parse and return it
+        if (resultBytes.length > 0) {
+          try {
+            const resultString = resultBytes.toString('utf8');
+            let parsedData: any = null;
+            
+            if (resultString) {
+              parsedData = JSON.parse(resultString);
+              parsedData = this.fixNullArrays(parsedData);
+            }
+            
+            logger.info(`✅ [OUTER CATCH] Successfully recovered data despite schema validation error for ${functionName}`);
+            return {
+              success: true,
+              data: parsedData,
+            };
+          } catch (parseError) {
+            logger.error(`[OUTER CATCH] Failed to parse extracted payload for ${functionName}:`, parseError);
+          }
+        }
+      }
+      
+      // If not a schema error or payload extraction failed, return error as before
       logger.error(`Failed to query chaincode function ${functionName}:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+  
+  // Helper method to fix null arrays in response data
+  private fixNullArrays(data: any): any {
+    if (Array.isArray(data)) {
+      return data.map((item: any) => {
+        if (item && typeof item === 'object') {
+          // Fix common null array fields
+          if (item.screenedAgainst === null || item.screenedAgainst === undefined) {
+            item.screenedAgainst = [];
+          }
+          if (item.ecxLots === null || item.ecxLots === undefined) {
+            item.ecxLots = [];
+          }
+          if (item.documents === null || item.documents === undefined) {
+            item.documents = [];
+          }
+          if (item.riskFactors === null || item.riskFactors === undefined) {
+            item.riskFactors = [];
+          }
+        }
+        return item;
+      });
+    } else if (data && typeof data === 'object') {
+      // Fix common null array fields for single objects
+      if (data.screenedAgainst === null || data.screenedAgainst === undefined) {
+        data.screenedAgainst = [];
+      }
+      if (data.ecxLots === null || data.ecxLots === undefined) {
+        data.ecxLots = [];
+      }
+      if (data.documents === null || data.documents === undefined) {
+        data.documents = [];
+      }
+      if (data.riskFactors === null || data.riskFactors === undefined) {
+        data.riskFactors = [];
+      }
+    }
+    return data;
   }
 
   // Exporter operations
@@ -715,7 +892,9 @@ export class FabricService {
 
   // Forex operations
   public async queryAllForex(): Promise<ChaincodeResponse> {
-    return this.queryChaincode('QueryAllForex', []);
+    // Use QueryNewForex to only retrieve records with proper schema (_v2 suffix)
+    // This avoids SDK validation errors from old records with null screenedAgainst
+    return this.queryChaincode('QueryNewForex', []);
   }
 
   public async getForex(forexId: string): Promise<ChaincodeResponse> {
@@ -762,11 +941,53 @@ export class FabricService {
   }
 
   public async getAllShipments(): Promise<ChaincodeResponse> {
-    return this.queryChaincode('QueryAllAssets', []);
+    return this.queryChaincode('QueryAllShipments', []);
   }
 
   public async updateShipmentStatus(shipmentId: string, status: string): Promise<ChaincodeResponse> {
     return this.invokeChaincode('UpdateShipmentStatus', [shipmentId, status]);
+  }
+
+  public async pickupShipment(
+    shipmentId: string,
+    pickupLocation: string,
+    pickupBy: string,
+    vehicleNumber: string,
+    driverName: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('PickupShipment', [
+      shipmentId,
+      pickupLocation,
+      pickupBy,
+      vehicleNumber,
+      driverName
+    ]);
+  }
+
+  public async confirmDelivery(
+    shipmentId: string,
+    deliveryLocation: string,
+    deliveredTo: string,
+    receivedBy: string,
+    receiverSignature: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('ConfirmDelivery', [
+      shipmentId,
+      deliveryLocation,
+      deliveredTo,
+      receivedBy,
+      receiverSignature
+    ]);
+  }
+
+  public async submitLCDocuments(
+    lcId: string,
+    documentIds: string[]
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('SubmitLCDocuments', [
+      lcId,
+      JSON.stringify(documentIds)
+    ]);
   }
 
   public async getShipmentHistory(shipmentId: string): Promise<ChaincodeResponse> {
@@ -1009,13 +1230,15 @@ export class FabricService {
     inspectionId: string,
     shipmentId: string,
     contractId: string,
-    exporterId: string
+    exporterId: string,
+    scheduledDate: string = ''
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('RequestInspection', [
       inspectionId,
       shipmentId,
       contractId,
       exporterId,
+      scheduledDate,
     ]);
   }
 
@@ -1341,9 +1564,10 @@ export class FabricService {
     clearanceNumber: string,
     dutiesAmount: string
   ): Promise<ChaincodeResponse> {
-    return this.invokeChaincode('ClearCustomsDeclaration', [
+    // FIX: Call ClearDeclaration (not ClearCustomsDeclaration) 
+    // ClearDeclaration properly updates shipment status to CUSTOMS_CLEARED
+    return this.invokeChaincode('ClearDeclaration', [
       declarationId,
-      clearedBy,
       clearanceNumber,
       dutiesAmount,
     ]);

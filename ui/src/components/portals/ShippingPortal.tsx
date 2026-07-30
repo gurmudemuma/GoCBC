@@ -49,6 +49,9 @@ import {
   Schedule,
   TrendingUp,
   QrCode,
+  Inventory,
+  Anchor,
+  Assessment,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -85,7 +88,7 @@ interface ShippingRecord {
   estimatedArrival: string;
   actualDeparture?: string;
   actualArrival?: string;
-  status: 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED';
+  status: 'CUSTOMS_CLEARED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED';
   trackingNumber: string;
   billOfLading?: string; // Sea freight B/L number
   containerType?: 'DRY' | 'REEFER' | 'OPEN_TOP'; // Sea freight only
@@ -107,7 +110,9 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
 
 const ShippingPortal: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
+  
   const [shippingRecords, setShippingRecords] = useState<ShippingRecord[]>([]);
+  const [allShippingRecords, setAllShippingRecords] = useState<ShippingRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<ShippingRecord | null>(null);
   const [trackingDialogOpen, setTrackingDialogOpen] = useState(false);
@@ -173,8 +178,47 @@ const ShippingPortal: React.FC = () => {
   ];
 
   useEffect(() => {
+    // Check if coming from Customs Portal with clearance context
+    const customsContext = sessionStorage.getItem('shipping_from_customs');
+    if (customsContext) {
+      try {
+        const data = JSON.parse(customsContext);
+        console.log('[SHIPPING] Received context from Customs Portal:', data);
+        
+        // Show notification
+        alert(
+          `📦 From Customs: Clearance Received\n\n` +
+          `Shipment: ${data.shipmentId}\n` +
+          `Declaration: ${data.declarationId}\n` +
+          `Clearance #: ${data.clearanceNumber}\n` +
+          `Destination: ${data.destination}\n` +
+          `Quantity: ${data.quantity?.toLocaleString()} kg\n\n` +
+          `Opening Bill of Lading form with auto-filled data...`
+        );
+        
+        // Pre-fill B/L form with shipment ID
+        setBolForm({ ...bolForm, shipmentId: data.shipmentId });
+        
+        // Auto-open B/L dialog and trigger auto-mapping
+        setBillOfLadingDialogOpen(true);
+        
+        // Auto-map data after a brief delay to ensure dialog is open
+        setTimeout(() => {
+          autoMapBOLData(data.shipmentId);
+        }, 500);
+        
+        // Clear the context after using it
+        sessionStorage.removeItem('shipping_from_customs');
+      } catch (error) {
+        console.error('[SHIPPING] Failed to parse customs context:', error);
+        sessionStorage.removeItem('shipping_from_customs');
+      }
+    }
+    
     loadData();
   }, []);
+
+
 
   const loadData = async () => {
     setLoading(true);
@@ -193,29 +237,43 @@ const ShippingPortal: React.FC = () => {
       
       if (shipmentsResult.success && shipmentsResult.data) {
         // Log all shipments with their statuses for debugging
-        console.log(`[SHIPPING] Total shipments: ${shipmentsResult.data.length}`);
-        console.log('[SHIPPING] All shipment statuses:', shipmentsResult.data.map((s: any) => ({
+        console.log(`[SHIPPING] Total shipments from blockchain: ${shipmentsResult.data.length}`);
+        
+        // FIX: De-duplicate shipments by ID (blockchain may return duplicates with different statuses)
+        // Keep only the LATEST version (most recent updatedAt)
+        const shipmentMap = new Map();
+        shipmentsResult.data.forEach((s: any) => {
+          const id = s.ShipmentID || s.shipmentId;
+          const updatedAt = new Date(s.UpdatedAt || s.updatedAt || 0);
+          
+          if (!shipmentMap.has(id) || updatedAt > shipmentMap.get(id).updatedAt) {
+            shipmentMap.set(id, { ...s, updatedAt });
+          }
+        });
+        
+        const uniqueShipments = Array.from(shipmentMap.values());
+        console.log(`[SHIPPING] After de-duplication: ${uniqueShipments.length} unique shipments`);
+        
+        console.log('[SHIPPING] All shipment statuses:', uniqueShipments.map((s: any) => ({
           id: s.ShipmentID || s.shipmentId,
           status: s.Status || s.status || s.shipmentStatus,
+          updated: s.UpdatedAt || s.updatedAt,
         })));
         
-        // Filter for shipments that are cleared by customs (ready for shipping)
-        // RELAXED FILTER: Show all shipments for debugging, will filter properly once customs workflow is complete
-        const readyShipments = shipmentsResult.data.filter((s: any) => {
-          const status = s.Status || s.status || s.shipmentStatus || '';
-          // Show shipments that are either:
-          // 1. Customs cleared (ready for shipping)
-          // 2. Already shipped
-          // 3. Delivered
-          // 4. Any shipment with customs info (for testing)
+        // Filter for shipments in shipping workflow - REAL STATUSES ONLY FROM BLOCKCHAIN
+        const readyShipments = uniqueShipments.filter((s: any) => {
+          const status = (s.Status || s.status || s.shipmentStatus || '').toUpperCase().trim();
+          // Include ONLY real blockchain shipping statuses (no fake data)
           return status === 'CUSTOMS_CLEARED' || 
-                 status === 'SHIPPED' || 
+                 status === 'LAND_TRANSPORT' ||
+                 status === 'PORT_ARRIVED' ||
+                 status === 'CONTAINER_STUFFED' ||
+                 status === 'VESSEL_LOADED' ||
+                 status === 'DEPARTED' ||
+                 status === 'IN_TRANSIT' ||
+                 status === 'DESTINATION_ARRIVED' ||
                  status === 'DELIVERED' ||
-                 status === 'CLEARED' ||
-                 status.includes('CLEARED') ||
-                 s.customsStatus === 'CLEARED' ||
-                 // TEMPORARY: Show all shipments for testing
-                 true;
+                 status === 'LOADED'; // B/L or AWB recorded
         });
         
         console.log(`[SHIPPING] Ready for shipping: ${readyShipments.length}`);
@@ -231,16 +289,46 @@ const ShippingPortal: React.FC = () => {
           // Blockchain uses camelCase: shipmentId, exporterId, transportMode, etc.
           const shipmentId = s.shipmentId || s.ShipmentID || 'UNKNOWN';
           const exporterId = s.exporterId || s.ExporterID || 'UNKNOWN';
-          const status = s.status || s.Status || 'PENDING';
+          const status = (s.status || s.Status || 'PENDING').toUpperCase().trim();
+          
+          // DEBUG: Log status mapping for each shipment
+          console.log(`[SHIPPING] Mapping ${shipmentId}: blockchain status="${status}"`);
           
           // Transport mode from blockchain
           const transportMode = s.transportMode || s.TransportMode || 'SEA';
           
-          // Map shipment status to shipping status
-          let shippingStatus = 'BOOKED';
-          if (status === 'DELIVERED') shippingStatus = 'DELIVERED';
-          else if (status === 'SHIPPED' || status === 'IN_TRANSIT') shippingStatus = 'IN_TRANSIT';
-          else if (s.billOfLadingNo || s.airwayBill) shippingStatus = 'LOADED';
+          // Map shipment status to shipping status - STRICT 1:1 MAPPING, NO FAKE DEFAULTS
+          let shippingStatus: ShippingRecord['status'];
+          
+          // Priority order: most specific to least specific (DELIVERED first to avoid fallthrough)
+          if (status === 'DELIVERED') {
+            shippingStatus = 'DELIVERED';
+          } else if (status === 'DESTINATION_ARRIVED') {
+            shippingStatus = 'DESTINATION_ARRIVED';
+          } else if (status === 'IN_TRANSIT') {
+            shippingStatus = 'IN_TRANSIT';
+          } else if (status === 'DEPARTED') {
+            shippingStatus = 'DEPARTED';
+          } else if (status === 'VESSEL_LOADED') {
+            shippingStatus = 'VESSEL_LOADED';
+          } else if (status === 'CONTAINER_STUFFED') {
+            shippingStatus = 'CONTAINER_STUFFED';
+          } else if (status === 'PORT_ARRIVED') {
+            shippingStatus = 'PORT_ARRIVED';
+          } else if (status === 'LAND_TRANSPORT') {
+            shippingStatus = 'LAND_TRANSPORT';
+          } else if (status === 'CUSTOMS_CLEARED') {
+            shippingStatus = 'CUSTOMS_CLEARED';
+          } else if (status === 'LOADED') {
+            // LOADED = B/L recorded, treat as CUSTOMS_CLEARED (ready for land transport)
+            shippingStatus = 'CUSTOMS_CLEARED';
+          } else {
+            // ERROR: Unknown status - do NOT show in shipping portal
+            console.error(`[SHIPPING] ❌ UNMAPPED STATUS "${status}" for shipment ${shipmentId} - SKIPPING THIS RECORD`);
+            return null; // Skip this shipment entirely
+          }
+          
+          console.log(`[SHIPPING] → Mapped to: ${shippingStatus}`);
           
           return {
             shippingId: `SH-${shipmentId}`,
@@ -275,17 +363,29 @@ const ShippingPortal: React.FC = () => {
             estimatedArrival: s.estimatedArrival || 
                              new Date(Date.now() + (transportMode === 'AIR' ? 1 : 30) * 24 * 60 * 60 * 1000).toISOString(),
             actualArrival: s.actualArrival || undefined,
-            status: shippingStatus as 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED',
+            status: shippingStatus,
             trackingNumber: s.trackingNumber || `TRK-${shipmentId}`,
             weight: s.quantity || 20000, // quantity from blockchain is in kg
             volume: ((s.quantity || 20000) / 600), // kg to m³ approximation
           };
-        });
+        }).filter(record => record !== null) as ShippingRecord[]; // Remove null entries
         
         console.log(`[SHIPPING] Mapped ${mappedRecords.length} shipping records from blockchain`);
         console.log('[SHIPPING] Sample record:', mappedRecords[0]);
+        console.log('[SHIPPING] Status distribution:', {
+          CUSTOMS_CLEARED: mappedRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length,
+          LAND_TRANSPORT: mappedRecords.filter(r => r.status === 'LAND_TRANSPORT').length,
+          PORT_ARRIVED: mappedRecords.filter(r => r.status === 'PORT_ARRIVED').length,
+          CONTAINER_STUFFED: mappedRecords.filter(r => r.status === 'CONTAINER_STUFFED').length,
+          VESSEL_LOADED: mappedRecords.filter(r => r.status === 'VESSEL_LOADED').length,
+          DEPARTED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DEPARTED').length,
+          IN_TRANSIT: mappedRecords.filter((r: ShippingRecord) => r.status === 'IN_TRANSIT').length,
+          DESTINATION_ARRIVED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DESTINATION_ARRIVED').length,
+          DELIVERED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DELIVERED').length,
+        });
         
         setShippingRecords(mappedRecords);
+        setAllShippingRecords(mappedRecords);
       }
     } catch (error) {
       console.error('[SHIPPING] Failed to load data:', error);
@@ -303,7 +403,7 @@ const ShippingPortal: React.FC = () => {
       console.log('[SHIPPING] Auto-mapping B/L data for shipment:', shipmentId);
 
       // Fetch shipment data
-      const shipmentResponse = await apiFetch('/shipments/${shipmentId}', {
+      const shipmentResponse = await apiFetch(`/shipments/${shipmentId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const shipmentResult = await shipmentResponse.json();
@@ -315,7 +415,7 @@ const ShippingPortal: React.FC = () => {
         // Fetch exporter data
         let exporterData: any = {};
         if (exporterId) {
-          const exporterResponse = await apiFetch('/users/${exporterId}', {
+          const exporterResponse = await apiFetch(`/users/${exporterId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const exporterResult = await exporterResponse.json();
@@ -437,7 +537,7 @@ const ShippingPortal: React.FC = () => {
       console.log(`[SHIPPING] Submitting ${bolForm.transportMode} document:`, bolForm);
 
       // Use the universal shipping-document endpoint
-      const response = await apiFetch('/shipments/${bolForm.shipmentId}/shipping-document', {
+      const response = await apiFetch(`/shipments/${bolForm.shipmentId}/shipping-document`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -530,7 +630,7 @@ const ShippingPortal: React.FC = () => {
       if (newStatus === 'IN_TRANSIT') shipmentStatus = 'SHIPPED';
       
       // Update shipment status
-      const response = await apiFetch('/shipments/${shipmentId}/status', {
+      const response = await apiFetch(`/shipments/${shipmentId}/status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -549,6 +649,426 @@ const ShippingPortal: React.FC = () => {
       }
     } catch (error) {
       console.error('[SHIPPING] Failed to update status:', error);
+    }
+  };
+
+  const handlePickup = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const pickupBy = prompt('Enter shipping company name:');
+    
+    if (!pickupBy) {
+      alert('❌ Shipping company name is required');
+      return;
+    }
+
+    try {
+      console.log('[SHIPPING] Recording pickup for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/pickup`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          pickupBy
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(`✅ Shipment Picked Up\n\nShipment ${shipmentId} has been picked up by ${pickupBy}\n\nStatus: IN_TRANSIT`);
+        loadData();
+      } else {
+        alert(`❌ Pickup Failed\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record pickup:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleDelivery = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Confirm delivery for shipment ${shipmentId}?`);
+    
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Confirming delivery for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/delivery`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          // Optional fields - backend will use defaults if not provided
+          deliveryLocation: '',
+          deliveredTo: ''
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(`✅ Delivery Confirmed\n\nShipment ${shipmentId} has been delivered\n\nStatus: DELIVERED`);
+        loadData();
+      } else {
+        alert(`❌ Delivery Confirmation Failed\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to confirm delivery:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  // ==================== NEW 8 WORKFLOW HANDLER FUNCTIONS ====================
+
+  const handleStartLandTransport = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const transportCompany = prompt('Enter transport company name:');
+    if (!transportCompany) {
+      alert('❌ Transport company name is required');
+      return;
+    }
+
+    const truckPlate = prompt('Enter truck plate number:');
+    if (!truckPlate) {
+      alert('❌ Truck plate number is required');
+      return;
+    }
+
+    const driverName = prompt('Enter driver name (optional):') || '';
+
+    try {
+      console.log('[SHIPPING] Starting land transport for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/land-transport/start`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          transportCompany,
+          truckPlate,
+          driverName,
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Land Transport Started\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Transport Co: ${transportCompany}\n` +
+          `Truck: ${truckPlate}\n` +
+          `Driver: ${driverName || 'N/A'}\n\n` +
+          `Status: LAND_TRANSPORT\n` +
+          `Journey: Addis Ababa → Djibouti (800km)`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Start Land Transport\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to start land transport:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handlePortArrival = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Confirm arrival at Djibouti Port for shipment ${shipmentId}?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Recording port arrival for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/port/arrive`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          notes: 'Arrived at Djibouti Port'
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Port Arrival Recorded\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Location: Djibouti Port\n` +
+          `Status: PORT_ARRIVED\n\n` +
+          `Next Step: Container stuffing`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Record Port Arrival\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record port arrival:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleContainerStuffing = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const containerNumber = prompt('Enter container number:');
+    if (!containerNumber) {
+      alert('❌ Container number is required');
+      return;
+    }
+
+    const containerType = prompt('Enter container type (DRY, REEFER, OPEN_TOP):', 'DRY') || 'DRY';
+
+    try {
+      console.log('[SHIPPING] Recording container stuffing for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/container/stuff`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          containerNumber,
+          containerType,
+          sealNumber: `SEAL-${Date.now()}`,
+          stuffedBy: 'Port Authority',
+          location: 'Djibouti Port'
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Container Stuffed\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Container: ${containerNumber}\n` +
+          `Type: ${containerType}\n` +
+          `Status: CONTAINER_STUFFED\n\n` +
+          `Next Step: Vessel loading`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Record Container Stuffing\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record container stuffing:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleVesselLoading = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Confirm container loaded on vessel for shipment ${shipmentId}?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Recording vessel loading for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/vessel/load`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          notes: 'Container loaded on vessel'
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Vessel Loaded\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Status: VESSEL_LOADED\n\n` +
+          `Next Step: Vessel departure`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Record Vessel Loading\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record vessel loading:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleVesselDeparture = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Confirm vessel departure from Djibouti for shipment ${shipmentId}?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Recording vessel departure for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/vessel/depart`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          notes: 'Vessel departed from Djibouti'
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Vessel Departed\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Status: DEPARTED\n\n` +
+          `Next Step: Update to in-transit`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Record Vessel Departure\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record vessel departure:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleInTransitUpdate = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Update shipment ${shipmentId} to IN_TRANSIT (at sea)?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Updating to in-transit for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/in-transit/update`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          trackingNumber: `TRK-${Date.now()}`
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ In-Transit Updated\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Status: IN_TRANSIT\n\n` +
+          `Journey: 25-35 days to Europe\n` +
+          `Next Step: Destination arrival`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Update In-Transit\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to update in-transit:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleDestinationArrival = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const confirmed = confirm(`Confirm arrival at destination port for shipment ${shipmentId}?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Recording destination arrival for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/destination/arrive`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          notes: 'Arrived at destination port'
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Destination Arrival Recorded\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Status: DESTINATION_ARRIVED\n\n` +
+          `Next Step: Final delivery`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Record Destination Arrival\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to record destination arrival:', error);
+      alert(`❌ Network Error\n\n${error}`);
+    }
+  };
+
+  const handleCompleteDelivery = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const deliveryNotes = prompt('Enter delivery notes (optional):') || 'Delivery completed';
+    
+    const confirmed = confirm(`Complete final delivery for shipment ${shipmentId}?`);
+    if (!confirmed) return;
+
+    try {
+      console.log('[SHIPPING] Completing delivery for shipment:', shipmentId);
+      
+      const response = await apiFetch(`/shipments/${shipmentId}/delivery/complete`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          deliveryNotes
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        alert(
+          `✅ Delivery Completed\n\n` +
+          `Shipment: ${shipmentId}\n` +
+          `Status: DELIVERED\n\n` +
+          `🎉 Ethiopian Coffee Export Complete!`
+        );
+        loadData();
+      } else {
+        alert(`❌ Failed to Complete Delivery\n\n${result.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('[SHIPPING] Failed to complete delivery:', error);
+      alert(`❌ Network Error\n\n${error}`);
     }
   };
   const shippingColumns: GridColDef[] = [
@@ -627,15 +1147,44 @@ const ShippingPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 260,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
       renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
+        <Box onClick={(e) => e.stopPropagation()} sx={{ display: 'flex', gap: 0.5 }}>
+          <Tooltip title="View Audit Trail">
+            <IconButton 
+              size="small"
+              color="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAuditEntityType('SHIPMENT');
+                setAuditEntityId(params.row.shipmentId);
+                setShowAuditTrail(true);
+              }}
+            >
+              <Assignment />
+            </IconButton>
+          </Tooltip>
+          
+          <Tooltip title="View Details">
+            <IconButton 
+              size="small"
+              color="primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedRecord(params.row);
+              }}
+            >
+              <Visibility />
+            </IconButton>
+          </Tooltip>
+          
           <Tooltip title="Track Shipment">
             <IconButton 
-              size="small" 
+              size="small"
+              color="info"
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedRecord(params.row);
@@ -645,29 +1194,134 @@ const ShippingPortal: React.FC = () => {
               <LocationOn />
             </IconButton>
           </Tooltip>
-          <Tooltip title="View Details">
-            <IconButton 
-              size="small" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedRecord(params.row);
-              }}
-            >
-              <Visibility />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Update Status">
-            <IconButton 
-              size="small" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedRecord(params.row);
-                setUpdateDialogOpen(true);
-              }}
-            >
-              <Schedule />
-            </IconButton>
-          </Tooltip>
+          
+          {/* CUSTOMS_CLEARED → Start Land Transport */}
+          {params.row.status === 'CUSTOMS_CLEARED' && (
+            <Tooltip title="Start Land Transport">
+              <IconButton 
+                size="small"
+                color="success"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleStartLandTransport(params.row.shipmentId);
+                }}
+              >
+                <LocalShipping />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* LAND_TRANSPORT → Port Arrival */}
+          {params.row.status === 'LAND_TRANSPORT' && (
+            <Tooltip title="Record Port Arrival">
+              <IconButton 
+                size="small"
+                color="info"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePortArrival(params.row.shipmentId);
+                }}
+              >
+                <Anchor />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* PORT_ARRIVED → Stuff Container */}
+          {params.row.status === 'PORT_ARRIVED' && (
+            <Tooltip title="Stuff Container">
+              <IconButton 
+                size="small"
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleContainerStuffing(params.row.shipmentId);
+                }}
+              >
+                <Inventory />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* CONTAINER_STUFFED → Load on Vessel */}
+          {params.row.status === 'CONTAINER_STUFFED' && (
+            <Tooltip title="Load on Vessel">
+              <IconButton 
+                size="small"
+                color="secondary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleVesselLoading(params.row.shipmentId);
+                }}
+              >
+                <DirectionsBoat />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* VESSEL_LOADED → Mark Departed */}
+          {params.row.status === 'VESSEL_LOADED' && (
+            <Tooltip title="Mark Vessel Departed">
+              <IconButton 
+                size="small"
+                color="warning"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleVesselDeparture(params.row.shipmentId);
+                }}
+              >
+                <DirectionsBoat />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* DEPARTED → Update In-Transit */}
+          {params.row.status === 'DEPARTED' && (
+            <Tooltip title="Update to In-Transit">
+              <IconButton 
+                size="small"
+                color="info"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleInTransitUpdate(params.row.shipmentId);
+                }}
+              >
+                <DirectionsBoat />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* IN_TRANSIT → Destination Arrival */}
+          {params.row.status === 'IN_TRANSIT' && (
+            <Tooltip title="Record Destination Arrival">
+              <IconButton 
+                size="small"
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDestinationArrival(params.row.shipmentId);
+                }}
+              >
+                <LocationOn />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* DESTINATION_ARRIVED → Complete Delivery */}
+          {params.row.status === 'DESTINATION_ARRIVED' && (
+            <Tooltip title="Complete Delivery">
+              <IconButton 
+                size="small"
+                color="success"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCompleteDelivery(params.row.shipmentId);
+                }}
+              >
+                <CheckCircle />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       ),
     },
@@ -689,496 +1343,593 @@ const ShippingPortal: React.FC = () => {
   const brandSecondary = '#0097a7'; // Cyan
 
   return (
-    <Box sx={{ p: 3 }}>
-      {/* Header */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Box>
-          <Typography variant="h4" component="h1" gutterBottom>
-            🚢 Shipping Portal
-          </Typography>
-          <Typography variant="subtitle1" color="textSecondary">
-            Maritime Logistics & Container Management - Ethiopian Coffee Exports
-          </Typography>
-        </Box>
-        <Box display="flex" gap={2} alignItems="center">
-          <AnimatedButton
-            variant="outlined"
-            startIcon={<Download />}
-            brandColor={brandPrimary}
-            onClick={() => {
-              // Export shipping report as CSV - include AWB data
-              const csvContent = [
-                ['Shipping ID', 'Shipment ID', 'Exporter', 'Mode', 'Document No', 'Carrier', 'Vessel/Flight', 'Container', 'POL', 'POD', 'Status', 'ETD', 'ETA'],
-                ...shippingRecords.map(r => [
-                  r.shippingId, 
-                  r.shipmentId, 
-                  r.exporterId, 
-                  r.transportMode || 'SEA',
-                  r.transportMode === 'AIR' ? (r.airwayBill || 'N/A') : (r.billOfLading || 'N/A'),
-                  r.shippingLine || 'N/A',
-                  r.transportMode === 'AIR' ? (r.flightNumber || 'N/A') : (r.vesselName || 'N/A'),
-                  r.containerNumber || (r.transportMode === 'AIR' ? 'N/A' : ''),
-                  r.portOfLoading, 
-                  r.portOfDischarge, 
-                  r.status,
-                  new Date(r.estimatedDeparture).toLocaleDateString(),
-                  new Date(r.estimatedArrival).toLocaleDateString()
-                ])
-              ].map(row => row.join(',')).join('\n');
-              
-              const blob = new Blob([csvContent], { type: 'text/csv' });
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `shipping_report_${new Date().toISOString().split('T')[0]}.csv`;
-              a.click();
-              window.URL.revokeObjectURL(url);
-            }}
-          >
-            Export Report
-          </AnimatedButton>
-          <AnimatedButton
-            variant="contained"
-            startIcon={<Add />}
-            brandColor={brandPrimary}
-            onClick={() => {
-              // Open shipping document dialog (B/L or AWB)
-              setBillOfLadingDialogOpen(true);
-            }}
-          >
-            Record Shipping Document
-          </AnimatedButton>
-        </Box>
-      </Box>
-      {/* Statistics Cards */}
-      <Grid container spacing={3} mb={3}>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Total Shipments"
-            value={stats.total}
-            icon={<LocalShipping />}
-            trend="up"
-            trendValue="+14%"
-            brandColor={brandPrimary}
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="In Transit"
-            value={stats.inTransit}
-            icon={<DirectionsBoat />}
-            trend="up"
-            trendValue="+7%"
-            brandColor="#ff9800"
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Delivered"
-            value={stats.delivered}
-            icon={<CheckCircle />}
-            trend="up"
-            trendValue="+25%"
-            brandColor="#4caf50"
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <DashboardKPI
-            title="Total Weight"
-            value={`${(stats.totalWeight / 1000).toFixed(1)}MT`}
-            icon={<Assignment />}
-            trend="up"
-            trendValue="+18%"
-            brandColor={brandSecondary}
-          />
-        </Grid>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #f7fcfd 0%, #edf7fa 46%, #fffef4 100%)',
+        p: { xs: 2, md: 3 },
+      }}
+    >
+      {/* Professional KPI Cards - Reflect 9-Tab Workflow */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        {(() => {
+          // KPIs based on 9-tab workflow structure (including Customs Cleared)
+          const kpis = tabValue === 0 ? [
+            // Tab 0: Customs Cleared
+            { 
+              icon: <CheckCircle />, 
+              label: 'Customs Cleared', 
+              value: allShippingRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length, 
+              color: '#4caf50',
+              subtitle: 'Ready for Shipping'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Awaiting Transport', 
+              value: allShippingRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length, 
+              color: '#ff9800',
+              subtitle: 'Next: Djibouti'
+            },
+            { 
+              icon: <LocalShipping />, 
+              label: 'Total Weight', 
+              value: `${Math.floor(allShippingRecords.filter(r => r.status === 'CUSTOMS_CLEARED').reduce((sum, r) => sum + r.weight, 0) / 1000)}t`, 
+              color: brandPrimary,
+              subtitle: 'Tons'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Clearance Rate', 
+              value: '96%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : tabValue === 1 ? [
+            // Tab 1: Land Transport
+            { 
+              icon: <LocalShipping />, 
+              label: 'Land Transport', 
+              value: allShippingRecords.filter(r => r.status === 'LAND_TRANSPORT').length, 
+              color: '#ff9800',
+              subtitle: 'Addis → Djibouti'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Avg Duration', 
+              value: '3-5d', 
+              color: '#2196F3',
+              subtitle: '800km Journey'
+            },
+            { 
+              icon: <LocalShipping />, 
+              label: 'Trucks Active', 
+              value: allShippingRecords.filter(r => r.status === 'LAND_TRANSPORT').length, 
+              color: brandPrimary,
+              subtitle: 'On Road'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'On Schedule', 
+              value: '94%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : tabValue === 2 ? [
+            // Tab 2: Port Arrived
+            { 
+              icon: <Inventory />, 
+              label: 'Containers', 
+              value: allShippingRecords.filter(r => r.status === 'CONTAINER_STUFFED').length, 
+              color: '#9c27b0',
+              subtitle: 'Stuffed & Sealed'
+            },
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'DRY', 
+              value: allShippingRecords.filter(r => r.status === 'CONTAINER_STUFFED' && r.containerType === 'DRY').length, 
+              color: '#2196F3',
+              subtitle: 'Standard'
+            },
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'REEFER', 
+              value: allShippingRecords.filter(r => r.status === 'CONTAINER_STUFFED' && r.containerType === 'REEFER').length, 
+              color: '#00bcd4',
+              subtitle: 'Climate Controlled'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Ready to Load', 
+              value: allShippingRecords.filter(r => r.status === 'CONTAINER_STUFFED').length, 
+              color: '#4caf50',
+              subtitle: 'Awaiting Vessel'
+            },
+          ] : tabValue === 3 ? [
+            // Tab 3: Container Stuffed
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'Loaded', 
+              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              color: '#2196F3',
+              subtitle: 'On Vessel'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Awaiting Departure', 
+              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              color: '#ff9800',
+              subtitle: 'Ready to Sail'
+            },
+            { 
+              icon: <Anchor />, 
+              label: 'At Djibouti', 
+              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              color: brandPrimary,
+              subtitle: 'Port'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Loading Efficiency', 
+              value: '97%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : tabValue === 4 ? [
+            // Tab 4: Vessel Loaded
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'Departed', 
+              value: allShippingRecords.filter(r => r.status === 'DEPARTED').length, 
+              color: '#2196F3',
+              subtitle: 'Left Port'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Recent Departures', 
+              value: allShippingRecords.filter(r => r.status === 'DEPARTED').length, 
+              color: '#ff9800',
+              subtitle: 'Last 24h'
+            },
+            { 
+              icon: <LocationOn />, 
+              label: 'From Djibouti', 
+              value: allShippingRecords.filter(r => r.status === 'DEPARTED').length, 
+              color: brandPrimary,
+              subtitle: 'Main Port'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'On Schedule', 
+              value: '98%', 
+              color: '#4caf50',
+              subtitle: 'Tracking'
+            },
+          ] : tabValue === 5 ? [
+            // Tab 5: Departed
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'At Sea', 
+              value: allShippingRecords.filter(r => r.status === 'IN_TRANSIT').length, 
+              color: '#2196F3',
+              subtitle: 'Active Voyages'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Avg Transit', 
+              value: '25-35d', 
+              color: '#ff9800',
+              subtitle: 'To Europe'
+            },
+            { 
+              icon: <LocationOn />, 
+              label: 'GPS Tracking', 
+              value: allShippingRecords.filter(r => r.status === 'IN_TRANSIT').length, 
+              color: brandPrimary,
+              subtitle: 'Active'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'On Schedule', 
+              value: '96%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : tabValue === 6 ? [
+            // Tab 6: In Transit
+            { 
+              icon: <LocationOn />, 
+              label: 'Arrived', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: '#4caf50',
+              subtitle: 'At Destination'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Awaiting Clearance', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: '#ff9800',
+              subtitle: 'Customs'
+            },
+            { 
+              icon: <Inventory />, 
+              label: 'Ready for Delivery', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: brandPrimary,
+              subtitle: 'Final Mile'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Clearance Rate', 
+              value: '95%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : tabValue === 7 ? [
+            // Tab 7: Destination Arrived
+            { 
+              icon: <LocationOn />, 
+              label: 'Arrived', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: '#4caf50',
+              subtitle: 'At Destination'
+            },
+            { 
+              icon: <Schedule />, 
+              label: 'Awaiting Clearance', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: '#ff9800',
+              subtitle: 'Customs'
+            },
+            { 
+              icon: <Inventory />, 
+              label: 'Ready for Delivery', 
+              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              color: brandPrimary,
+              subtitle: 'Final Mile'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Clearance Rate', 
+              value: '95%', 
+              color: '#4caf50',
+              subtitle: 'Performance'
+            },
+          ] : [
+            // Tab 8: Delivered
+            { 
+              icon: <CheckCircle />, 
+              label: 'Delivered', 
+              value: allShippingRecords.filter(r => r.status === 'DELIVERED').length, 
+              color: '#4caf50',
+              subtitle: 'Complete'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'This Month', 
+              value: allShippingRecords.filter(r => {
+                const estDep = new Date(r.estimatedDeparture);
+                const now = new Date();
+                return r.status === 'DELIVERED' && estDep.getMonth() === now.getMonth() && estDep.getFullYear() === now.getFullYear();
+              }).length, 
+              color: brandPrimary,
+              subtitle: 'Shipments'
+            },
+            { 
+              icon: <Assessment />, 
+              label: 'Total Weight', 
+              value: `${Math.round(allShippingRecords.filter(r => r.status === 'DELIVERED').reduce((sum, r) => sum + (r.weight || 0), 0) / 1000)}t`, 
+              color: '#2196F3',
+              subtitle: 'Delivered'
+            },
+            { 
+              icon: <DirectionsBoat />, 
+              label: 'Success Rate', 
+              value: '98.5%', 
+              color: '#4caf50',
+              subtitle: 'Quality'
+            },
+          ];
+
+          return kpis.map((kpi, index) => (
+            <Grid item xs={12} sm={6} md={3} key={index}>
+              <Card 
+                sx={{ 
+                  bgcolor: '#fff', 
+                  border: `2px solid ${kpi.color}`,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                  transition: 'all 0.3s ease',
+                  cursor: 'pointer',
+                  '&:hover': {
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+                    transform: 'translateY(-4px)',
+                  }
+                }}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
+                  <Typography variant="caption" sx={{ 
+                    color: '#666', 
+                    textTransform: 'uppercase', 
+                    fontWeight: 700, 
+                    display: 'block',
+                    letterSpacing: '0.8px',
+                    mb: 0.5
+                  }}>
+                    {kpi.label}
+                  </Typography>
+                  <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color, mb: 0.5 }}>
+                    {kpi.value}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#999', fontSize: '0.75rem' }}>
+                    {kpi.subtitle}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ));
+        })()}
       </Grid>
 
-      {/* Real-time Tracking Alert */}
-      <Alert severity="info" sx={{ mb: 3 }}>
-        <Typography variant="body2">
-          <strong>Real-time Tracking:</strong> All containers equipped with IoT sensors for temperature, humidity, and GPS tracking. 
-          Blockchain integration ensures immutable logistics records.
-          <br />
-          <strong>Current Performance:</strong> 96% on-time delivery • 2.1 days avg port dwell • 94.5% efficiency rating
-        </Typography>
-      </Alert>
-
-      {/* Tabs */}
+      {/* Tabs - Shipping Workflow Status */}
       <ModernCard>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
-            <Tab label="Shipments" />
-            <Tab label="Container Tracking" />
-            <Tab label="Port Operations" />
-            <Tab label="Analytics" />
+          <Tabs 
+            value={tabValue} 
+            onChange={(e, newValue) => setTabValue(newValue)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              '& .MuiTab-root': {
+                minHeight: 48,
+                textTransform: 'none',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                color: '#666',
+                transition: 'all 0.3s ease',
+                '&.Mui-selected': {
+                  color: brandPrimary,
+                  fontWeight: 700,
+                },
+                '&:hover': {
+                  color: brandPrimary,
+                  opacity: 0.8,
+                }
+              },
+              '& .MuiTabs-indicator': {
+                height: 3,
+                backgroundColor: brandPrimary,
+                borderRadius: '3px 3px 0 0',
+              }
+            }}
+          >
+            <Tab label="🛃 Customs Cleared" icon={<CheckCircle />} iconPosition="start" />
+            <Tab label="🚚 Land Transport" icon={<LocalShipping />} iconPosition="start" />
+            <Tab label="⚓ Port Arrived" icon={<Anchor />} iconPosition="start" />
+            <Tab label="📦 Container Stuffed" icon={<Inventory />} iconPosition="start" />
+            <Tab label="🚢 Vessel Loaded" icon={<DirectionsBoat />} iconPosition="start" />
+            <Tab label="⛵ Departed" icon={<DirectionsBoat />} iconPosition="start" />
+            <Tab label="🌊 In Transit" icon={<DirectionsBoat />} iconPosition="start" />
+            <Tab label="🏁 Destination Port" icon={<LocationOn />} iconPosition="start" />
+            <Tab label="✅ Delivered" icon={<CheckCircle />} iconPosition="start" />
           </Tabs>
         </Box>
 
+        {/* Tab 0: Customs Cleared (Ready for Shipping) */}
         <TabPanel value={tabValue} index={0}>
-          <Alert severity={shippingRecords.length > 0 ? "success" : "warning"} sx={{ mb: 2 }}>
-            <Typography variant="body2" fontWeight={600}>
-              {shippingRecords.length > 0 ? '✅ ' : '⏳ '}
-              Customs-Cleared Shipments Ready for Transportation
-            </Typography>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🛃 Customs Cleared - Ready for Shipping
+          </Typography>
+          
+          <Alert severity="info" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              This view shows shipments that have completed the following prerequisites:
-              <br/>
-              ✅ ECTA quality inspection approved • ✅ Export permit issued • ✅ Customs clearance received
-              <br/>
-              Shipping companies book cargo space, issue Bills of Lading, and manage transportation to destination.
-              {shippingRecords.length === 0 && (
-                <>
-                  <br/><br/>
-                  <strong>⚠️ No customs-cleared shipments found.</strong> Shipments will appear here after they receive customs clearance approval.
-                  Check the Customs Portal to process pending declarations.
-                </>
-              )}
+              <strong>Next Step:</strong> Record shipping documents (Bill of Lading or Airway Bill) to assign vessel/flight and start the shipping workflow.
+              <br />
+              <strong>Action:</strong> Click "Record Shipping Document" button above to create B/L for these shipments.
             </Typography>
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={shippingRecords}
+              rows={allShippingRecords.filter(r => r.status === 'CUSTOMS_CLEARED')}
               columns={shippingColumns}
               getRowId={(row) => row.shippingId}
               loading={loading}
-              pageSizeOptions={[25, 50, 100]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 25 } },
-              }}
-              checkboxSelection
-              disableRowSelectionOnClick
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
             />
           </Box>
         </TabPanel>
+
+        {/* Tab 1: Land Transport (Addis → Djibouti) */}
         <TabPanel value={tabValue} index={1}>
-          <Typography variant="h6" gutterBottom>
-            Real-time Container Tracking
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🚚 Land Transport - Addis Ababa to Djibouti Port
           </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Active Containers
-                  </Typography>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Container</TableCell>
-                        <TableCell>Status</TableCell>
-                        <TableCell>Location</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {shippingRecords.map((record) => (
-                        <TableRow key={record.containerNumber}>
-                          <TableCell>{record.containerNumber}</TableCell>
-                          <TableCell>
-                            <Chip label={record.status} size="small" color="primary" />
-                          </TableCell>
-                          <TableCell>
-                            {record.status === 'LOADED' ? record.portOfLoading : 
-                             record.status === 'IN_TRANSIT' ? 'At Sea' : 
-                             record.portOfDischarge}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    IoT Sensor Status
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Temperature Monitoring: Active
-                    </Typography>
-                    <LinearProgress variant="determinate" value={100} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      GPS Tracking: Active
-                    </Typography>
-                    <LinearProgress variant="determinate" value={98} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Humidity Control: Active
-                    </Typography>
-                    <LinearProgress variant="determinate" value={95} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">
-                      Security Seals: Intact
-                    </Typography>
-                    <LinearProgress variant="determinate" value={100} sx={{ mt: 1 }} />
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
+          
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Journey:</strong> 800km overland journey (3-5 days). Coffee transported by truck from Ethiopian warehouses to Djibouti seaport.
+            </Typography>
+          </Alert>
 
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Blockchain Integration Status
-              </Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Immutable Records:
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    ✅ Container loading timestamps
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    ✅ Port departure/arrival logs
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    ✅ Temperature/humidity data
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    ✅ GPS coordinate tracking
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Smart Contract Triggers:
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    🔄 Automatic status updates
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    🔄 Payment release conditions
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    🔄 Insurance claim processing
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    🔄 Delivery confirmation
-                  </Typography>
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'LAND_TRANSPORT')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
         </TabPanel>
 
+        {/* Tab 2: Port Arrived */}
         <TabPanel value={tabValue} index={2}>
-          <Typography variant="h6" gutterBottom>
-            Port Operations Management
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            ⚓ Port Arrived - Coffee at Djibouti Port
           </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={8}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Port Performance Metrics
-                  </Typography>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Port</TableCell>
-                        <TableCell>Containers</TableCell>
-                        <TableCell>Avg Dwell (days)</TableCell>
-                        <TableCell>Efficiency (%)</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {portPerformanceData.map((port) => (
-                        <TableRow key={port.port}>
-                          <TableCell>{port.port}</TableCell>
-                          <TableCell>{port.containers}</TableCell>
-                          <TableCell>{port.avgDwell}</TableCell>
-                          <TableCell>
-                            <Box display="flex" alignItems="center">
-                              <Typography variant="body2" sx={{ mr: 1 }}>
-                                {port.efficiency}%
-                              </Typography>
-                              <LinearProgress 
-                                variant="determinate" 
-                                value={port.efficiency} 
-                                sx={{ width: 60 }}
-                              />
-                            </Box>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Djibouti Port Status
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary" gutterBottom>
-                    Primary export gateway for Ethiopian coffee
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2">
-                      Current Queue: 12 containers
-                    </Typography>
-                    <LinearProgress variant="determinate" value={25} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2">
-                      Processing Rate: 94.5%
-                    </Typography>
-                    <LinearProgress variant="determinate" value={94.5} sx={{ mt: 1 }} />
-                  </Box>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2">
-                      Weather Conditions: Good
-                    </Typography>
-                    <LinearProgress variant="determinate" value={85} sx={{ mt: 1 }} />
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
+          
+          <Alert severity="success" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Coffee arrived at port. Ready for container stuffing and vessel loading.
+            </Typography>
+          </Alert>
 
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Shipping Line Performance
-              </Typography>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Shipping Line</TableCell>
-                    <TableCell>Market Share (%)</TableCell>
-                    <TableCell>Performance Score</TableCell>
-                    <TableCell>On-time Delivery</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {shippingLineData.map((line) => (
-                    <TableRow key={line.line}>
-                      <TableCell>{line.line}</TableCell>
-                      <TableCell>{line.share}%</TableCell>
-                      <TableCell>{line.performance}%</TableCell>
-                      <TableCell>
-                        <LinearProgress 
-                          variant="determinate" 
-                          value={line.performance} 
-                          sx={{ width: 100 }}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'PORT_ARRIVED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
         </TabPanel>
-        <TabPanel value={tabValue} index={3}>
-          <Typography variant="h6" gutterBottom>
-            Shipping Analytics & Trends
-          </Typography>
-          <Grid container spacing={3} mb={3}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Monthly Shipping Trends
-                  </Typography>
-                  <Box sx={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={shippingTrendsData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month" />
-                        <YAxis />
-                        <RechartsTooltip />
-                        <Line type="monotone" dataKey="containers" stroke="#0277bd" strokeWidth={3} name="Total Containers" />
-                        <Line type="monotone" dataKey="onTime" stroke="#4caf50" strokeWidth={3} name="On-time %" />
-                        <Line type="monotone" dataKey="delayed" stroke="#f44336" strokeWidth={3} name="Delayed %" />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Container Utilization
-                  </Typography>
-                  <Box sx={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={portPerformanceData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="port" />
-                        <YAxis />
-                        <RechartsTooltip />
-                        <Bar dataKey="containers" fill="#0277bd" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
 
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Key Performance Indicators
-              </Typography>
-              <Grid container spacing={3}>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="primary.main">
-                      96%
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      On-time Delivery
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="success.main">
-                      2.1
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Avg Port Dwell (days)
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="secondary.main">
-                      94.5%
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Port Efficiency
-                    </Typography>
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Box textAlign="center">
-                    <Typography variant="h4" color="warning.main">
-                      15.2
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Avg Transit Days
-                    </Typography>
-                  </Box>
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
+        {/* Tab 3: Container Stuffed */}
+        <TabPanel value={tabValue} index={3}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            📦 Container Stuffed - Coffee Packed & Sealed
+          </Typography>
+          
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Coffee bags loaded into shipping container. Container sealed and ready for vessel loading.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'CONTAINER_STUFFED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 4: Vessel Loaded */}
+        <TabPanel value={tabValue} index={4}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🚢 Vessel Loaded - Container on Ship
+          </Typography>
+          
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Container loaded onto cargo vessel. Awaiting vessel departure from Djibouti.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'VESSEL_LOADED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 5: Departed */}
+        <TabPanel value={tabValue} index={5}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            ⛵ Departed - Vessel Left Port
+          </Typography>
+          
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Vessel departed from Djibouti Port. Beginning ocean transit to destination.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'DEPARTED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 6: In Transit (At Sea) */}
+        <TabPanel value={tabValue} index={6}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🌊 In Transit - Coffee at Sea
+          </Typography>
+          
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Vessel in transit. Typical journey: 25-35 days to Europe, 45-60 days to Asia/Americas.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'IN_TRANSIT')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 7: Destination Arrived */}
+        <TabPanel value={tabValue} index={7}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🏁 Destination Port - Arrived at Buyer's Port
+          </Typography>
+          
+          <Alert severity="success" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Vessel arrived at destination port. Container unloading and customs clearance in progress.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 8: Delivered */}
+        <TabPanel value={tabValue} index={8}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            ✅ Delivered - Export Complete
+          </Typography>
+          
+          <Alert severity="success" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Status:</strong> Coffee successfully delivered to buyer. Ethiopian coffee export process complete!
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={allShippingRecords.filter(r => r.status === 'DELIVERED')}
+              columns={shippingColumns}
+              getRowId={(row) => row.shippingId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+            />
+          </Box>
         </TabPanel>
       </ModernCard>
       {/* Shipping Record Detail Dialog */}
@@ -1313,7 +2064,7 @@ const ShippingPortal: React.FC = () => {
           >
             Track Shipment
           </AnimatedButton>
-          {selectedRecord && ['BOOKED', 'LOADED', 'DEPARTED', 'IN_TRANSIT'].includes(selectedRecord.status) && (
+          {selectedRecord && ['CUSTOMS_CLEARED', 'IN_TRANSIT'].includes(selectedRecord.status) && (
             <AnimatedButton
               variant="contained"
               brandColor="#4caf50"
@@ -1382,7 +2133,7 @@ const ShippingPortal: React.FC = () => {
                 <Typography>→</Typography>
                 <Chip label="In Transit" color={selectedRecord.status === 'IN_TRANSIT' ? 'success' : 'default'} />
                 <Typography>→</Typography>
-                <Chip label="Port Arrival" color={selectedRecord.status === 'ARRIVED' ? 'success' : 'default'} />
+                <Chip label="Port Arrival" color={selectedRecord.status === 'DESTINATION_ARRIVED' ? 'success' : 'default'} />
                 <Typography>→</Typography>
                 <Chip label="Delivered" color={selectedRecord.status === 'DELIVERED' ? 'success' : 'default'} />
               </Box>
@@ -1439,41 +2190,79 @@ const ShippingPortal: React.FC = () => {
 
       {/* Status Update Dialog */}
       <Dialog open={updateDialogOpen} onClose={() => setUpdateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Update Shipping Status</DialogTitle>
+        <DialogTitle>Shipping Actions</DialogTitle>
         <DialogContent>
           {selectedRecord && (
             <Box sx={{ pt: 2 }}>
               <Typography variant="body1" gutterBottom>
-                <strong>Container:</strong> {selectedRecord.containerNumber}
+                <strong>Shipment ID:</strong> {selectedRecord.shipmentId}
               </Typography>
               <Typography variant="body1" gutterBottom sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <strong>Current Status:</strong> <Chip label={selectedRecord.status} size="small" color="primary" />
               </Typography>
               
-              <FormControl fullWidth sx={{ mb: 2 }}>
-                <InputLabel>New Status</InputLabel>
-                <Select
-                  defaultValue={selectedRecord.status}
-                  label="New Status"
-                  id="shipping-status-select"
-                >
-                  <MenuItem value="BOOKED">BOOKED - Container Booked</MenuItem>
-                  <MenuItem value="LOADED">LOADED - Container Loaded</MenuItem>
-                  <MenuItem value="DEPARTED">DEPARTED - Vessel Departed</MenuItem>
-                  <MenuItem value="IN_TRANSIT">IN_TRANSIT - In Transit</MenuItem>
-                  <MenuItem value="ARRIVED">ARRIVED - Arrived at Port</MenuItem>
-                  <MenuItem value="DELIVERED">DELIVERED - Delivered to Buyer</MenuItem>
-                </Select>
-              </FormControl>
-              
-              <TextField
-                fullWidth
-                id="shipping-status-notes"
-                label="Status Update Notes"
-                multiline
-                rows={3}
-                placeholder="Enter status update details, location information, and any remarks..."
-              />
+              {/* Action Buttons based on status */}
+              <Box sx={{ mt: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {/* Pickup Action - Only for CUSTOMS_CLEARED */}
+                {selectedRecord.status === 'CUSTOMS_CLEARED' && (
+                  <AnimatedButton
+                    variant="contained"
+                    brandColor="#2e7d32"
+                    startIcon={<LocalShipping />}
+                    onClick={() => {
+                      handlePickup(selectedRecord.shipmentId);
+                      setUpdateDialogOpen(false);
+                    }}
+                    fullWidth
+                  >
+                    📦 Record Pickup (Customs Cleared → In Transit)
+                  </AnimatedButton>
+                )}
+                
+                {/* Delivery Action - Only for IN_TRANSIT */}
+                {selectedRecord.status === 'IN_TRANSIT' && (
+                  <AnimatedButton
+                    variant="contained"
+                    brandColor="#1976d2"
+                    startIcon={<CheckCircle />}
+                    onClick={() => {
+                      handleDelivery(selectedRecord.shipmentId);
+                      setUpdateDialogOpen(false);
+                    }}
+                    fullWidth
+                  >
+                    ✅ Confirm Delivery (In Transit → Delivered)
+                  </AnimatedButton>
+                )}
+                
+                {/* Manual Status Update */}
+                <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid #e0e0e0' }}>
+                  <Typography variant="subtitle2" gutterBottom color="textSecondary">
+                    Manual Status Update (Advanced)
+                  </Typography>
+                  <FormControl fullWidth sx={{ mb: 2 }}>
+                    <InputLabel>New Status</InputLabel>
+                    <Select
+                      defaultValue={selectedRecord.status}
+                      label="New Status"
+                      id="shipping-status-select"
+                    >
+                      <MenuItem value="CUSTOMS_CLEARED">CUSTOMS_CLEARED - Cleared by Customs</MenuItem>
+                      <MenuItem value="IN_TRANSIT">IN_TRANSIT - Picked Up & In Transit</MenuItem>
+                      <MenuItem value="DELIVERED">DELIVERED - Delivered to Buyer</MenuItem>
+                    </Select>
+                  </FormControl>
+                  
+                  <TextField
+                    fullWidth
+                    id="shipping-status-notes"
+                    label="Status Update Notes"
+                    multiline
+                    rows={2}
+                    placeholder="Enter reason for manual status update..."
+                  />
+                </Box>
+              </Box>
             </Box>
           )}
         </DialogContent>
@@ -1482,27 +2271,24 @@ const ShippingPortal: React.FC = () => {
             Cancel
           </AnimatedButton>
           <AnimatedButton 
-            variant="contained" 
+            variant="outlined" 
             brandColor="#006064"
             onClick={() => {
               if (selectedRecord) {
                 const statusSelect = document.querySelector<HTMLSelectElement>('#shipping-status-select');
                 const notesInput = document.querySelector<HTMLTextAreaElement>('#shipping-status-notes');
-                const newStatus = statusSelect?.value || 'DEPARTED';
-                const notes = notesInput?.value || 'Status updated';
+                const newStatus = statusSelect?.value || selectedRecord.status;
                 
-                console.log('[SHIPPING] Updating status:', {
-                  shippingId: selectedRecord.shippingId,
-                  newStatus,
-                  notes,
-                  timestamp: new Date().toISOString()
-                });
+                if (newStatus === selectedRecord.status) {
+                  alert('⚠️ Please select a different status');
+                  return;
+                }
                 
                 handleUpdateStatus(selectedRecord.shippingId, newStatus);
               }
             }}
           >
-            Update Status
+            Apply Manual Update
           </AnimatedButton>
         </DialogActions>
       </Dialog>
@@ -2014,6 +2800,14 @@ const ShippingPortal: React.FC = () => {
           </AnimatedButton>
         </DialogActions>
       </Dialog>
+
+      {/* Audit Trail Viewer */}
+      <AuditTrailViewer
+        entityType={auditEntityType}
+        entityId={auditEntityId}
+        open={showAuditTrail}
+        onClose={() => setShowAuditTrail(false)}
+      />
     </Box>
   );
 };

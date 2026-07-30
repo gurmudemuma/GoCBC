@@ -248,11 +248,11 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 
 	compliance := ComplianceMetadata{
 		ECTACompliance: true,
-		NBECompliance:  false, // Not yet approved
+		NBECompliance:  false, // NBE monitors, doesn't approve LCs
 		UCP600Check:    true,  // LC follows UCP 600
 		EUDRCompliance: contract.EUDRRequired,
 		ICOCompliance:  true,
-		ComplianceNote: "LC requested, pending bank approval and NBE forex allocation",
+		ComplianceNote: "LC requested. Requires bank approval, then bank allocates forex per NBE policy (50% retention).",
 	}
 
 	err = c.CreateAuditLog(ctx, "CREATE", "LC", lcID, "", "REQUESTED", changes,
@@ -352,58 +352,9 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 	fmt.Printf("ApproveLC: LC approved by %s with IssuingBank=%s, AdvisingBank=%s\n", 
 		approverMSP, lc.IssuingBank, lc.AdvisingBank)
 
-	// AUTO-TRIGGER: Create forex allocation
-	forexID := "FOREX_" + lcID
-
-	exchangeRate := 120.0
-	rateObj, err := c.GetCurrentExchangeRate(ctx, lc.Currency)
-	if err == nil && rateObj != nil {
-		exchangeRate = rateObj.MidRate
-	}
-
-	// NBE FXD/01/2024: 100% retention allowed, must sell to bank within 30 days
-	retentionRate := 100.0
-	policy, err := c.GetCurrentRetentionPolicy(ctx, "COFFEE")
-	if err == nil && policy != nil {
-		retentionRate = policy.RetentionRate
-	}
-
-	expiryDays := 90
-	expiryDate := txTime.AddDate(0, 0, expiryDays).Format(time.RFC3339)
-
-	forex := ForexAllocation{
-		ForexID:         forexID,
-		ContractID:      lc.ContractID,
-		ExporterID:      lc.ExporterID,
-		LCID:            lcID,
-		RequestedAmount: lc.Amount,
-		AllocatedAmount: lc.Amount,
-		Currency:        lc.Currency,
-		ExchangeRate:    exchangeRate,
-		OfficialRate:    exchangeRate,
-		RetentionRate:   retentionRate,
-		Status:          "ALLOCATED",
-		RequestDate:     txTime,
-		AllocationDate:  txTime.Format(time.RFC3339),
-		ExpiryDate:      expiryDate,
-		NBEOfficer:      "AUTO_SYSTEM",
-		NBEApprovalRef:  "LC_AUTO_" + lcID,
-		Comments:        fmt.Sprintf("Auto-allocated for LC with Issuing Bank: %s, Advising Bank: %s", lc.IssuingBank, lc.AdvisingBank),
-		CreatedAt:       txTime,
-		UpdatedAt:       txTime,
-	}
-
-	forexJSON, err := json.Marshal(forex)
-	if err != nil {
-		fmt.Printf("ApproveLC WARNING: failed to marshal forex: %v\n", err)
-	} else {
-		err = ctx.GetStub().PutState(forexID, forexJSON)
-		if err != nil {
-			fmt.Printf("ApproveLC WARNING: failed to save forex: %v\n", err)
-		} else {
-			fmt.Printf("ApproveLC: Forex allocated successfully\n")
-		}
-	}
+	// NOTE: Forex allocation is now MANUAL via separate forex allocation tab
+	// Banks must explicitly allocate forex in the Forex Allocations tab after LC approval
+	fmt.Printf("ApproveLC: LC approved. Forex allocation must be done manually by bank.\n")
 
 	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
 	changes := []FieldChange{
@@ -414,15 +365,15 @@ func (c *CoffeeContract) ApproveLC(ctx contractapi.TransactionContextInterface,
 
 	compliance := ComplianceMetadata{
 		ECTACompliance: true,
-		NBECompliance:  true, // Forex allocated
+		NBECompliance:  false, // Forex must be allocated manually by bank
 		UCP600Check:    true,
 		EUDRCompliance: true,
 		ICOCompliance:  true,
-		ComplianceNote: "LC approved by bank, forex allocated by NBE",
+		ComplianceNote: "LC approved by bank. Bank must manually allocate forex in Forex Allocations tab per NBE policy (50% retention).",
 	}
 
 	err = c.CreateAuditLog(ctx, "APPROVE", "LC", lcID, "REQUESTED", "APPROVED", changes,
-		"Letter of Credit approved, forex allocated", compliance)
+		"Letter of Credit approved by bank. Forex allocation pending in Forex Allocations tab.", compliance)
 	if err != nil {
 		log.Printf("WARNING: Failed to create audit log: %v", err)
 	}
@@ -790,6 +741,72 @@ func (c *CoffeeContract) LCExists(ctx contractapi.TransactionContextInterface,
 	return lcJSON != nil, nil
 }
 
+// DeleteLC - Delete a Letter of Credit (ADMIN ONLY - for fixing duplicates)
+// ⚠️ WARNING: This is a destructive operation. Use only for cleanup.
+func (c *CoffeeContract) DeleteLC(ctx contractapi.TransactionContextInterface, lcID string) error {
+	// ✅ CAPTURE MSP IDENTITY - Only BANKS or ECTA can delete
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("DeleteLC: failed to get MSP ID: %w", err)
+	}
+	
+	// Only BANKS or ECTA can delete LCs (for cleanup purposes)
+	if mspID != "BanksMSP" && mspID != "ECTAMSP" && mspID != "NBEMSP" {
+		return fmt.Errorf("DeleteLC: only Banks, ECTA, or NBE can delete LCs (for duplicate cleanup), got: %s", mspID)
+	}
+	
+	fmt.Printf("=== DeleteLC called by %s: lcID=%s ===\n", mspID, lcID)
+
+	// Check if LC exists
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %v", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	// Parse LC to log details before deletion
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %v", err)
+	}
+
+	fmt.Printf("DeleteLC: Deleting LC %s (Status: %s, Contract: %s, Amount: %.2f %s)\n", 
+		lcID, lc.Status, lc.ContractID, lc.Amount, lc.Currency)
+
+	// Delete the LC
+	err = ctx.GetStub().DelState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to delete LC: %v", err)
+	}
+
+	// ✅ CREATE AUDIT LOG for deletion
+	changes := []FieldChange{
+		{FieldName: "lcId", OldValue: lcID, NewValue: "DELETED", DataType: "string"},
+		{FieldName: "status", OldValue: lc.Status, NewValue: "DELETED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("LC deleted by %s for duplicate cleanup", mspID),
+	}
+
+	err = c.CreateAuditLog(ctx, "DELETE", "LC", lcID, lc.Status, "DELETED", changes,
+		fmt.Sprintf("LC deleted by %s (duplicate cleanup)", mspID), compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log for LC deletion: %v", err)
+	}
+
+	fmt.Printf("=== DeleteLC completed: %s ===\n", lcID)
+	return nil
+}
+
 // Helper function for querying LCs
 func (c *CoffeeContract) queryLCs(ctx contractapi.TransactionContextInterface,
 	queryString string) ([]*LetterOfCredit, error) {
@@ -966,4 +983,169 @@ func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInte
 
 	fmt.Printf("ReleaseLCPayment: Payment released for LC %s: %s %.2f\n", lcID, currency, paymentAmount)
 	return nil
+}
+
+
+// LinkShipmentToLC - Update LC status when exporter creates shipment
+// This moves LC from FOREX_ALLOCATED to SHIPPED status
+func (c *CoffeeContract) LinkShipmentToLC(ctx contractapi.TransactionContextInterface,
+	lcID, shipmentID string) error {
+	
+	// Read LC
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %v", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %v", err)
+	}
+
+	// Only update if LC has forex allocated
+	if lc.Status != "FOREX_ALLOCATED" && lc.Status != "ISSUED" {
+		return fmt.Errorf("LC status must be FOREX_ALLOCATED or ISSUED to link shipment, current: %s", lc.Status)
+	}
+
+	// Get timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update LC status to SHIPPED
+	lc.Status = "SHIPPED"
+	lc.UpdatedAt = txTime
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save LC: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":  "LCShipmentCreated",
+		"lcID":       lcID,
+		"shipmentID": shipmentID,
+		"timestamp":  txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("LCShipmentCreated", eventJSON)
+
+	fmt.Printf("LinkShipmentToLC: LC %s linked to shipment %s, status updated to SHIPPED\n", lcID, shipmentID)
+	return nil
+}
+
+// SubmitLCDocuments - Update LC status when exporter submits shipping documents
+// This moves LC from SHIPPED to DOCUMENTS_SUBMITTED status
+func (c *CoffeeContract) SubmitLCDocuments(ctx contractapi.TransactionContextInterface,
+	lcID string, documentIDs []string) error {
+	
+	// Read LC
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %v", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal LC: %v", err)
+	}
+
+	// Only update if LC is shipped
+	if lc.Status != "SHIPPED" {
+		return fmt.Errorf("LC status must be SHIPPED to submit documents, current: %s", lc.Status)
+	}
+
+	// Get timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update LC status and attach documents
+	lc.Status = "DOCUMENTS_SUBMITTED"
+	lc.Documents = documentIDs
+	lc.UpdatedAt = txTime
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save LC: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":     "LCDocumentsSubmitted",
+		"lcID":          lcID,
+		"documentCount": len(documentIDs),
+		"timestamp":     txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("LCDocumentsSubmitted", eventJSON)
+
+	fmt.Printf("SubmitLCDocuments: LC %s documents submitted, status updated to DOCUMENTS_SUBMITTED\n", lcID)
+	return nil
+}
+
+
+// QueryLCsByContract - Get all LCs for a specific contract
+func (c *CoffeeContract) QueryLCsByContract(ctx contractapi.TransactionContextInterface,
+	contractID string) ([]*LetterOfCredit, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
+	
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query LCs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var lcs []*LetterOfCredit
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var lc LetterOfCredit
+		err = json.Unmarshal(queryResponse.Value, &lc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
+		}
+		
+		// Ensure arrays are never nil
+		if lc.Amendments == nil {
+			lc.Amendments = []LCAmendment{}
+		}
+		if lc.Discrepancies == nil {
+			lc.Discrepancies = []LCDiscrepancy{}
+		}
+		if lc.Documents == nil {
+			lc.Documents = []string{}
+		}
+		
+		lcs = append(lcs, &lc)
+	}
+
+	return lcs, nil
 }

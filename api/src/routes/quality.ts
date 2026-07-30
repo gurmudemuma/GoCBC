@@ -3,6 +3,7 @@
 
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
@@ -37,12 +38,14 @@ router.post('/:inspectionID/certify',
       const classification = body.classification || 'WASHED';
       const cuppingScore = Number(body.cupping || body.overall || 87);
       const normalizedScore = Math.max(0, Math.min(10, cuppingScore / 10));
+      const scheduledDate = body.scheduledDate || new Date().toISOString();
 
       const requestResult = await fabricService.requestInspection(
         inspectionID,
         shipmentID,
         contractID,
-        exporterID
+        exporterID,
+        scheduledDate || ''
       );
 
       if (!requestResult.success) {
@@ -128,7 +131,7 @@ router.post('/inspections',
   validateRequest,
   async (req, res) => {
     try {
-      const { inspectionID, shipmentID, contractID, exporterID } = req.body;
+      const { inspectionID, shipmentID, contractID, exporterID, scheduledDate } = req.body;
 
       // Reconnect Fabric with the user's organization identity
       const userOrg = (req as any).user?.org || 'ECTAMSP';
@@ -156,7 +159,8 @@ router.post('/inspections',
         inspectionID,
         shipmentID,
         finalContractID,
-        finalExporterID
+        finalExporterID,
+        scheduledDate || ''
       );
 
       if (result.success) {
@@ -377,7 +381,7 @@ router.post('/inspections/:inspectionID/issue-permit',
   async (req, res) => {
     try {
       const { inspectionID } = req.params;
-      const { exportPermitNo, issuedBy } = req.body;
+      const { exportPermitNo, issuedBy, autoCreateCustomsDeclaration } = req.body;
 
       // Reconnect Fabric with the user's organization identity
       const userOrg = (req as any).user?.org || 'ECTAMSP';
@@ -390,7 +394,71 @@ router.post('/inspections/:inspectionID/issue-permit',
       );
 
       if (result.success) {
-        logger.info(`Export permit issued: ${exportPermitNo} for inspection ${inspectionID}`);
+        logger.info(`✅ [ECTA] Export permit issued: ${exportPermitNo} for inspection ${inspectionID}`);
+        
+        // ✅ AUTOMATICALLY TRIGGER CUSTOMS WORKFLOW
+        // After ECTA issues export permit, the customs declaration workflow can begin
+        if (autoCreateCustomsDeclaration !== false) { // Default to true
+          try {
+            // Fetch inspection details to get shipment and exporter info
+            const inspectionResult = await fabricService.getInspection(inspectionID);
+            if (inspectionResult.success && inspectionResult.data) {
+              const inspection = inspectionResult.data;
+              const shipmentId = inspection.shipmentId || inspection.ShipmentID || inspection.ShipmentId;
+              const exporterId = inspection.exporterId || inspection.ExporterID || inspection.ExporterId;
+
+              if (shipmentId) {
+                logger.info(`[ECTA→CUSTOMS] Triggering customs declaration workflow for shipment ${shipmentId}`);
+                
+                // Call the auto-create customs declaration endpoint
+                const axios = require('axios');
+                const baseURL = process.env.API_BASE_URL || 'http://localhost:3001';
+                
+                try {
+                  const customsResponse = await axios.post(
+                    `${baseURL}/api/v1/customs/declaration/auto-create-from-permit`,
+                    {
+                      inspectionId: inspectionID,
+                      shipmentId,
+                      exporterId,
+                      exportPermitNo
+                    },
+                    {
+                      headers: {
+                        'Authorization': req.headers.authorization,
+                        'Content-Type': 'application/json'
+                      }
+                    }
+                  );
+
+                  if (customsResponse.data.success) {
+                    logger.info(`✅ [ECTA→CUSTOMS] Customs declaration auto-created: ${customsResponse.data.declarationId}`);
+                    
+                    return res.json({
+                      success: true,
+                      data: result.data,
+                      customsDeclaration: {
+                        created: true,
+                        declarationId: customsResponse.data.declarationId,
+                        shipmentId: customsResponse.data.shipmentId
+                      },
+                      txId: result.txId,
+                      timestamp: new Date().toISOString(),
+                      message: `Export permit issued and customs declaration workflow initiated for shipment ${shipmentId}`
+                    });
+                  }
+                } catch (customsError: any) {
+                  logger.warn(`[ECTA→CUSTOMS] Could not auto-create customs declaration: ${customsError.message}`);
+                  // Don't fail the permit issuance if customs declaration fails
+                }
+              }
+            }
+          } catch (triggerError: any) {
+            logger.warn(`[ECTA→CUSTOMS] Could not trigger customs workflow: ${triggerError.message}`);
+            // Don't fail the permit issuance if workflow trigger fails
+          }
+        }
+
         res.json({
           success: true,
           data: result.data,
@@ -480,6 +548,33 @@ router.post('/inspections/:inspectionID/reject',
 );
 
 /**
+ * POST /api/v1/quality/inspections/:inspectionID/claim - Claim/acknowledge a permit-ready inspection (by customs)
+ */
+router.post('/inspections/:inspectionID/claim',
+  authMiddleware,
+  [param('inspectionID').notEmpty().withMessage('Inspection ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { inspectionID } = req.params;
+      const db = DatabaseService.getInstance();
+      const user = (req as any).user || {};
+
+      // Record a lightweight audit entry to mark this inspection as claimed/acknowledged by customs
+      await db.run(
+        `INSERT INTO audit_log (user_id, action, resource_type, resource_id, details) VALUES (?, ?, ?, ?, ?)`,
+        [user.id || null, 'inspection.claimed', 'inspection', inspectionID, JSON.stringify({ claimedBy: user.username || user.email || null, timestamp: new Date().toISOString(), note: req.body.note || null })]
+      );
+
+      res.json({ success: true, data: { inspectionId: inspectionID }, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error claiming inspection:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+/**
  * GET /api/v1/quality/inspections - Get all inspections
  */
 router.get('/inspections', authMiddleware, async (req, res) => {
@@ -497,9 +592,34 @@ router.get('/inspections', authMiddleware, async (req, res) => {
 
     if (result.success) {
       let inspections = result.data || [];
+      if (!Array.isArray(inspections)) inspections = [inspections];
+
+      const normalizedInspections = inspections.map((inspection: any) => ({
+        inspectionID: inspection?.inspectionID || inspection?.InspectionID || inspection?.id || '',
+        shipmentID: inspection?.shipmentID || inspection?.ShipmentID || inspection?.shipmentId || '',
+        exporterID: inspection?.exporterID || inspection?.ExporterID || inspection?.exporterId || '',
+        status: inspection?.status || inspection?.Status || 'PENDING',
+        inspectionType: inspection?.inspectionType || inspection?.InspectionType || 'QUALITY',
+        requestedBy: inspection?.requestedBy || inspection?.RequestedBy || '',
+        requestedAt: inspection?.requestedAt || inspection?.requestDate || inspection?.request_date || null,
+        performedBy: inspection?.performedBy || inspection?.PerformedBy || '',
+        performedAt: inspection?.performedAt || inspection?.inspectionDate || inspection?.inspection_date || null,
+        approvedBy: inspection?.approvedBy || inspection?.ApprovedBy || '',
+        approvalDate: inspection?.approvalDate || inspection?.approval_date || null,
+        issuanceDate: inspection?.issuanceDate || inspection?.issueDate || inspection?.issuance_date || null,
+        certificateNumber: inspection?.certificateNumber || inspection?.CertificateNumber || '',
+        permitNumber: inspection?.permitNumber || inspection?.PermitNumber || '',
+        findings: inspection?.findings || inspection?.Findings || '',
+        documents: inspection?.documents || inspection?.Documents || [],
+        results: inspection?.results || inspection?.Results || [],
+        createdAt: inspection?.createdAt || inspection?.created_at || null,
+        updatedAt: inspection?.updatedAt || inspection?.updated_at || null,
+      }));
+
+      const validInspections = dedupeById(normalizedInspections.filter(isValidInspection), (inspection: any) => inspection.inspectionID);
 
       // Apply pagination
-      const paginatedInspections = inspections.slice(
+      const paginatedInspections = validInspections.slice(
         parseInt(offset as string),
         parseInt(offset as string) + parseInt(limit as string)
       );
@@ -508,10 +628,10 @@ router.get('/inspections', authMiddleware, async (req, res) => {
         success: true,
         data: paginatedInspections,
         pagination: {
-          total: inspections.length,
+          total: validInspections.length,
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
-          hasMore: parseInt(offset as string) + parseInt(limit as string) < inspections.length,
+          hasMore: parseInt(offset as string) + parseInt(limit as string) < normalizedInspections.length,
         },
         timestamp: new Date().toISOString(),
       });

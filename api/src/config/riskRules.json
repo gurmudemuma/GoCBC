@@ -1,0 +1,5 @@
+{
+  "highValueThreshold": 50000,
+  "hsPrefixesMedium": ["07", "08", "09"],
+  "defaultRiskLevel": "LOW"
+}

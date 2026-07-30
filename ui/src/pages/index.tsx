@@ -16,6 +16,12 @@ export default function Home() {
         // Not authenticated → redirect to login
         router.replace('/login');
       } else if (user) {
+        // CRITICAL: Check if user is rejected - redirect to resubmit page ONLY
+        if (user.status === 'rejected') {
+          router.replace('/resubmit-application');
+          return;
+        }
+
         // Authenticated → redirect to user's portal
         const portalRoutes: Record<string, string> = {
           ECTA: '/portals/ecta',

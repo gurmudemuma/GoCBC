@@ -9,6 +9,10 @@ export interface SWIFTDashboardWrapperProps {
   primaryColor?: string;
   secondaryColor?: string;
   accentColor?: string;
+  rowsPerPage?: number;
+  currentPage?: number;
+  onPageChange?: (page: number) => void;
+  onRowsPerPageChange?: (rowsPerPage: number) => void;
 }
 
 // CBE Color Palette (default for Banks portal)
@@ -22,7 +26,11 @@ const CBE_COLORS = {
 const SWIFTDashboardWrapper: React.FC<SWIFTDashboardWrapperProps> = ({ 
   primaryColor = CBE_COLORS.purple,
   secondaryColor = CBE_COLORS.golden,
-  accentColor = CBE_COLORS.black
+  accentColor = CBE_COLORS.black,
+  rowsPerPage,
+  currentPage,
+  onPageChange,
+  onRowsPerPageChange,
 }) => {
   return (
     <ConfigProvider
@@ -47,6 +55,10 @@ const SWIFTDashboardWrapper: React.FC<SWIFTDashboardWrapperProps> = ({
           primaryColor={primaryColor}
           secondaryColor={secondaryColor}
           accentColor={accentColor}
+          rowsPerPage={rowsPerPage}
+          currentPage={currentPage}
+          onPageChange={onPageChange}
+          onRowsPerPageChange={onRowsPerPageChange}
         />
       </div>
     </ConfigProvider>

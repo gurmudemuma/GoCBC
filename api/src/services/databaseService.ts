@@ -2,14 +2,18 @@
 // Database Service - SQLite Wrapper
 
 import * as sqlite3 from 'sqlite3';
+import { Pool } from 'pg';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 
 export class DatabaseService {
   private static instance: DatabaseService;
   private db: sqlite3.Database | null = null;
+  private pgPool: Pool | null = null;
+  private usePg: boolean = false;
 
   private constructor() {
+    this.usePg = !!process.env.DATABASE_URL;
     this.connect();
   }
 
@@ -21,10 +25,23 @@ export class DatabaseService {
   }
 
   public isConnected(): boolean {
-    return this.db !== null;
+    return this.usePg ? this.pgPool !== null : this.db !== null;
   }
 
   private connect(): void {
+    if (this.usePg) {
+      this.pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
+      this.pgPool.connect((err) => {
+        if (err) {
+          logger.error('Failed to connect to PostgreSQL:', err);
+        } else {
+          logger.info(`✅ PostgreSQL connected`);
+          this.initializeTables();
+        }
+      });
+      return;
+    }
+
     try {
       const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', '..', 'cecbs.db');
       
@@ -39,6 +56,23 @@ export class DatabaseService {
     } catch (error) {
       logger.error('Database connection error:', error);
     }
+  }
+
+  // Helper to translate queries from SQLite to Postgres
+  private translateQuery(sql: string): string {
+    if (!this.usePg) return sql;
+    
+    // Replace datetime('now') with CURRENT_TIMESTAMP
+    let translated = sql.replace(/datetime\('now'\)/g, 'CURRENT_TIMESTAMP');
+    
+    // Convert ? parameters to $1, $2, etc.
+    let paramIndex = 1;
+    translated = translated.replace(/\?/g, () => `$${paramIndex++}`);
+    
+    // Convert AUTOINCREMENT to SERIAL for table creations
+    translated = translated.replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY');
+    
+    return translated;
   }
 
   private initializeTables(): void {
@@ -62,7 +96,7 @@ export class DatabaseService {
         bank_branch TEXT,
         bank_branch_code TEXT,
         permissions TEXT DEFAULT '[]',
-        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'inactive')),
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'inactive', 'rejected')),
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
         last_login TEXT,
@@ -138,42 +172,72 @@ export class DatabaseService {
       );
     `;
 
-    this.db.serialize(() => {
-      this.db!.run(usersTableSQL, (err) => {
-        if (err) {
-          logger.error('Failed to create users table:', err);
-        } else {
-          logger.info('✅ Users table ready');
-          this.createIndexes();
-          this.runMigrations();
-          this.seedDefaultUsers();
-        }
-      });
+    // Declaration risk assessment table
+    const declarationRiskTableSQL = `
+      CREATE TABLE IF NOT EXISTS declaration_risk (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        declaration_id TEXT NOT NULL,
+        shipment_id TEXT,
+        risk_level TEXT NOT NULL CHECK(risk_level IN ('LOW','MEDIUM','HIGH')),
+        reason TEXT,
+        assessed_by TEXT,
+        assessed_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
 
-      this.db!.run(applicationsTableSQL, (err) => {
-        if (err) {
-          logger.error('Failed to create applications table:', err);
-        } else {
-          logger.info('✅ Exporter applications table ready');
-        }
-      });
+    // Local declarations table (drafts + metadata)
+    const declarationsTableSQL = `
+      CREATE TABLE IF NOT EXISTS declarations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        declaration_id TEXT UNIQUE NOT NULL,
+        shipment_id TEXT NOT NULL,
+        exporter_id TEXT,
+        status TEXT DEFAULT 'DECLARATION_STARTED',
+        hs_code TEXT,
+        quantity REAL,
+        value REAL,
+        currency TEXT,
+        destination TEXT,
+        port_of_exit TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
 
-      this.db!.run(auditLogTableSQL, (err) => {
-        if (err) {
-          logger.error('Failed to create audit_log table:', err);
-        } else {
-          logger.info('✅ Audit log table ready');
-        }
-      });
+    // Declaration audit table for overrides and manual actions
+    const declarationAuditTableSQL = `
+      CREATE TABLE IF NOT EXISTS declaration_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        declaration_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        performed_by TEXT,
+        details TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
 
-      this.db!.run(sessionsTableSQL, (err) => {
-        if (err) {
-          logger.error('Failed to create sessions table:', err);
-        } else {
-          logger.info('✅ Sessions table ready');
-        }
-      });
-    });
+    this.run(usersTableSQL).then(() => {
+        logger.info('✅ Users table ready');
+        this.createIndexes();
+        this.runMigrations();
+        this.seedDefaultUsers();
+    }).catch(err => logger.error('Failed to create users table:', err));
+
+    this.run(applicationsTableSQL).then(() => logger.info('✅ Exporter applications table ready'))
+        .catch(err => logger.error('Failed to create applications table:', err));
+
+    this.run(auditLogTableSQL).then(() => logger.info('✅ Audit log table ready'))
+        .catch(err => logger.error('Failed to create audit_log table:', err));
+
+    this.run(sessionsTableSQL).then(() => logger.info('✅ Sessions table ready'))
+        .catch(err => logger.error('Failed to create sessions table:', err));
+
+    this.run(declarationRiskTableSQL).then(() => logger.info('✅ Declaration risk table ready'))
+      .catch(err => logger.error('Failed to create declaration_risk table:', err));
+    this.run(declarationsTableSQL).then(() => logger.info('✅ Declarations table ready'))
+      .catch(err => logger.error('Failed to create declarations table:', err));
+    this.run(declarationAuditTableSQL).then(() => logger.info('✅ Declaration audit table ready'))
+      .catch(err => logger.error('Failed to create declaration_audit table:', err));
   }
 
   private runMigrations(): void {
@@ -185,6 +249,7 @@ export class DatabaseService {
       `ALTER TABLE exporter_applications ADD COLUMN bank_branch_name TEXT`,
       `ALTER TABLE exporter_applications ADD COLUMN bank_branch_code TEXT`,
       `ALTER TABLE exporter_applications ADD COLUMN documents TEXT DEFAULT '[]'`,
+      `ALTER TABLE declaration_risk ADD COLUMN rule_hash TEXT`,
     ];
 
     migrations.forEach((sql) => {
@@ -212,11 +277,13 @@ export class DatabaseService {
       'CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)',
       'CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)',
       'CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)',
+      'CREATE INDEX IF NOT EXISTS idx_declaration_risk_declaration_id ON declaration_risk(declaration_id)',
+      'CREATE INDEX IF NOT EXISTS idx_declaration_risk_assessed_at ON declaration_risk(assessed_at)'
     ];
 
     indexes.forEach((indexSQL) => {
-      this.db!.run(indexSQL, (err) => {
-        if (err) {
+      this.run(indexSQL).catch(err => {
+        if (!err.message.includes('already exists')) {
           logger.error('Failed to create index:', err);
         }
       });
@@ -352,6 +419,20 @@ export class DatabaseService {
 
   // Promisified database operations
   public async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    const translatedSql = this.translateQuery(sql);
+
+    if (this.usePg && this.pgPool) {
+      let queryToRun = translatedSql;
+      const isInsert = queryToRun.trim().toUpperCase().startsWith('INSERT');
+      if (isInsert && !queryToRun.toUpperCase().includes('RETURNING ID')) {
+          queryToRun = queryToRun + ' RETURNING id';
+      }
+      
+      const res = await this.pgPool.query(queryToRun, params);
+      const lastID = (isInsert && res.rows.length > 0) ? res.rows[0].id : 0;
+      return { lastID, changes: res.rowCount || 0 };
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.db) {
         reject(new Error('Database not connected'));
@@ -369,6 +450,13 @@ export class DatabaseService {
   }
 
   public async get(sql: string, params: any[] = []): Promise<any> {
+    const translatedSql = this.translateQuery(sql);
+
+    if (this.usePg && this.pgPool) {
+      const res = await this.pgPool.query(translatedSql, params);
+      return res.rows[0] || null;
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.db) {
         reject(new Error('Database not connected'));
@@ -386,6 +474,13 @@ export class DatabaseService {
   }
 
   public async all(sql: string, params: any[] = []): Promise<any[]> {
+    const translatedSql = this.translateQuery(sql);
+
+    if (this.usePg && this.pgPool) {
+      const res = await this.pgPool.query(translatedSql, params);
+      return res.rows || [];
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.db) {
         reject(new Error('Database not connected'));
@@ -403,6 +498,13 @@ export class DatabaseService {
   }
 
   public async exec(sql: string): Promise<void> {
+    const translatedSql = this.translateQuery(sql);
+
+    if (this.usePg && this.pgPool) {
+      await this.pgPool.query(translatedSql);
+      return;
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.db) {
         reject(new Error('Database not connected'));

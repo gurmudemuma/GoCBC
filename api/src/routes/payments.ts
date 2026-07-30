@@ -101,26 +101,74 @@ router.post('/initiate',
       // Connect as BanksMSP to initiate payment
       await fabricService.connectAsOrg('BanksMSP');
 
+      // AUTO-MAPPING: Fetch LC, Contract, and Forex data to auto-populate payment fields
+      let autoMappedData: any = {};
+      try {
+        // Get LC details
+        const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
+        if (lcResult.success && lcResult.data) {
+          const lc = lcResult.data;
+          autoMappedData.amount = lc.Amount || lc.amount || '0';
+          autoMappedData.currency = lc.Currency || lc.currency || 'USD';
+          autoMappedData.contractID = lc.ContractID || lc.contractID || contractID;
+          autoMappedData.issuingBank = lc.IssuingBank || lc.issuingBank || '';
+          logger.info(`[PAYMENT] Auto-mapped from LC: amount=${autoMappedData.amount}, currency=${autoMappedData.currency}`);
+        }
+        
+        // Get Contract details for exporter info
+        const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID || autoMappedData.contractID]);
+        if (contractResult.success && contractResult.data) {
+          const contract = contractResult.data;
+          autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
+          autoMappedData.exporterBank = contract.ExporterBank || contract.exporterBank || '';
+          logger.info(`[PAYMENT] Auto-mapped from contract: exporterID=${autoMappedData.exporterID}, exporterBank=${autoMappedData.exporterBank}`);
+        }
+      } catch (error) {
+        logger.warn('[PAYMENT] Could not fetch LC/Contract for auto-mapping:', error);
+      }
+
+      // Use provided values or auto-mapped values with smart defaults
+      const finalContractID = contractID || autoMappedData.contractID || '';
+      const finalExporterID = exporterID || autoMappedData.exporterID || '';
+      const finalAmount = amount || autoMappedData.amount || '0';
+      const finalCurrency = currency || autoMappedData.currency || 'USD';
+      const finalReceivingBank = receivingBank || autoMappedData.exporterBank || 'Commercial Bank of Ethiopia';
+      const finalReceivingBankBIC = receivingBankBIC || 'CBETETAA';
+      const finalBeneficiaryName = beneficiaryName || finalExporterID;
+      const finalBeneficiaryAccount = beneficiaryAccount || `${finalExporterID}-001`;
+      const finalPaymentMethod = paymentMethod || 'LC';
+
       const result = await fabricService.invokeChaincode('InitiatePayment', [
         paymentID,
-        contractID,
-        exporterID,
+        finalContractID,
+        finalExporterID,
         lcID,
-        amount.toString(),
-        currency,
-        receivingBank,
-        receivingBankBIC,
-        beneficiaryName,
-        beneficiaryAccount,
-        paymentMethod,
+        finalAmount.toString(),
+        finalCurrency,
+        finalReceivingBank,
+        finalReceivingBankBIC,
+        finalBeneficiaryName,
+        finalBeneficiaryAccount,
+        finalPaymentMethod,
       ]);
 
       if (result.success) {
-        logger.info(`✅ [PAYMENT] Payment initiated successfully: ${paymentID}`);
+        logger.info(`✅ [PAYMENT] Payment initiated successfully: ${paymentID} with auto-mapped data`);
         res.status(201).json({
           success: true,
           message: 'Payment initiated successfully',
           data: result.data,
+          autoMapped: {
+            contractID: finalContractID,
+            exporterID: finalExporterID,
+            amount: finalAmount,
+            currency: finalCurrency,
+            receivingBank: finalReceivingBank,
+            receivingBankBIC: finalReceivingBankBIC,
+            beneficiaryName: finalBeneficiaryName,
+            beneficiaryAccount: finalBeneficiaryAccount,
+            paymentMethod: finalPaymentMethod,
+          },
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });

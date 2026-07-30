@@ -7,6 +7,9 @@ import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
+import { dedupeById, isValidContract } from '../utils/dataFilters';
+import { dedupeById, isValidContract } from '../utils/dataFilters';
+import { dedupeById, isValidContract } from '../utils/dataFilters';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -228,15 +231,35 @@ router.get('/', async (req, res) => {
 
     if (result.success) {
       const contracts = result.data || [];
+      const normalizedContracts = contracts.map((contract: any) => ({
+        contractId: contract?.contractId || contract?.ContractID || contract?.id || '',
+        exporterId: contract?.exporterId || contract?.ExporterID || contract?.exporterID || '',
+        buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
+        buyerName: contract?.buyerName || contract?.BuyerName || '',
+        buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
+        amount: contract?.amount ?? contract?.Amount ?? 0,
+        currency: contract?.currency || contract?.Currency || 'USD',
+        pricePerKg: contract?.pricePerKg ?? contract?.PricePerKg ?? 0,
+        quantity: contract?.quantity ?? contract?.Quantity ?? 0,
+        totalValue: contract?.totalValue ?? contract?.TotalValue ?? 0,
+        paymentMethod: contract?.paymentMethod || contract?.PaymentMethod || 'LC',
+        status: contract?.status || contract?.contractStatus || contract?.ContractStatus || 'PENDING',
+        eudrRequired: contract?.eudrRequired ?? contract?.EUDRRequired ?? false,
+        registrationDate: contract?.registrationDate || contract?.registeredAt || contract?.createdAt || null,
+        approvalDate: contract?.approvalDate || contract?.approvedAt || null,
+        terms: contract?.terms || contract?.Terms || '',
+      }));
+
+      const validContracts = dedupeById(normalizedContracts.filter(isValidContract), (contract: any) => contract.contractId);
       const { exporterID, status, eudrRequired, limit = 50, offset = 0 } = req.query;
 
       // Apply filters
-      let filteredContracts = contracts;
+      let filteredContracts = validContracts;
       if (exporterID) {
-        filteredContracts = filteredContracts.filter((contract: any) => contract.exporterID === exporterID);
+        filteredContracts = filteredContracts.filter((contract: any) => contract.exporterId === exporterID);
       }
       if (status) {
-        filteredContracts = filteredContracts.filter((contract: any) => contract.contractStatus === status);
+        filteredContracts = filteredContracts.filter((contract: any) => contract.status === status);
       }
       if (eudrRequired !== undefined) {
         const eudrBool = eudrRequired === 'true';
@@ -365,7 +388,7 @@ router.post('/approve',
       logger.info('[CONTRACTS] Approving contract:', { contractId, approvedBy });
 
       const result = await fabricService.submitTransaction(
-        'ApproveContract',
+        'ApproveSalesContract',
         contractId,
         approvedBy || 'NBE Admin',
         comments || 'Approved'
@@ -393,7 +416,7 @@ router.post('/approve',
  * @swagger
  * /api/v1/contracts/{contractID}/approve:
  *   post:
- *     summary: Approve a sales contract
+ *     summary: Approve a sales contract (ECTA - Export Compliance)
  *     tags: [Contracts]
  *     parameters:
  *       - in: path
@@ -404,7 +427,7 @@ router.post('/approve',
  *         description: Contract ID
  *     responses:
  *       200:
- *         description: Contract approved successfully
+ *         description: Contract approved successfully by ECTA
  *       400:
  *         description: Invalid request
  *       404:
@@ -423,31 +446,31 @@ router.post('/:contractID/approve',
       const userOrg = String(user?.org || '').toUpperCase();
       const userRole = String(user?.role || '').toUpperCase();
 
-      // Only NBE can approve sales contracts
-      if (userOrg !== 'NBEMSP' && userRole !== 'NBE') {
+      // Only ECTA can approve sales contracts for export compliance
+      if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA') {
         logger.warn(`Unauthorized sales contract approval attempt by ${user?.org || 'UNKNOWN'}: ${contractID}`);
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only NBE users can approve sales contracts',
+            message: 'Only ECTA users can approve sales contracts for export compliance',
           },
           timestamp: new Date().toISOString(),
         });
       }
 
       // Log which organization is approving
-      logger.info(`[${user.org}] Approving contract: ${contractID}`, {
+      logger.info(`[${user.org}] ECTA approving contract for export compliance: ${contractID}`, {
         userId: user?.sub,
         organization: user?.org,
         role: user?.role,
       });
       
-      await fabricService.connectAsOrg('NBEMSP');
+      await fabricService.connectAsOrg('ECTAMSP');
       const result = await fabricService.approveSalesContract(contractID);
 
       if (result.success) {
-        logger.info(`[${user?.org}] ✅ Sales contract approved: ${contractID}`);
+        logger.info(`[${user?.org}] ✅ Sales contract approved by ECTA for export compliance: ${contractID}`);
         res.json({
           success: true,
           data: result.data,
@@ -482,6 +505,131 @@ router.post('/:contractID/approve',
  * POST /api/v1/contracts/:contractID/nbe-approve
  * NBE approves contract for forex allocation eligibility
  */
+/**
+ * @swagger
+ * /api/v1/contracts/{contractID}/reject:
+ *   post:
+ *     summary: Reject a sales contract (ECTA - Export Compliance)
+ *     tags: [Contracts]
+ *     parameters:
+ *       - in: path
+ *         name: contractID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Contract ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - reason
+ *             properties:
+ *               reason:
+ *                 type: string
+ *               rejectedBy:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Contract rejected successfully by ECTA
+ *       400:
+ *         description: Invalid request
+ *       404:
+ *         description: Contract not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:contractID/reject',
+  authMiddleware,
+  [
+    param('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('reason').notEmpty().withMessage('Rejection reason is required'),
+    body('rejectedBy').optional().isString(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { contractID } = req.params;
+      const { reason, rejectedBy } = req.body;
+      const user = (req as any).user;
+      const userOrg = String(user?.org || '').toUpperCase();
+      const userRole = String(user?.role || '').toUpperCase();
+
+      // Only ECTA can reject sales contracts
+      if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA') {
+        logger.warn(`Unauthorized contract rejection attempt by ${user?.org || 'UNKNOWN'}: ${contractID}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only ECTA users can reject sales contracts',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      logger.info(`[${user.org}] ECTA rejecting contract: ${contractID}`, {
+        userId: user?.sub,
+        organization: user?.org,
+        role: user?.role,
+        reason,
+      });
+      
+      await fabricService.connectAsOrg('ECTAMSP');
+      
+      // Call RejectSalesContract chaincode function
+      const result = await fabricService.invokeChaincode('RejectSalesContract', [
+        contractID,
+        rejectedBy || user?.username || 'ECTA Officer',
+        reason,
+      ]);
+
+      if (result.success) {
+        logger.info(`[${user?.org}] ✅ Sales contract rejected by ECTA: ${contractID}, Reason: ${reason}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'REJECTION_FAILED',
+            message: result.error || 'Failed to reject contract',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error rejecting contract:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// REMOVED: Bank contract approval endpoints
+// Banks should only issue LCs for ECTA-approved contracts
+// Contract approval is ECTA's responsibility only
+
+/**
+ * POST /api/v1/contracts/:contractID/nbe-approve
+ * DEPRECATED: This endpoint is deprecated. NBE should use forex allocation endpoints instead.
+ * NBE's role is to allocate forex using AllocateForex chaincode function, not approve contracts.
+ * Contract approval is done by ECTA for export compliance.
+ * 
+ * This endpoint is kept for backward compatibility but will be removed in future versions.
+ */
 router.post('/:contractID/nbe-approve',
   authMiddleware,
   [
@@ -493,49 +641,21 @@ router.post('/:contractID/nbe-approve',
   async (req, res) => {
     try {
       const { contractID } = req.params;
-      const { approvedBy, approvalType, comments } = req.body;
-      const user = (req as any).user;
+      const { approvedBy } = req.body;
 
-      logger.info(`[NBE] Approving contract ${contractID} for forex allocation`, {
-        userId: user?.sub,
-        organization: user?.org,
-        approvedBy,
+      logger.warn(`[NBE] Deprecated nbe-approve endpoint called for contract ${contractID}. Use forex allocation instead.`);
+
+      // Return deprecation warning
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'ENDPOINT_DEPRECATED',
+          message: 'This endpoint is deprecated. NBE should use forex allocation endpoints. Contract approval is done by ECTA.',
+        },
+        timestamp: new Date().toISOString(),
       });
-
-      // Update contract status to APPROVED in blockchain
-      const result = await fabricService.invokeChaincode('ApproveContract', [
-        contractID,
-        approvedBy,
-        'NBE_FOREX_APPROVAL',
-        comments || 'Approved for foreign exchange allocation by NBE',
-      ]);
-
-      if (result.success) {
-        logger.info(`✅ Contract ${contractID} approved for forex by NBE`);
-        res.json({
-          success: true,
-          data: {
-            contractID,
-            approvedBy,
-            approvalType: 'NBE_FOREX_APPROVAL',
-            approvalDate: new Date().toISOString(),
-          },
-          txId: result.txId,
-          message: 'Contract approved for forex allocation',
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'NBE_APPROVAL_FAILED',
-            message: result.error || 'Failed to approve contract for forex',
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
     } catch (error) {
-      logger.error('Error in NBE contract approval:', error);
+      logger.error('Error in deprecated NBE endpoint:', error);
       res.status(500).json({
         success: false,
         error: {

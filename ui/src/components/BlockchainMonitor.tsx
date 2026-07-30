@@ -144,18 +144,20 @@ const BlockchainMonitor: React.FC = () => {
           />
         </Box>
         <Tooltip title="Refresh">
-          <IconButton
-            onClick={loadBlockchainStats}
-            disabled={refreshing}
-            sx={{
-              backgroundColor: alpha(theme.palette.primary.main, 0.1),
-              '&:hover': {
-                backgroundColor: alpha(theme.palette.primary.main, 0.2),
-              },
-            }}
-          >
-            <Refresh className={refreshing ? 'rotating' : ''} />
-          </IconButton>
+          <span>
+            <IconButton
+              onClick={loadBlockchainStats}
+              disabled={refreshing}
+              sx={{
+                backgroundColor: alpha(theme.palette.primary.main, 0.1),
+                '&:hover': {
+                  backgroundColor: alpha(theme.palette.primary.main, 0.2),
+                },
+              }}
+            >
+              <Refresh className={refreshing ? 'rotating' : ''} />
+            </IconButton>
+          </span>
         </Tooltip>
       </Box>
 

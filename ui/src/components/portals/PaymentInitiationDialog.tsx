@@ -198,7 +198,7 @@ const PaymentInitiationDialog: React.FC<PaymentInitiationDialogProps> = ({
       const token = localStorage.getItem('authToken');
       if (!token || !contract) return;
       
-      await apiFetch('/banking/payment/${paymentID}/status', {
+      await apiFetch(`/banking/payment/${paymentID}/status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,

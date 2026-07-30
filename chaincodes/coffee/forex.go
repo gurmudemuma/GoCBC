@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
@@ -123,6 +124,7 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 		RequestDate:     txTime,
 		CreatedAt:       txTime,
 		UpdatedAt:       txTime,
+		ScreenedAgainst: []string{}, // Initialize as empty array, not null
 	}
 
 	forexJSON, err := json.Marshal(forex)
@@ -133,10 +135,11 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 	return ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
 }
 
-// AllocateForex - NBE allocates foreign exchange with retention policy
-// NOTE: LC ID now provided during allocation phase instead of request phase
+// AllocateForex - Bank or NBE allocates foreign exchange with retention policy
+// Per NBE FXD/01/2024: Banks can allocate forex without prior NBE approval
+// NBE sets policy (50% retention rate), banks execute allocations
 func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterface,
-	forexID, lcID, amountStr, exchangeRateStr, retentionRateStr, nbeOfficer, nbeApprovalRef, expiryDate string) error {
+	forexID, lcID, amountStr, exchangeRateStr, retentionRateStr, officer, approvalRef, expiryDate string) error {
 
 	// Get MSP ID for access control
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
@@ -144,9 +147,12 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("AllocateForex: failed to get MSP ID: %w", err)
 	}
 
-	// Only NBE can allocate forex
-	if mspID != "NBEMSP" {
-		return fmt.Errorf("AllocateForex: unauthorized: only NBE can allocate forex (caller: %s)", mspID)
+	// Banks or NBE can allocate forex (per 2024-2025 NBE reforms)
+	// NBE sets policy, banks execute allocations
+	isBankOrNBE := mspID == "NBEMSP" || mspID == "CBEMSP" || mspID == "BanksMSP" || strings.Contains(mspID, "Bank")
+	
+	if !isBankOrNBE {
+		return fmt.Errorf("AllocateForex: unauthorized: only NBE or Banks can allocate forex (caller: %s)", mspID)
 	}
 
 	// VALIDATION: IDs
@@ -156,10 +162,10 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	if err := ValidateID(lcID, "lcID"); err != nil {
 		return fmt.Errorf("AllocateForex: %w", err)
 	}
-	if err := ValidateNonEmptyString(nbeOfficer, "nbeOfficer", MaxStringLen); err != nil {
+	if err := ValidateNonEmptyString(officer, "officer", MaxStringLen); err != nil {
 		return fmt.Errorf("AllocateForex: %w", err)
 	}
-	if err := ValidateNonEmptyString(nbeApprovalRef, "nbeApprovalRef", MaxStringLen); err != nil {
+	if err := ValidateNonEmptyString(approvalRef, "approvalRef", MaxStringLen); err != nil {
 		return fmt.Errorf("AllocateForex: %w", err)
 	}
 
@@ -231,8 +237,8 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	forex.ExchangeRate = exchangeRate
 	forex.OfficialRate = exchangeRate
 	forex.RetentionRate = retentionRate
-	forex.NBEOfficer = nbeOfficer
-	forex.NBEApprovalRef = nbeApprovalRef
+	forex.NBEOfficer = officer
+	forex.NBEApprovalRef = approvalRef
 	forex.ExpiryDate = expiryDate
 	forex.AllocationDate = txTime.Format(time.RFC3339)
 	forex.UpdatedAt = txTime
@@ -257,6 +263,32 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 	err = ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
 	if err != nil {
 		return fmt.Errorf("failed to save forex: %v", err)
+	}
+
+	// Update LC status to FOREX_ALLOCATED so exporter knows they can proceed with shipment
+	if lcID != "" {
+		lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+		if err == nil && lcJSON != nil {
+			var lc LetterOfCredit
+			if json.Unmarshal(lcJSON, &lc) == nil {
+				if lc.Status == "ISSUED" || lc.Status == "FOREX_REQUESTED" {
+					lc.Status = "FOREX_ALLOCATED"
+					lc.UpdatedAt = txTime
+					updatedLCJSON, _ := json.Marshal(lc)
+					ctx.GetStub().PutState("LC_"+lcID, updatedLCJSON)
+					
+					// Emit event
+					lcEvent := map[string]interface{}{
+						"eventType": "LCForexAllocated",
+						"lcID":      lcID,
+						"forexID":   forexID,
+						"timestamp": txTime.Format(time.RFC3339),
+					}
+					lcEventJSON, _ := json.Marshal(lcEvent)
+					ctx.GetStub().SetEvent("LCForexAllocated", lcEventJSON)
+				}
+			}
+		}
 	}
 
 	// Note: Exporter will need to create shipment manually
@@ -377,7 +409,47 @@ func (c *CoffeeContract) QueryAllForex(ctx contractapi.TransactionContextInterfa
 		if err != nil {
 			return nil, err
 		}
+		
+		// Ensure screenedAgainst is never null (backward compatibility fix)
+		if allocation.ScreenedAgainst == nil {
+			allocation.ScreenedAgainst = []string{}
+		}
+		
 		allocations = append(allocations, &allocation)
+	}
+
+	return allocations, nil
+}
+
+// QueryNewForex - Get only new forex allocations (with _v2 suffix) - working records
+func (c *CoffeeContract) QueryNewForex(ctx contractapi.TransactionContextInterface) ([]*ForexAllocation, error) {
+	resultsIterator, err := ctx.GetStub().GetStateByRange("FOREX_", "FOREX_~")
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var allocations []*ForexAllocation
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var allocation ForexAllocation
+		err = json.Unmarshal(queryResponse.Value, &allocation)
+		if err != nil {
+			return nil, err
+		}
+		
+		// Only include records with _v2 suffix (new format with proper schema)
+		if strings.Contains(allocation.ForexID, "_v2") {
+			// Ensure screenedAgainst is never null
+			if allocation.ScreenedAgainst == nil {
+				allocation.ScreenedAgainst = []string{}
+			}
+			allocations = append(allocations, &allocation)
+		}
 	}
 
 	return allocations, nil
@@ -432,6 +504,12 @@ func (c *CoffeeContract) queryForex(ctx contractapi.TransactionContextInterface,
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal forex: %v", err)
 		}
+		
+		// Ensure screenedAgainst is never null (backward compatibility fix)
+		if forex.ScreenedAgainst == nil {
+			forex.ScreenedAgainst = []string{}
+		}
+		
 		forexList = append(forexList, &forex)
 	}
 
@@ -554,6 +632,45 @@ func (c *CoffeeContract) QueryExchangeRateHistory(ctx contractapi.TransactionCon
 	currency string) ([]*ExchangeRate, error) {
 
 	queryString := fmt.Sprintf(`{"selector":{"currency":"%s"}}`, currency)
+	return c.queryExchangeRates(ctx, queryString)
+}
+
+// QueryAllExchangeRates - Get all exchange rates
+func (c *CoffeeContract) QueryAllExchangeRates(ctx contractapi.TransactionContextInterface) ([]*ExchangeRate, error) {
+	resultsIterator, err := ctx.GetStub().GetStateByRange("RATE_", "RATE_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get exchange rates: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var rates []*ExchangeRate
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate rates: %v", err)
+		}
+
+		var rate ExchangeRate
+		err = json.Unmarshal(queryResponse.Value, &rate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal rate: %v", err)
+		}
+		rates = append(rates, &rate)
+	}
+
+	return rates, nil
+}
+
+// QueryExchangeRate - Get specific exchange rate by currency (returns active rate)
+func (c *CoffeeContract) QueryExchangeRate(ctx contractapi.TransactionContextInterface,
+	currency string) (*ExchangeRate, error) {
+	return c.GetCurrentExchangeRate(ctx, currency)
+}
+
+// queryExchangeRates - Helper function for querying exchange rates
+func (c *CoffeeContract) queryExchangeRates(ctx contractapi.TransactionContextInterface,
+	queryString string) ([]*ExchangeRate, error) {
+
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query rates: %v", err)

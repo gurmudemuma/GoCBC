@@ -5,6 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import { dedupeById, isValidForex } from '../utils/dataFilters';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -16,7 +17,24 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const result = await fabricService.queryAllForex();
     if (result.success) {
-      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+      const normalizedForex = (result.data || []).map((fx: any) => ({
+        forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
+        contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
+        exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
+        amount: fx?.amount ?? fx?.Amount ?? 0,
+        currency: fx?.currency || fx?.Currency || 'USD',
+        status: fx?.status || fx?.Status || 'REQUESTED',
+        allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
+        exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
+        retention: fx?.retention ?? fx?.Retention ?? 0,
+        expiryDate: fx?.expiryDate || fx?.expiry_date || null,
+        requestDate: fx?.requestDate || fx?.request_date || null,
+        utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
+        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+      }));
+
+      const validForex = dedupeById(normalizedForex.filter(isValidForex), (fx: any) => fx.forexId);
+      res.json({ success: true, data: validForex, timestamp: new Date().toISOString() });
     } else {
       res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
     }
@@ -60,15 +78,34 @@ router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
 router.post('/request', authMiddleware, async (req, res) => {
   try {
     const { forexId, contractId, exporterId, amount, currency } = req.body;
-    if (!forexId || !contractId || !exporterId || !amount) {
-      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'forexId, contractId, exporterId, amount are required' } });
+    if (!forexId || !contractId) {
+      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'forexId and contractId are required' } });
     }
 
-    // NOTE: Auto-mapping removed to prevent "Peer endorsements do not match" errors
-    // In multi-peer networks, querying recently-created contracts during endorsement causes inconsistency
-    // All required fields must be provided in the request body
+    // AUTO-MAPPING: Fetch contract data to auto-populate forex fields
+    let autoMappedData: any = {};
+    try {
+      const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractId]);
+      if (contractResult.success && contractResult.data) {
+        const contract = contractResult.data;
+        autoMappedData.exporterId = contract.ExporterID || contract.exporterId || exporterId;
+        autoMappedData.currency = contract.Currency || contract.currency || 'USD';
+        
+        // Calculate forex amount from contract value if not provided
+        const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+        const quantity = parseFloat(contract.Quantity || contract.quantity || '0');
+        autoMappedData.calculatedAmount = (pricePerKg * quantity).toFixed(2);
+        
+        logger.info(`[FOREX] Auto-mapped from contract: exporterId=${autoMappedData.exporterId}, amount=${autoMappedData.calculatedAmount}, currency=${autoMappedData.currency}`);
+      }
+    } catch (error) {
+      logger.warn('[FOREX] Could not fetch contract for auto-mapping:', error);
+    }
 
-    const finalCurrency = currency || 'USD';
+    // Use provided values or auto-mapped values
+    const finalExporterId = exporterId || autoMappedData.exporterId || '';
+    const finalAmount = amount || autoMappedData.calculatedAmount || '0';
+    const finalCurrency = currency || autoMappedData.currency || 'USD';
 
     // Retry logic for peer synchronization issues
     let result;
@@ -79,11 +116,11 @@ router.post('/request', authMiddleware, async (req, res) => {
       try {
         // RequestForex now takes 5 parameters (lcId removed)
         result = await fabricService.invokeChaincode('RequestForex', [
-          forexId, contractId, exporterId, amount.toString(), finalCurrency,
+          forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency,
         ]);
         
         if (result.success) {
-          logger.info(`✅ Forex request created: ${forexId} (attempt ${attempt})`);
+          logger.info(`✅ Forex request created: ${forexId} with auto-mapped data (attempt ${attempt})`);
           
           // Wait for transaction to propagate to all peers before responding
           // This prevents the next operation (AllocateForex) from failing
@@ -92,6 +129,11 @@ router.post('/request', authMiddleware, async (req, res) => {
           return res.status(201).json({ 
             success: true, 
             data: { forexId },
+            autoMapped: {
+              exporterId: finalExporterId,
+              amount: finalAmount,
+              currency: finalCurrency,
+            },
             txId: result.txId, 
             attempt,
             timestamp: new Date().toISOString() 
@@ -142,46 +184,86 @@ router.post('/request', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/v1/forex/allocate — NBE allocates forex (NBEMSP enforced on-chain)
-// NOTE: LC ID now provided during allocation instead of request to prevent peer mismatch
+// POST /api/v1/forex/allocate — Bank allocates forex per NBE policy
+// Per NBE FXD/01/2024: Banks can allocate without prior NBE approval
 router.post('/allocate', authMiddleware, async (req, res) => {
   try {
-    const { forexId, lcId, amount, exchangeRate, retentionRate, nbeOfficer, nbeApprovalRef, expiryDate } = req.body;
-    if (!forexId || !lcId || !amount || !exchangeRate || !retentionRate || !nbeOfficer || !nbeApprovalRef || !expiryDate) {
-      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'All fields required: forexId, lcId, amount, exchangeRate, retentionRate, nbeOfficer, nbeApprovalRef, expiryDate' } });
+    const { forexId, lcId, amount, exchangeRate, retentionRate, officer, approvalRef, expiryDate } = req.body;
+    if (!forexId || !lcId) {
+      return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'forexId and lcId are required' } });
     }
 
-    // Connect as NBE since AllocateForex requires NBEMSP
-    await fabricService.connectAsOrg('NBEMSP');
+    // Connect as Banks to allocate forex
+    // NBE sets policy (50% retention), banks execute
+    await fabricService.connectAsOrg('BanksMSP');
+
+    // AUTO-MAPPING: Fetch forex request and LC data to auto-populate allocation fields
+    let autoMappedData: any = {};
+    try {
+      // Get forex request details
+      const forexResult = await fabricService.queryChaincode('ReadForexAllocation', [forexId]);
+      if (forexResult.success && forexResult.data) {
+        const forex = forexResult.data;
+        autoMappedData.requestedAmount = forex.RequestedAmount || forex.requestedAmount || '0';
+        autoMappedData.currency = forex.Currency || forex.currency || 'USD';
+        logger.info(`[FOREX] Auto-mapped from forex request: requestedAmount=${autoMappedData.requestedAmount}`);
+      }
+      
+      // Get LC details for validation
+      const lcResult = await fabricService.queryChaincode('ReadLC', [lcId]);
+      if (lcResult.success && lcResult.data) {
+        const lc = lcResult.data;
+        autoMappedData.lcAmount = lc.Amount || lc.amount || '0';
+        logger.info(`[FOREX] Auto-mapped from LC: lcAmount=${autoMappedData.lcAmount}`);
+      }
+    } catch (error) {
+      logger.warn('[FOREX] Could not fetch forex/LC for auto-mapping:', error);
+    }
+
+    // Use provided values or auto-mapped values with smart defaults
+    const finalAmount = amount || autoMappedData.requestedAmount || autoMappedData.lcAmount || '0';
+    const finalExchangeRate = exchangeRate || 115.5; // Default ETB/USD rate
+    const finalRetentionRate = retentionRate || 50; // NBE policy: 50% retention
+    const finalOfficer = officer || 'Bank Officer';
+    const finalApprovalRef = approvalRef || `NBE-${Date.now()}`;
+    const finalExpiryDate = expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days from now
 
     // Retry logic for peer synchronization issues
     let result;
     let lastError;
-    const maxRetries = 5; // Increased from 3 to 5 attempts
+    const maxRetries = 5;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // AllocateForex now takes 8 parameters (lcId added as second parameter)
+        // AllocateForex: forexID, lcID, amount, exchangeRate, retentionRate, officer, approvalRef, expiryDate
         result = await fabricService.invokeChaincode('AllocateForex', [
           forexId,
           lcId,
-          amount.toString(),
-          exchangeRate.toString(),
-          retentionRate.toString(),
-          nbeOfficer,
-          nbeApprovalRef,
-          expiryDate,
+          finalAmount.toString(),
+          finalExchangeRate.toString(),
+          finalRetentionRate.toString(),
+          finalOfficer,
+          finalApprovalRef,
+          finalExpiryDate,
         ]);
         
         if (result.success) {
-          logger.info(`Forex allocated: ${forexId} by ${nbeOfficer} (attempt ${attempt})`);
+          logger.info(`✅ Forex allocated: ${forexId} by ${finalOfficer} with auto-mapped data (attempt ${attempt})`);
           
           // Wait for transaction to propagate before responding
           await new Promise(resolve => setTimeout(resolve, 5000));
           
           return res.json({ 
             success: true, 
-            data: { forexId }, 
+            data: { forexId },
+            autoMapped: {
+              amount: finalAmount,
+              exchangeRate: finalExchangeRate,
+              retentionRate: finalRetentionRate,
+              officer: finalOfficer,
+              approvalRef: finalApprovalRef,
+              expiryDate: finalExpiryDate,
+            },
             txId: result.txId, 
             attempt,
             timestamp: new Date().toISOString() 
@@ -196,7 +278,7 @@ router.post('/allocate', authMiddleware, async (req, res) => {
           result.error.includes('Peer endorsements do not match') ||
           result.error.includes('not found')
         )) {
-          const waitTime = 5000 * attempt; // 5s, 10s, 15s, 20s, 25s
+          const waitTime = 5000 * attempt;
           logger.warn(`Forex not synced or peer mismatch on attempt ${attempt}/${maxRetries}, waiting ${waitTime}ms...`);
           if (attempt < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -244,6 +326,90 @@ router.post('/utilize', authMiddleware, async (req, res) => {
     }
   } catch (error: any) {
     res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// ==================== EXCHANGE RATES ROUTES ====================
+
+// GET /api/v1/forex/rates — get all exchange rates
+router.get('/rates', authMiddleware, async (req, res) => {
+  try {
+    const result = await fabricService.queryChaincode('QueryAllExchangeRates', []);
+    if (result.success) {
+      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+    } else {
+      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    }
+  } catch (error: any) {
+    logger.error('Error fetching exchange rates:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// GET /api/v1/forex/rates/:currency — get specific currency rate
+router.get('/rates/:currency', authMiddleware, async (req, res) => {
+  try {
+    const result = await fabricService.queryChaincode('QueryExchangeRate', [req.params.currency]);
+    if (result.success) {
+      res.json({ success: true, data: result.data, timestamp: new Date().toISOString() });
+    } else {
+      res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: result.error }, timestamp: new Date().toISOString() });
+    }
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// POST /api/v1/forex/rates — create/update exchange rate (NBE only)
+router.post('/rates', authMiddleware, async (req, res) => {
+  try {
+    const { currency, buyingRate, sellingRate } = req.body;
+    if (!currency || !buyingRate || !sellingRate) {
+      return res.status(400).json({ 
+        success: false, 
+        error: { code: 'MISSING_FIELDS', message: 'currency, buyingRate, and sellingRate are required' } 
+      });
+    }
+
+    // Connect as NBE
+    await fabricService.connectAsOrg('NBEMSP');
+
+    const user = (req as any).user;
+    const setBy = user?.sub || user?.userId || 'NBE_SYSTEM';
+    const rateId = `RATE${Date.now()}${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+    // SetExchangeRate(rateID, currency, buyingRate, sellingRate, setBy)
+    const result = await fabricService.invokeChaincode('SetExchangeRate', [
+      rateId,
+      currency,
+      buyingRate.toString(),
+      sellingRate.toString(),
+      setBy,
+    ]);
+
+    if (result.success) {
+      const midRate = (parseFloat(buyingRate) + parseFloat(sellingRate)) / 2;
+      logger.info(`✅ Exchange rate set: ${currency} = ${buyingRate}/${sellingRate} ETB by ${setBy}`);
+      res.status(201).json({ 
+        success: true, 
+        data: { rateId, currency, buyingRate, sellingRate, midRate, setBy },
+        txId: result.txId, 
+        timestamp: new Date().toISOString() 
+      });
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        error: { code: 'RATE_CREATE_FAILED', message: result.error }, 
+        timestamp: new Date().toISOString() 
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error setting exchange rate:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: { code: 'INTERNAL_ERROR', message: error.message }, 
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 

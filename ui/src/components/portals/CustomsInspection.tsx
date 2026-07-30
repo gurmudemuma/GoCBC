@@ -12,6 +12,7 @@ import {
   Paper,
   Button,
   Dialog,
+  TablePagination,
   DialogTitle,
   DialogContent,
   DialogActions,
@@ -54,11 +55,17 @@ interface QualityInspection {
   updatedAt?: string;
 }
 
-export const CustomsInspection: React.FC = () => {
+interface CustomsInspectionProps {
+  onCreateDeclaration?: (shipmentId: string, inspectionId: string) => void;
+}
+
+export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDeclaration }) => {
   const [inspections, setInspections] = useState<QualityInspection[]>([]);
   const [loading, setLoading] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedInspection, setSelectedInspection] = useState<QualityInspection | null>(null);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const { notification, showSuccess, showError, closeNotification } = useNotification();
 
   useEffect(() => {
@@ -86,7 +93,57 @@ export const CustomsInspection: React.FC = () => {
         console.log(`[CUSTOMS-INSPECTIONS] Loaded ${result.data.length} quality inspections`);
         console.log('[CUSTOMS-INSPECTIONS] Sample inspection data:', result.data[0]);
         console.log('[CUSTOMS-INSPECTIONS] Fields:', Object.keys(result.data[0] || {}));
-        setInspections(result.data);
+        
+        // Load existing declarations to filter out inspections that already have declarations
+        let existingDeclarationShipments: Set<string> = new Set();
+        try {
+          const declResponse = await apiFetch('/customs/declarations', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const declResult = await declResponse.json();
+          
+          if (declResult.success && declResult.data) {
+            existingDeclarationShipments = new Set(
+              declResult.data.map((d: any) => d.shipmentId || d.ShipmentID || d.shipmentID || '')
+            );
+            console.log(`[CUSTOMS-INSPECTIONS] Found ${existingDeclarationShipments.size} shipments with existing declarations`);
+          }
+        } catch (error) {
+          console.warn('[CUSTOMS-INSPECTIONS] Could not load existing declarations:', error);
+        }
+        
+        // Filter to only show APPROVED inspections with export permits that DON'T have declarations yet
+        const permitReady = result.data.filter((insp: any) => {
+          const status = (insp.status || insp.Status || '').toString().toUpperCase();
+          const permitNo = (insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '').toString();
+          const certificateNo = (insp.certificateNo || insp.CertificateNo || insp.certificate || '').toString();
+          const shipmentId = (insp.shipmentId || insp.ShipmentID || '').toString();
+          
+          // Check approval by status OR by having both certificate and permit
+          const statusApproved = status === 'APPROVED' || status === 'QUALITY_APPROVED';
+          const hasCertificate = certificateNo && certificateNo.trim() !== '' && certificateNo.toUpperCase() !== 'N/A';
+          const hasPermit = permitNo && permitNo.trim() !== '' && permitNo.toUpperCase() !== 'NOT ISSUED' && permitNo.toUpperCase() !== 'N/A';
+          
+          // If both certificate and permit exist, inspection is approved (regardless of status field)
+          const isApprovedByDocuments = hasCertificate && hasPermit;
+          const isApproved = statusApproved || isApprovedByDocuments;
+          
+          // Check if declaration already exists for this shipment
+          const hasDeclaration = existingDeclarationShipments.has(shipmentId);
+          
+          // Debug logging for filtering
+          if (hasDeclaration) {
+            console.log(`[CUSTOMS-INSPECTIONS] ✅ Declaration exists for ${shipmentId} (inspection ${insp.inspectionId || insp.InspectionID}) - moving to workflow tabs`);
+          } else if (!isApproved || !hasPermit) {
+            console.log(`[CUSTOMS-INSPECTIONS] ❌ Filtered out inspection ${insp.inspectionId || insp.InspectionID}: status=${status}, statusApproved=${statusApproved}, certificate=${certificateNo}, permit=${permitNo}, isApprovedByDocs=${isApprovedByDocuments}`);
+          }
+          
+          // Show ONLY inspections that are approved with permits AND don't have declarations yet
+          return isApproved && hasPermit && !hasDeclaration;
+        });
+        
+        console.log(`[CUSTOMS-INSPECTIONS] Filtered to ${permitReady.length} permit-ready inspections WITHOUT declarations`);
+        setInspections(permitReady);
       } else {
         console.log('[CUSTOMS-INSPECTIONS] No inspections found or query failed');
         setInspections([]);
@@ -208,7 +265,9 @@ export const CustomsInspection: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {inspections.map((inspection) => (
+                {inspections
+                  .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                  .map((inspection) => (
                   <TableRow key={getInspectionId(inspection)}>
                     <TableCell>{getInspectionId(inspection)}</TableCell>
                     <TableCell>{getShipmentId(inspection)}</TableCell>
@@ -236,22 +295,54 @@ export const CustomsInspection: React.FC = () => {
                       />
                     </TableCell>
                     <TableCell>
-                      <AnimatedButton
-                        size="small"
-                        startIcon={<Visibility />}
-                        onClick={() => {
-                          setSelectedInspection(inspection);
-                          setDetailsDialogOpen(true);
-                        }}
-                      >
-                        View Details
-                      </AnimatedButton>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <AnimatedButton
+                          size="small"
+                          startIcon={<Visibility />}
+                          onClick={() => {
+                            setSelectedInspection(inspection);
+                            setDetailsDialogOpen(true);
+                          }}
+                        >
+                          View
+                        </AnimatedButton>
+                        {getStatus(inspection) === 'APPROVED' && getExportPermitNo(inspection) !== 'Not Issued' && (
+                          <AnimatedButton
+                            size="small"
+                            variant="contained"
+                            brandColor="#4caf50"
+                            startIcon={<CheckCircle />}
+                            onClick={() => {
+                              // Create customs declaration from this permit
+                              if (onCreateDeclaration) {
+                                onCreateDeclaration(getShipmentId(inspection), getInspectionId(inspection));
+                              } else {
+                                console.error('[CUSTOMS-INSPECTION] No onCreateDeclaration handler provided');
+                              }
+                            }}
+                          >
+                            Create Declaration
+                          </AnimatedButton>
+                        )}
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePagination
+            component="div"
+            count={inspections.length}
+            page={page}
+            onPageChange={(_event, newPage) => setPage(newPage)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+            rowsPerPageOptions={[5, 10, 25]}
+          />
         </>
       )}
 
@@ -442,7 +533,25 @@ export const CustomsInspection: React.FC = () => {
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDetailsDialogOpen(false)} variant="contained">Close</Button>
+          <Button onClick={() => setDetailsDialogOpen(false)}>Close</Button>
+          {selectedInspection && getStatus(selectedInspection) === 'APPROVED' && getExportPermitNo(selectedInspection) !== 'Not Issued' && (
+            <AnimatedButton
+              variant="contained"
+              brandColor="#4caf50"
+              startIcon={<Assignment />}
+              onClick={() => {
+                // Create customs declaration from this permit
+                if (onCreateDeclaration) {
+                  onCreateDeclaration(getShipmentId(selectedInspection), getInspectionId(selectedInspection));
+                  setDetailsDialogOpen(false);
+                } else {
+                  console.error('[CUSTOMS-INSPECTION] No onCreateDeclaration handler provided');
+                }
+              }}
+            >
+              Create Customs Declaration
+            </AnimatedButton>
+          )}
         </DialogActions>
       </Dialog>
 

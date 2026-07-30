@@ -46,6 +46,7 @@ interface QualityInspectionWorkflowProps {
 }
 
 interface InspectionFormData {
+  scheduledDate: string;
   inspectorName: string;
   transportMode: TransportMode;
   sampleSize: string;
@@ -85,6 +86,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
 
   // Perform Inspection Form Data
   const [inspectionForm, setInspectionForm] = useState<InspectionFormData>({
+    scheduledDate: new Date().toISOString().split('T')[0],
     inspectorName: '',
     transportMode: DEFAULT_TRANSPORT_MODE,
     sampleSize: '300',
@@ -140,6 +142,10 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
       showError('Validation Error', 'Please select an ECTA inspector');
       return;
     }
+    if (!inspectionForm.scheduledDate) {
+      showError('Validation Error', 'Please select an inspection date');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -151,6 +157,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
         shipmentID: shipment.shipmentId,
         contractID: shipment.contractId || 'CONTRACT_' + shipment.exporterId,
         exporterID: shipment.exporterId,
+        scheduledDate: inspectionForm.scheduledDate,
       });
 
       // Perform inspection
@@ -269,7 +276,18 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
               </Typography>
 
               <Grid container spacing={2}>
-                <Grid item xs={12}>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    type="date"
+                    label="Scheduled Inspection Date"
+                    value={inspectionForm.scheduledDate}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, scheduledDate: e.target.value })}
+                    InputLabelProps={{ shrink: true }}
+                    helperText="Select the date ECTA will perform the inspection"
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
                   <FormControl fullWidth>
                     <InputLabel>ECTA Official Inspector *</InputLabel>
                     <Select
@@ -530,6 +548,8 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
                 <strong>✅ Inspection Recorded on Blockchain!</strong>
                 <br />
                 Shipment: {shipment.shipmentId} • Total Score: {calculateTotalScore()}/100 • Grade: {getQualityGrade()}
+                <br />
+                Scheduled for: {inspectionForm.scheduledDate}
                 <br />
                 {inspectionData?.inspectionId && `Inspection ID: ${inspectionData.inspectionId}`}
               </Alert>

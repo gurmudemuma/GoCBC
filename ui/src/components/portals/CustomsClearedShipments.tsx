@@ -13,8 +13,18 @@ import {
   Typography,
   Chip,
   Button,
+  TablePagination,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  MenuItem,
+  Grid,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
-import { CheckCircle, Visibility, FileDownload } from '@mui/icons-material';
+import { CheckCircle, Visibility, FileDownload, LocalShipping, Close } from '@mui/icons-material';
 import { AnimatedButton, StatusChip } from '@/components/modern';
 import { apiFetch } from '@/config/api.config';
 
@@ -34,6 +44,10 @@ interface ClearedShipment {
 export const CustomsClearedShipments: React.FC = () => {
   const [clearedShipments, setClearedShipments] = useState<ClearedShipment[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [selectedShipment, setSelectedShipment] = useState<ClearedShipment | null>(null);
 
   useEffect(() => {
     loadClearedShipments();
@@ -98,6 +112,35 @@ export const CustomsClearedShipments: React.FC = () => {
     return `${currency} ${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const handleOpenBookingDialog = (shipment: ClearedShipment) => {
+    // Navigate to Shipping Portal with shipment ID pre-selected
+    const shipmentId = shipment.shipmentId;
+    
+    // Store shipment context for Shipping Portal
+    sessionStorage.setItem('shipping_from_customs', JSON.stringify({
+      shipmentId: shipmentId,
+      declarationId: shipment.declarationId,
+      clearanceNumber: shipment.clearanceNumber,
+      destination: shipment.destination,
+      quantity: shipment.quantity,
+      value: shipment.value,
+      currency: shipment.currency,
+    }));
+    
+    // Navigate to Shipping Portal
+    window.location.href = `/portals/shipping?shipment=${shipmentId}&from=customs`;
+  };
+
+  const handleOpenViewDialog = (shipment: ClearedShipment) => {
+    setSelectedShipment(shipment);
+    setViewDialogOpen(true);
+  };
+
+  const handleCloseViewDialog = () => {
+    setViewDialogOpen(false);
+    setSelectedShipment(null);
+  };
+
   return (
     <Box>
       <Alert severity="success" sx={{ mb: 2 }}>
@@ -151,7 +194,9 @@ export const CustomsClearedShipments: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {clearedShipments.map((shipment) => (
+                {clearedShipments
+                  .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                  .map((shipment) => (
                   <TableRow key={shipment.declarationId}>
                     <TableCell>
                       <Chip 
@@ -170,21 +215,223 @@ export const CustomsClearedShipments: React.FC = () => {
                     <TableCell>{formatDate(shipment.clearanceDate)}</TableCell>
                     <TableCell>{shipment.customsOfficer}</TableCell>
                     <TableCell>
-                      <AnimatedButton
-                        size="small"
-                        startIcon={<Visibility />}
-                        onClick={() => alert(`View details for ${shipment.declarationId}`)}
-                      >
-                        View
-                      </AnimatedButton>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Tooltip title="View Details">
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() => handleOpenViewDialog(shipment)}
+                          >
+                            <Visibility />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Navigate to Shipping Portal">
+                          <IconButton
+                            size="small"
+                            color="success"
+                            onClick={() => handleOpenBookingDialog(shipment)}
+                          >
+                            <LocalShipping />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePagination
+            component="div"
+            count={clearedShipments.length}
+            page={page}
+            onPageChange={(_event, newPage) => setPage(newPage)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+            rowsPerPageOptions={[5, 10, 25]}
+          />
         </>
       )}
+
+      {/* View Details Dialog */}
+      <Dialog 
+        open={viewDialogOpen} 
+        onClose={handleCloseViewDialog} 
+        maxWidth="md" 
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">Clearance Details</Typography>
+            <IconButton size="small" onClick={handleCloseViewDialog}>
+              <Close />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {selectedShipment && (
+            <>
+              <Alert severity="success" sx={{ mb: 3, mt: 1 }}>
+                <Typography variant="body2" fontWeight={600}>
+                  ✅ Customs Cleared - Export Authorized
+                </Typography>
+                <Typography variant="body2">
+                  Clearance Number: {selectedShipment.clearanceNumber}
+                </Typography>
+              </Alert>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                    Declaration Information
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Declaration ID"
+                    value={selectedShipment.declarationId}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Shipment ID"
+                    value={selectedShipment.shipmentId}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Clearance Number"
+                    value={selectedShipment.clearanceNumber}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Clearance Date"
+                    value={formatDate(selectedShipment.clearanceDate)}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Typography variant="subtitle1" fontWeight={600} gutterBottom sx={{ mt: 2 }}>
+                    Shipment Details
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Exporter ID"
+                    value={selectedShipment.exporterId}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Destination Country"
+                    value={selectedShipment.destination}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Quantity"
+                    value={`${selectedShipment.quantity.toLocaleString()} kg`}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Customs Value"
+                    value={formatCurrency(selectedShipment.value, selectedShipment.currency)}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Typography variant="subtitle1" fontWeight={600} gutterBottom sx={{ mt: 2 }}>
+                    Clearance Information
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Customs Officer"
+                    value={selectedShipment.customsOfficer}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Status"
+                    value="CLEARED ✓"
+                    InputProps={{ 
+                      readOnly: true,
+                      style: { color: '#2e7d32', fontWeight: 600 }
+                    }}
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    <Typography variant="body2" fontWeight={600}>
+                      Next Steps - Shipping
+                    </Typography>
+                    <Typography variant="body2">
+                      • This shipment is authorized for export<br/>
+                      • Navigate to Shipping Portal to book freight<br/>
+                      • Generate Bill of Lading and transport documents<br/>
+                      • Arrange transport to Djibouti Port
+                    </Typography>
+                  </Alert>
+                </Grid>
+              </Grid>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={handleCloseViewDialog}>
+            Close
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<FileDownload />}
+            onClick={() => {
+              if (selectedShipment) {
+                alert(`Download functionality:\nGenerating clearance certificate for ${selectedShipment.clearanceNumber}\n\nWould include:\n• Clearance number and date\n• Declaration details\n• Shipment information\n• Customs officer signature\n• QR code for verification`);
+              }
+            }}
+          >
+            Download Certificate
+          </Button>
+          {selectedShipment && (
+            <Button
+              variant="contained"
+              color="success"
+              startIcon={<LocalShipping />}
+              onClick={() => {
+                handleCloseViewDialog();
+                handleOpenBookingDialog(selectedShipment);
+              }}
+            >
+              Go to Shipping Portal
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

@@ -3,13 +3,16 @@
 
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { EmailService } from '../services/emailService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
+import { dedupeById, isValidContract, isValidForex, isValidLC, isValidShipment } from '../utils/dataFilters';
 import { body, param, query } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const emailService = EmailService.getInstance();
 
 // ============================================================================
 // APPLICATIONS ROUTES (must come BEFORE /:exporterID to avoid route conflicts)
@@ -86,6 +89,18 @@ router.post('/exporter-applications',
     body('phone').notEmpty().withMessage('Phone number is required'),
     body('address').notEmpty().withMessage('Address is required'),
     body('city').notEmpty().withMessage('City is required'),
+    body('region').optional().isString().withMessage('Region must be a string'),
+    body('bankName').optional().isString().withMessage('Bank name must be a string'),
+    body('bankAccountNumber').optional().isString().withMessage('Bank account number must be a string'),
+    body('bankBranchName').optional().isString().withMessage('Bank branch name must be a string'),
+    body('bankBranchCode').optional().isString().withMessage('Bank branch code must be a string'),
+    body('comments').optional().isString().withMessage('Comments must be a string'),
+    body('documents').optional().isArray().withMessage('Documents must be an array'),
+    body('documents.*').optional().isString().withMessage('Each document item must be a string'),
+    body('exporterType').optional().isIn(['private','company','individual']).withMessage('Exporter type must be private, company, or individual'),
+    body('laboratoryFacility').optional().isString().withMessage('Laboratory facility flag must be a string'),
+    body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
+    body('registrationDate').optional().isISO8601().withMessage('Registration date must be a valid ISO date'),
   ],
   validateRequest,
   async (req, res) => {
@@ -444,6 +459,21 @@ router.post('/exporter-applications/:applicationId/approve',
       
       logger.info(`✅ Application approved: ${applicationId} -> ${exporterId} (User activated: ${exporterId}, Bank: ${bankName}, Branch: ${bankBranch})`);
       
+      // Send approval email to exporter
+      const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      await emailService.sendApprovalEmail({
+        exporterName: application.company_name,
+        exporterId,
+        licenseNumber: ectaLicenseNumber,
+        email: application.email,
+        username: exporterId,
+        temporaryPassword: newPassword,
+        bankName: bankName || undefined,
+        bankBranch: bankBranch || undefined,
+        bankBranchCode: bankBranchCode || undefined,
+        loginUrl: `${loginUrl}/login`,
+      });
+      
       // Return credentials to ECTA admin (to be sent to exporter via email)
       res.json({ 
         success: true, 
@@ -459,7 +489,7 @@ router.post('/exporter-applications/:applicationId/approve',
             username: exporterId,
             temporaryPassword: newPassword,
             email: application.email,
-            message: 'Please send these credentials to the exporter via email. They should change the password on first login.'
+            message: 'Email notification has been sent to the exporter with login credentials.'
           }
         }, 
         timestamp: new Date().toISOString() 
@@ -472,7 +502,7 @@ router.post('/exporter-applications/:applicationId/approve',
 );
 
 // POST /exporter-applications/:applicationId/reject - Reject application (ECTA admin)
-// This endpoint also DELETES the inactive user account
+// This endpoint updates the application status but KEEPS the user account for resubmission
 router.post('/exporter-applications/:applicationId/reject',
   authMiddleware,
   [
@@ -503,14 +533,15 @@ router.post('/exporter-applications/:applicationId/reject',
         return;
       }
 
-      // Step 1: Delete the inactive user account associated with this application
+      // Step 1: Keep the inactive user account but mark it as rejected
+      // This allows the applicant to login and see rejection reason
       await new Promise((resolve, reject) => {
         db.run(
-          `DELETE FROM users WHERE email = ? AND role = 'EXPORTER' AND status = 'inactive'`,
+          `UPDATE users SET status = 'rejected' WHERE email = ? AND role = 'EXPORTER' AND status = 'inactive'`,
           [application.email],
           (err: any) => {
             if (err) {
-              logger.error('Failed to delete inactive user account:', err);
+              logger.error('Failed to update user account status:', err);
               reject(err);
             } else {
               resolve(true);
@@ -527,20 +558,328 @@ router.post('/exporter-applications/:applicationId/reject',
         );
       });
       
-      logger.info(`❌ Application rejected: ${applicationId} (Inactive user account deleted for: ${application.email})`);
+      // Get the user's temporary credentials
+      const user = await new Promise<any>((resolve, reject) => {
+        db.get('SELECT username, password_hash FROM users WHERE email = ? AND role = \'EXPORTER\'', [application.email], (err: any, row: any) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+      });
+      
+      // Generate a new temporary password for resubmission
+      const bcrypt = require('bcrypt');
+      const tempPassword = `Rejected${Math.random().toString(36).slice(-6)}!`;
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+      
+      // Update user password
+      await new Promise((resolve, reject) => {
+        db.run('UPDATE users SET password_hash = ? WHERE email = ? AND role = \'EXPORTER\'', [hashedPassword, application.email], (err: any) => {
+          if (err) reject(err);
+          else resolve(true);
+        });
+      });
+      
+      logger.info(`❌ Application rejected: ${applicationId} (User ${application.email} can now login to see rejection and resubmit)`);
+      
+      // Send rejection email to exporter
+      const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      await emailService.sendRejectionEmail({
+        exporterName: application.company_name,
+        applicationId,
+        email: application.email,
+        reason,
+        username: user?.username || application.email,
+        temporaryPassword: tempPassword,
+        resubmitUrl: `${loginUrl}/login`,
+      });
+      
       res.json({ 
         success: true, 
         data: { 
           applicationId, 
           status: 'rejected', 
           reason,
-          message: 'Application rejected and associated user account removed. Applicant can resubmit after addressing issues.'
+          message: 'Application rejected. Email notification sent to applicant with resubmission instructions.'
         }, 
         timestamp: new Date().toISOString() 
       });
     } catch (error) {
       logger.error('Error rejecting application:', error);
       res.status(500).json({ success: false, error: { code: 'REJECTION_FAILED' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// GET /exporter-applications/check/:email - Check application status (PUBLIC - no auth)
+// Allows applicants to check their application status using their email
+router.get('/exporter-applications/check/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const db = fabricService['db'];
+    
+    if (!db) {
+      res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
+      return;
+    }
+    
+    const application = await new Promise<any>((resolve, reject) => {
+      db.get(
+        'SELECT * FROM exporter_applications WHERE email = ? ORDER BY submitted_at DESC LIMIT 1',
+        [email],
+        (err: any, row: any) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+    if (application?.documents && typeof application.documents === 'string') {
+      try {
+        application.documents = JSON.parse(application.documents);
+      } catch (err) {
+        logger.warn('Failed to parse application documents JSON:', err);
+      }
+    }
+    
+    if (!application) {
+      res.status(404).json({ 
+        success: false, 
+        error: { code: 'NOT_FOUND', message: 'No application found for this email' }, 
+        timestamp: new Date().toISOString() 
+      });
+      return;
+    }
+    
+    res.json({
+      success: true,
+      data: application,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error checking application status:', error);
+    res.status(500).json({ success: false, error: { code: 'CHECK_FAILED' }, timestamp: new Date().toISOString() });
+  }
+});
+
+// POST /exporter-applications/:applicationId/resubmit - Resubmit rejected application (PUBLIC - no auth)
+// Allows applicants to resubmit a corrected application after rejection
+router.post('/exporter-applications/:applicationId/resubmit',
+  [
+    param('applicationId').notEmpty(),
+    body('companyName').optional().notEmpty().withMessage('Company name is required when provided'),
+    body('tinNumber').optional().notEmpty().withMessage('TIN number is required when provided'),
+    body('businessLicenseNumber').optional().notEmpty().withMessage('Business license number is required when provided'),
+    body('registrationDate').optional().isISO8601().withMessage('Registration date must be a valid ISO date'),
+    body('exporterType').optional().isIn(['private','company','individual']).withMessage('Exporter type must be private, company, or individual'),
+    body('capitalRequirement').optional().isNumeric().withMessage('Capital requirement must be a number'),
+    body('professionalTaster').optional().isBoolean().withMessage('Professional taster must be a boolean'),
+    body('tasterCertificate').optional().isString().withMessage('Taster certificate must be a string'),
+    body('laboratoryFacility').optional().isString().withMessage('Laboratory facility must be a string'),
+    body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
+    body('contactPerson').optional().isString().withMessage('Contact person must be a string'),
+    body('phone').optional().isString().withMessage('Phone number must be a string'),
+    body('address').optional().isString().withMessage('Address must be a string'),
+    body('city').optional().isString().withMessage('City must be a string'),
+    body('region').optional().isString().withMessage('Region must be a string'),
+    body('bankName').optional().isString().withMessage('Bank name must be a string'),
+    body('bankAccountNumber').optional().isString().withMessage('Bank account number must be a string'),
+    body('bankBranchName').optional().isString().withMessage('Bank branch name must be a string'),
+    body('bankBranchCode').optional().isString().withMessage('Bank branch code must be a string'),
+    body('comments').optional().isString().withMessage('Comments must be a string'),
+    body('documents').optional().isArray().withMessage('Documents must be an array'),
+    body('documents.*').optional().isString().withMessage('Each document item must be a string'),
+    body('email').isEmail().withMessage('Valid email is required').withMessage('Valid email is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { applicationId } = req.params;
+      const updateData = req.body;
+      const db = fabricService['db'];
+      
+      if (!db) {
+        res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
+        return;
+      }
+      
+      // Verify the application exists and is rejected
+      const application = await new Promise<any>((resolve, reject) => {
+        db.get('SELECT * FROM exporter_applications WHERE application_id = ? AND status = "rejected"', [applicationId], (err: any, row: any) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+      });
+      
+      if (!application) {
+        res.status(404).json({ 
+          success: false, 
+          error: { code: 'NOT_FOUND', message: 'Application not found or not in rejected status' }, 
+          timestamp: new Date().toISOString() 
+        });
+        return;
+      }
+      
+      // Verify email matches
+      if (application.email !== updateData.email) {
+        res.status(403).json({ 
+          success: false, 
+          error: { code: 'UNAUTHORIZED', message: 'Email does not match application' }, 
+          timestamp: new Date().toISOString() 
+        });
+        return;
+      }
+      
+      // Build update query for fields that were provided
+      const fieldsToUpdate: string[] = [];
+      const values: any[] = [];
+      
+      if (updateData.companyName) {
+        fieldsToUpdate.push('company_name = ?');
+        values.push(updateData.companyName);
+      }
+      if (updateData.tinNumber) {
+        fieldsToUpdate.push('tin_number = ?');
+        values.push(updateData.tinNumber);
+      }
+      if (updateData.businessLicenseNumber) {
+        fieldsToUpdate.push('business_license_number = ?');
+        values.push(updateData.businessLicenseNumber);
+      }
+      if (updateData.registrationDate) {
+        fieldsToUpdate.push('registration_date = ?');
+        values.push(updateData.registrationDate);
+      }
+      if (updateData.capitalRequirement) {
+        fieldsToUpdate.push('capital_requirement = ?');
+        values.push(parseFloat(updateData.capitalRequirement));
+      }
+      if (updateData.professionalTaster !== undefined) {
+        fieldsToUpdate.push('professional_taster = ?');
+        values.push(updateData.professionalTaster ? 1 : 0);
+      }
+      if (updateData.tasterCertificate) {
+        fieldsToUpdate.push('taster_certificate = ?');
+        values.push(updateData.tasterCertificate);
+      }
+      if (updateData.laboratoryFacility) {
+        fieldsToUpdate.push('laboratory_facility = ?');
+        values.push(updateData.laboratoryFacility);
+      }
+      if (updateData.laboratoryCertificateNumber) {
+        fieldsToUpdate.push('laboratory_certificate_number = ?');
+        values.push(updateData.laboratoryCertificateNumber);
+      }
+      if (updateData.contactPerson) {
+        fieldsToUpdate.push('contact_person = ?');
+        values.push(updateData.contactPerson);
+      }
+      if (updateData.phone) {
+        fieldsToUpdate.push('phone = ?');
+        values.push(updateData.phone);
+      }
+      if (updateData.address) {
+        fieldsToUpdate.push('address = ?');
+        values.push(updateData.address);
+      }
+      if (updateData.city) {
+        fieldsToUpdate.push('city = ?');
+        values.push(updateData.city);
+      }
+      if (updateData.region) {
+        fieldsToUpdate.push('region = ?');
+        values.push(updateData.region);
+      }
+      if (updateData.bankName) {
+        fieldsToUpdate.push('bank_name = ?');
+        values.push(updateData.bankName);
+      }
+      if (updateData.bankAccountNumber) {
+        fieldsToUpdate.push('bank_account_number = ?');
+        values.push(updateData.bankAccountNumber);
+      }
+      if (updateData.bankBranchName) {
+        fieldsToUpdate.push('bank_branch_name = ?');
+        values.push(updateData.bankBranchName);
+      }
+      if (updateData.bankBranchCode) {
+        fieldsToUpdate.push('bank_branch_code = ?');
+        values.push(updateData.bankBranchCode);
+      }
+      if (updateData.comments) {
+        fieldsToUpdate.push('comments = ?');
+        values.push(updateData.comments);
+      }
+      if (updateData.documents) {
+        fieldsToUpdate.push('documents = ?');
+        values.push(JSON.stringify(updateData.documents));
+      }
+      if (updateData.exporterType) {
+        fieldsToUpdate.push('exporter_type = ?');
+        values.push(updateData.exporterType);
+      }
+      
+      // Always update status to pending and clear rejection data
+      fieldsToUpdate.push('status = ?');
+      fieldsToUpdate.push('rejected_at = ?');
+      fieldsToUpdate.push('rejection_reason = ?');
+      fieldsToUpdate.push('submitted_at = ?');
+      values.push('pending', null, null, new Date().toISOString());
+      
+      // Add application ID at the end for WHERE clause
+      values.push(applicationId);
+      
+      const updateQuery = `
+        UPDATE exporter_applications 
+        SET ${fieldsToUpdate.join(', ')}
+        WHERE application_id = ?
+      `;
+      
+      await new Promise((resolve, reject) => {
+        db.run(updateQuery, values, (err: any) => {
+          if (err) reject(err);
+          else resolve(true);
+        });
+      });
+      
+      // Update user status from rejected back to inactive
+      await new Promise((resolve, reject) => {
+        db.run(
+          `UPDATE users SET status = 'inactive' WHERE email = ? AND role = 'EXPORTER' AND status = 'rejected'`,
+          [updateData.email],
+          (err: any) => {
+            if (err) {
+              logger.error('Failed to update user status:', err);
+              reject(err);
+            } else {
+              resolve(true);
+            }
+          }
+        );
+      });
+      
+      logger.info(`✅ Application resubmitted: ${applicationId} by ${updateData.email}`);
+      
+      // Send notification to ECTA admins
+      await emailService.sendResubmissionNotification({
+        exporterName: application.company_name,
+        applicationId: application.application_id,
+        email: application.email,
+        originalSubmissionDate: application.submitted_at,
+        rejectionDate: application.rejected_at,
+        resubmissionDate: new Date().toISOString(),
+      });
+      
+      res.json({
+        success: true,
+        data: {
+          applicationId,
+          status: 'pending',
+          message: 'Application resubmitted successfully and is now pending review. ECTA has been notified.'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      logger.error('Error resubmitting application:', error);
+      res.status(500).json({ success: false, error: { code: 'RESUBMIT_FAILED' }, timestamp: new Date().toISOString() });
     }
   }
 );
@@ -1332,14 +1671,12 @@ router.post('/exporter-applications',
       const query = `
         INSERT INTO exporter_applications (
           application_id, company_name, tin_number, business_license_number,
-          registration_date, capital_requirement, professional_taster,
-          taster_certificate, laboratory_facility, contact_person,
-          email, phone, address, city, region, bank_name,
-          bank_account_number, comments, status, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-      `;
-      
-      await new Promise((resolve, reject) => {
+            exporter_type, registration_date, capital_requirement, professional_taster,
+            taster_certificate, laboratory_facility, laboratory_certificate_number, contact_person,
+            email, phone, address, city, region, bank_name,
+            bank_account_number, bank_branch_name, bank_branch_code,
+            comments, documents, status, submitted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         db.run(query, [
           applicationId,
           applicationData.companyName,
@@ -1827,9 +2164,28 @@ router.get('/contracts', authMiddleware, async (req, res) => {
     const result = await fabricService.queryContracts({ exporterId });
 
     if (result.success) {
+      const normalizedContracts = (result.data || []).map((contract: any) => ({
+        contractId: contract?.contractId || contract?.ContractID || contract?.id || '',
+        exporterId: contract?.exporterId || contract?.ExporterID || contract?.exporterID || '',
+        buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
+        buyerName: contract?.buyerName || contract?.BuyerName || '',
+        buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
+        amount: contract?.amount ?? contract?.Amount ?? 0,
+        currency: contract?.currency || contract?.Currency || 'USD',
+        pricePerKg: contract?.pricePerKg ?? contract?.PricePerKg ?? 0,
+        quantity: contract?.quantity ?? contract?.Quantity ?? 0,
+        totalValue: contract?.totalValue ?? contract?.TotalValue ?? 0,
+        paymentMethod: contract?.paymentMethod || contract?.PaymentMethod || 'LC',
+        status: contract?.status || contract?.contractStatus || contract?.ContractStatus || 'PENDING',
+        eudrRequired: contract?.eudrRequired ?? contract?.EUDRRequired ?? false,
+        registrationDate: contract?.registrationDate || contract?.registeredAt || contract?.createdAt || null,
+        approvalDate: contract?.approvalDate || contract?.approvedAt || null,
+        terms: contract?.terms || contract?.Terms || '',
+      }));
+
       res.json({
         success: true,
-        data: result.data || [],
+        data: normalizedContracts,
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -1875,9 +2231,25 @@ router.get('/forex', authMiddleware, async (req, res) => {
     const result = await fabricService.queryForexAllocations({ exporterId });
 
     if (result.success) {
+      const normalizedForex = (result.data || []).map((fx: any) => ({
+        forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
+        contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
+        exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
+        amount: fx?.amount ?? fx?.Amount ?? 0,
+        currency: fx?.currency || fx?.Currency || 'USD',
+        status: fx?.status || fx?.Status || 'REQUESTED',
+        allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
+        exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
+        retention: fx?.retention ?? fx?.Retention ?? 0,
+        expiryDate: fx?.expiryDate || fx?.expiry_date || null,
+        requestDate: fx?.requestDate || fx?.request_date || null,
+        utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
+        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+      }));
+
       res.json({
         success: true,
-        data: result.data || [],
+        data: normalizedForex,
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -1923,9 +2295,28 @@ router.get('/lc', authMiddleware, async (req, res) => {
     const result = await fabricService.queryLettersOfCredit({ exporterId });
 
     if (result.success) {
+      const normalizedLCs = (result.data || []).map((lc: any) => ({
+        lcId: lc?.lcId || lc?.LCID || lc?.id || '',
+        contractId: lc?.contractId || lc?.ContractID || lc?.contractID || '',
+        exporterId: lc?.exporterId || lc?.ExporterID || lc?.exporterID || '',
+        bankName: lc?.bankName || lc?.BankName || '',
+        issuingBank: lc?.issuingBank || lc?.IssuingBank || '',
+        advisingBank: lc?.advisingBank || lc?.AdvisingBank || '',
+        beneficiary: lc?.beneficiary || '',
+        amount: lc?.amount ?? lc?.Amount ?? 0,
+        currency: lc?.currency || lc?.Currency || 'USD',
+        status: lc?.status || lc?.Status || 'REQUESTED',
+        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
+        requestDate: lc?.requestDate || lc?.request_date || null,
+        approvalDate: lc?.approvalDate || lc?.approval_date || null,
+        issueDate: lc?.issueDate || lc?.issue_date || null,
+        terms: lc?.terms || lc?.Terms || '',
+        documents: lc?.documents || lc?.Documents || [],
+      }));
+
       res.json({
         success: true,
-        data: result.data || [],
+        data: normalizedLCs,
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -2019,9 +2410,25 @@ router.get('/shipments', authMiddleware, async (req, res) => {
     const result = await fabricService.queryShipments({ exporterId });
 
     if (result.success) {
+      const normalizedShipments = (result.data || []).map((shipment: any) => ({
+        shipmentId: shipment?.shipmentId || shipment?.ShipmentID || shipment?.id || '',
+        contractId: shipment?.contractId || shipment?.ContractID || shipment?.contractID || '',
+        exporterId: shipment?.exporterId || shipment?.ExporterID || shipment?.exporterID || '',
+        buyerId: shipment?.buyerId || shipment?.BuyerID || shipment?.buyerID || '',
+        origin: shipment?.origin || shipment?.Origin || '',
+        destination: shipment?.destination || shipment?.Destination || '',
+        quantity: shipment?.quantity ?? shipment?.Quantity ?? 0,
+        grade: shipment?.grade || shipment?.Grade || '',
+        icoNumber: shipment?.icoNumber || shipment?.ICONumber || shipment?.icoNumber || '',
+        status: shipment?.status || shipment?.Status || 'CREATED',
+        createdAt: shipment?.createdAt || shipment?.created_at || null,
+        updatedAt: shipment?.updatedAt || shipment?.updated_at || null,
+        documents: shipment?.documents || shipment?.Documents || [],
+      }));
+
       res.json({
         success: true,
-        data: result.data || [],
+        data: normalizedShipments,
         timestamp: new Date().toISOString(),
       });
     } else {

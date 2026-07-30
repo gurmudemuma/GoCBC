@@ -67,28 +67,35 @@ This will:
 - Fill buyer bank (international) and exporter bank (Ethiopian)
 - Submit
 
-### 2. Issue LC (as Bank)
+### 2. Approve Contract (as ECTA)
+- Login: ecta_admin / password123
+- Portal: ECTA → Sales Contracts → Review
+- Approve contract for export compliance
+- *(Note: Banks do NOT approve contracts - only ECTA does)*
+
+### 3. Issue LC (as Bank)
 - Login: bank_admin / password123
-- Portal: Banks → Issue Letter of Credit
+- Portal: Banks → ECTA-Approved Contracts
+- View ECTA-approved contracts
+- Navigate to LC Management → Issue Letter of Credit
 - Select contract → Banks should auto-fill
 - Submit
 
-### 3. Approve Quality (as ECTA)
-- Login: ecta_admin / password123
+### 4. Approve Quality (as ECTA)
 - Portal: ECTA → Quality Control
 - Perform inspection → Approve
 - Issue Export Permit (separate button)
 
-### 4. Customs Clearance (as Customs)
+### 5. Customs Clearance (as Customs)
 - Login: customs_admin / password123
 - Portal: Customs → Declarations
 - Start Inspection → Complete → Clear
 
-### 5. Submit Documents (as Exporter)
+### 6. Submit Documents (as Exporter)
 - Portal: Exporter → Payments
 - Submit Documents (B/L, Invoice, etc.)
 
-### 6. Verify & Pay (as Bank)
+### 7. Verify & Pay (as Bank)
 - Portal: Banks → Payments
 - Verify Documents → Initiate SWIFT
 
@@ -138,6 +145,8 @@ docker logs peer0.ecta.cecbs.et --tail 50
 
 - Always create NEW contracts to test bank auto-fill (old contracts don't have bank data)
 - Check browser console for debugging logs
+- **Contract approval is ECTA's responsibility ONLY** - Banks do NOT approve contracts
+- Banks only issue LCs for ECTA-approved contracts
 - Export permit issuance is separate from quality approval
 - Customs has physical inspection step before clearance
 - Banks must verify documents before SWIFT payment

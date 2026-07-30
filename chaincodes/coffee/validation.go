@@ -9,8 +9,8 @@ import (
 
 // Validation constants
 const (
-	MaxAmount      = 1000000000  // 1 billion USD
-	MaxQuantity    = 1000000     // 1 million kg
+	MaxAmount      = 100000000000  // 100 billion USD (increased for large capital requirements)
+	MaxQuantity    = 10000000     // 10 million kg (increased for large transactions)
 	MaxStringLen   = 500         // Max chars for text fields
 	MaxIDLen       = 100         // Max chars for IDs
 	MinPercentage  = 0

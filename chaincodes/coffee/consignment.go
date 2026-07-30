@@ -417,9 +417,38 @@ func (c *CoffeeContract) QueryConsignmentsByStatus(ctx contractapi.TransactionCo
 
 // QueryOutstandingConsignments - Get all consignments with outstanding payments
 func (c *CoffeeContract) QueryOutstandingConsignments(ctx contractapi.TransactionContextInterface) ([]*ConsignmentPayment, error) {
+	// Get all consignments using range query instead of selector (more reliable)
+	resultsIterator, err := ctx.GetStub().GetStateByRange("CONSIGN", "CONSIGN~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query consignments: %v", err)
+	}
+	defer resultsIterator.Close()
 
-	queryString := `{"selector":{"status":{"$in":["SHIPPED","PARTIAL"]}}}`
-	return c.queryConsignments(ctx, queryString)
+	var consignments []*ConsignmentPayment
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var consignment ConsignmentPayment
+		err = json.Unmarshal(queryResponse.Value, &consignment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal consignment: %v", err)
+		}
+		
+		// Ensure PartialPayments is never nil (backward compatibility)
+		if consignment.PartialPayments == nil {
+			consignment.PartialPayments = []PartialPayment{}
+		}
+		
+		// Filter for outstanding consignments (SHIPPED or PARTIAL status)
+		if consignment.Status == "SHIPPED" || consignment.Status == "PARTIAL" {
+			consignments = append(consignments, &consignment)
+		}
+	}
+
+	return consignments, nil
 }
 
 // QueryAllConsignments - Get all consignment payments
@@ -442,6 +471,12 @@ func (c *CoffeeContract) QueryAllConsignments(ctx contractapi.TransactionContext
 		if err != nil {
 			return nil, err
 		}
+		
+		// Ensure PartialPayments is never nil (backward compatibility)
+		if consignment.PartialPayments == nil {
+			consignment.PartialPayments = []PartialPayment{}
+		}
+		
 		consignments = append(consignments, &consignment)
 	}
 
@@ -470,6 +505,12 @@ func (c *CoffeeContract) queryConsignments(ctx contractapi.TransactionContextInt
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal consignment: %v", err)
 		}
+		
+		// Ensure PartialPayments is never nil (backward compatibility)
+		if consignment.PartialPayments == nil {
+			consignment.PartialPayments = []PartialPayment{}
+		}
+		
 		consignments = append(consignments, &consignment)
 	}
 

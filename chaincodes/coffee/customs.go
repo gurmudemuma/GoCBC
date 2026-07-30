@@ -192,6 +192,7 @@ func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInt
 		Status:         "SUBMITTED",
 		SubmissionDate: txTime,
 		Documents:      documents, // This is already provided as a parameter
+		RiskFactors:    []string{}, // Initialize as empty array, not nil
 		CreatedAt:      txTime,
 		UpdatedAt:      txTime,
 	}
@@ -222,6 +223,37 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 	}
 	
 	log.Printf("Customs declaration %s submitted by: %s (MSP: %s)", declarationID, submitterID, submitterMSP)
+
+	// ✅ VALIDATE ECTA EXPORT PERMIT EXISTS BEFORE CUSTOMS DECLARATION
+	// This ensures proper workflow sequencing: ECTA Permit → Customs Declaration
+	if shipmentID != "" {
+		shipmentJSON, err := ctx.GetStub().GetState(shipmentID)
+		if err == nil && shipmentJSON != nil {
+			var shipment CoffeeShipment
+			if json.Unmarshal(shipmentJSON, &shipment) == nil {
+				// Check shipment status - must have PERMIT_ISSUED from ECTA
+				if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" {
+					return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED)", shipmentID, shipment.Status)
+				}
+				
+				// Verify quality inspection has export permit
+				inspections, err := c.QueryInspectionsByShipment(ctx, shipmentID)
+				if err == nil && len(inspections) > 0 {
+					hasPermit := false
+					for _, insp := range inspections {
+						if insp.Status == "APPROVED" && insp.ExportPermitNo != "" {
+							hasPermit = true
+							log.Printf("✅ Verified ECTA export permit: %s for shipment %s", insp.ExportPermitNo, shipmentID)
+							break
+						}
+					}
+					if !hasPermit {
+						return fmt.Errorf("customs declaration cannot be submitted: no valid ECTA export permit found for shipment %s. Quality inspection must be approved and export permit issued first", shipmentID)
+					}
+				}
+			}
+		}
+	}
 
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
 	if err != nil {
@@ -271,6 +303,7 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 		SubmissionDate:  txTime,
 		SubmittedBy:     submitterID, // ✅ RECORD WHO SUBMITTED
 		Documents:       []string{}, // Initialize as empty array, not nil
+		RiskFactors:     []string{}, // Initialize as empty array, not nil
 		CreatedAt:       txTime,
 		UpdatedAt:       txTime,
 	}
@@ -563,6 +596,17 @@ func (c *CoffeeContract) ClearDeclaration(ctx contractapi.TransactionContextInte
 		return err
 	}
 
+	// Update shipment status to CUSTOMS_CLEARED
+	if declaration.ShipmentID != "" {
+		err = c.UpdateShipmentStatus(ctx, declaration.ShipmentID, "CUSTOMS_CLEARED")
+		if err != nil {
+			// Log but don't fail — declaration is already cleared
+			log.Printf("WARNING: Failed to update shipment status: %v", err)
+		} else {
+			fmt.Printf("ClearDeclaration: Shipment %s status updated to CUSTOMS_CLEARED\n", declaration.ShipmentID)
+		}
+	}
+
 	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
 	changes := []FieldChange{
 		{FieldName: "status", OldValue: "UNDER_REVIEW", NewValue: "CLEARED", DataType: "string"},
@@ -714,7 +758,23 @@ func (c *CoffeeContract) RejectDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	err = ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err != nil {
+		return err
+	}
+
+	// Update shipment status to CUSTOMS_REJECTED
+	if declaration.ShipmentID != "" {
+		err = c.UpdateShipmentStatus(ctx, declaration.ShipmentID, "CUSTOMS_REJECTED")
+		if err != nil {
+			// Log but don't fail — declaration is already rejected
+			log.Printf("WARNING: Failed to update shipment status: %v", err)
+		} else {
+			fmt.Printf("RejectDeclaration: Shipment %s status updated to CUSTOMS_REJECTED\n", declaration.ShipmentID)
+		}
+	}
+
+	return nil
 }
 
 // RejectCustomsDeclaration - API-compatible wrapper for customs rejection
@@ -773,7 +833,23 @@ func (c *CoffeeContract) RejectCustomsDeclaration(ctx contractapi.TransactionCon
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	err = ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err != nil {
+		return err
+	}
+
+	// Update shipment status to CUSTOMS_REJECTED
+	if declaration.ShipmentID != "" {
+		err = c.UpdateShipmentStatus(ctx, declaration.ShipmentID, "CUSTOMS_REJECTED")
+		if err != nil {
+			// Log but don't fail — declaration is already rejected
+			log.Printf("WARNING: Failed to update shipment status: %v", err)
+		} else {
+			fmt.Printf("RejectCustomsDeclaration: Shipment %s status updated to CUSTOMS_REJECTED\n", declaration.ShipmentID)
+		}
+	}
+
+	return nil
 }
 
 // ReadDeclaration - Get declaration details
@@ -836,6 +912,78 @@ func (c *CoffeeContract) QueryCustomsDeclarationsByStatus(ctx contractapi.Transa
 	return c.QueryDeclarationsByStatus(ctx, status)
 }
 
+// MigrateCustomsDeclarations - Fix null riskFactors in existing declarations
+// This function updates all existing declarations to ensure riskFactors is an empty array instead of null
+func (c *CoffeeContract) MigrateCustomsDeclarations(ctx contractapi.TransactionContextInterface) (string, error) {
+	log.Printf("Starting customs declarations migration...")
+	
+	resultsIterator, err := ctx.GetStub().GetStateByRange("DECL_", "DECL_~")
+	if err != nil {
+		return "", fmt.Errorf("failed to get state range: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	fixedCount := 0
+	errorCount := 0
+	totalCount := 0
+
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			errorCount++
+			log.Printf("Error iterating: %v", err)
+			continue
+		}
+
+		totalCount++
+		var declaration CustomsDeclaration
+		if err := json.Unmarshal(queryResponse.Value, &declaration); err != nil {
+			errorCount++
+			log.Printf("Error unmarshaling declaration: %v", err)
+			continue
+		}
+
+		needsUpdate := false
+
+		// Fix riskFactors if it's nil
+		if declaration.RiskFactors == nil {
+			declaration.RiskFactors = []string{}
+			needsUpdate = true
+			log.Printf("Fixed riskFactors for declaration %s", declaration.DeclarationID)
+		}
+
+		// Fix documents if it's nil (while we're at it)
+		if declaration.Documents == nil {
+			declaration.Documents = []string{}
+			needsUpdate = true
+			log.Printf("Fixed documents for declaration %s", declaration.DeclarationID)
+		}
+
+		// Update the declaration if needed
+		if needsUpdate {
+			declarationJSON, err := json.Marshal(declaration)
+			if err != nil {
+				errorCount++
+				log.Printf("Error marshaling declaration %s: %v", declaration.DeclarationID, err)
+				continue
+			}
+
+			err = ctx.GetStub().PutState(queryResponse.Key, declarationJSON)
+			if err != nil {
+				errorCount++
+				log.Printf("Error updating declaration %s: %v", declaration.DeclarationID, err)
+				continue
+			}
+
+			fixedCount++
+		}
+	}
+
+	result := fmt.Sprintf("Migration complete: Total=%d, Fixed=%d, Errors=%d", totalCount, fixedCount, errorCount)
+	log.Printf(result)
+	return result, nil
+}
+
 // QueryAllCustomsDeclarations - API-compatible wrapper for listing all declarations
 func (c *CoffeeContract) QueryAllCustomsDeclarations(ctx contractapi.TransactionContextInterface) ([]*CustomsDeclaration, error) {
 	resultsIterator, err := ctx.GetStub().GetStateByRange("DECL_", "DECL_~")
@@ -857,6 +1005,10 @@ func (c *CoffeeContract) QueryAllCustomsDeclarations(ctx contractapi.Transaction
 		// Ensure documents is never nil for JSON compatibility
 		if declaration.Documents == nil {
 			declaration.Documents = []string{}
+		}
+		// Ensure riskFactors is never nil for JSON compatibility
+		if declaration.RiskFactors == nil {
+			declaration.RiskFactors = []string{}
 		}
 		declarations = append(declarations, &declaration)
 	}

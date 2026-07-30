@@ -2,6 +2,8 @@ import express from 'express';
 import FabricService from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { authMiddleware } from '../middleware/auth';
+import DatabaseService from '../services/databaseService';
+import RiskService from '../services/riskService';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -203,6 +205,18 @@ router.post('/declaration/:declarationId/clear', async (req, res) => {
     
     await fabricService.connectAsOrg('CustomsMSP');
     
+    const declarationResult = await fabricService.getCustomsDeclaration(declarationId);
+    const currentStatus = declarationResult.success ? (declarationResult.data?.status || declarationResult.data?.Status || '') : '';
+    if (!declarationResult.success) {
+      return res.status(404).json({ success: false, error: declarationResult.error });
+    }
+    if (currentStatus !== 'UNDER_REVIEW') {
+      return res.status(400).json({
+        success: false,
+        error: { message: `Declaration cannot be cleared, current status: ${currentStatus}. It must be UNDER_REVIEW before customs clearance.` }
+      });
+    }
+
     const clearanceNum = clearanceNumber || `CLR-${Date.now()}`;
     const duties = dutiesAmount || '0';
     
@@ -214,23 +228,57 @@ router.post('/declaration/:declarationId/clear', async (req, res) => {
     );
     
     if (result.success) {
-      logger.info(`✅ [CUSTOMS] Declaration ${declarationId} cleared`);
+      logger.info(`✅ [CUSTOMS] Declaration ${declarationId} cleared (shipment status automatically updated by chaincode)`);
       
       // Extract shipmentID from declarationID (format: CD-SHIPMENTID)
       const shipmentID = declarationId.replace('CD-', '');
       
-      // Update shipment status to CUSTOMS_CLEARED
+      // ✅ AUTO-TRIGGER: Initiate next workflow steps
+      const nextSteps: Array<{action: string, description: string, priority: string}> = [];
+      
+      // 1. Check if shipment needs freight booking
       try {
-        await fabricService.updateShipmentStatus(shipmentID, 'CUSTOMS_CLEARED');
-        logger.info(`✅ [CUSTOMS] Shipment ${shipmentID} status updated to CUSTOMS_CLEARED`);
-      } catch (statusError) {
-        logger.warn(`Could not update shipment status: ${statusError}`);
+        const shipmentResult = await fabricService.queryChaincode('ReadShipment', [shipmentID]);
+        if (shipmentResult.success && shipmentResult.data) {
+          const shipment = shipmentResult.data;
+          const contractID = shipment.ContractID || shipment.contractID;
+          
+          // Get contract to determine payment method
+          if (contractID) {
+            const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID]);
+            if (contractResult.success && contractResult.data) {
+              const contract = contractResult.data;
+              const paymentMethod = contract.PaymentMethod || contract.paymentMethod;
+              
+              // Determine next steps based on payment method
+              if (paymentMethod === 'LC' || paymentMethod === 'DOCUMENTARY_COLLECTION') {
+                nextSteps.push({
+                  action: 'PREPARE_SHIPPING_DOCUMENTS',
+                  description: 'Prepare documents for bank submission (Bill of Lading, Invoice, Packing List)',
+                  priority: 'HIGH'
+                });
+              }
+              
+              nextSteps.push({
+                action: 'BOOK_FREIGHT',
+                description: `Book ${contract.Incoterm || contract.incoterm || 'FOB'} freight for shipment`,
+                priority: 'HIGH'
+              });
+              
+              logger.info(`[CUSTOMS] Next steps for ${shipmentID}: ${JSON.stringify(nextSteps)}`);
+            }
+          }
+        }
+      } catch (nextStepError) {
+        logger.warn(`[CUSTOMS] Could not determine next steps: ${nextStepError}`);
       }
       
       res.json({ 
         success: true, 
         message: 'Declaration cleared successfully', 
         clearanceNumber: clearanceNum,
+        shipmentID: shipmentID,
+        nextSteps: nextSteps.length > 0 ? nextSteps : undefined,
         data: result.data,
         txId: result.txId
       });
@@ -296,6 +344,43 @@ router.get('/declaration/:declarationId', async (req, res) => {
   }
 });
 
+// Get customs workflow definition for UI consumption
+router.get('/workflow', authMiddleware, async (_req, res) => {
+  try {
+    const workflowSteps = [
+      {
+        step: 1,
+        title: 'Export declaration',
+        description: 'The exporter or licensed customs clearing agent submits an electronic declaration including HS code, quantity, destination, value, exporter identity, and supporting export documentation.',
+      },
+      {
+        step: 2,
+        title: 'Supporting documents',
+        description: 'Customs verifies documents such as commercial invoice, packing list, coffee quality certificate, phytosanitary certificate, certificate of origin (when required), export permit, banking documents, and transport information.',
+      },
+      {
+        step: 3,
+        title: 'Risk management',
+        description: 'Customs determines whether documents are sufficient, whether a physical inspection is required, or whether additional verification is needed.',
+      },
+      {
+        step: 4,
+        title: 'Physical inspection (if selected)',
+        description: 'When required, officers verify container number, seal integrity, bag count, product match, weight, packaging, and cargo condition.',
+      },
+      {
+        step: 5,
+        title: 'Customs release',
+        description: 'If everything matches, Customs authorizes export and the shipment is allowed to proceed toward Djibouti for transport.',
+      },
+    ];
+    res.json({ success: true, data: workflowSteps });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching workflow:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load customs workflow' } });
+  }
+});
+
 // Query declarations by exporter
 router.get('/declaration/exporter/:exporterId', async (req, res) => {
   try {
@@ -347,15 +432,417 @@ router.get('/declarations', authMiddleware, async (req, res) => {
     logger.info(`[CUSTOMS] Query result: success=${result.success}, dataLength=${result.data ? result.data.length : 0}`);
     
     if (result.success) {
-      const declarations = result.data || [];
-      logger.info(`[CUSTOMS] Returning ${declarations.length} declarations`);
-      res.json({ success: true, data: declarations });
+      let declarations = result.data || [];
+      
+      // Normalize customs declarations for table display
+      const normalizedDeclarations = declarations.map((d: any) => ({
+        declarationId: d?.declarationId || d?.DeclarationID || d?.id || '',
+        shipmentId: d?.shipmentId || d?.ShipmentID || d?.shipmentID || '',
+        exporterId: d?.exporterId || d?.ExporterID || d?.exporterID || '',
+        declarationType: d?.declarationType || d?.DeclarationType || 'STANDARD',
+        hsCode: d?.hsCode || d?.HSCode || d?.hs_code || '',
+        quantity: d?.quantity ?? d?.Quantity ?? 0,
+        value: d?.value ?? d?.Value ?? 0,
+        currency: d?.currency || d?.Currency || 'USD',
+        destination: d?.destination || d?.Destination || '',
+        portOfExit: d?.portOfExit || d?.PortOfExit || '',
+        eudrCompliant: d?.eudrCompliant ?? d?.EUDRCompliant ?? false,
+        status: d?.status || d?.Status || 'SUBMITTED',
+        customsOfficer: d?.customsOfficer || d?.CustomsOfficer || '',
+        clearanceNumber: d?.clearanceNumber || d?.ClearanceNumber || '',
+        createdAt: d?.createdAt || d?.created_at || null,
+        updatedAt: d?.updatedAt || d?.updated_at || null,
+        notes: d?.additionalNotes || d?.notes || '',
+      }));
+
+      const validDeclarations = dedupeById(normalizedDeclarations.filter(isValidDeclaration), (declaration: any) => declaration.declarationId);
+      logger.info(`[CUSTOMS] Filtered ${declarations.length} to ${validDeclarations.length} valid declarations`);
+      res.json({ success: true, data: validDeclarations });
     } else {
       logger.error(`[CUSTOMS] Query failed:`, result.error);
       res.status(500).json({ success: false, error: result.error });
     }
   } catch (error: any) {
     logger.error(`[CUSTOMS] Error querying all declarations:`, error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// Migration endpoint - Fix null riskFactors in existing declarations
+router.post('/migrate', authMiddleware, async (req, res) => {
+  try {
+    logger.info('[CUSTOMS] Running migration to fix null riskFactors...');
+    await fabricService.connectAsOrg('CustomsMSP');
+    
+    const result = await fabricService.invokeChaincode('MigrateCustomsDeclarations', []);
+    
+    if (result.success) {
+      logger.info(`✅ [CUSTOMS] Migration complete: ${result.data}`);
+      res.json({ 
+        success: true, 
+        message: 'Migration completed successfully',
+        data: result.data,
+        txId: result.txId
+      });
+    } else {
+      logger.error(`❌ [CUSTOMS] Migration failed:`, result.error);
+      res.status(500).json({ success: false, error: result.error });
+    }
+  } catch (error: any) {
+    logger.error(`[CUSTOMS] Error running migration:`, error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// Permit-ready summary: shipments with approved inspections and issued permits
+router.get('/permit-ready', authMiddleware, async (req, res) => {
+  try {
+    // Prefer quality inspections endpoint on-chain
+    const inspectionsResult = await fabricService.getAllInspections();
+    if (!inspectionsResult.success) {
+      return res.status(500).json({ success: false, error: inspectionsResult.error });
+    }
+
+    const inspections = inspectionsResult.data || [];
+    const ready = inspections
+      .filter((insp: any) => {
+        const status = insp.status || insp.Status || '';
+        const permit = insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '';
+        return (status === 'APPROVED' || status === 'QUALITY_APPROVED') && permit && permit.trim() !== '';
+      })
+      .map((insp: any) => ({
+        inspectionId: insp.inspectionId || insp.InspectionID || insp.InspectionId || '',
+        shipmentId: insp.shipmentId || insp.ShipmentID || insp.ShipmentId || '',
+        exporterId: insp.exporterId || insp.ExporterID || insp.ExporterId || '',
+        qualityGrade: insp.qualityGrade || insp.QualityGrade || insp.quality || '',
+        totalScore: insp.totalScore != null ? Number(insp.totalScore) : undefined,
+        classification: insp.classification || insp.Classification || '',
+        certificateNo: insp.certificateNo || insp.CertificateNo || insp.certificate || '',
+        exportPermitNo: insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '',
+        status: insp.status || insp.Status || '',
+      }));
+
+    res.json({ success: true, data: ready });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching permit-ready summary:', error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// Start a declaration (create draft locally and record an audit). Does NOT submit on-chain.
+router.post('/declaration/:shipmentId/start', authMiddleware, async (req, res) => {
+  try {
+    const db = DatabaseService.getInstance();
+    const { shipmentId } = req.params;
+    const { exporterId, hsCode, quantity, value, currency, destination, portOfExit } = req.body;
+
+    const declarationId = `CD-${shipmentId}`;
+
+    await db.run(
+      `INSERT OR IGNORE INTO declarations (declaration_id, shipment_id, exporter_id, status, hs_code, quantity, value, currency, destination, port_of_exit, created_at)
+       VALUES (?, ?, ?, 'DECLARATION_STARTED', ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [declarationId, shipmentId, exporterId || null, hsCode || null, quantity || null, value || null, currency || null, destination || null, portOfExit || null]
+    );
+
+    // Record audit
+    await db.run(
+      `INSERT INTO declaration_audit (declaration_id, action, performed_by, details, timestamp)
+       VALUES (?, 'START_DECLARATION', ?, ?, datetime('now'))`,
+      [declarationId, (req as any).user?.username || null, JSON.stringify({ shipmentId, exporterId })]
+    );
+
+    // Attempt to record lightweight create event on-chain (non-blocking)
+    try {
+      await fabricService.connectAsOrg((req as any).user?.org || 'CustomsMSP');
+      if (fabricService.isConnected()) {
+        // Submit a minimal on-chain event if the chaincode exposes SubmitCustomsDeclaration or CreateDeclaration
+        const ccResult = await fabricService.invokeChaincode('CreateDeclaration', [declarationId, shipmentId, exporterId || '', 'DECLARATION_STARTED']);
+        if (!ccResult.success) {
+          // Try SubmitCustomsDeclaration wrapper with minimal payload
+          await fabricService.invokeChaincode('SubmitCustomsDeclaration', [declarationId, shipmentId, exporterId || '', 'STANDARD', hsCode || '090111', (quantity||'0').toString(), (value||'0').toString(), currency||'USD', destination||'', portOfExit||'']);
+        }
+      }
+    } catch (chainErr) {
+      logger.warn('[CUSTOMS] Non-fatal: on-chain createDeclaration failed:', chainErr);
+    }
+
+    logger.info(`[CUSTOMS] Declaration started for shipment ${shipmentId} by ${(req as any).user?.username || 'unknown'}`);
+    res.json({ success: true, declarationId, shipmentId });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error starting declaration:', error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// ✅ NEW: Auto-create customs declaration when ECTA export permit is issued
+// This endpoint should be called after ECTA issues an export permit
+router.post('/declaration/auto-create-from-permit', authMiddleware, async (req, res) => {
+  try {
+    const { inspectionId, shipmentId, exporterId, exportPermitNo } = req.body;
+    
+    if (!inspectionId || !shipmentId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: { message: 'inspectionId and shipmentId are required' } 
+      });
+    }
+
+    logger.info(`[CUSTOMS] Auto-creating customs declaration for shipment ${shipmentId} with ECTA permit ${exportPermitNo}`);
+
+    // Connect and fetch inspection details
+    await fabricService.connectAsOrg('ECTAMSP');
+    const inspectionResult = await fabricService.queryChaincode('ReadInspection', [inspectionId]);
+    
+    if (!inspectionResult.success || !inspectionResult.data) {
+      return res.status(404).json({ 
+        success: false, 
+        error: { message: `Inspection ${inspectionId} not found` } 
+      });
+    }
+
+    const inspection = inspectionResult.data;
+
+    // Verify export permit is issued (handle both capitalization styles)
+    const inspStatus = inspection.Status || inspection.status;
+    const inspPermitNo = inspection.ExportPermitNo || inspection.exportPermitNo;
+    
+    if (inspStatus !== 'APPROVED' || !inspPermitNo) {
+      return res.status(400).json({
+        success: false,
+        error: { message: `Inspection ${inspectionId} does not have a valid export permit. Status: ${inspStatus}, Permit: ${inspPermitNo}` }
+      });
+    }
+
+    // Fetch shipment details for auto-mapping
+    const shipmentResult = await fabricService.queryChaincode('ReadShipment', [shipmentId]);
+    let shipmentData: any = {};
+    if (shipmentResult.success && shipmentResult.data) {
+      shipmentData = shipmentResult.data;
+    }
+
+    // Fetch contract details if available
+    let contractData: any = {};
+    if (shipmentData.ContractID || shipmentData.contractID) {
+      const contractId = shipmentData.ContractID || shipmentData.contractID;
+      const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractId]);
+      if (contractResult.success && contractResult.data) {
+        contractData = contractResult.data;
+      }
+    }
+
+    // Auto-map declaration data from inspection, shipment, and contract
+    const declarationId = `CD-${shipmentId}`;
+    const quantity = shipmentData.Quantity || shipmentData.quantity || inspection.SampleSize || '0';
+    const value = shipmentData.ValueUSD || shipmentData.valueUSD || '0';
+    const currency = contractData.Currency || contractData.currency || 'USD';
+    const destination = contractData.BuyerCountry || contractData.buyerCountry || '';
+    const portOfExit = 'Djibouti Port'; // Default
+    const hsCode = '090111'; // Coffee, not roasted, not decaffeinated
+    const eudrCompliant = shipmentData.EUDRCompliant || shipmentData.eudrCompliant || false;
+
+    // Check if declaration already exists
+    const existingDecl = await fabricService.queryChaincode('GetCustomsDeclaration', [declarationId]);
+    if (existingDecl.success && existingDecl.data) {
+      logger.warn(`[CUSTOMS] Declaration ${declarationId} already exists, skipping auto-creation`);
+      return res.json({
+        success: true,
+        message: 'Declaration already exists',
+        declarationId,
+        existingDeclaration: true
+      });
+    }
+
+    // Submit customs declaration on blockchain
+    await fabricService.connectAsOrg('CustomsMSP');
+    const result = await fabricService.submitCustomsDeclaration(
+      declarationId,
+      shipmentId,
+      exporterId || inspection.ExporterID || inspection.exporterId,
+      'STANDARD',
+      hsCode,
+      quantity.toString(),
+      value.toString(),
+      currency,
+      destination,
+      portOfExit,
+      eudrCompliant ? 'true' : 'false'
+    );
+
+    if (result.success) {
+      logger.info(`✅ [CUSTOMS] Auto-created declaration ${declarationId} from ECTA permit ${exportPermitNo}`);
+      
+      // Update shipment status to CUSTOMS_DECLARED
+      try {
+        await fabricService.updateShipmentStatus(shipmentId, 'CUSTOMS_DECLARED');
+        logger.info(`✅ [CUSTOMS] Shipment ${shipmentId} status updated to CUSTOMS_DECLARED`);
+      } catch (statusError) {
+        logger.warn(`Could not update shipment status: ${statusError}`);
+      }
+
+      res.json({
+        success: true,
+        message: 'Customs declaration auto-created from ECTA export permit',
+        declarationId,
+        shipmentId,
+        exportPermitNo: inspection.ExportPermitNo || inspection.exportPermitNo,
+        autoMapped: {
+          quantity,
+          value,
+          currency,
+          destination,
+          exporterId: exporterId || inspection.ExporterID || inspection.exporterId,
+          eudrCompliant,
+          hsCode,
+          portOfExit
+        },
+        txId: result.txId
+      });
+    } else {
+      // Check if error is "already exists" - this is OK, return existing declaration
+      const errorMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error || '');
+      if (errorMsg.includes('already exists')) {
+        logger.info(`⚠️ [CUSTOMS] Declaration ${declarationId} already exists - returning existing`);
+        return res.json({
+          success: true,
+          message: 'Customs declaration already exists',
+          declarationId,
+          shipmentId,
+          existingDeclaration: true,
+          autoMapped: {
+            quantity,
+            value,
+            currency,
+            destination,
+            exporterId: exporterId || inspection.ExporterID || inspection.exporterId,
+            eudrCompliant,
+            hsCode,
+            portOfExit
+          }
+        });
+      }
+      
+      logger.error(`❌ [CUSTOMS] Failed to auto-create declaration: ${result.error}`);
+      res.status(500).json({ success: false, error: result.error });
+    }
+  } catch (error: any) {
+    logger.error(`[CUSTOMS] Error auto-creating declaration from permit:`, error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// New route: Risk assessment for a declaration (compute and persist)
+router.post('/declaration/:declarationId/risk-assess', authMiddleware, async (req, res) => {
+  try {
+    const db = DatabaseService.getInstance();
+    const { declarationId } = req.params;
+    // Accept either a full inspection/permit object or specific fields
+    const { shipmentId, totalValue, value, hsCode, exportPermitNo, certificateNo, assessedBy } = req.body;
+
+    // Use configured rules from RiskService
+    const rules = RiskService.getRules();
+    const computeRisk = (payload: any) => {
+      const valueNumber = Number(payload.totalValue || payload.value || 0) || 0;
+      const hs = (payload.hsCode || payload.hs || '').toString();
+      let risk: 'LOW' | 'MEDIUM' | 'HIGH' = (rules.defaultRiskLevel || 'LOW') as any;
+      let reason = '';
+
+      const highValueThreshold = Number(rules.highValueThreshold || 50000);
+      const hasPermitOrCertificate = Boolean(payload.exportPermitNo || payload.certificateNo);
+      if (valueNumber >= highValueThreshold) {
+        if (hasPermitOrCertificate) {
+          risk = 'MEDIUM';
+          reason = `High declared value (${valueNumber}) with export permit/certificate present`;
+        } else {
+          risk = 'HIGH';
+          reason = `High declared value (${valueNumber})`;
+        }
+      }
+
+      if (!hasPermitOrCertificate) {
+        risk = 'HIGH';
+        reason = reason ? reason + ' & missing permit/certificate' : 'Missing export permit/certificate';
+      }
+
+      if (!reason && hs) {
+        const prefixes = rules.hsPrefixesMedium || ['07','08','09'];
+        for (const p of prefixes) {
+          if (hs.startsWith(p)) {
+            risk = 'MEDIUM';
+            reason = 'HS code flagged for documentary/physical checks';
+            break;
+          }
+        }
+      }
+
+      if (!reason) reason = 'Standard checks passed';
+      return { risk, reason };
+    };
+
+    const assessment = computeRisk({ totalValue, value, hsCode, exportPermitNo, certificateNo });
+
+    // Compute rule hash/version to record with assessment
+    const ruleHash = require('crypto').createHash('sha256').update(JSON.stringify(rules)).digest('hex');
+
+    await db.run(
+      `INSERT INTO declaration_risk (declaration_id, shipment_id, risk_level, reason, assessed_by, assessed_at, rule_hash)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+      [declarationId, shipmentId || null, assessment.risk, assessment.reason, assessedBy || null, ruleHash]
+    );
+
+    logger.info(`[CUSTOMS] Risk assessment saved for ${declarationId}: ${assessment.risk}`);
+
+    res.json({ success: true, declarationId, risk: assessment.risk, reason: assessment.reason });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error computing/persisting risk:', error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// Override risk decision and record user choice (proceed despite risk)
+router.post('/declaration/:declarationId/override-risk', authMiddleware, async (req, res) => {
+  try {
+    const db = DatabaseService.getInstance();
+    const { declarationId } = req.params;
+    const { shipmentId, riskLevel, overrideReason, overriddenBy } = req.body;
+
+    if (!riskLevel || !['LOW','MEDIUM','HIGH'].includes(riskLevel)) {
+      return res.status(400).json({ success: false, error: 'Invalid riskLevel' });
+    }
+
+    const reason = overrideReason || 'User override: proceed despite risk';
+
+    await db.run(
+      `INSERT INTO declaration_risk (declaration_id, shipment_id, risk_level, reason, assessed_by, assessed_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+      [declarationId, shipmentId || null, riskLevel, reason, overriddenBy || null]
+    );
+
+    logger.info(`[CUSTOMS] Risk override recorded for ${declarationId} by ${overriddenBy || 'unknown'}`);
+    res.json({ success: true, declarationId, riskLevel, reason });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error recording risk override:', error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+// Expose current risk rules (GET) and allow updating them (PUT) - restricted via authMiddleware
+router.get('/risk-rules', authMiddleware, async (_req, res) => {
+  try {
+    const rules = RiskService.getRules();
+    res.json({ success: true, data: rules });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching risk rules:', error);
+    res.status(500).json({ success: false, error: { message: error.message } });
+  }
+});
+
+router.put('/risk-rules', authMiddleware, async (req, res) => {
+  try {
+    const updates = req.body || {};
+    RiskService.setRules(updates);
+    res.json({ success: true, data: RiskService.getRules() });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error updating risk rules:', error);
     res.status(500).json({ success: false, error: { message: error.message } });
   }
 });

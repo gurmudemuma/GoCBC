@@ -211,7 +211,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
             {data.entityType} SUMMARY
           </Typography>
           <Grid container spacing={2}>
-            {data.summary.map((item, idx) => (
+            {data.summary.filter(item => item.value !== undefined && item.value !== null && item.value !== '').map((item, idx) => (
               <Grid item xs={12} sm={6} key={idx}>
                 <Typography variant="caption" color="text.secondary">
                   {item.label}

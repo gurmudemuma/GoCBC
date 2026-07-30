@@ -30,6 +30,13 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
       return;
     }
 
+    // CRITICAL: Rejected users can ONLY access resubmit-application page
+    if (user.status === 'rejected' && router.pathname !== '/resubmit-application') {
+      console.warn(`Rejected user attempting to access ${router.pathname} - redirecting to resubmit page`);
+      router.replace('/resubmit-application');
+      return;
+    }
+
     // Check role-based access
     if (allowedRoles && !allowedRoles.includes(user.role)) {
       console.warn(`Access denied: User role ${user.role} not in allowed roles`, allowedRoles);

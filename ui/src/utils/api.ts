@@ -51,12 +51,47 @@ class CECBSApi {
       (error) => Promise.reject(error)
     );
 
-    // Response interceptor for error handling
+    // Response interceptor for error handling with token refresh
     this.client.interceptors.response.use(
       (response) => response,
-      (error) => {
+      async (error) => {
+        const originalRequest = error.config;
+        
         // Handle authentication errors (401 Unauthorized)
-        if (error.response?.status === 401) {
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+          
+          try {
+            // Try to refresh the token
+            const token = localStorage.getItem('authToken');
+            if (token) {
+              console.log('Token expired, attempting to refresh...');
+              const refreshResponse = await axios.post(
+                `${process.env.CECBS_API_URL || 'http://localhost:3001/api/v1'}/auth/refresh`,
+                {},
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+              
+              if (refreshResponse.data.success && refreshResponse.data.data.token) {
+                const newToken = refreshResponse.data.data.token;
+                localStorage.setItem('authToken', newToken);
+                
+                // Update the failed request with new token
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+                
+                console.log('Token refreshed successfully');
+                return this.client(originalRequest);
+              }
+            }
+          } catch (refreshError) {
+            console.warn('Token refresh failed, clearing session');
+          }
+          
+          // If refresh fails or no token, clear session and redirect
           console.warn('Authentication failed - clearing token and redirecting to login');
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
@@ -146,10 +181,7 @@ class CECBSApi {
     return response.data;
   }
 
-  async approveContract(contractId: string): Promise<ApiResponse<SalesContract>> {
-    const response = await this.client.post(`/contracts/${contractId}/approve`);
-    return response.data;
-  }
+  // NOTE: approveContract is defined later in ECTA Portal Operations section
 
   // Shipment Management
   async getShipments(params?: {
@@ -263,6 +295,7 @@ class CECBSApi {
     shipmentID: string;
     contractID: string;
     exporterID: string;
+    scheduledDate?: string;
   }): Promise<ApiResponse<any>> {
     const response = await this.client.post('/quality/inspections', data);
     return response.data;
@@ -307,9 +340,25 @@ class CECBSApi {
 
   // NBE Portal Operations
   async approveContractForForex(contractId: string, nbeOfficer: string): Promise<ApiResponse<any>> {
+    // DEPRECATED: NBE should not approve contracts, only allocate forex
+    console.warn('approveContractForForex is deprecated. NBE should use forex allocation.');
     const response = await this.client.post(`/contracts/${contractId}/nbe-approve`, {
       approvedBy: nbeOfficer,
       approvalType: 'FOREX_ELIGIBILITY'
+    });
+    return response.data;
+  }
+
+  // ECTA Portal Operations
+  async approveContract(contractId: string): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/contracts/${contractId}/approve`);
+    return response.data;
+  }
+
+  async rejectContract(contractId: string, reason: string, rejectedBy?: string): Promise<ApiResponse<any>> {
+    const response = await this.client.post(`/contracts/${contractId}/reject`, {
+      reason,
+      rejectedBy,
     });
     return response.data;
   }
@@ -357,6 +406,32 @@ class CECBSApi {
     avgProcessingTime: number;
   }>> {
     const response = await this.client.get('/analytics/banking');
+    return response.data;
+  }
+
+  // Exchange Rates for NBE Portal
+  async getExchangeRates(): Promise<ApiResponse<Array<{
+    rateId: string;
+    currency: string;
+    buyingRate: number;
+    sellingRate: number;
+    midRate: number;
+    effectiveDate: string;
+    status: string;
+  }>>> {
+    const response = await this.client.get('/forex/rates');
+    return response.data;
+  }
+
+  // Create or update exchange rate
+  async createExchangeRate(rateData: {
+    currency: string;
+    buyingRate: number;
+    sellingRate: number;
+    effectiveDate: string;
+    justification?: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.post('/forex/rates', rateData);
     return response.data;
   }
 }

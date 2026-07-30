@@ -305,9 +305,50 @@ cmd_upgrade() {
   local VERSION=$1
   local SEQUENCE=$2
   
+  # If version/sequence not provided, auto-detect and increment
   if [ -z "$VERSION" ] || [ -z "$SEQUENCE" ]; then
-    print_error "Usage: ./chaincode.sh upgrade <version> <sequence>"
-    exit 1
+    print_info "Auto-detecting current chaincode version and sequence..."
+    
+    # Get current committed chaincode info
+    CURRENT_INFO=$(MSYS_NO_PATHCONV=1 docker exec \
+      -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
+      peer0.ecta.cecbs.et \
+      peer lifecycle chaincode querycommitted \
+        --channelID ${CHANNEL_NAME} \
+        --name ${CHAINCODE_NAME} 2>&1)
+    
+    if echo "$CURRENT_INFO" | grep -q "Version:"; then
+      CURRENT_VERSION=$(echo "$CURRENT_INFO" | grep -oP "Version: \K[^,]+")
+      CURRENT_SEQUENCE=$(echo "$CURRENT_INFO" | grep -oP "Sequence: \K[^,]+")
+      
+      print_info "Current: v${CURRENT_VERSION} (Sequence: ${CURRENT_SEQUENCE})"
+      
+      # Increment version (e.g., 1.15 -> 1.16)
+      if [ -z "$VERSION" ]; then
+        MAJOR=$(echo "$CURRENT_VERSION" | cut -d'.' -f1)
+        MINOR=$(echo "$CURRENT_VERSION" | cut -d'.' -f2)
+        NEW_MINOR=$((MINOR + 1))
+        VERSION="${MAJOR}.${NEW_MINOR}"
+      fi
+      
+      # Increment sequence
+      if [ -z "$SEQUENCE" ]; then
+        SEQUENCE=$((CURRENT_SEQUENCE + 1))
+      fi
+      
+      print_info "New: v${VERSION} (Sequence: ${SEQUENCE})"
+      echo ""
+      read -p "Proceed with upgrade? (y/n) " -n 1 -r
+      echo ""
+      if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Upgrade cancelled"
+        exit 0
+      fi
+    else
+      print_error "Could not detect current version. Please provide version and sequence."
+      print_info "Usage: ./chaincode.sh upgrade [version] [sequence]"
+      exit 1
+    fi
   fi
   
   print_header "Complete Chaincode Upgrade v${VERSION}"

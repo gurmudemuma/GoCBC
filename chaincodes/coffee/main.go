@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
@@ -27,8 +28,8 @@ type CoffeeShipment struct {
 	Grade            string    `json:"grade"`
 	ICONumber        string    `json:"icoNumber"`
 	ECXLotNumber     string    `json:"ecxLotNumber"`     // Primary ECX lot (backward compatibility)
-	ECXLots          []string  `json:"ecxLots"`          // Multiple ECX lots for blended shipments
-	Documents        []string  `json:"documents"`        // Document IDs linked to this shipment
+	ECXLots          []string  `json:"ecxLots"` // Multiple ECX lots for blended shipments
+	Documents        []string  `json:"documents"` // Document IDs linked to this shipment
 	Status           string    `json:"status"`
 	Channel          string    `json:"channel"`
 	ForexRate        float64   `json:"forexRate"`
@@ -132,9 +133,12 @@ type SalesContract struct {
 	ContractStatus        string    `json:"contractStatus"`
 	RegistrationDate      string    `json:"registrationDate"` // ISO date format
 	ApprovalDate          string    `json:"approvalDate"`     // ISO date format
+	RejectionDate         string    `json:"rejectionDate"`    // ISO date format
+	RejectionReason       string    `json:"rejectionReason"`  // Reason for rejection
 	RegisteredBy          string    `json:"registeredBy"`     // ✅ X.509 certificate of registrar
 	RegisteredByMSP       string    `json:"registeredByMsp"`  // ✅ MSP of registrar
 	ApprovedBy            string    `json:"approvedBy"`       // ✅ X.509 certificate of approver
+	RejectedBy            string    `json:"rejectedBy"`       // ✅ X.509 certificate of rejector
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
@@ -259,11 +263,11 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 
 	compliance := ComplianceMetadata{
 		ECTACompliance: true,
-		NBECompliance:  false, // Not yet approved by NBE
+		NBECompliance:  false, // NBE monitors but doesn't approve exporters
 		UCP600Check:    false,
 		EUDRCompliance: false,
 		ICOCompliance:  false,
-		ComplianceNote: "Exporter registered, pending NBE approval for contracts",
+		ComplianceNote: "Exporter registered by ECTA with valid license. Can now create contracts for ECTA approval.",
 	}
 
 	err = c.CreateAuditLog(ctx, "CREATE", "EXPORTER", exporterID, "", "ACTIVE", changes,
@@ -660,15 +664,12 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 		approverID = mspID // Fallback
 	}
 
-	// Only NBE can approve sales contracts
-	if mspID != "NBEMSP" {
-		return fmt.Errorf("only NBE can approve sales contracts, got: %s", mspID)
+	// Only ECTA can approve sales contracts (for export compliance)
+	if mspID != "ECTAMSP" {
+		return fmt.Errorf("only ECTA can approve sales contracts, got: %s", mspID)
 	}
 	
 	log.Printf("Contract %s being approved by: %s (MSP: %s)", contractID, approverID, mspID)
-	if mspID != "NBEMSP" {
-		return fmt.Errorf("unauthorized: only NBE can approve sales contracts (caller: %s)", mspID)
-	}
 
 	contract, err := c.ReadSalesContract(ctx, contractID)
 	if err != nil {
@@ -709,15 +710,15 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 
 	compliance := ComplianceMetadata{
 		ECTACompliance: true,
-		NBECompliance:  true, // NBE approved
+		NBECompliance:  false, // Banks will handle forex allocation per NBE policy
 		UCP600Check:    false,
 		EUDRCompliance: contract.EUDRRequired,
 		ICOCompliance:  true,
-		ComplianceNote: "Contract approved by NBE, ready for forex allocation and LC issuance",
+		ComplianceNote: "Contract approved by ECTA for export compliance. Ready for bank LC issuance and forex allocation per NBE policy (50% retention).",
 	}
 
 	err = c.CreateAuditLog(ctx, "APPROVE", "CONTRACT", contractID, previousStatus, "APPROVED", changes,
-		"Contract approved by NBE for forex and export", compliance)
+		"Contract approved by ECTA for export compliance", compliance)
 	if err != nil {
 		log.Printf("WARNING: Failed to create audit log: %v", err)
 	}
@@ -733,6 +734,100 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ContractApproved", eventJSON)
+
+	return nil
+}
+
+// RejectSalesContract - Reject a sales contract (ECTA only)
+func (c *CoffeeContract) RejectSalesContract(ctx contractapi.TransactionContextInterface, contractID string, rejectedBy string, rejectionReason string) error {
+	// ✅ CAPTURE MSP IDENTITY of rejector
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+	
+	rejectorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejectorID = mspID // Fallback
+	}
+
+	// Only ECTA can reject sales contracts (for export compliance)
+	if mspID != "ECTAMSP" {
+		return fmt.Errorf("only ECTA can reject sales contracts, got: %s", mspID)
+	}
+	
+	log.Printf("Contract %s being rejected by: %s (MSP: %s), Reason: %s", contractID, rejectorID, mspID, rejectionReason)
+
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return err
+	}
+
+	// Capture previous status for audit
+	previousStatus := contract.ContractStatus
+
+	// Only allow rejection of REGISTERED contracts
+	if contract.ContractStatus != "REGISTERED" {
+		return fmt.Errorf("only REGISTERED contracts can be rejected, current status: %s", contract.ContractStatus)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	contract.ContractStatus = "REJECTED"
+	contract.RejectionDate = timestamp.Format(time.RFC3339)
+	contract.RejectedBy = rejectorID
+	contract.RejectionReason = rejectionReason
+	contract.UpdatedAt = timestamp
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+
+	// Save contract
+	err = ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: "REJECTED", DataType: "string"},
+		{FieldName: "rejectionDate", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "date"},
+		{FieldName: "rejectionReason", OldValue: "", NewValue: rejectionReason, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: contract.EUDRRequired,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Contract rejected by ECTA: %s", rejectionReason),
+	}
+
+	err = c.CreateAuditLog(ctx, "REJECT", "CONTRACT", contractID, previousStatus, "REJECTED", changes,
+		fmt.Sprintf("Contract rejected by ECTA: %s", rejectionReason), compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":       "ContractRejected",
+		"contractID":      contractID,
+		"exporterID":      contract.ExporterID,
+		"rejectionReason": rejectionReason,
+		"timestamp":       timestamp.Format(time.RFC3339),
+		"rejectedBy":      rejectorID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractRejected", eventJSON)
 
 	return nil
 }
@@ -1099,6 +1194,39 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 	}
 	fmt.Printf("CreateShipment: Documents to be linked: %d document(s)\n", len(documents))
 
+	// MANDATORY FIELD VALIDATION: Ensure all required fields are filled after auto-mapping
+	var validationErrors []string
+	
+	if mappedExporterID == "" {
+		validationErrors = append(validationErrors, "ExporterID is required and cannot be empty")
+	}
+	if mappedBuyerID == "" {
+		validationErrors = append(validationErrors, "BuyerID is required and cannot be empty")
+	}
+	if origin == "" {
+		validationErrors = append(validationErrors, "Origin is required and cannot be empty")
+	}
+	if quantity <= 0 {
+		validationErrors = append(validationErrors, "Quantity must be greater than 0")
+	}
+	if grade == "" {
+		validationErrors = append(validationErrors, "Grade is required and cannot be empty")
+	}
+	if icoNumber == "" {
+		validationErrors = append(validationErrors, "ICO Number is required and cannot be empty")
+	}
+	if valueUSD <= 0 {
+		validationErrors = append(validationErrors, "ValueUSD must be greater than 0")
+	}
+	
+	if len(validationErrors) > 0 {
+		errorMsg := fmt.Sprintf("Shipment validation failed: %s", strings.Join(validationErrors, "; "))
+		fmt.Printf("CreateShipment ERROR: %s\n", errorMsg)
+		return fmt.Errorf("%s", errorMsg)
+	}
+	
+	fmt.Printf("CreateShipment: All required fields validated successfully\n")
+
 	exists, err := c.ShipmentExists(ctx, shipmentID)
 	if err != nil {
 		return err
@@ -1124,6 +1252,7 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		Grade:         grade,
 		ICONumber:     icoNumber,
 		ECXLotNumber:  ecxLotNumber,
+		ECXLots:       []string{},    // Initialize as empty array, not nil
 		Documents:     documents,
 		Status:        "CREATED",
 		Channel:       channel,
@@ -1139,7 +1268,12 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		return err
 	}
 
-	err = ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	// Store with SHIPMENT_ prefix, but check if shipmentID already has it
+	key := shipmentID
+	if !strings.HasPrefix(shipmentID, "SHIPMENT_") {
+		key = "SHIPMENT_" + shipmentID
+	}
+	err = ctx.GetStub().PutState(key, shipmentJSON)
 	if err != nil {
 		return err
 	}
@@ -1165,7 +1299,7 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 		fmt.Printf("CreateShipment WARNING: failed to marshal inspection: %v\n", err)
 		// Don't fail shipment creation if inspection creation fails
 	} else {
-		err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+		err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
 		if err != nil {
 			fmt.Printf("CreateShipment WARNING: failed to save inspection: %v\n", err)
 		} else {
@@ -1178,10 +1312,20 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 }
 
 func (c *CoffeeContract) ReadShipment(ctx contractapi.TransactionContextInterface, shipmentID string) (*CoffeeShipment, error) {
-	shipmentJSON, err := ctx.GetStub().GetState(shipmentID)
+	// Try with SHIPMENT_ prefix first (new format)
+	shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read shipment: %v", err)
 	}
+	
+	// If not found with prefix, try without prefix (old format for backward compatibility)
+	if shipmentJSON == nil {
+		shipmentJSON, err = ctx.GetStub().GetState(shipmentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read shipment: %v", err)
+		}
+	}
+	
 	if shipmentJSON == nil {
 		return nil, fmt.Errorf("shipment %s does not exist", shipmentID)
 	}
@@ -1226,7 +1370,7 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
 // RecordBillOfLading - Shipping company records Bill of Lading details (Sea Freight)
@@ -1261,7 +1405,7 @@ func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextIn
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
 // RecordAirwayBill - Airline records Airway Bill details (Air Freight)
@@ -1296,7 +1440,7 @@ func (c *CoffeeContract) RecordAirwayBill(ctx contractapi.TransactionContextInte
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
 // RecordShippingDetails - Universal function that records either B/L or AWB based on transport mode
@@ -1344,7 +1488,7 @@ func (c *CoffeeContract) RecordShippingDetails(ctx contractapi.TransactionContex
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
 // UpdateShipmentLocation - Update shipment GPS location/status
@@ -1375,13 +1519,22 @@ func (c *CoffeeContract) UpdateShipmentLocation(ctx contractapi.TransactionConte
 		return err
 	}
 
-	return ctx.GetStub().PutState(shipmentID, shipmentJSON)
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
 func (c *CoffeeContract) ShipmentExists(ctx contractapi.TransactionContextInterface, shipmentID string) (bool, error) {
-	shipmentJSON, err := ctx.GetStub().GetState(shipmentID)
+	// Try with SHIPMENT_ prefix first (new format)
+	shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
 	if err != nil {
 		return false, fmt.Errorf("failed to read from world state: %v", err)
+	}
+
+	// If not found with prefix, try without prefix (old format)
+	if shipmentJSON == nil {
+		shipmentJSON, err = ctx.GetStub().GetState(shipmentID)
+		if err != nil {
+			return false, fmt.Errorf("failed to read from world state: %v", err)
+		}
 	}
 
 	return shipmentJSON != nil, nil
@@ -1549,9 +1702,14 @@ func (c *CoffeeContract) QueryShipmentsByExporter(ctx contractapi.TransactionCon
 			return nil, err
 		}
 		
-		// FIX: Handle null documents array
+		// FIX: Handle null documents array - convert to empty slice
 		if shipment.Documents == nil {
 			shipment.Documents = []string{}
+		}
+		
+		// FIX: Handle null ECXLots array - convert to empty slice
+		if shipment.ECXLots == nil {
+			shipment.ECXLots = []string{}
 		}
 		
 		shipments = append(shipments, &shipment)
@@ -1562,17 +1720,17 @@ func (c *CoffeeContract) QueryShipmentsByExporter(ctx contractapi.TransactionCon
 
 // QueryAllShipments - Get all shipments in the system
 func (c *CoffeeContract) QueryAllShipments(ctx contractapi.TransactionContextInterface) ([]*CoffeeShipment, error) {
-	queryString := `{"selector":{"_id":{"$regex":"^SHIPMENT_"}}}`
-
-	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	var shipments []*CoffeeShipment
+	
+	// Query NEW shipments with SHIPMENT_ prefix
+	newIterator, err := ctx.GetStub().GetStateByRange("SHIPMENT_", "SHIPMENT_~")
 	if err != nil {
 		return nil, err
 	}
-	defer resultsIterator.Close()
+	defer newIterator.Close()
 
-	var shipments []*CoffeeShipment
-	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
+	for newIterator.HasNext() {
+		queryResponse, err := newIterator.Next()
 		if err != nil {
 			return nil, err
 		}
@@ -1583,12 +1741,49 @@ func (c *CoffeeContract) QueryAllShipments(ctx contractapi.TransactionContextInt
 			return nil, err
 		}
 		
-		// FIX: Handle null documents array
+		// FIX: Handle null arrays
 		if shipment.Documents == nil {
 			shipment.Documents = []string{}
 		}
+		if shipment.ECXLots == nil {
+			shipment.ECXLots = []string{}
+		}
 		
 		shipments = append(shipments, &shipment)
+	}
+	
+	// Query OLD shipments without prefix (backward compatibility)
+	// Only get keys that start with "SHIPMENT" but NOT "SHIPMENT_" (already got those)
+	oldIterator, err := ctx.GetStub().GetStateByRange("SHIPMENT", "SHIPMENT_")
+	if err != nil {
+		return nil, err
+	}
+	defer oldIterator.Close()
+
+	for oldIterator.HasNext() {
+		queryResponse, err := oldIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var shipment CoffeeShipment
+		err = json.Unmarshal(queryResponse.Value, &shipment)
+		if err != nil {
+			continue // Skip invalid records
+		}
+		
+		// Only include if it has a shipmentId (identifies as shipment)
+		if shipment.ShipmentID != "" {
+			// FIX: Handle null arrays
+			if shipment.Documents == nil {
+				shipment.Documents = []string{}
+			}
+			if shipment.ECXLots == nil {
+				shipment.ECXLots = []string{}
+			}
+			
+			shipments = append(shipments, &shipment)
+		}
 	}
 
 	return shipments, nil
@@ -1740,4 +1935,907 @@ func main() {
 	if err := server.Start(); err != nil {
 		log.Panicf("Error starting coffee chaincode server: %v", err)
 	}
+}
+
+
+// PickupShipment - Shipping company picks up cleared shipment
+// Updates status from CUSTOMS_CLEARED to IN_TRANSIT
+func (c *CoffeeContract) PickupShipment(ctx contractapi.TransactionContextInterface,
+	shipmentID, shippingCompany, transportMode, trackingNumber string) error {
+
+	// VALIDATION
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("PickupShipment: %w", err)
+	}
+	if err := ValidateNonEmptyString(shippingCompany, "shippingCompany", MaxStringLen); err != nil {
+		return fmt.Errorf("PickupShipment: %w", err)
+	}
+	if err := ValidateNonEmptyString(transportMode, "transportMode", MaxIDLen); err != nil {
+		return fmt.Errorf("PickupShipment: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("PickupShipment: %w", err)
+	}
+
+	// Must be customs cleared to pickup
+	if shipment.Status != "CUSTOMS_CLEARED" && shipment.Status != "PERMIT_ISSUED" {
+		return fmt.Errorf("shipment must be CUSTOMS_CLEARED to pickup, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update shipment
+	shipment.Status = "IN_TRANSIT"
+	shipment.TransportMode = transportMode
+	shipment.TrackingNumber = trackingNumber
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":       "ShipmentPickedUp",
+		"shipmentID":      shipmentID,
+		"shippingCompany": shippingCompany,
+		"transportMode":   transportMode,
+		"timestamp":       timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ShipmentPickedUp", eventJSON)
+
+	fmt.Printf("PickupShipment: Shipment %s picked up by %s, status updated to IN_TRANSIT\n", shipmentID, shippingCompany)
+	return nil
+}
+
+// ConfirmDelivery - Shipping company confirms delivery
+// Updates status from IN_TRANSIT to DELIVERED
+func (c *CoffeeContract) ConfirmDelivery(ctx contractapi.TransactionContextInterface,
+	shipmentID, deliveryNotes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("ConfirmDelivery: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("ConfirmDelivery: %w", err)
+	}
+
+	if shipment.Status != "IN_TRANSIT" {
+		return fmt.Errorf("shipment must be IN_TRANSIT to confirm delivery, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "DELIVERED"
+	shipment.ActualArrival = timestamp.Format(time.RFC3339)
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "ActualArrival", OldValue: "", NewValue: shipment.ActualArrival, DataType: "datetime"},
+		{FieldName: "DeliveryConfirmed", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "datetime"},
+		{FieldName: "FinalDestination", OldValue: "", NewValue: shipment.DestinationPort, DataType: "string"},
+		{FieldName: "Buyer", OldValue: "", NewValue: shipment.BuyerID, DataType: "string"},
+		{FieldName: "ContractID", OldValue: "", NewValue: shipment.ContractID, DataType: "string"},
+		{FieldName: "ExporterID", OldValue: "", NewValue: shipment.ExporterID, DataType: "string"},
+		{FieldName: "QuantityDelivered", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+		{FieldName: "Grade", OldValue: "", NewValue: shipment.Grade, DataType: "string"},
+		{FieldName: "Origin", OldValue: "", NewValue: shipment.Origin, DataType: "string"},
+		{FieldName: "DeliveryNotes", OldValue: "", NewValue: deliveryNotes, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+		ICOCompliance:  true,
+	}
+
+	err = c.CreateAuditLog(ctx, "DELIVERY_CONFIRMED", "SHIPMENT", shipmentID,
+		previousStatus, "DELIVERED", changes,
+		fmt.Sprintf("Delivery confirmed by shipping company. %s", deliveryNotes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":  "ShipmentDelivered",
+		"shipmentID": shipmentID,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ShipmentDelivered", eventJSON)
+
+	fmt.Printf("ConfirmDelivery: Shipment %s delivered, status updated to DELIVERED\n", shipmentID)
+	return nil
+}
+
+// ==================== COMPLETE SHIPPING WORKFLOW FUNCTIONS ====================
+
+// StartLandTransport - Begin land transport from Addis to Djibouti
+// Updates status from CUSTOMS_CLEARED to LAND_TRANSPORT
+func (c *CoffeeContract) StartLandTransport(ctx contractapi.TransactionContextInterface,
+	shipmentID, transportCompany, truckPlate, driverName, sealNumber string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("StartLandTransport: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("StartLandTransport: %w", err)
+	}
+
+	if shipment.Status != "CUSTOMS_CLEARED" {
+		return fmt.Errorf("shipment must be CUSTOMS_CLEARED to start land transport, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "LAND_TRANSPORT"
+	shipment.LandTransportCompany = transportCompany
+	shipment.TruckPlateNumber = truckPlate
+	shipment.DriverName = driverName
+	shipment.LandTransportSeal = sealNumber
+	shipment.DepartureFromAddis = timestamp.Format(time.RFC3339)
+	shipment.LandTransportStatus = "IN_TRANSIT"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail with ALL data captured
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "LandTransportCompany", OldValue: "", NewValue: transportCompany, DataType: "string"},
+		{FieldName: "TruckPlateNumber", OldValue: "", NewValue: truckPlate, DataType: "string"},
+		{FieldName: "DriverName", OldValue: "", NewValue: driverName, DataType: "string"},
+		{FieldName: "TransportSealNumber", OldValue: "", NewValue: sealNumber, DataType: "string"},
+		{FieldName: "DepartureFromAddis", OldValue: "", NewValue: shipment.DepartureFromAddis, DataType: "datetime"},
+		{FieldName: "ShipmentID", OldValue: "", NewValue: shipmentID, DataType: "string"},
+		{FieldName: "ContractID", OldValue: "", NewValue: shipment.ContractID, DataType: "string"},
+		{FieldName: "ExporterID", OldValue: "", NewValue: shipment.ExporterID, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+		{FieldName: "Grade", OldValue: "", NewValue: shipment.Grade, DataType: "string"},
+		{FieldName: "Origin", OldValue: "", NewValue: shipment.Origin, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+		ICOCompliance:  true,
+	}
+
+	err = c.CreateAuditLog(ctx, "START_LAND_TRANSPORT", "SHIPMENT", shipmentID,
+		previousStatus, "LAND_TRANSPORT", changes,
+		fmt.Sprintf("Land transport started by %s with truck %s, driver %s", transportCompany, truckPlate, driverName),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":        "LandTransportStarted",
+		"shipmentID":       shipmentID,
+		"transportCompany": transportCompany,
+		"truckPlate":       truckPlate,
+		"timestamp":        timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("LandTransportStarted", eventJSON)
+
+	fmt.Printf("StartLandTransport: Shipment %s started land transport with %s\n", shipmentID, transportCompany)
+	return nil
+}
+
+// ArriveAtPort - Record arrival at Djibouti Port
+// Updates status from LAND_TRANSPORT to PORT_ARRIVED
+func (c *CoffeeContract) ArriveAtPort(ctx contractapi.TransactionContextInterface,
+	shipmentID, notes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("ArriveAtPort: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("ArriveAtPort: %w", err)
+	}
+
+	if shipment.Status != "LAND_TRANSPORT" {
+		return fmt.Errorf("shipment must be in LAND_TRANSPORT to arrive at port, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "PORT_ARRIVED"
+	shipment.ArrivalAtDjibouti = timestamp.Format(time.RFC3339)
+	shipment.LandTransportStatus = "ARRIVED"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "ArrivalAtDjibouti", OldValue: "", NewValue: shipment.ArrivalAtDjibouti, DataType: "datetime"},
+		{FieldName: "LandTransportStatus", OldValue: "", NewValue: shipment.LandTransportStatus, DataType: "string"},
+		{FieldName: "TransportCompany", OldValue: "", NewValue: shipment.LandTransportCompany, DataType: "string"},
+		{FieldName: "TruckPlate", OldValue: "", NewValue: shipment.TruckPlateNumber, DataType: "string"},
+		{FieldName: "Driver", OldValue: "", NewValue: shipment.DriverName, DataType: "string"},
+		{FieldName: "Notes", OldValue: "", NewValue: notes, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "PORT_ARRIVAL", "SHIPMENT", shipmentID,
+		previousStatus, "PORT_ARRIVED", changes,
+		fmt.Sprintf("Shipment arrived at Djibouti Port. %s", notes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "PortArrival",
+		"shipmentID": shipmentID,
+		"port":       "Djibouti",
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("PortArrival", eventJSON)
+
+	fmt.Printf("ArriveAtPort: Shipment %s arrived at Djibouti Port\n", shipmentID)
+	return nil
+}
+
+// StuffContainer - Record container stuffing
+// Updates status from PORT_ARRIVED to CONTAINER_STUFFED
+func (c *CoffeeContract) StuffContainer(ctx contractapi.TransactionContextInterface,
+	shipmentID, containerNumber, containerType, sealNumber, stuffedBy, location string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("StuffContainer: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("StuffContainer: %w", err)
+	}
+
+	if shipment.Status != "PORT_ARRIVED" {
+		return fmt.Errorf("shipment must be PORT_ARRIVED to stuff container, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "CONTAINER_STUFFED"
+	shipment.ContainerNumber = containerNumber
+	shipment.ContainerType = containerType
+	shipment.StuffingSealNumber = sealNumber
+	shipment.StuffedBy = stuffedBy
+	shipment.StuffingLocation = location
+	shipment.StuffingDate = timestamp.Format(time.RFC3339)
+	shipment.ContainerCondition = "GOOD"
+	
+	// Set defaults if not already set
+	if shipment.DeparturePort == "" {
+		shipment.DeparturePort = "Djibouti"
+	}
+	if shipment.VesselName == "" {
+		shipment.VesselName = "Maersk Eindhoven"
+	}
+	if shipment.VoyageNumber == "" {
+		shipment.VoyageNumber = fmt.Sprintf("V%dW%d", time.Now().Year(), time.Now().Unix()%100)
+	}
+	if shipment.BillOfLadingNo == "" {
+		shipment.BillOfLadingNo = fmt.Sprintf("BL%d", time.Now().Unix())
+	}
+	
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: containerNumber, DataType: "string"},
+		{FieldName: "ContainerType", OldValue: "", NewValue: containerType, DataType: "string"},
+		{FieldName: "SealNumber", OldValue: "", NewValue: sealNumber, DataType: "string"},
+		{FieldName: "StuffedBy", OldValue: "", NewValue: stuffedBy, DataType: "string"},
+		{FieldName: "StuffingLocation", OldValue: "", NewValue: location, DataType: "string"},
+		{FieldName: "StuffingDate", OldValue: "", NewValue: shipment.StuffingDate, DataType: "datetime"},
+		{FieldName: "ContainerCondition", OldValue: "", NewValue: shipment.ContainerCondition, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "Vessel", OldValue: "", NewValue: shipment.VesselName, DataType: "string"},
+		{FieldName: "Voyage", OldValue: "", NewValue: shipment.VoyageNumber, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "CONTAINER_STUFFING", "SHIPMENT", shipmentID,
+		previousStatus, "CONTAINER_STUFFED", changes,
+		fmt.Sprintf("Container %s stuffed by %s at %s with seal %s", containerNumber, stuffedBy, location, sealNumber),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":       "ContainerStuffed",
+		"shipmentID":      shipmentID,
+		"containerNumber": containerNumber,
+		"sealNumber":      sealNumber,
+		"timestamp":       timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContainerStuffed", eventJSON)
+
+	fmt.Printf("StuffContainer: Shipment %s stuffed into container %s\n", shipmentID, containerNumber)
+	return nil
+}
+
+// LoadOnVessel - Record container loaded on vessel
+// Updates status from CONTAINER_STUFFED to VESSEL_LOADED
+func (c *CoffeeContract) LoadOnVessel(ctx contractapi.TransactionContextInterface,
+	shipmentID, notes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("LoadOnVessel: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("LoadOnVessel: %w", err)
+	}
+
+	if shipment.Status != "CONTAINER_STUFFED" {
+		return fmt.Errorf("shipment must be CONTAINER_STUFFED to load on vessel, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "VESSEL_LOADED"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "VesselName", OldValue: "", NewValue: shipment.VesselName, DataType: "string"},
+		{FieldName: "VoyageNumber", OldValue: "", NewValue: shipment.VoyageNumber, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: shipment.ContainerNumber, DataType: "string"},
+		{FieldName: "ContainerType", OldValue: "", NewValue: shipment.ContainerType, DataType: "string"},
+		{FieldName: "SealNumber", OldValue: "", NewValue: shipment.StuffingSealNumber, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "Notes", OldValue: "", NewValue: notes, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "VESSEL_LOADING", "SHIPMENT", shipmentID,
+		previousStatus, "VESSEL_LOADED", changes,
+		fmt.Sprintf("Container loaded on vessel %s (voyage %s). %s", shipment.VesselName, shipment.VoyageNumber, notes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "VesselLoaded",
+		"shipmentID": shipmentID,
+		"vessel":     shipment.VesselName,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("VesselLoaded", eventJSON)
+
+	fmt.Printf("LoadOnVessel: Shipment %s loaded on vessel %s\n", shipmentID, shipment.VesselName)
+	return nil
+}
+
+// DepartFromPort - Record vessel departure
+// Updates status from VESSEL_LOADED to DEPARTED
+func (c *CoffeeContract) DepartFromPort(ctx contractapi.TransactionContextInterface,
+	shipmentID, notes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("DepartFromPort: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("DepartFromPort: %w", err)
+	}
+
+	if shipment.Status != "VESSEL_LOADED" {
+		return fmt.Errorf("shipment must be VESSEL_LOADED to depart, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "DEPARTED"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "DeparturePort", OldValue: "", NewValue: shipment.DeparturePort, DataType: "string"},
+		{FieldName: "VesselName", OldValue: "", NewValue: shipment.VesselName, DataType: "string"},
+		{FieldName: "VoyageNumber", OldValue: "", NewValue: shipment.VoyageNumber, DataType: "string"},
+		{FieldName: "DepartureTime", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "datetime"},
+		{FieldName: "DestinationPort", OldValue: "", NewValue: shipment.DestinationPort, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: shipment.ContainerNumber, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "Notes", OldValue: "", NewValue: notes, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "VESSEL_DEPARTURE", "SHIPMENT", shipmentID,
+		previousStatus, "DEPARTED", changes,
+		fmt.Sprintf("Vessel %s departed from %s port (voyage %s). %s", shipment.VesselName, shipment.DeparturePort, shipment.VoyageNumber, notes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "VesselDeparted",
+		"shipmentID": shipmentID,
+		"port":       shipment.DeparturePort,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("VesselDeparted", eventJSON)
+
+	fmt.Printf("DepartFromPort: Vessel with shipment %s departed from %s\n", shipmentID, shipment.DeparturePort)
+	return nil
+}
+
+// UpdateToInTransit - Update to in-transit (at sea)
+// Updates status from DEPARTED to IN_TRANSIT
+func (c *CoffeeContract) UpdateToInTransit(ctx contractapi.TransactionContextInterface,
+	shipmentID, trackingNumber string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("UpdateToInTransit: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("UpdateToInTransit: %w", err)
+	}
+
+	if shipment.Status != "DEPARTED" {
+		return fmt.Errorf("shipment must be DEPARTED to update to IN_TRANSIT, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "IN_TRANSIT"
+	if trackingNumber != "" {
+		shipment.TrackingNumber = trackingNumber
+	}
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "TrackingNumber", OldValue: "", NewValue: shipment.TrackingNumber, DataType: "string"},
+		{FieldName: "VesselName", OldValue: "", NewValue: shipment.VesselName, DataType: "string"},
+		{FieldName: "VoyageNumber", OldValue: "", NewValue: shipment.VoyageNumber, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: shipment.ContainerNumber, DataType: "string"},
+		{FieldName: "DeparturePort", OldValue: "", NewValue: shipment.DeparturePort, DataType: "string"},
+		{FieldName: "DestinationPort", OldValue: "", NewValue: shipment.DestinationPort, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "IN_TRANSIT_UPDATE", "SHIPMENT", shipmentID,
+		previousStatus, "IN_TRANSIT", changes,
+		fmt.Sprintf("Shipment in transit at sea (tracking: %s)", shipment.TrackingNumber),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "InTransit",
+		"shipmentID": shipmentID,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("InTransit", eventJSON)
+
+	fmt.Printf("UpdateToInTransit: Shipment %s is now in transit at sea\n", shipmentID)
+	return nil
+}
+
+// ArriveAtDestination - Record arrival at destination port
+// Updates status from IN_TRANSIT to DESTINATION_ARRIVED
+func (c *CoffeeContract) ArriveAtDestination(ctx contractapi.TransactionContextInterface,
+	shipmentID, notes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("ArriveAtDestination: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("ArriveAtDestination: %w", err)
+	}
+
+	if shipment.Status != "IN_TRANSIT" {
+		return fmt.Errorf("shipment must be IN_TRANSIT to arrive at destination, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "DESTINATION_ARRIVED"
+	shipment.ActualArrival = timestamp.Format(time.RFC3339)
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "DestinationPort", OldValue: "", NewValue: shipment.DestinationPort, DataType: "string"},
+		{FieldName: "ActualArrival", OldValue: "", NewValue: shipment.ActualArrival, DataType: "datetime"},
+		{FieldName: "VesselName", OldValue: "", NewValue: shipment.VesselName, DataType: "string"},
+		{FieldName: "VoyageNumber", OldValue: "", NewValue: shipment.VoyageNumber, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: shipment.ContainerNumber, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "TrackingNumber", OldValue: "", NewValue: shipment.TrackingNumber, DataType: "string"},
+		{FieldName: "Notes", OldValue: "", NewValue: notes, DataType: "string"},
+		{FieldName: "Quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+	}
+
+	err = c.CreateAuditLog(ctx, "DESTINATION_ARRIVAL", "SHIPMENT", shipmentID,
+		previousStatus, "DESTINATION_ARRIVED", changes,
+		fmt.Sprintf("Shipment arrived at destination port %s. %s", shipment.DestinationPort, notes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "DestinationArrival",
+		"shipmentID": shipmentID,
+		"port":       shipment.DestinationPort,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("DestinationArrival", eventJSON)
+
+	fmt.Printf("ArriveAtDestination: Shipment %s arrived at %s\n", shipmentID, shipment.DestinationPort)
+	return nil
+}
+
+// CompleteDelivery - Final delivery confirmation
+// Updates status from DESTINATION_ARRIVED to DELIVERED
+func (c *CoffeeContract) CompleteDelivery(ctx contractapi.TransactionContextInterface,
+	shipmentID, deliveryNotes string) error {
+
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("CompleteDelivery: %w", err)
+	}
+
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("CompleteDelivery: %w", err)
+	}
+
+	if shipment.Status != "DESTINATION_ARRIVED" {
+		return fmt.Errorf("shipment must be DESTINATION_ARRIVED to complete delivery, current status: %s", shipment.Status)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	previousStatus := shipment.Status
+	shipment.Status = "DELIVERED"
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal shipment: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save shipment: %v", err)
+	}
+
+	// Create comprehensive audit trail - FINAL DELIVERY RECORD
+	changes := []FieldChange{
+		{FieldName: "Status", OldValue: previousStatus, NewValue: shipment.Status, DataType: "string"},
+		{FieldName: "DeliveryConfirmed", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "datetime"},
+		{FieldName: "FinalDestination", OldValue: "", NewValue: shipment.DestinationPort, DataType: "string"},
+		{FieldName: "Buyer", OldValue: "", NewValue: shipment.BuyerID, DataType: "string"},
+		{FieldName: "ContractID", OldValue: "", NewValue: shipment.ContractID, DataType: "string"},
+		{FieldName: "ExporterID", OldValue: "", NewValue: shipment.ExporterID, DataType: "string"},
+		{FieldName: "BillOfLading", OldValue: "", NewValue: shipment.BillOfLadingNo, DataType: "string"},
+		{FieldName: "ContainerNumber", OldValue: "", NewValue: shipment.ContainerNumber, DataType: "string"},
+		{FieldName: "Vessel", OldValue: "", NewValue: fmt.Sprintf("%s (Voyage %s)", shipment.VesselName, shipment.VoyageNumber), DataType: "string"},
+		{FieldName: "QuantityDelivered", OldValue: "", NewValue: fmt.Sprintf("%.2f kg", shipment.Quantity), DataType: "number"},
+		{FieldName: "Grade", OldValue: "", NewValue: shipment.Grade, DataType: "string"},
+		{FieldName: "Origin", OldValue: "", NewValue: shipment.Origin, DataType: "string"},
+		{FieldName: "ICONumber", OldValue: "", NewValue: shipment.ICONumber, DataType: "string"},
+		{FieldName: "DeliveryNotes", OldValue: "", NewValue: deliveryNotes, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		
+		ICOCompliance:  true,
+	}
+
+	err = c.CreateAuditLog(ctx, "DELIVERY_COMPLETE", "SHIPMENT", shipmentID,
+		previousStatus, "DELIVERED", changes,
+		fmt.Sprintf("Shipment delivered successfully to %s. %s", shipment.BuyerID, deliveryNotes),
+		compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "DeliveryComplete",
+		"shipmentID": shipmentID,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("DeliveryComplete", eventJSON)
+
+	fmt.Printf("CompleteDelivery: Shipment %s delivered successfully\n", shipmentID)
+	return nil
+}
+
+// ==================== DATA MIGRATION FUNCTIONS ====================
+
+// MigrateShipmentNullArrays - Fix null array fields in existing shipments
+// This is a one-time migration function to fix legacy data
+func (c *CoffeeContract) MigrateShipmentNullArrays(ctx contractapi.TransactionContextInterface) (string, error) {
+	log.Println("=== MigrateShipmentNullArrays: Starting migration ===")
+	
+	// Use GetStateByRange to iterate through ALL keys in the ledger
+	// This catches shipments regardless of how they're indexed
+	resultsIterator, err := ctx.GetStub().GetStateByRange("", "~")
+	if err != nil {
+		return "", fmt.Errorf("failed to get all state: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	fixedCount := 0
+	skippedCount := 0
+	errorCount := 0
+
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			log.Printf("ERROR: Iterator failed: %v", err)
+			errorCount++
+			continue
+		}
+
+		// Try to unmarshal as CoffeeShipment - if it fails, it's not a shipment
+		var shipment CoffeeShipment
+		err = json.Unmarshal(queryResponse.Value, &shipment)
+		if err != nil {
+			skippedCount++ // Not a shipment, skip silently
+			continue
+		}
+
+		// Verify it's actually a shipment by checking for shipmentId field
+		if shipment.ShipmentID == "" {
+			skippedCount++ // Not a valid shipment
+			continue
+		}
+
+		// Check if this shipment needs fixing
+		needsFix := false
+		
+		if shipment.Documents == nil {
+			shipment.Documents = []string{}
+			needsFix = true
+		}
+		
+		if shipment.ECXLots == nil {
+			shipment.ECXLots = []string{}
+			needsFix = true
+		}
+
+		if !needsFix {
+			skippedCount++
+			continue
+		}
+
+		// Update timestamp
+		txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+		if err == nil {
+			shipment.UpdatedAt = time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+		}
+
+		// Save updated shipment
+		updatedJSON, err := json.Marshal(shipment)
+		if err != nil {
+			log.Printf("ERROR: Failed to marshal shipment %s: %v", shipment.ShipmentID, err)
+			errorCount++
+			continue
+		}
+
+		err = ctx.GetStub().PutState(queryResponse.Key, updatedJSON)
+		if err != nil {
+			log.Printf("ERROR: Failed to save shipment %s: %v", shipment.ShipmentID, err)
+			errorCount++
+			continue
+		}
+
+		fixedCount++
+		if fixedCount%100 == 0 {
+			log.Printf("Progress: Fixed %d shipments...", fixedCount)
+		}
+	}
+
+	summary := fmt.Sprintf("Migration complete: Fixed=%d, Skipped=%d, Errors=%d", fixedCount, skippedCount, errorCount)
+	log.Printf("=== MigrateShipmentNullArrays: %s ===", summary)
+	
+	return summary, nil
 }

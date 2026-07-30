@@ -429,7 +429,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
       
       <Divider />
       
-      <DialogContent sx={{ pt: 3 }}>
+      <DialogContent sx={{ pt: 3, background: 'linear-gradient(180deg, #ffffff 0%, #fcf8ff 100%)' }}>
         {/* Info Alert */}
         <Alert 
           severity="info" 

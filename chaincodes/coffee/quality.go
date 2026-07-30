@@ -13,13 +13,14 @@ import (
 // ==================== QUALITY INSPECTION STRUCTURE ====================
 
 type QualityInspection struct {
-	InspectionID   string    `json:"inspectionId"`
-	ShipmentID     string    `json:"shipmentId"`
-	ContractID     string    `json:"contractId"`
-	ExporterID     string    `json:"exporterId"`
-	InspectorID    string    `json:"inspectorId"`
-	InspectorName  string    `json:"inspectorName"`
-	InspectionDate time.Time `json:"inspectionDate"`
+	InspectionID    string    `json:"inspectionId"`
+	ShipmentID      string    `json:"shipmentId"`
+	ContractID      string    `json:"contractId"`
+	ExporterID      string    `json:"exporterId"`
+	InspectorID     string    `json:"inspectorId"`
+	InspectorName   string    `json:"inspectorName"`
+	InspectionDate  time.Time `json:"inspectionDate"`
+	ScheduledDate   string    `json:"scheduledDate"`
 
 	// Physical Inspection
 	SampleSize      float64 `json:"sampleSize"`      // kg
@@ -100,7 +101,7 @@ type LaboratoryTestResults struct {
 
 // RequestInspection - Exporter requests quality inspection for shipment
 func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInterface,
-	inspectionID, shipmentID, contractID, exporterID string) error {
+	inspectionID, shipmentID, contractID, exporterID, scheduledDate string) error {
 
 	// VALIDATION: IDs
 	if err := ValidateID(inspectionID, "inspectionID"); err != nil {
@@ -151,6 +152,7 @@ func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInt
 		ContractID:   contractID,
 		ExporterID:   exporterID,
 		Status:       "PENDING",
+		ScheduledDate: scheduledDate,
 		CreatedAt:    txTime,
 		UpdatedAt:    txTime,
 	}
@@ -573,6 +575,24 @@ func (c *CoffeeContract) IssueExportPermit(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to update shipment status: %v", err)
 	}
 
+	// ✅ EMIT EVENT TO TRIGGER CUSTOMS WORKFLOW
+	// When ECTA issues export permit, customs workflow can begin
+	event := map[string]interface{}{
+		"eventType":      "ExportPermitIssued",
+		"inspectionID":   inspectionID,
+		"shipmentID":     inspection.ShipmentID,
+		"exporterID":     inspection.ExporterID,
+		"exportPermitNo": exportPermitNo,
+		"qualityGrade":   inspection.QualityGrade,
+		"cuppingGrade":   inspection.CuppingGrade,
+		"timestamp":      txTime.Format(time.RFC3339),
+		"nextWorkflow":   "CUSTOMS_DECLARATION", // Signal for customs portal
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ExportPermitIssued", eventJSON)
+
+	log.Printf("✅ ECTA Export Permit issued: %s - Customs workflow can now begin for shipment %s", exportPermitNo, inspection.ShipmentID)
+
 	return nil
 }
 
@@ -664,6 +684,14 @@ func (c *CoffeeContract) ReadInspection(ctx contractapi.TransactionContextInterf
 	}
 
 	return &inspection, nil
+}
+
+// QueryInspectionsByShipment - Get all inspections for a shipment
+func (c *CoffeeContract) QueryInspectionsByShipment(ctx contractapi.TransactionContextInterface,
+	shipmentID string) ([]*QualityInspection, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"shipmentId":"%s"}}`, shipmentID)
+	return c.queryInspections(ctx, queryString)
 }
 
 // QueryInspectionsByExporter - Get all inspections for an exporter

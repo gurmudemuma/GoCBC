@@ -12,6 +12,7 @@ import {
 import {
   Add, Warehouse, Assignment, CheckCircle, LocalShipping,
   Coffee, TrendingUp, Assessment, Visibility, Refresh,
+  AttachMoney, Warning, Science,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -62,7 +63,13 @@ const ECXPortal: React.FC = () => {
   const { notification, showSuccess, showError, closeNotification } = useNotification();
 
   const [tabValue, setTabValue] = useState(0);
+  
+  // Sub-tab state for KPI filtering
+  const [subTabValue, setSubTabValue] = useState(0);
+  const [activeKPIFilter, setActiveKPIFilter] = useState<string | null>(null);
+  
   const [lots, setLots] = useState<CoffeeLot[]>([]);
+  const [allLots, setAllLots] = useState<CoffeeLot[]>([]);
   const [loading, setLoading] = useState(false);
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
   const [selectedLot, setSelectedLot] = useState<CoffeeLot | null>(null);
@@ -116,11 +123,14 @@ const ECXPortal: React.FC = () => {
       const res = await api.get('/ecx/lots');
       if (res.data?.success) {
         setLots(res.data.data || []);
+        setAllLots(res.data.data || []);
       } else {
         setLots([]);
+        setAllLots([]);
       }
     } catch {
       setLots([]);
+      setAllLots([]);
     } finally {
       setLoading(false);
     }
@@ -131,6 +141,19 @@ const ECXPortal: React.FC = () => {
     const year = new Date().getFullYear();
     const seq = String(Math.floor(Math.random() * 9000) + 1000);
     return `ECX-${code}-${year}-${seq}`;
+  };
+
+  // Handle KPI filter for sub-tabs
+  const handleKPIFilter = (filterKey: string, kpiTitle: string) => {
+    setActiveKPIFilter(filterKey);
+    
+    // Apply filter based on filter key
+    if (filterKey === 'ALL_LOTS') setLots(allLots);
+    else if (filterKey === 'WAREHOUSED') setLots(allLots.filter(l => l.status === 'WAREHOUSED'));
+    else if (filterKey === 'GRADED') setLots(allLots.filter(l => l.status === 'GRADED'));
+    else if (filterKey === 'ASSIGNED') setLots(allLots.filter(l => l.status === 'ASSIGNED'));
+    else if (filterKey === 'RELEASED') setLots(allLots.filter(l => l.status === 'RELEASED'));
+    else setLots(allLots);
   };
 
   // STEP 1: Register intake (warehouse receipt)
@@ -269,26 +292,13 @@ const ECXPortal: React.FC = () => {
 
 
   return (
-    <Box sx={{ p: 3 }}>
-      {/* Header */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Box>
-          <Typography variant="h4" fontWeight="bold">📈 ECX Portal</Typography>
-          <Typography variant="subtitle1" color="textSecondary">
-            Ethiopian Commodity Exchange — Warehouse Intake, Grading, Lot Assignment & Release
-          </Typography>
-        </Box>
-        <Box display="flex" gap={2} alignItems="center">
-          <ThemeToggle mode={themeMode} onToggle={() => setThemeMode(t => t === 'light' ? 'dark' : 'light')} brandColor={BRAND_COLOR} />
-          <Tooltip title="Refresh">
-            <IconButton onClick={loadData}><Refresh /></IconButton>
-          </Tooltip>
-          <AnimatedButton startIcon={<Add />} onClick={() => setIntakeOpen(true)} brandColor={BRAND_COLOR} secondaryColor={SECONDARY_COLOR}>
-            Register Intake
-          </AnimatedButton>
-        </Box>
-      </Box>
-
+    <Box
+      sx={{
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #f8fcf9 0%, #eef8f2 45%, #fffef5 100%)',
+        p: { xs: 2, md: 3 },
+      }}
+    >
       {/* Actual ECX process steps banner */}
       <Alert severity="info" icon={<Coffee />} sx={{ mb: 3 }}>
         <Typography variant="body2" fontWeight="bold" gutterBottom>ECX Coffee Lot Lifecycle (4 Steps)</Typography>
@@ -316,22 +326,162 @@ const ECXPortal: React.FC = () => {
         </Typography>
       </Alert>
 
-      {/* KPIs */}
-      <Grid container spacing={3} mb={3}>
-        <Grid item xs={6} md={3}><DashboardKPI title="Warehoused" value={stats.warehoused} icon={<Warehouse />} brandColor="#607d8b" subtitle="Awaiting grading" /></Grid>
-        <Grid item xs={6} md={3}><DashboardKPI title="Graded" value={stats.graded} icon={<Assessment />} brandColor="#ff9800" subtitle="Ready to assign" /></Grid>
-        <Grid item xs={6} md={3}><DashboardKPI title="Assigned" value={stats.assigned} icon={<Assignment />} brandColor={BRAND_COLOR} subtitle="Linked to contract" /></Grid>
-        <Grid item xs={6} md={3}><DashboardKPI title="Released" value={stats.released} icon={<CheckCircle />} brandColor="#4caf50" subtitle="Cleared for export" /></Grid>
-      </Grid>
+      {/* Professional KPI Cards - At the very top */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        {(() => {
+          const kpis = tabValue === 0 ? [
+            { icon: <Coffee />, label: 'Total Lots', value: allLots.length, color: BRAND_COLOR },
+            { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
+            { icon: <CheckCircle />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#4caf50' },
+            { icon: <LocalShipping />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#2196f3' },
+          ] : tabValue === 1 ? [
+            { icon: <TrendingUp />, label: 'Market Active', value: 'OPEN', color: '#4caf50' },
+            { icon: <AttachMoney />, label: 'Avg Price (ETB/kg)', value: '150', color: BRAND_COLOR },
+            { icon: <Coffee />, label: 'Traded Today', value: '0', color: '#2196f3' },
+            { icon: <Assessment />, label: 'Volume (tons)', value: '0', color: SECONDARY_COLOR },
+          ] : [
+            { icon: <Science />, label: 'Grade 1 (Premium)', value: allLots.filter(l => l.grade === 'Grade 1').length, color: '#4caf50' },
+            { icon: <Coffee />, label: 'Grade 2 (High)', value: allLots.filter(l => l.grade === 'Grade 2').length, color: BRAND_COLOR },
+            { icon: <Assignment />, label: 'Grade 3-4 (Good)', value: allLots.filter(l => ['Grade 3', 'Grade 4'].includes(l.grade || '')).length, color: '#ff9800' },
+            { icon: <Warning />, label: 'Grade 5 (Fair)', value: allLots.filter(l => l.grade === 'Grade 5').length, color: '#f44336' },
+          ];
 
+          return kpis.map((kpi, index) => (
+            <Grid item xs={12} sm={6} md={3} key={index}>
+              <Card sx={{ 
+                bgcolor: '#fff', 
+                border: `2px solid ${kpi.color}`,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+                  transform: 'translateY(-4px)',
+                }
+              }}>
+                <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                  {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
+                  <Typography variant="caption" sx={{ 
+                    color: '#666', 
+                    textTransform: 'uppercase', 
+                    fontWeight: 700, 
+                    display: 'block',
+                    letterSpacing: '0.8px',
+                    mb: 1
+                  }}>
+                    {kpi.label}
+                  </Typography>
+                  <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color }}>
+                    {kpi.value}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ));
+        })()}
+      </Grid>
 
       {/* Tabs */}
       <ModernCard brandColor={BRAND_COLOR}>
+        <Box sx={{ borderBottom: 2, borderColor: 'divider' }}>
+          <Tabs 
+            value={tabValue} 
+            onChange={(_, v) => setTabValue(v)}
+            sx={{
+              '& .MuiTab-root': {
+                minHeight: 48,
+                textTransform: 'none',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                color: '#666',
+                transition: 'all 0.3s ease',
+                '&.Mui-selected': {
+                  color: BRAND_COLOR,
+                  fontWeight: 700,
+                },
+                '&:hover': {
+                  color: BRAND_COLOR,
+                  opacity: 0.8,
+                }
+              },
+              '& .MuiTabs-indicator': {
+                height: 3,
+                backgroundColor: BRAND_COLOR,
+                borderRadius: '3px 3px 0 0',
+              }
+            }}
+          >
+            <Tab label={`Coffee Lots (${allLots.length})`} icon={<Coffee sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="Market Prices" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="Grading Standards" icon={<Science sx={{ fontSize: 20 }} />} iconPosition="start" />
+          </Tabs>
+        </Box>
+
+        {/* KPI Sub-Tabs - Dynamic based on active main tab */}
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
-            <Tab label="Coffee Lots" />
-            <Tab label="Market Prices" />
-            <Tab label="Grading Standards" />
+          <Tabs 
+            value={subTabValue} 
+            onChange={(e, newValue) => {
+              setSubTabValue(newValue);
+              const kpis = tabValue === 0 ? [
+                { key: 'ALL_LOTS', title: 'All Lots', value: allLots.length, color: BRAND_COLOR },
+                { key: 'WAREHOUSED', title: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
+                { key: 'GRADED', title: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#2196F3' },
+                { key: 'ASSIGNED', title: 'Assigned', value: allLots.filter(l => l.status === 'ASSIGNED').length, color: '#9c27b0' },
+                { key: 'RELEASED', title: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#4caf50' },
+              ] : [
+                { key: 'ALL_LOTS', title: 'All Lots', value: allLots.length, color: BRAND_COLOR },
+              ];
+              handleKPIFilter(kpis[newValue].key, kpis[newValue].title);
+            }}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{ 
+              borderBottom: 1,
+              borderColor: 'divider',
+              bgcolor: 'rgba(0,0,0,0.02)',
+              '& .MuiTab-root': {
+                minHeight: 70,
+                flexDirection: 'column',
+                gap: 0.5,
+                color: '#666',
+                transition: 'all 0.3s ease',
+                '&.Mui-selected': {
+                  color: BRAND_COLOR,
+                  bgcolor: 'rgba(15, 71, 175, 0.08)',
+                },
+                '&:hover': {
+                  bgcolor: 'rgba(0,0,0,0.04)',
+                }
+              },
+              '& .MuiTabs-indicator': {
+                height: 4,
+                backgroundColor: BRAND_COLOR,
+                borderRadius: '4px 4px 0 0',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              }
+            }}
+          >
+            {(tabValue === 0 ? [
+              { icon: <Coffee />, label: 'All Lots', value: allLots.length, color: BRAND_COLOR },
+              { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
+              { icon: <Assignment />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#2196F3' },
+              { icon: <LocalShipping />, label: 'Assigned', value: allLots.filter(l => l.status === 'ASSIGNED').length, color: '#9c27b0' },
+              { icon: <CheckCircle />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#4caf50' },
+            ] : [
+              { icon: <Coffee />, label: 'All Lots', value: allLots.length, color: BRAND_COLOR },
+            ]).map((kpi, index) => (
+              <Tab key={index} label={
+                <Box sx={{ textAlign: 'center' }}>
+                  <Box sx={{ color: kpi.color, mb: 0.5 }}>{kpi.icon}</Box>
+                  <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, fontSize: '0.7rem' }}>
+                    {kpi.label}
+                  </Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 700, color: kpi.color }}>
+                    {kpi.value}
+                  </Typography>
+                </Box>
+              } />
+            ))}
           </Tabs>
         </Box>
 

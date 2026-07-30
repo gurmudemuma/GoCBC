@@ -1136,22 +1136,119 @@ func (c *CoffeeContract) GetSWIFTMessageStatistics(ctx contractapi.TransactionCo
 		return nil, err
 	}
 
-	stats := map[string]interface{}{
-		"totalMessages": len(allMessages),
-		"byType":        make(map[string]int),
-		"byStatus":      make(map[string]int),
-	}
+	// Initialize counters
+	totalMessages := len(allMessages)
+	messagesToday := 0
+	pendingApproval := 0
+	settledToday := 0
+	totalValue := 0.0
+	sent := 0
+	received := 0
+	totalSettlementDays := 0.0
+	settledCount := 0
 
 	byType := make(map[string]int)
 	byStatus := make(map[string]int)
 
-	for _, msg := range allMessages {
-		byType[msg.MessageType]++
-		byStatus[msg.Status]++
+	// Get today's date (YYYY-MM-DD format)
+	now := time.Now()
+	today := now.Format("2006-01-02")
+
+	// Get user's organization BIC to determine sent vs received
+	userBIC := ""
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err == nil {
+		// Extract organization from client ID if possible
+		userBIC = clientID // Simplified - in production, extract BIC from cert attributes
 	}
 
-	stats["byType"] = byType
-	stats["byStatus"] = byStatus
+	// Process all messages
+	for _, msg := range allMessages {
+		// Count by type
+		byType[msg.MessageType]++
+		
+		// Count by status
+		byStatus[msg.Status]++
+
+		// Count messages created today
+		msgDate := msg.CreatedAt.Format("2006-01-02")
+		if msgDate == today {
+			messagesToday++
+		}
+
+		// Count pending approval
+		if msg.Status == "PENDING_APPROVAL" {
+			pendingApproval++
+		}
+
+		// Count settled today
+		if msg.Status == "SETTLED" {
+			// Check if ProcessedDate is today (closest we have to settled date)
+			if msg.ProcessedDate != "" {
+				settledTime, parseErr := time.Parse("2006-01-02T15:04:05Z07:00", msg.ProcessedDate)
+				if parseErr == nil && settledTime.Format("2006-01-02") == today {
+					settledToday++
+				}
+			}
+		}
+
+		// Sum total value (for payment messages)
+		if msg.Amount > 0 {
+			totalValue += msg.Amount
+		}
+		if msg.LCAmount > 0 {
+			totalValue += msg.LCAmount
+		}
+
+		// Count sent vs received based on sender BIC
+		if userBIC != "" {
+			if strings.Contains(msg.SenderBIC, userBIC) || msg.SentBy == clientID {
+				sent++
+			} else if strings.Contains(msg.ReceiverBIC, userBIC) || msg.ReceivedBy == clientID {
+				received++
+			}
+		} else {
+			// If can't determine user, count based on SentBy field
+			if msg.SentBy != "" {
+				sent++
+			}
+			if msg.ReceivedBy != "" {
+				received++
+			}
+		}
+
+		// Calculate average settlement time (days between sent and processed/settled)
+		if msg.Status == "SETTLED" && !msg.SentDate.IsZero() && msg.ProcessedDate != "" {
+			processedTime, parseErr := time.Parse("2006-01-02T15:04:05Z07:00", msg.ProcessedDate)
+			if parseErr == nil {
+				days := processedTime.Sub(msg.SentDate).Hours() / 24
+				if days >= 0 {
+					totalSettlementDays += days
+					settledCount++
+				}
+			}
+		}
+	}
+
+	// Calculate average settlement time
+	avgSettlementTime := 0.0
+	if settledCount > 0 {
+		avgSettlementTime = totalSettlementDays / float64(settledCount)
+	}
+
+	// Build statistics response
+	stats := map[string]interface{}{
+		"totalMessages":      totalMessages,
+		"messagesToday":      messagesToday,
+		"pendingApproval":    pendingApproval,
+		"settledToday":       settledToday,
+		"totalValue":         totalValue,
+		"sent":               sent,
+		"received":           received,
+		"avgSettlementTime":  avgSettlementTime,
+		"byType":             byType,
+		"byStatus":           byStatus,
+	}
 
 	return stats, nil
 }
@@ -1311,4 +1408,66 @@ func (c *CoffeeContract) UpdateSWIFTMessageField(ctx contractapi.TransactionCont
 	}
 
 	return ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON)
+}
+
+// LinkSWIFTMessageToLC - Link a SWIFT message to an LC
+func (c *CoffeeContract) LinkSWIFTMessageToLC(ctx contractapi.TransactionContextInterface,
+	messageID, lcID string) error {
+
+	// Validate inputs
+	if messageID == "" {
+		return fmt.Errorf("message ID is required")
+	}
+	if lcID == "" {
+		return fmt.Errorf("LC ID is required")
+	}
+
+	// Get SWIFT message
+	msgJSON, err := ctx.GetStub().GetState("SWIFT_" + messageID)
+	if err != nil {
+		return fmt.Errorf("failed to read message: %w", err)
+	}
+	if msgJSON == nil {
+		return fmt.Errorf("message %s not found", messageID)
+	}
+
+	var msg SWIFTMessageEnhanced
+	if err := json.Unmarshal(msgJSON, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	// Verify LC exists (optional validation)
+	lcJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("LC %s not found", lcID)
+	}
+
+	// Link the LC to the message
+	msg.LinkedLCID = lcID
+
+	// Update timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %w", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+	msg.UpdatedAt = txTime
+
+	// Recompute hash
+	msg.MessageHash = ComputeMessageHash(&msg)
+
+	// Save updated message
+	msgJSON, err = json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	if err := ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON); err != nil {
+		return fmt.Errorf("failed to save message: %w", err)
+	}
+
+	return nil
 }

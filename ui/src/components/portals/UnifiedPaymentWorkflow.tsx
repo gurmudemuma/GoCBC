@@ -20,7 +20,6 @@ import {
   Alert,
   Chip,
   LinearProgress,
-  IconButton,
   Tooltip,
   Table,
   TableBody,
@@ -62,7 +61,15 @@ const PAYMENT_METHODS = [
     icon: <Description />,
     description: 'Bank-guaranteed payment (UCP 600)',
     riskLevel: 'LOW',
-    steps: ['Request LC', 'Approve LC', 'Issue LC', 'Ship Goods', 'Examine Documents', 'Release Payment'],
+    steps: [
+      'LC Requested',           // Step 0 - Exporter submits LC request
+      'Approve Request',        // Step 1 - BANK ACTION: Review and approve
+      'Issue LC',               // Step 2 - BANK ACTION: Issue LC (MT700)
+      'Awaiting Shipment',      // Step 3 - Exporter ships goods
+      'Verify Documents',       // Step 4 - BANK ACTION: Examine shipping docs
+      'Release Payment'         // Step 5 - BANK ACTION: SWIFT MT103 payment
+    ],
+    bankActions: [1, 2, 4, 5], // Steps where bank takes action (forex allocation is separate)
     color: CBE_COLORS.purple,
     recommended: true,
   },
@@ -72,7 +79,8 @@ const PAYMENT_METHODS = [
     icon: <LocalShipping />,
     description: 'Cash Against Documents (D/P or D/A)',
     riskLevel: 'MEDIUM',
-    steps: ['Ship Goods', 'Submit to Bank', 'Forward Documents', 'Notify Buyer', 'Receive Payment', 'Release Documents'],
+    steps: ['Goods Shipped', 'Receive Documents', 'Forward to Buyer', 'Buyer Notified', 'Payment Received', 'Release Documents'],
+    bankActions: [1, 2, 5], // Bank receives, forwards, releases
     color: CBE_COLORS.golden,
   },
   {
@@ -81,7 +89,8 @@ const PAYMENT_METHODS = [
     icon: <AttachMoney />,
     description: 'Payment before shipment (TT Advance)',
     riskLevel: 'LOW',
-    steps: ['Issue Proforma', 'Receive Advance', 'Register Contract', 'Source Coffee', 'Quality Check', 'Ship Goods', 'Receive Balance'],
+    steps: ['Proforma Invoice', 'Receive Advance', 'Contract Registered', 'Coffee Sourced', 'Quality Check', 'Goods Shipped', 'Receive Balance'],
+    bankActions: [1, 6], // Bank processes advance and balance payments
     color: CBE_COLORS.black,
   },
   {
@@ -90,7 +99,8 @@ const PAYMENT_METHODS = [
     icon: <Assignment />,
     description: 'Restricted: Fruits, Flowers, Meat only',
     riskLevel: 'HIGH',
-    steps: ['Issue Permit', 'Ship Goods', 'Sell Goods', 'Receive Payment', 'Settle Account'],
+    steps: ['Issue Permit', 'Goods Shipped', 'Goods Sold', 'Payment Received', 'Account Settled'],
+    bankActions: [0, 3, 4], // Bank issues permit and processes payments
     color: CBE_COLORS.gray,
   },
 ];
@@ -103,9 +113,14 @@ interface UnifiedPaymentWorkflowProps {
   consignments: any[];
   pendingDocuments: any[];
   selectedPaymentMethod: string;
+  forexAllocations: any[]; // Add forex data to cross-reference
   onCreatePayment: (method: string, data: any) => void;
   onProcessStep: (paymentId: string, step: string) => void;
   onViewDetails: (payment: any) => void;
+  rowsPerPage?: number;
+  currentPage?: number;
+  onPageChange?: (page: number) => void;
+  onRowsPerPageChange?: (rowsPerPage: number) => void;
 }
 
 export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
@@ -116,30 +131,77 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
   consignments,
   pendingDocuments,
   selectedPaymentMethod,
+  forexAllocations,
   onCreatePayment,
   onProcessStep,
   onViewDetails,
+  rowsPerPage: propRowsPerPage,
+  currentPage: propCurrentPage,
+  onPageChange,
+  onRowsPerPageChange,
 }) => {
   const [showWorkflow, setShowWorkflow] = useState(false);
+  
+  // Local pagination state (fallback if props not provided)
+  const [localPage, setLocalPage] = useState(0);
+  const [localRowsPerPage, setLocalRowsPerPage] = useState(5);
+  
+  // Use props if provided, otherwise use local state
+  const currentPage = propCurrentPage !== undefined ? propCurrentPage : localPage;
+  const rowsPerPage = propRowsPerPage !== undefined ? propRowsPerPage : localRowsPerPage;
+  
+  const handlePageChange = (newPage: number) => {
+    if (onPageChange) {
+      onPageChange(newPage);
+    } else {
+      setLocalPage(newPage);
+    }
+  };
+  
+  const handleRowsPerPageChange = (newRowsPerPage: number) => {
+    if (onRowsPerPageChange) {
+      onRowsPerPageChange(newRowsPerPage);
+    } else {
+      setLocalRowsPerPage(newRowsPerPage);
+    }
+    handlePageChange(0);
+  };
 
   // Get method configuration
   const selectedMethodConfig = PAYMENT_METHODS.find(m => m.id === selectedPaymentMethod);
 
-  // Get payments for selected method
+  // Get payments for selected method - FILTER TO ONLY SHOW ITEMS AWAITING BANK ACTION
   const getPaymentsForMethod = () => {
+    let allPayments: any[] = [];
+    
     switch (selectedPaymentMethod) {
       case 'LC':
-        return letterOfCredits.map(lc => ({
-          ...lc,
-          id: lc.lcId,
-          amount: lc.amount,
-          currency: lc.currency,
-          exporter: lc.exporterId,
-          status: lc.status,
-          currentStep: getCurrentStep(lc.status, 'LC'),
-        }));
+        allPayments = letterOfCredits.map(lc => {
+          // Check if this LC has a pending forex request
+          const forexRequest = forexAllocations.find(f => f.lcId === lc.lcId);
+          let effectiveStatus = lc.status;
+          
+          // If LC is ISSUED but has a pending forex request, treat it as FOREX_REQUESTED
+          if (lc.status === 'ISSUED' && forexRequest && forexRequest.status === 'REQUESTED') {
+            effectiveStatus = 'FOREX_REQUESTED';
+          } else if (lc.status === 'ISSUED' && forexRequest && forexRequest.status === 'ALLOCATED') {
+            effectiveStatus = 'FOREX_ALLOCATED';
+          }
+          
+          return {
+            ...lc,
+            id: lc.lcId,
+            amount: lc.amount,
+            currency: lc.currency,
+            exporter: lc.exporterId,
+            status: effectiveStatus,
+            currentStep: getCurrentStep(effectiveStatus, 'LC'),
+            forexRequest, // Include forex data for reference
+          };
+        });
+        break;
       case 'CAD':
-        return documentaryCollections.map(cad => ({
+        allPayments = documentaryCollections.map(cad => ({
           ...cad,
           id: cad.collectionId,
           amount: cad.amount,
@@ -148,8 +210,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           status: cad.status,
           currentStep: getCurrentStep(cad.status, 'CAD'),
         }));
+        break;
       case 'ADVANCE':
-        return advancePayments.map(adv => ({
+        allPayments = advancePayments.map(adv => ({
           ...adv,
           id: adv.paymentId,
           amount: adv.amount,
@@ -158,8 +221,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           status: adv.status,
           currentStep: getCurrentStep(adv.status, 'ADVANCE'),
         }));
+        break;
       case 'CONSIGNMENT':
-        return consignments.map(con => ({
+        allPayments = consignments.map(con => ({
           ...con,
           id: con.consignmentId,
           amount: con.permitAmount,
@@ -168,20 +232,54 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           status: con.status,
           currentStep: getCurrentStep(con.status, 'CONSIGNMENT'),
         }));
+        break;
       default:
         return [];
     }
+    
+    // CRITICAL FILTER: Only show payments where bank needs to take action IN THIS TAB
+    // Forex allocation happens in Banking Operations tab, so hide those LCs here
+    const methodConfig = PAYMENT_METHODS.find(m => m.id === selectedPaymentMethod);
+    if (!methodConfig) return [];
+    
+    return allPayments.filter(payment => {
+      // For LC: Hide if status is ISSUED (waiting for forex/shipment - handled elsewhere)
+      if (selectedPaymentMethod === 'LC') {
+        if (payment.status === 'ISSUED') {
+          return false; // Don't show - LC is issued, forex allocation happens in Banking Operations → Forex Allocation tab
+        }
+        // Hide if waiting for shipment (exporter action, not bank)
+        if (payment.status === 'SHIPPED' && payment.currentStep === 3) {
+          return false; // Don't show - exporter must ship goods
+        }
+      }
+      
+      // Show if completed (for history/reference)
+      if (payment.status === 'PAID' || payment.status === 'SETTLED') {
+        return true;
+      }
+      
+      // Show only if current step OR next step requires bank action IN THIS TAB
+      const currentStepIsBank = methodConfig.bankActions?.includes(payment.currentStep);
+      const nextStepIsBank = methodConfig.bankActions?.includes(payment.currentStep + 1);
+      
+      // Show if we're at a bank step or about to reach one
+      return currentStepIsBank || nextStepIsBank;
+    });
   };
 
   // Map status to workflow step
   const getCurrentStep = (status: string, method: string): number => {
     const stepMappings: Record<string, Record<string, number>> = {
       LC: {
-        'REQUESTED': 0,
-        'APPROVED': 1,
-        'ISSUED': 2,
-        'DOCUMENTS_VERIFIED': 4,
-        'PAID': 5,
+        'REQUESTED': 0,           // LC Requested
+        'APPROVED': 1,            // Approve Request (ready for issuance)
+        'ISSUED': 2,              // Issue LC (MT700 sent)
+        'SHIPPED': 3,             // Awaiting Shipment (goods in transit)
+        'DOCUMENTS_SUBMITTED': 4, // Verify Documents (bank examines)
+        'DOCUMENTS_VERIFIED': 4,  // Verify Documents (bank approved docs)
+        'PAID': 5,                // Release Payment (MT103 sent)
+        'SETTLED': 5,             // Release Payment (complete)
       },
       CAD: {
         'PENDING': 0,
@@ -268,6 +366,21 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
         </Box>
       </Box>
 
+      {/* Info Alert for LC Payment Method */}
+      {selectedPaymentMethod === 'LC' && (
+        <Alert 
+          severity="info" 
+          sx={{ 
+            mb: 2,
+            bgcolor: 'rgba(155, 48, 183, 0.05)',
+            borderLeft: `4px solid ${CBE_COLORS.purple}`,
+          }}
+        >
+          <strong>Note:</strong> LCs with ISSUED status have moved to <strong>Banking Operations → Forex Allocation</strong> tab. 
+          Forex allocation is handled separately per NBE policy guidelines.
+        </Alert>
+      )}
+
       {/* Payments Table */}
       <Paper sx={{ border: `2px solid ${CBE_COLORS.black}` }}>
         <Box sx={{ 
@@ -350,7 +463,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                 </TableRow>
               </TableHead>
               <TableBody>
-                {payments.map((payment) => {
+                {payments
+                  .slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage)
+                  .map((payment) => {
                   const progress = (payment.currentStep / (selectedMethodConfig?.steps.length || 1)) * 100;
                   
                   return (
@@ -416,38 +531,62 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                         />
                       </TableCell>
                       <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          <Tooltip title="View Full Details">
-                            <IconButton
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<Visibility fontSize="small" />}
+                            onClick={() => onViewDetails(payment)}
+                            sx={{
+                              borderColor: CBE_COLORS.purple,
+                              color: CBE_COLORS.purple,
+                              fontWeight: 600,
+                              textTransform: 'none',
+                              '&:hover': {
+                                borderColor: CBE_COLORS.purpleDark,
+                                bgcolor: 'rgba(155, 48, 183, 0.05)',
+                              },
+                            }}
+                          >
+                            View Details
+                          </Button>
+                          {/* Only show action button if current step is a bank action */}
+                          {payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
+                           payment.status !== 'PAID' && 
+                           payment.status !== 'SETTLED' &&
+                           selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
+                            <Button
                               size="small"
-                              onClick={() => onViewDetails(payment)}
+                              variant="contained"
+                              startIcon={<CheckCircle fontSize="small" />}
+                              onClick={() => onProcessStep(payment.id, selectedMethodConfig?.steps[payment.currentStep + 1] || '')}
                               sx={{
-                                color: CBE_COLORS.purple,
+                                bgcolor: CBE_COLORS.golden,
+                                color: CBE_COLORS.black,
+                                fontWeight: 600,
+                                textTransform: 'none',
                                 '&:hover': {
-                                  bgcolor: 'rgba(155, 48, 183, 0.1)',
+                                  bgcolor: CBE_COLORS.goldenLight,
                                 },
                               }}
                             >
-                              <Visibility fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          {payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && payment.status !== 'PAID' && payment.status !== 'SETTLED' && (
-                            <Tooltip title={`Process: ${selectedMethodConfig?.steps[payment.currentStep + 1] || 'Next Step'}`}>
-                              <IconButton
-                                size="small"
-                                onClick={() => onProcessStep(payment.id, selectedMethodConfig?.steps[payment.currentStep + 1] || '')}
-                                sx={{
-                                  color: CBE_COLORS.golden,
-                                  border: `1px solid ${CBE_COLORS.golden}`,
-                                  '&:hover': {
-                                    bgcolor: CBE_COLORS.golden,
-                                    color: CBE_COLORS.black,
-                                  },
-                                }}
-                              >
-                                <CheckCircle fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
+                              {selectedMethodConfig?.steps[payment.currentStep + 1] || 'Next Action'}
+                            </Button>
+                          )}
+                          {/* Show info if next step is not a bank action */}
+                          {payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
+                           payment.status !== 'PAID' && 
+                           payment.status !== 'SETTLED' &&
+                           !selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
+                            <Chip 
+                              label={`⏳ Awaiting: ${selectedMethodConfig?.steps[payment.currentStep + 1]}`}
+                              size="small" 
+                              sx={{ 
+                                bgcolor: '#f5f5f5',
+                                color: CBE_COLORS.gray,
+                                fontWeight: 600,
+                              }} 
+                            />
                           )}
                           {(payment.status === 'PAID' || payment.status === 'SETTLED') && (
                             <Chip 
@@ -469,6 +608,51 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
               </TableBody>
             </Table>
           </TableContainer>
+        )}
+        
+        {/* Pagination Controls */}
+        {payments.length > 0 && (
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" color="black">Rows per page:</Typography>
+              <TextField
+                select
+                size="small"
+                value={rowsPerPage}
+                onChange={(e) => handleRowsPerPageChange(parseInt(e.target.value))}
+                sx={{ width: 80 }}
+              >
+                <MenuItem value={5}>5</MenuItem>
+                <MenuItem value={10}>10</MenuItem>
+                <MenuItem value={25}>25</MenuItem>
+                <MenuItem value={50}>50</MenuItem>
+                <MenuItem value={100}>100</MenuItem>
+              </TextField>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Typography variant="body2" color="black">
+                Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, payments.length)} of {payments.length}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={currentPage === 0}
+                  onClick={() => handlePageChange(currentPage - 1)}
+                >
+                  Previous
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={currentPage >= Math.ceil(payments.length / rowsPerPage) - 1}
+                  onClick={() => handlePageChange(currentPage + 1)}
+                >
+                  Next
+                </Button>
+              </Box>
+            </Box>
+          </Box>
         )}
       </Paper>
 

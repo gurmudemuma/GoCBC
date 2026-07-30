@@ -3,7 +3,12 @@ import React from 'react';
 import { ConfigProvider } from 'antd';
 import SWIFTMessagesView from './SWIFTMessagesView';
 
-const SWIFTMessagesViewWrapper: React.FC = () => {
+interface SWIFTMessagesViewWrapperProps {
+  lcStatuses?: any[];
+  exporterId?: string;
+}
+
+const SWIFTMessagesViewWrapper: React.FC<SWIFTMessagesViewWrapperProps> = ({ lcStatuses, exporterId }) => {
   return (
     <ConfigProvider
       theme={{
@@ -19,7 +24,10 @@ const SWIFTMessagesViewWrapper: React.FC = () => {
         minHeight: '100vh',
         padding: 0
       }}>
-        <SWIFTMessagesView />
+        <SWIFTMessagesView 
+          initialLcStatuses={lcStatuses}
+          exporterId={exporterId}
+        />
       </div>
     </ConfigProvider>
   );

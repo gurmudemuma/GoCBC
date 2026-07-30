@@ -15,6 +15,7 @@ import {
   DialogActions,
   TextField,
   MenuItem,
+  InputAdornment,
   Chip,
   IconButton,
   Tooltip,
@@ -63,6 +64,8 @@ import AuditTrailViewer from './AuditTrailViewer';
 import DocumentVerificationPanel from './DocumentVerificationPanel';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
+import ForexAllocationDialog from './ForexAllocationDialog';
+import SwiftComposeDialog from './SwiftComposeDialog';
 
 // Modern Components
 import {
@@ -77,7 +80,6 @@ import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
 import { PaymentMethodTab } from './PaymentMethodTab';
-import SWIFTDashboardWrapper from '@/components/bank/SWIFTDashboardWrapper';
 
 interface SalesContract {
   contractId: string;
@@ -160,6 +162,7 @@ const BanksPortal: React.FC = () => {
   const [consignments, setConsignments] = useState<any[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<any[]>([]);
   const [swiftStats, setSwiftStats] = useState<any>(null);
+  const [swiftMessages, setSwiftMessages] = useState<any[]>([]);
   const [selectedPayment, setSelectedPayment] = useState<any | null>(null);
   const [verificationDialogOpen, setVerificationDialogOpen] = useState(false);
   const [documentUploadDialogOpen, setDocumentUploadDialogOpen] = useState(false);
@@ -177,6 +180,55 @@ const BanksPortal: React.FC = () => {
   // Bulk selection state
   const [selectedLCIds, setSelectedLCIds] = useState<string[]>([]);
   const [bulkApproving, setBulkApproving] = useState(false);
+  
+  // Phase 1: Document Examination & Payment Release state
+  const [documentExaminationOpen, setDocumentExaminationOpen] = useState(false);
+  const [paymentReleaseOpen, setPaymentReleaseOpen] = useState(false);
+  const [lcAmendmentOpen, setLcAmendmentOpen] = useState(false);
+  const [forexDetailsOpen, setForexDetailsOpen] = useState(false);
+  const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
+  const [allocationDialogOpen, setAllocationDialogOpen] = useState(false);
+  const [allocationForm, setAllocationForm] = useState({
+    forexId: '',
+    lcId: '',
+    amount: 0,
+    exchangeRate: 115.5,
+    retentionRate: 50,
+    officer: '',
+    approvalRef: '',
+    expiryDate: '',
+  });
+
+  // SWIFT compose dialog state
+  const [swiftComposeOpen, setSwiftComposeOpen] = useState(false);
+  const [swiftForm, setSwiftForm] = useState<any>({
+    messageID: '',
+    messageType: 'MT103',
+    swiftReference: '',
+    senderBIC: 'CBETETAA',
+    receiverBIC: '',
+    amount: '',
+    currency: 'USD',
+    valueDate: '',
+    beneficiary: '',
+    remittanceInfo: '',
+    linkedLcId: '',
+    linkedPaymentId: '',
+    applicant: '',
+    lcExpiryDate: '',
+  });
+  const [documentExaminationFilter, setDocumentExaminationFilter] = useState<'PENDING_EXAMINATION' | 'VERIFIED'>('PENDING_EXAMINATION');
+  const [paymentReleaseFilter, setPaymentReleaseFilter] = useState<'READY_FOR_PAYMENT' | 'RELEASED_TODAY' | 'TOTAL_RELEASED'>('READY_FOR_PAYMENT');
+  const [lcsForExamination, setLcsForExamination] = useState<LetterOfCredit[]>([]);
+  const [lcsForPaymentRelease, setLcsForPaymentRelease] = useState<LetterOfCredit[]>([]);
+  
+  // KPI Data Dialog state
+  const [kpiDataDialogOpen, setKpiDataDialogOpen] = useState(false);
+  const [kpiDataDialogTitle, setKpiDataDialogTitle] = useState('');
+  const [kpiDataDialogData, setKpiDataDialogData] = useState<any[]>([]);
+  const [kpiDataDialogType, setKpiDataDialogType] = useState<'forex' | 'lc' | 'swift' | ''>('');
+  const [kpiDialogPage, setKpiDialogPage] = useState(0);
+  const [kpiDialogRowsPerPage, setKpiDialogRowsPerPage] = useState(5);
   
   // LC Amendment Form
   const [amendmentForm, setAmendmentForm] = useState({
@@ -251,7 +303,7 @@ const BanksPortal: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [rowsPerPage, setRowsPerPage] = useState(5);
   
   // Advanced filters
   const [dateFrom, setDateFrom] = useState('');
@@ -301,14 +353,14 @@ const BanksPortal: React.FC = () => {
     console.log('[BANKS] Starting to load banking data...');
 
     try {
-      // Load all NBE-approved contracts
-      console.log('[BANKS] Fetching contracts from API...');
+      // Load all NBE-approved contracts from /contracts endpoint
+      console.log('[BANKS] Fetching contracts from /contracts endpoint...');
       const contractsResponse = await apiFetch('/contracts', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       console.log('[BANKS] Contracts response status:', contractsResponse.status);
       const contractsResult = await contractsResponse.json();
-      console.log('[BANKS] Contracts result:', contractsResult);
+      console.log('[BANKS] Contracts result:', { success: contractsResult.success, count: contractsResult.data?.length });
       
       let nbeApprovedContracts: any[] = [];
       
@@ -319,11 +371,7 @@ const BanksPortal: React.FC = () => {
         );
         
         console.log(`[BANKS] Total contracts: ${contractsResult.data.length}`);
-        console.log(`[BANKS] Contract statuses:`, contractsResult.data.map((c: any) => ({ 
-          id: c.contractID || c.contractId, 
-          status: c.contractStatus 
-        })));
-        console.log(`[BANKS] ✅ Approved contracts available: ${nbeApprovedContracts.length}`);
+        console.log(`[BANKS] ✅ NBE-approved contracts: ${nbeApprovedContracts.length}`);
         
         setContracts(nbeApprovedContracts.map((c: any) => {
           const mappedContract = {
@@ -343,24 +391,20 @@ const BanksPortal: React.FC = () => {
             registrationDate: c.registrationDate,
             approvalDate: c.approvalDate,
           };
-          console.log(`Mapped contract ${mappedContract.contractId}:`, {
-            buyerBank: mappedContract.buyerBank || '❌ MISSING',
-            exporterBank: mappedContract.exporterBank || '❌ MISSING',
-            hasBankData: !!(mappedContract.buyerBank && mappedContract.exporterBank),
-            rawData: { buyerBank: c.buyerBank, BuyerBank: c.BuyerBank, exporterBank: c.exporterBank, ExporterBank: c.ExporterBank }
-          });
           return mappedContract;
         }));
       }
 
-      // Load Letters of Credit
+      // Load Letters of Credit from /banking/lc endpoint
       try {
         const lcResponse = await apiFetch('/banking/lc', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const lcResult = await lcResponse.json();
+        console.log('[BANKS] LC Response:', { status: lcResponse.status, success: lcResult.success, count: lcResult.data?.length });
+        
         if (lcResult.success) {
-          setLetterOfCredits(lcResult.data.map((lc: any) => ({
+          const allLCs = lcResult.data.map((lc: any) => ({
             lcId: lc.lcId || lc.LCID,
             contractId: lc.contractId || lc.ContractID,
             exporterId: lc.exporterId || lc.ExporterID,
@@ -372,13 +416,30 @@ const BanksPortal: React.FC = () => {
             status: lc.status || lc.Status,
             expiryDate: lc.expiryDate || lc.ExpiryDate,
             requestDate: lc.requestDate || lc.RequestDate,
-          })));
+          }));
+          
+          setLetterOfCredits(allLCs);
+          console.log(`[BANKS] ✅ Letters of Credit loaded: ${allLCs.length}`);
+          
+          // Filter LCs for Document Examination (status: DOCUMENTS_SUBMITTED)
+          const forExamination = allLCs.filter((lc: any) => 
+            lc.status === 'DOCUMENTS_SUBMITTED' || lc.status === 'UNDER_EXAMINATION'
+          );
+          setLcsForExamination(forExamination);
+          console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length}`);
+          
+          // Filter LCs for Payment Release (status: DOCUMENTS_VERIFIED)
+          const forPaymentRelease = allLCs.filter((lc: any) => 
+            lc.status === 'DOCUMENTS_VERIFIED' || lc.status === 'DOCUMENTS_ACCEPTED'
+          );
+          setLcsForPaymentRelease(forPaymentRelease);
+          console.log(`[BANKS] 💰 LCs ready for payment release: ${forPaymentRelease.length}`);
         }
       } catch (err) {
-        console.warn('Could not load LCs:', err);
+        console.error('[BANKS] ❌ Failed to load Letters of Credit:', err);
       }
 
-      // Load Forex Allocations  
+      // Load Forex Allocations from /forex endpoint
       try {
         const forexResponse = await apiFetch('/forex', {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -390,20 +451,21 @@ const BanksPortal: React.FC = () => {
             contractId: f.contractId || f.ContractID,
             exporterId: f.exporterId || f.ExporterID,
             lcId: f.lcId || f.LCID,
-            requestedAmount: f.requestedAmount || f.RequestedAmount,
-            allocatedAmount: f.allocatedAmount || f.AllocatedAmount,
+            requestedAmount: Number(f.requestedAmount ?? f.RequestedAmount) || 0,
+            allocatedAmount: Number(f.allocatedAmount ?? f.AllocatedAmount) || 0,
             currency: f.currency || f.Currency,
-            exchangeRate: f.exchangeRate || f.ExchangeRate,
-            retentionRate: f.retentionRate || f.RetentionRate,
+            exchangeRate: Number(f.exchangeRate ?? f.ExchangeRate) || 0,
+            retentionRate: Number(f.retentionRate ?? f.RetentionRate) || 0,
             status: f.status || f.Status,
             expiryDate: f.expiryDate || f.ExpiryDate,
           })));
+          console.log(`[BANKS] ✅ Forex allocations loaded: ${forexResult.data.length}`);
         }
       } catch (err) {
-        console.warn('Could not load forex allocations:', err);
+        console.warn('[BANKS] Could not load forex allocations:', err);
       }
 
-      // Load Export Permits
+      // Load Export Permits from /permits endpoint
       try {
         const permitsResponse = await apiFetch('/permits', {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -411,35 +473,32 @@ const BanksPortal: React.FC = () => {
         const permitsResult = await permitsResponse.json();
         if (permitsResult.success) {
           setExportPermits(Array.isArray(permitsResult.data) ? permitsResult.data : []);
+          console.log(`[BANKS] ✅ Export permits loaded: ${permitsResult.data?.length || 0}`);
         }
       } catch (err) {
-        console.warn('Could not load export permits:', err);
+        console.warn('[BANKS] Could not load export permits:', err);
       }
 
-      // Load Documentary Collections
+      // Load Documentary Collections (CAD) - Endpoint may not exist yet
       try {
-        const collectionsResponse = await apiFetch('/banking/cad/exporter/' + encodeURIComponent('ALL'), {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const collectionsResult = await collectionsResponse.json();
-        if (collectionsResult.success) {
-          setDocumentaryCollections(Array.isArray(collectionsResult.data) ? collectionsResult.data : []);
-        }
+        // TODO: Backend needs GET /api/v1/banking/cad endpoint
+        // For now, use empty array as CAD functionality is Phase 2
+        setDocumentaryCollections([]);
+        console.log('[BANKS] Documentary Collections: endpoint not yet implemented (Phase 2)');
       } catch (err) {
         console.warn('Could not load documentary collections:', err);
+        setDocumentaryCollections([]);
       }
 
-      // Load Advance Payments (via generic payment query)
+      // Load Advance Payments - Endpoint may not exist yet
       try {
-        const advanceResponse = await apiFetch('/banking/payment/by-method/ADVANCE', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const advanceResult = await advanceResponse.json();
-        if (advanceResult.success) {
-          setAdvancePayments(Array.isArray(advanceResult.data) ? advanceResult.data : []);
-        }
+        // TODO: Backend needs GET /api/v1/banking/payment/by-method/ADVANCE endpoint
+        // For now, use empty array as Advance Payment functionality is Phase 2
+        setAdvancePayments([]);
+        console.log('[BANKS] Advance Payments: endpoint not yet implemented (Phase 2)');
       } catch (err) {
         console.warn('Could not load advance payments:', err);
+        setAdvancePayments([]);
       }
 
       // Load Consignments
@@ -450,12 +509,14 @@ const BanksPortal: React.FC = () => {
         const consignmentsResult = await consignmentsResponse.json();
         if (consignmentsResult.success) {
           setConsignments(Array.isArray(consignmentsResult.data) ? consignmentsResult.data : []);
+          console.log(`[BANKS] Consignments loaded: ${consignmentsResult.data?.length || 0}`);
         }
       } catch (err) {
         console.warn('Could not load consignments:', err);
+        setConsignments([]);
       }
 
-      // Load Pending Documents for Verification
+      // Load Pending Documents for Verification from /banking/payment/by-method/LC endpoint
       try {
         const paymentsResponse = await apiFetch('/banking/payment/by-method/LC', {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -467,39 +528,52 @@ const BanksPortal: React.FC = () => {
             p.status === 'DOCUMENTS_SUBMITTED' || p.status === 'UNDER_VERIFICATION'
           );
           setPendingDocuments(pending);
+          console.log(`[BANKS] 📄 Pending documents for verification: ${pending.length}`);
         }
       } catch (err) {
-        console.warn('Could not load pending documents:', err);
+        console.warn('[BANKS] Could not load pending documents:', err);
       }
 
-      console.log(`Loaded ${nbeApprovedContracts?.length || 0} NBE-approved contracts for bank processing`);
-      
-      // Summary of bank data availability
-      if (nbeApprovedContracts && nbeApprovedContracts.length > 0) {
-        const contractsWithBanks = nbeApprovedContracts.filter((c: any) => 
-          (c.buyerBank || c.BuyerBank) && (c.exporterBank || c.ExporterBank)
-        ).length;
-        const contractsWithoutBanks = nbeApprovedContracts.length - contractsWithBanks;
-        
-        console.log('📊 Bank Data Summary:');
-        console.log(`  ✅ Contracts with bank data: ${contractsWithBanks}`);
-        console.log(`  ❌ Contracts without bank data: ${contractsWithoutBanks}`);
-        
-        if (contractsWithoutBanks > 0) {
-          console.warn('⚠️ Some contracts are missing bank data (created before bank fields were added)');
-          console.info('💡 TIP: Create a NEW contract to test auto-fill with complete bank data');
-        }
-      }
+      console.log(`\n[BANKS] ═══════════════════════════════════════════════════`);
+      console.log(`[BANKS] 📊 Data Loading Summary:`);
+      console.log(`[BANKS] ✅ NBE-Approved Contracts: ${nbeApprovedContracts?.length || 0}`);
+      console.log(`[BANKS] ✅ Letters of Credit: ${letterOfCredits.length}`);
+      console.log(`[BANKS] ✅ Forex Allocations: ${forexAllocations.length}`);
+      console.log(`[BANKS] ✅ Export Permits: ${exportPermits.length}`);
+      console.log(`[BANKS] ✅ Consignments: ${consignments.length}`);
+      console.log(`[BANKS] 📋 LCs for Document Examination: ${lcsForExamination.length}`);
+      console.log(`[BANKS] 💰 LCs for Payment Release: ${lcsForPaymentRelease.length}`);
+      console.log(`[BANKS] � Pending Document Verifications: ${pendingDocuments.length}`);
+      console.log(`[BANKS] ⏳ Documentary Collections (CAD): ${documentaryCollections.length} (Phase 2)`);
+      console.log(`[BANKS] ⏳ Advance Payments: ${advancePayments.length} (Phase 2)`);
+      console.log(`[BANKS] ═══════════════════════════════════════════════════\n`);
 
-      // Load SWIFT Statistics
+      // Load SWIFT Statistics from /swift/statistics endpoint
       try {
-        const swiftStatsResponse = await apiFetch('/swift/statistics');
+        const swiftStatsResponse = await apiFetch('/swift/statistics', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
         const swiftStatsResult = await swiftStatsResponse.json();
         if (swiftStatsResult.success) {
           setSwiftStats(swiftStatsResult.data);
+          console.log('[BANKS] ✅ SWIFT statistics loaded');
         }
       } catch (err) {
-        console.warn('Could not load SWIFT statistics:', err);
+        console.warn('[BANKS] Could not load SWIFT statistics:', err);
+      }
+
+      // Load SWIFT Messages from /swift/messages endpoint
+      try {
+        const swiftMessagesResponse = await apiFetch('/swift/messages', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const swiftMessagesResult = await swiftMessagesResponse.json();
+        if (swiftMessagesResult.success) {
+          setSwiftMessages(swiftMessagesResult.data || []);
+          console.log(`[BANKS] ✅ SWIFT messages loaded: ${swiftMessagesResult.data?.length || 0}`);
+        }
+      } catch (err) {
+        console.warn('[BANKS] Could not load SWIFT messages:', err);
       }
       
     } catch (error) {
@@ -1282,6 +1356,86 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  // Allocate Forex - Bank action
+  const handleAllocateForex = async (forex: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+
+    try {
+      const payload = {
+        forexId: forex.forexId,
+        lcId: forex.lcId || '',
+        amount: forex.allocatedAmount || forex.requestedAmount || 0,
+        exchangeRate: forex.exchangeRate || 115.5,
+        retentionRate: forex.retentionRate || 50,
+        officer: forex.officer || 'Bank Officer',
+        approvalRef: `BANK-${Date.now()}`,
+        expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+      };
+
+      const response = await apiFetch('/forex/allocate', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Forex Allocated', `Forex ${forex.forexId} allocated successfully`);
+        loadBankingData();
+      } else {
+        showError('Allocation Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message || 'Failed to allocate forex');
+    }
+  };
+
+  // Send SWIFT Message (dispatch)
+  const handleSendSwiftMessage = async (msg: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+
+    try {
+      const payload: any = {
+        messageID: msg.messageId || `MSG${Date.now()}`,
+        messageType: msg.messageType || 'MT103',
+        swiftReference: msg.swiftReference || `REF${Date.now()}`,
+        senderBIC: msg.senderBic || 'CBETETAA',
+        receiverBIC: msg.receiverBic || '',
+        amount: msg.amount || 0,
+        currency: msg.currency || 'USD',
+        linkedLcId: msg.linkedLcId || msg.lcId || '',
+        linkedPaymentId: msg.linkedPaymentId || '',
+      };
+
+      // Choose endpoint based on message type
+      const endpoint = (msg.messageType === 'MT700') ? '/swift/messages/mt700' : '/swift/messages';
+
+      const response = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('SWIFT Sent', `Message ${payload.messageID} dispatched`);
+        loadBankingData();
+      } else {
+        showError('SWIFT Failed', result.error?.message || 'Failed to create SWIFT message');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message || 'Failed to send SWIFT message');
+    }
+  };
+
   // Filter and Pagination Helper Functions
   const getFilteredContracts = () => {
     let filtered = contracts;
@@ -1345,13 +1499,41 @@ const BanksPortal: React.FC = () => {
       );
     }
     if (filterStatus !== 'ALL') {
-      filtered = filtered.filter(forex => forex.status === filterStatus);
+      if (filterStatus === 'APPROVED_OR_ALLOCATED') {
+        filtered = filtered.filter(forex => forex.status === 'APPROVED' || forex.status === 'ALLOCATED');
+      } else {
+        filtered = filtered.filter(forex => forex.status === filterStatus);
+      }
     }
     if (amountMin) {
       filtered = filtered.filter(forex => forex.allocatedAmount >= parseFloat(amountMin));
     }
     if (amountMax) {
       filtered = filtered.filter(forex => forex.allocatedAmount <= parseFloat(amountMax));
+    }
+    return filtered;
+  };
+
+  const getFilteredSwiftMessages = () => {
+    let filtered = swiftMessages;
+    if (searchTerm) {
+      filtered = filtered.filter((msg: any) =>
+        msg.messageId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        msg.swiftReference?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        msg.senderBic?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        msg.receiverBic?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        msg.linkedLcId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        msg.linkedPaymentId?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    if (filterStatus !== 'ALL') {
+      filtered = filtered.filter((msg: any) => msg.status === filterStatus);
+    }
+    if (amountMin) {
+      filtered = filtered.filter((msg: any) => (msg.amount || 0) >= parseFloat(amountMin));
+    }
+    if (amountMax) {
+      filtered = filtered.filter((msg: any) => (msg.amount || 0) <= parseFloat(amountMax));
     }
     return filtered;
   };
@@ -1369,6 +1551,42 @@ const BanksPortal: React.FC = () => {
       filtered = filtered.filter(payment => payment.status === filterStatus);
     }
     return filtered;
+  };
+
+  const getFilteredDocumentExaminationLCs = () => {
+    const baseList = documentExaminationFilter === 'VERIFIED'
+      ? letterOfCredits.filter(lc => lc.status === 'DOCUMENTS_VERIFIED')
+      : lcsForExamination;
+
+    if (!searchTerm) {
+      return baseList;
+    }
+
+    const lowerSearch = searchTerm.toLowerCase();
+    return baseList.filter(lc =>
+      lc.lcId?.toLowerCase().includes(lowerSearch) ||
+      lc.exporterId?.toLowerCase().includes(lowerSearch) ||
+      lc.currency?.toLowerCase().includes(lowerSearch) ||
+      lc.status?.toLowerCase().includes(lowerSearch)
+    );
+  };
+
+  const getFilteredPaymentReleaseLCs = () => {
+    const baseList = paymentReleaseFilter === 'RELEASED_TODAY' || paymentReleaseFilter === 'TOTAL_RELEASED'
+      ? letterOfCredits.filter(lc => lc.status === 'PAYMENT_RELEASED')
+      : lcsForPaymentRelease;
+
+    if (!searchTerm) {
+      return baseList;
+    }
+
+    const lowerSearch = searchTerm.toLowerCase();
+    return baseList.filter(lc =>
+      lc.lcId?.toLowerCase().includes(lowerSearch) ||
+      lc.exporterId?.toLowerCase().includes(lowerSearch) ||
+      lc.currency?.toLowerCase().includes(lowerSearch) ||
+      lc.status?.toLowerCase().includes(lowerSearch)
+    );
   };
 
   const getPaginatedData = (data: any[]) => {
@@ -1439,6 +1657,22 @@ const BanksPortal: React.FC = () => {
     return [headers, ...rows].map(row => row.join(',')).join('\n');
   };
 
+  const generateSwiftCSV = (data: any[]) => {
+    const headers = ['Message ID', 'Type', 'SWIFT Reference', 'Sender BIC', 'Receiver BIC', 'Amount', 'Currency', 'Status', 'Created/Updated Date'];
+    const rows = data.map(msg => [
+      msg.messageId,
+      msg.messageType,
+      msg.swiftReference,
+      msg.senderBic,
+      msg.receiverBic,
+      msg.amount || 0,
+      msg.currency || 'USD',
+      msg.status,
+      msg.sentDate || msg.createdAt || msg.updatedAt || 'N/A'
+    ]);
+    return [headers, ...rows].map(row => row.join(',')).join('\n');
+  };
+
   const downloadCSV = (csvContent: string, filename: string) => {
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -1451,367 +1685,411 @@ const BanksPortal: React.FC = () => {
       link.click();
       document.body.removeChild(link);
     }
-  };
+  }; // End downloadCSV
 
   return (
     <ThemeProvider theme={banksTheme}>
       <Box sx={{ p: 3 }}>
-      {/* Top KPI Dashboard - Tab-specific KPIs */}
-      {activeTab === 0 ? (
-        /* Payment Methods KPIs */
+        {/* Professional KPI Cards - Dynamic per Tab */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <Assignment sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  {selectedPaymentMethod === 'LC' ? 'Active LCs' :
-                   selectedPaymentMethod === 'CAD' ? 'Active Collections' :
-                   selectedPaymentMethod === 'ADVANCE' ? 'Active Advances' :
-                   selectedPaymentMethod === 'CONSIGNMENT' ? 'Active Consignments' :
-                   'Active LCs'}
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
-                  {selectedPaymentMethod === 'LC' ? letterOfCredits.length :
-                   selectedPaymentMethod === 'CAD' ? documentaryCollections.length :
-                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.length :
-                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.length :
-                   letterOfCredits.length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <Description sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Total Value
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  ${((selectedPaymentMethod === 'LC' ? letterOfCredits.reduce((s, lc) => s + lc.amount, 0) :
-                      selectedPaymentMethod === 'CAD' ? documentaryCollections.reduce((s: number, c: any) => s + (c.amount || 0), 0) :
-                      selectedPaymentMethod === 'ADVANCE' ? advancePayments.reduce((s: number, a: any) => s + (a.amount || 0), 0) :
-                      selectedPaymentMethod === 'CONSIGNMENT' ? consignments.reduce((s: number, c: any) => s + (c.permitAmount || 0), 0) :
-                      letterOfCredits.reduce((s, lc) => s + lc.amount, 0)) / 1000000).toFixed(1)}M
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Completed
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
-                  {selectedPaymentMethod === 'LC' ? letterOfCredits.filter(lc => lc.status === 'PAID' || lc.status === 'ISSUED').length :
-                   selectedPaymentMethod === 'CAD' ? documentaryCollections.filter((c: any) => c.status === 'COMPLETED').length :
-                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.filter((a: any) => a.status === 'COMPLETED').length :
-                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.filter((c: any) => c.status === 'SETTLED').length :
-                   letterOfCredits.filter(lc => lc.status === 'PAID' || lc.status === 'ISSUED').length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Pending Actions
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  {selectedPaymentMethod === 'LC' ? letterOfCredits.filter(lc => lc.status === 'REQUESTED').length :
-                   selectedPaymentMethod === 'CAD' ? documentaryCollections.filter((c: any) => c.status === 'PENDING').length :
-                   selectedPaymentMethod === 'ADVANCE' ? advancePayments.filter((a: any) => a.status === 'PENDING').length :
-                   selectedPaymentMethod === 'CONSIGNMENT' ? consignments.filter((c: any) => c.status === 'PENDING').length :
-                   letterOfCredits.filter(lc => lc.status === 'REQUESTED').length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      ) : activeTab === 1 ? (
-        /* Forex Allocations KPIs */
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <CurrencyExchange sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Total Forex Requests
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
-                  {forexAllocations.length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <AttachMoney sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Forex Allocated
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  ${(forexAllocations.reduce((s, f) => s + f.allocatedAmount, 0) / 1000000).toFixed(1)}M
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Approved
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
-                  {forexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Pending Approval
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  {forexAllocations.filter(f => f.status === 'PENDING').length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      ) : activeTab === 2 ? (
-        /* SWIFT Messages KPIs */
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fff9e6', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <MessageOutlined sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Total Messages
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#000' }}>
-                  {swiftStats?.totalMessages || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f3e5f5', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <SendOutlined sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Messages Today
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  {swiftStats?.messagestoday || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#fffbf0', border: '1px solid #FFD700' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <CheckCircle sx={{ fontSize: 40, color: '#FFD700', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Settled Today
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#FFD700' }}>
-                  {swiftStats?.settledToday || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: '#f8f0ff', border: '1px solid #9b30b7' }}>
-              <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                <AccessTime sx={{ fontSize: 40, color: '#9b30b7', mb: 1 }} />
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
-                  Pending Approval
-                </Typography>
-                <Typography variant="h3" sx={{ fontWeight: 700, color: '#9b30b7' }}>
-                  {swiftStats?.pendingApproval || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      ) : null}
-
-      {/* Main Tabs */}
-      <Paper sx={{ mb: 3, borderRadius: 0, boxShadow: 'none', borderBottom: '2px solid #e0e0e0' }}>
-        <Tabs 
-          value={activeTab} 
-          onChange={(e, v) => setActiveTab(v)}
-          sx={{
-            '& .MuiTab-root': {
-              fontSize: '0.95rem',
-              fontWeight: 600,
-              textTransform: 'none',
-              minHeight: 56,
-              px: 4,
-              color: '#666',
-              '&.Mui-selected': {
+          {(() => {
+            // Dynamic KPI cards based on active tab (like ShippingPortal)
+            const kpis = activeTab === 0 ? [
+              // Tab 0: Payment Methods - Show clickable payment method cards as KPIs
+              { 
+                icon: <Description />, 
+                label: 'Letter of Credit', 
+                value: letterOfCredits.length, 
                 color: '#9b30b7',
+                subtitle: 'Bank-guaranteed (UCP 600)',
+                method: 'LC',
+                clickable: true
               },
-            },
-            '& .MuiTabs-indicator': {
-              height: 3,
-              bgcolor: '#9b30b7',
-            },
-          }}
-        >
-          <Tab label="Payment Methods" icon={<Payment />} iconPosition="start" />
-          <Tab label="Forex Allocations" icon={<CurrencyExchange />} iconPosition="start" />
-          <Tab label="SWIFT Messages" icon={<AccountBalance />} iconPosition="start" />
-        </Tabs>
-      </Paper>
+              { 
+                icon: <DirectionsBoat />, 
+                label: 'Documentary Collection', 
+                value: documentaryCollections.length, 
+                color: '#2196F3',
+                subtitle: 'Cash Against Documents',
+                method: 'CAD',
+                clickable: true
+              },
+              { 
+                icon: <AttachMoney />, 
+                label: 'Advance Payment', 
+                value: advancePayments.length, 
+                color: '#ff9800',
+                subtitle: 'Payment before shipment',
+                method: 'ADVANCE',
+                clickable: true
+              },
+              { 
+                icon: <Assignment />, 
+                label: 'Consignment', 
+                value: consignments.length, 
+                color: '#4caf50',
+                subtitle: 'Fruits, Flowers, Meat',
+                method: 'CONSIGNMENT',
+                clickable: true
+              },
+            ] : activeTab === 1 ? [
+              // Tab 1: Forex Allocations KPIs - Show data in table
+              { 
+                icon: <CurrencyExchange />, 
+                label: 'Total Forex Requests', 
+                value: forexAllocations.length, 
+                color: '#FFD700',
+                subtitle: 'All Requests',
+                description: 'View every forex allocation request below.',
+                clickable: true,
+                selected: filterStatus === 'ALL',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('ALL');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <AttachMoney />, 
+                label: 'Forex Allocated', 
+                value: `$${(forexAllocations.reduce((s, f) => s + (Number(f.allocatedAmount) || 0), 0) / 1000000).toFixed(1)}M`, 
+                color: '#9b30b7',
+                subtitle: 'Total USD',
+                description: 'Sum of all allocated forex amounts in USD.',
+                clickable: true,
+                selected: filterStatus === 'ALLOCATED',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('ALLOCATED');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <CheckCircle />, 
+                label: 'Approved', 
+                value: forexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length, 
+                color: '#4caf50',
+                subtitle: 'Ready to Use',
+                description: 'Requests approved or already allocated.',
+                clickable: true,
+                selected: filterStatus === 'APPROVED_OR_ALLOCATED',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('APPROVED_OR_ALLOCATED');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <AccessTime />, 
+                label: 'Pending Approval', 
+                value: forexAllocations.filter(f => f.status === 'PENDING').length, 
+                color: '#ff9800',
+                subtitle: 'Awaiting Review',
+                description: 'Requests still waiting for NBE approval.',
+                clickable: true,
+                selected: filterStatus === 'PENDING',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('PENDING');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+            ] : activeTab === 2 ? [
+              // Tab 2: SWIFT Messages - Show multiple KPI cards like other tabs
+              { 
+                icon: <MessageOutlined />, 
+                label: 'Total Messages', 
+                value: swiftMessages.length, 
+                color: '#9b30b7',
+                subtitle: 'SWIFT Messages',
+                description: 'All SWIFT messages linked to LCs and payments.',
+                clickable: true,
+                selected: filterStatus === 'ALL',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('ALL');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <AccessTime />, 
+                label: 'Pending Approval', 
+                value: swiftMessages.filter((msg: any) => msg.status === 'PENDING_APPROVAL').length, 
+                color: '#ff9800',
+                subtitle: 'Awaiting Review',
+                description: 'Messages waiting for approval and dispatch.',
+                clickable: true,
+                selected: filterStatus === 'PENDING_APPROVAL',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('PENDING_APPROVAL');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <SendOutlined />, 
+                label: 'Sent', 
+                value: swiftMessages.filter((msg: any) => msg.status === 'SENT').length, 
+                color: '#2196F3',
+                subtitle: 'Outgoing',
+                description: 'Messages that have been dispatched to counterparties.',
+                clickable: true,
+                selected: filterStatus === 'SENT',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('SENT');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <AccountBalance />, 
+                label: 'Received', 
+                value: swiftMessages.filter((msg: any) => msg.status === 'RECEIVED').length, 
+                color: '#4caf50',
+                subtitle: 'Incoming',
+                description: 'Messages received from the counterparty bank.',
+                clickable: true,
+                selected: filterStatus === 'RECEIVED',
+                onClick: () => {
+                  setSearchTerm('');
+                  setFilterStatus('RECEIVED');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setCurrentPage(0);
+                }
+              },
+            ] : activeTab === 3 ? [
+              // Tab 3: Document Examination KPIs - Show data in table
+              { 
+                icon: <Description />, 
+                label: 'Pending Examination', 
+                value: lcsForExamination.length, 
+                color: '#ff9800',
+                subtitle: 'Documents Submitted',
+                description: 'Show LCs pending document review.',
+                clickable: true,
+                selected: documentExaminationFilter === 'PENDING_EXAMINATION',
+                onClick: () => {
+                  setSearchTerm('');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setDocumentExaminationFilter('PENDING_EXAMINATION');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <CheckCircle />, 
+                label: 'Examined Today', 
+                value: letterOfCredits.filter(lc => lc.status === 'DOCUMENTS_VERIFIED').length, 
+                color: '#4caf50',
+                subtitle: 'Completed',
+                description: 'Show LCs whose documents were verified.',
+                clickable: true,
+                selected: documentExaminationFilter === 'VERIFIED',
+                onClick: () => {
+                  setSearchTerm('');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setDocumentExaminationFilter('VERIFIED');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <AccessTime />, 
+                label: 'Avg Processing Time', 
+                value: '2.4d', 
+                color: '#2196F3',
+                subtitle: 'Document Review',
+                description: 'Average time required to complete document examination.',
+                clickable: false,
+              },
+              { 
+                icon: <Assignment />, 
+                label: 'Compliance Rate', 
+                value: '96%', 
+                color: '#9b30b7',
+                subtitle: 'UCP 600 Standard',
+                description: 'Percentage of documents compliant with UCP 600.',
+                clickable: false,
+              },
+            ] : [
+              // Tab 4: Payment Release KPIs - Show data in table
+              { 
+                icon: <AttachMoney />, 
+                label: 'Ready for Payment', 
+                value: lcsForPaymentRelease.length, 
+                color: '#ff9800',
+                subtitle: 'Documents Verified',
+                description: 'Show LCs ready for payment release.',
+                clickable: true,
+                selected: paymentReleaseFilter === 'READY_FOR_PAYMENT',
+                onClick: () => {
+                  setSearchTerm('');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setPaymentReleaseFilter('READY_FOR_PAYMENT');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <CheckCircle />, 
+                label: 'Released Today', 
+                value: letterOfCredits.filter(lc => lc.status === 'PAYMENT_RELEASED').length, 
+                color: '#4caf50',
+                subtitle: 'Payments Sent',
+                description: 'Show LCs with payments already released.',
+                clickable: true,
+                selected: paymentReleaseFilter === 'RELEASED_TODAY',
+                onClick: () => {
+                  setSearchTerm('');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setPaymentReleaseFilter('RELEASED_TODAY');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <CurrencyExchange />, 
+                label: 'Total Released', 
+                value: `$${(letterOfCredits.filter(lc => lc.status === 'PAYMENT_RELEASED').reduce((s, lc) => s + lc.amount, 0) / 1000000).toFixed(1)}M`, 
+                color: '#2196F3',
+                subtitle: 'This Month',
+                description: 'Show payments released this month.',
+                clickable: true,
+                selected: paymentReleaseFilter === 'TOTAL_RELEASED',
+                onClick: () => {
+                  setSearchTerm('');
+                  setAmountMin('');
+                  setAmountMax('');
+                  setPaymentReleaseFilter('TOTAL_RELEASED');
+                  setCurrentPage(0);
+                }
+              },
+              { 
+                icon: <Assignment />, 
+                label: 'Avg Release Time', 
+                value: '1.2d', 
+                color: '#9b30b7',
+                subtitle: 'After Verification',
+                description: 'Average time between verification and payment release.',
+                clickable: false,
+              },
+            ];
 
-      {/* Tab 0: Payment Methods Selection */}
-      {activeTab === 0 && (
-        <Box>
-          {/* Payment Method Cards - Clean Grid */}
-          <Grid container spacing={3} sx={{ mb: 4 }}>
-            {/* Letter of Credit */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  height: 160,
-                  border: selectedPaymentMethod === 'LC' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
-                  bgcolor: selectedPaymentMethod === 'LC' ? '#f3e5f5' : 'white',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    transform: 'translateY(-2px)',
-                  },
-                }}
-                onClick={() => setSelectedPaymentMethod('LC')}
-              >
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  <Description sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
-                    Letter of Credit
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    Bank-guaranteed payment (UCP 600)
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
+            return kpis.map((kpi: any, index) => (
+              <Grid item xs={12} sm={6} md={3} key={index}>
+                <Card 
+                  sx={{ 
+                    cursor: kpi.clickable ? 'pointer' : 'default',
+                    height: 160,
+                    border: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `3px solid ${kpi.color}` : `1px solid #e0e0e0`,
+                    bgcolor: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `${kpi.color}10` : 'white',
+                    transition: 'all 0.2s ease',
+                    '&:hover': kpi.clickable ? {
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                      transform: 'translateY(-2px)',
+                    } : {},
+                  }}
+                  onClick={kpi.clickable ? (kpi.onClick || (() => kpi.method && setSelectedPaymentMethod(kpi.method))) : undefined}
+                >
+                  <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                    {React.cloneElement(kpi.icon, { 
+                      sx: { fontSize: 40, color: kpi.color, mb: 1 } 
+                    })}
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                      {kpi.label}
+                    </Typography>
+                    <Typography variant="h3" sx={{ fontWeight: 700, color: kpi.color }}>
+                      {kpi.value}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      {kpi.subtitle}
+                    </Typography>
+                    {kpi.description && (
+                      <Typography variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                        {kpi.description}
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            ));
+          })()}
+        </Grid>
 
-            {/* Documentary Collection */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  height: 160,
-                  border: selectedPaymentMethod === 'CAD' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
-                  bgcolor: selectedPaymentMethod === 'CAD' ? '#f3e5f5' : 'white',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    transform: 'translateY(-2px)',
-                  },
-                }}
-                onClick={() => setSelectedPaymentMethod('CAD')}
-              >
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  <DirectionsBoat sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
-                    Documentary Collection
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    Cash Against Documents
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
+        {/* Main Tabs - 5 Tabs Like ShippingPortal */}
+        <Paper sx={{ mb: 3, borderRadius: 0, boxShadow: 'none', borderBottom: '2px solid #e0e0e0' }}>
+          <Tabs 
+            value={activeTab} 
+            onChange={(e, v) => {
+              setActiveTab(v);
+              setCurrentPage(0); // Reset pagination when switching tabs
+            }}
+            sx={{
+              '& .MuiTab-root': {
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                textTransform: 'none',
+                minHeight: 56,
+                px: 4,
+                color: '#666',
+                '&.Mui-selected': {
+                  color: '#9b30b7',
+                },
+              },
+              '& .MuiTabs-indicator': {
+                height: 3,
+                bgcolor: '#9b30b7',
+              },
+            }}
+          >
+            <Tab label="💳 Payment Methods" icon={<Payment />} iconPosition="start" />
+            <Tab label="💱 Forex Allocations" icon={<CurrencyExchange />} iconPosition="start" />
+            <Tab label="📨 SWIFT Messages" icon={<AccountBalance />} iconPosition="start" />
+            <Tab 
+              label={`📋 Document Examination ${lcsForExamination.length > 0 ? `(${lcsForExamination.length})` : ''}`}
+              icon={<Description />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label={`💰 Payment Release ${lcsForPaymentRelease.length > 0 ? `(${lcsForPaymentRelease.length})` : ''}`}
+              icon={<AttachMoney />} 
+              iconPosition="start" 
+            />
+          </Tabs>
+        </Paper>
 
-            {/* Advance Payment */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  height: 160,
-                  border: selectedPaymentMethod === 'ADVANCE' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
-                  bgcolor: selectedPaymentMethod === 'ADVANCE' ? '#f3e5f5' : 'white',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    transform: 'translateY(-2px)',
-                  },
-                }}
-                onClick={() => setSelectedPaymentMethod('ADVANCE')}
-              >
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  <AttachMoney sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
-                    Advance Payment
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    Payment before shipment
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-
-            {/* Consignment */}
-            <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  height: 160,
-                  border: selectedPaymentMethod === 'CONSIGNMENT' ? '3px solid #9b30b7' : '1px solid #e0e0e0',
-                  bgcolor: selectedPaymentMethod === 'CONSIGNMENT' ? '#f3e5f5' : 'white',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    transform: 'translateY(-2px)',
-                  },
-                }}
-                onClick={() => setSelectedPaymentMethod('CONSIGNMENT')}
-              >
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  <Assignment sx={{ fontSize: 48, color: '#9b30b7', mb: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5, color: '#000' }}>
-                    Consignment
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    Fruits, Flowers, Meat only
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-
-          {/* Selected Payment Method Content */}
-          <UnifiedPaymentWorkflow
-            contracts={contracts}
-            letterOfCredits={letterOfCredits}
-            documentaryCollections={documentaryCollections}
-            advancePayments={advancePayments}
-            consignments={consignments}
-            pendingDocuments={pendingDocuments}
-            selectedPaymentMethod={selectedPaymentMethod}
+        {/* Tab 0: Payment Methods Selection */}
+        {activeTab === 0 && (
+          <Box>
+            {/* Selected Payment Method Content */}
+            <UnifiedPaymentWorkflow
+              contracts={contracts}
+              letterOfCredits={letterOfCredits}
+              forexAllocations={forexAllocations}
+              documentaryCollections={documentaryCollections}
+              advancePayments={advancePayments}
+              consignments={consignments}
+              pendingDocuments={pendingDocuments}
+              selectedPaymentMethod={selectedPaymentMethod}
+              rowsPerPage={rowsPerPage}
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              onRowsPerPageChange={setRowsPerPage}
             onCreatePayment={(method, data) => {
               console.log('Create payment:', method, data);
               setSelectedContract(contracts.length > 0 ? contracts[0] : null);
@@ -2007,596 +2285,15 @@ const BanksPortal: React.FC = () => {
         </Box>
       )}
 
-      {/* Tab 1: Forex Allocations */}
+      {/* Tab 1: Forex Allocations ONLY */}
       {activeTab === 1 && (
         <ModernCard>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Letter of Credit Management
+            Forex Allocation Management
           </Typography>
           <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>LC Status Workflow:</strong> REQUESTED → APPROVED → ISSUED → UTILIZED<br />
-            Each issued LC enables NBE forex allocation and export permit issuance.
-          </Alert>
-
-          {/* Search and Filter Controls */}
-          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-            <TextField
-              size="small"
-              placeholder="Search LCs..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(0);
-              }}
-              sx={{ minWidth: 300 }}
-              InputProps={{
-                startAdornment: <CommentIcon sx={{ mr: 1, color: 'black' }} />,
-              }}
-            />
-            <TextField
-              select
-              size="small"
-              label="Filter by Status"
-              value={filterStatus}
-              onChange={(e) => {
-                setFilterStatus(e.target.value);
-                setCurrentPage(0);
-              }}
-              sx={{ minWidth: 150 }}
-            >
-              <MenuItem value="ALL">All Status</MenuItem>
-              <MenuItem value="REQUESTED">Requested</MenuItem>
-              <MenuItem value="APPROVED">Approved</MenuItem>
-              <MenuItem value="ISSUED">Issued</MenuItem>
-              <MenuItem value="UTILIZED">Utilized</MenuItem>
-            </TextField>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-            >
-              {showAdvancedFilters ? 'Hide' : 'Show'} Advanced Filters
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                setSearchTerm('');
-                setFilterStatus('ALL');
-                setDateFrom('');
-                setDateTo('');
-                setAmountMin('');
-                setAmountMax('');
-                setCurrentPage(0);
-              }}
-            >
-              Clear All Filters
-            </Button>
-            {selectedLCIds.length > 0 && (
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<CheckCircle />}
-                onClick={handleBulkApproveLC}
-                disabled={bulkApproving}
-                sx={{
-                  bgcolor: '#FFD700',
-                  color: '#000',
-                  fontWeight: 600,
-                  '&:hover': { bgcolor: '#FFC700' },
-                  '&:disabled': { bgcolor: '#ccc', color: '#666' },
-                }}
-              >
-                {bulkApproving ? 'Approving...' : `Approve ${selectedLCIds.length} LC${selectedLCIds.length > 1 ? 's' : ''}`}
-              </Button>
-            )}
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<Description />}
-              onClick={() => {
-                const csv = generateLCCSV(getFilteredLCs());
-                downloadCSV(csv, 'Letters-of-Credit.csv');
-              }}
-              sx={{
-                borderColor: '#9b30b7',
-                color: '#9b30b7',
-                fontWeight: 600,
-                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-              }}
-            >
-              Export CSV
-            </Button>
-            <Box sx={{ flexGrow: 1 }} />
-            <Typography variant="body2" color="black">
-              Showing {getPaginatedData(getFilteredLCs()).length} of {getFilteredLCs().length} LCs
-            </Typography>
-          </Box>
-
-          {/* Advanced Filters Panel */}
-          {showAdvancedFilters && (
-            <Paper sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }}>
-              <Typography variant="subtitle2" gutterBottom>Advanced Filters</Typography>
-              <Grid container spacing={2} sx={{ mt: 1 }}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    type="date"
-                    label="Date From"
-                    value={dateFrom}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      setCurrentPage(0);
-                    }}
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    type="date"
-                    label="Date To"
-                    value={dateTo}
-                    onChange={(e) => {
-                      setDateTo(e.target.value);
-                      setCurrentPage(0);
-                    }}
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    label="Amount Min (USD)"
-                    value={amountMin}
-                    onChange={(e) => {
-                      setAmountMin(e.target.value);
-                      setCurrentPage(0);
-                    }}
-                    placeholder="e.g., 10000"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    label="Amount Max (USD)"
-                    value={amountMax}
-                    onChange={(e) => {
-                      setAmountMax(e.target.value);
-                      setCurrentPage(0);
-                    }}
-                    placeholder="e.g., 100000"
-                  />
-                </Grid>
-              </Grid>
-            </Paper>
-          )}
-
-          {letterOfCredits.length === 0 ? (
-            <Alert severity="info">
-              No Letters of Credit on record. Issue LCs from NBE-Approved Contracts tab.
-            </Alert>
-          ) : getFilteredLCs().length === 0 ? (
-            <Alert severity="warning">
-              No LCs match your search criteria.
-            </Alert>
-          ) : (
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        indeterminate={selectedLCIds.length > 0 && selectedLCIds.length < getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length}
-                        checked={getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length > 0 && selectedLCIds.length === getFilteredLCs().filter(lc => lc.status === 'REQUESTED').length}
-                        onChange={toggleAllLCSelection}
-                      />
-                    </TableCell>
-                    <TableCell><strong>LC ID</strong></TableCell>
-                    <TableCell><strong>Contract</strong></TableCell>
-                    <TableCell><strong>Exporter</strong></TableCell>
-                    <TableCell><strong>Issuing Bank</strong></TableCell>
-                    <TableCell><strong>Advising Bank</strong></TableCell>
-                    <TableCell><strong>Amount</strong></TableCell>
-                    <TableCell><strong>Status</strong></TableCell>
-                    <TableCell><strong>Expiry</strong></TableCell>
-                    <TableCell><strong>Actions</strong></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {getPaginatedData(getFilteredLCs()).map((lc) => (
-                    <TableRow key={lc.lcId} selected={selectedLCIds.includes(lc.lcId)}>
-                      <TableCell padding="checkbox">
-                        {lc.status === 'REQUESTED' && (
-                          <Checkbox
-                            checked={selectedLCIds.includes(lc.lcId)}
-                            onChange={() => toggleLCSelection(lc.lcId)}
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell>{lc.lcId}</TableCell>
-                      <TableCell>{lc.contractId}</TableCell>
-                      <TableCell>{lc.exporterId}</TableCell>
-                      <TableCell>{lc.issuingBank || 'N/A'}</TableCell>
-                      <TableCell>{lc.advisingBank || lc.issuingBank || 'N/A'}</TableCell>
-                      <TableCell>
-                        <strong>${lc.amount.toLocaleString()}</strong> {lc.currency}
-                      </TableCell>
-                      <TableCell>
-                        <StatusChip 
-                          label={lc.status} 
-                          status={lc.status === 'ISSUED' ? 'APPROVED' : lc.status === 'REQUESTED' ? 'PENDING' : 'ACTIVE'} 
-                        />
-                      </TableCell>
-                      <TableCell>{new Date(lc.expiryDate).toLocaleDateString()}</TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          {/* View Details - Always available */}
-                          <Tooltip title="View LC Details & Prerequisites">
-                            <IconButton 
-                              size="small" 
-                              onClick={() => {
-                                const contract = contracts.find(c => c.contractId === lc.contractId);
-                                setValidationData({
-                                  entityId: lc.lcId,
-                                  entityType: 'LETTER OF CREDIT',
-                                  title: `LC Details - ${lc.lcId}`,
-                                  summary: [
-                                    { label: 'LC ID', value: lc.lcId },
-                                    { label: 'Status', value: lc.status },
-                                    { label: 'Contract ID', value: lc.contractId },
-                                    { label: 'Exporter ID', value: lc.exporterId },
-                                    { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
-                                    { label: 'Issuing Bank', value: lc.issuingBank || 'N/A' },
-                                    { label: 'Advising Bank', value: lc.advisingBank || lc.issuingBank || 'N/A' },
-                                    { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
-                                    { label: 'Request Date', value: lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A' },
-                                    { label: 'Contract Value', value: contract ? `$${contract.totalValue.toLocaleString()}` : 'N/A' },
-                                    { label: 'Buyer Name', value: contract?.buyerName || 'N/A' },
-                                    { label: 'Buyer Country', value: contract?.buyerCountry || 'N/A' },
-                                  ],
-                                  prerequisites: [
-                                    {
-                                      label: 'Contract Registration',
-                                      status: contract ? 'PASSED' : 'FAILED',
-                                      details: contract ? `Contract ${contract.contractId} is registered in CECBS` : 'Contract not found in system'
-                                    },
-                                    {
-                                      label: 'NBE Approval Status',
-                                      status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-                                      details: contract ? `Contract status: ${contract.status}` : 'Contract not verified'
-                                    },
-                                    {
-                                      label: 'Amount Verification',
-                                      status: contract && lc.amount === contract.totalValue ? 'PASSED' : 'WARNING',
-                                      details: contract ? 
-                                        (lc.amount === contract.totalValue ? 
-                                          `LC amount matches contract value: $${lc.amount.toLocaleString()}` : 
-                                          `Amount mismatch - LC: $${lc.amount.toLocaleString()}, Contract: $${contract.totalValue.toLocaleString()}`) : 
-                                        'Cannot verify - contract data unavailable'
-                                    },
-                                    {
-                                      label: 'Exporter Verification',
-                                      status: 'PASSED',
-                                      details: `Exporter ${lc.exporterId} is registered and licensed by ECTA`
-                                    },
-                                    {
-                                      label: 'Banking Information',
-                                      status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
-                                      details: lc.issuingBank ? 'All required banking details are complete' : 'Some banking details may be incomplete'
-                                    },
-                                    {
-                                      label: 'LC Validity Period',
-                                      status: new Date(lc.expiryDate) > new Date() ? 'PASSED' : 'FAILED',
-                                      details: `Expires: ${new Date(lc.expiryDate).toLocaleDateString()} (${Math.ceil((new Date(lc.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} days remaining)`
-                                    },
-                                  ],
-                                  documents: [
-                                    { 
-                                      id: `DOC_${lc.lcId}_001`, 
-                                      name: 'LC Application Form', 
-                                      type: 'PDF', 
-                                      status: 'AVAILABLE', 
-                                      uploadedDate: new Date().toLocaleDateString(), 
-                                      size: '245 KB',
-                                      url: `/api/documents/${lc.lcId}/application`
-                                    },
-                                    { 
-                                      id: `DOC_${lc.lcId}_002`, 
-                                      name: 'Sales Contract Copy', 
-                                      type: 'PDF', 
-                                      status: 'AVAILABLE', 
-                                      uploadedDate: new Date().toLocaleDateString(), 
-                                      size: '189 KB',
-                                      url: `/api/documents/${lc.contractId}/contract`
-                                    },
-                                    { 
-                                      id: `DOC_${lc.lcId}_003`, 
-                                      name: 'Proforma Invoice', 
-                                      type: 'PDF', 
-                                      status: 'AVAILABLE', 
-                                      uploadedDate: new Date().toLocaleDateString(), 
-                                      size: '156 KB',
-                                      url: `/api/documents/${lc.contractId}/invoice`
-                                    },
-                                    { 
-                                      id: `DOC_${lc.lcId}_004`, 
-                                      name: 'Buyer Bank Details (SWIFT)', 
-                                      type: 'PDF', 
-                                      status: 'AVAILABLE', 
-                                      uploadedDate: new Date().toLocaleDateString(), 
-                                      size: '98 KB',
-                                      url: `/api/documents/${lc.lcId}/bank-details`
-                                    },
-                                    { 
-                                      id: `DOC_${lc.lcId}_005`, 
-                                      name: 'SWIFT Message MT700', 
-                                      type: 'SWIFT', 
-                                      status: lc.status === 'ISSUED' ? 'AVAILABLE' : 'MISSING', 
-                                      uploadedDate: lc.status === 'ISSUED' ? new Date().toLocaleDateString() : undefined, 
-                                      size: lc.status === 'ISSUED' ? '123 KB' : undefined,
-                                      url: lc.status === 'ISSUED' ? `/api/documents/${lc.lcId}/swift-mt700` : undefined
-                                    },
-                                  ],
-                                  complianceChecks: [
-                                    {
-                                      label: 'UCP 600 Compliance',
-                                      status: 'COMPLIANT',
-                                      details: 'LC terms and conditions comply with ICC Uniform Customs and Practice for Documentary Credits (UCP 600 revision)'
-                                    },
-                                    {
-                                      label: 'NBE Regulations',
-                                      status: 'COMPLIANT',
-                                      details: 'Complies with National Bank of Ethiopia forex allocation and export documentation requirements'
-                                    },
-                                    {
-                                      label: 'Trade Sanctions Check',
-                                      status: 'COMPLIANT',
-                                      details: contract?.buyerCountry ? `${contract.buyerCountry} is not subject to international trade sanctions` : 'Buyer country verified'
-                                    },
-                                    {
-                                      label: 'AML/CFT Screening',
-                                      status: 'COMPLIANT',
-                                      details: 'Anti-Money Laundering and Counter-Terrorism Financing checks passed for all parties'
-                                    },
-                                    {
-                                      label: 'Export License Validity',
-                                      status: 'COMPLIANT',
-                                      details: 'Exporter holds valid ECTA export license'
-                                    },
-                                  ],
-                                  additionalInfo: lc.status === 'REQUESTED' ? 
-                                    'This LC is pending approval. Review all details carefully before proceeding.' :
-                                    lc.status === 'ISSUED' ?
-                                    'This LC has been issued and is active. Exporter can proceed with shipment preparation.' :
-                                    'Review LC details and current status.'
-                                });
-                                setValidationDialogOpen(true);
-                              }}
-                            >
-                              <Visibility />
-                            </IconButton>
-                          </Tooltip>
-
-                          {/* Approve/Reject - Only for REQUESTED status */}
-                          {lc.status === 'REQUESTED' && (
-                            <>
-                              <Tooltip title="Review & Approve LC">
-                                <IconButton 
-                                  size="small" 
-                                  sx={{
-                                    color: '#FFD700',
-                                    '&:hover': { bgcolor: 'rgba(255, 215, 0, 0.1)' },
-                                  }}
-                                  onClick={() => {
-                                    const contract = contracts.find(c => c.contractId === lc.contractId);
-                                    setValidationData({
-                                      entityId: lc.lcId,
-                                      entityType: 'LETTER OF CREDIT',
-                                      title: `LC Approval - ${lc.lcId}`,
-                                      summary: [
-                                        { label: 'LC ID', value: lc.lcId },
-                                        { label: 'Contract', value: lc.contractId },
-                                        { label: 'Exporter', value: lc.exporterId },
-                                        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
-                                        { label: 'Issuing Bank', value: lc.issuingBank || 'N/A' },
-                                        { label: 'Advising Bank', value: lc.advisingBank || lc.issuingBank },
-                                        { label: 'Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
-                                        { label: 'Status', value: lc.status },
-                                      ],
-                                      prerequisites: [
-                                        {
-                                          label: 'Contract Registered',
-                                          status: contract ? 'PASSED' : 'FAILED',
-                                          details: contract ? `Contract ${contract.contractId} found and verified` : 'Contract not found in system'
-                                        },
-                                        {
-                                          label: 'NBE Approval',
-                                          status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-                                          details: contract?.status === 'NBE_APPROVED' ? 'Contract approved by NBE' : 'Awaiting NBE approval'
-                                        },
-                                        {
-                                          label: 'Amount Verification',
-                                          status: contract && lc.amount === contract.totalValue ? 'PASSED' : 'WARNING',
-                                          details: contract ? (lc.amount === contract.totalValue ? 'LC amount matches contract value' : `Mismatch: LC $${lc.amount.toLocaleString()} vs Contract $${contract.totalValue.toLocaleString()}`) : 'Cannot verify - contract not found'
-                                        },
-                                        {
-                                          label: 'Exporter Registration',
-                                          status: 'PASSED',
-                                          details: 'Exporter is registered and verified in CECBS'
-                                        },
-                                        {
-                                          label: 'Banking Details',
-                                          status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
-                                          details: 'All banking information complete'
-                                        },
-                                      ],
-                                      documents: [
-                                        { id: '1', name: 'LC Application Form', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '245 KB' },
-                                        { id: '2', name: 'Sales Contract Copy', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '189 KB' },
-                                        { id: '3', name: 'Proforma Invoice', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '156 KB' },
-                                        { id: '4', name: 'Buyer Bank Details', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '98 KB' },
-                                        { id: '5', name: 'SWIFT Message MT700', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '123 KB' },
-                                      ],
-                                      complianceChecks: [
-                                        {
-                                          label: 'UCP 600 Compliant',
-                                          status: 'COMPLIANT',
-                                          details: 'LC terms comply with ICC Uniform Customs and Practice for Documentary Credits'
-                                        },
-                                        {
-                                          label: 'NBE Regulations',
-                                          status: 'COMPLIANT',
-                                          details: 'Meets National Bank of Ethiopia forex and export regulations'
-                                        },
-                                        {
-                                          label: 'Trade Sanctions Check',
-                                          status: 'COMPLIANT',
-                                          details: 'Buyer country not subject to trade sanctions'
-                                        },
-                                        {
-                                          label: 'AML/CFT Screening',
-                                          status: 'COMPLIANT',
-                                          details: 'Anti-money laundering and counter-terrorism financing checks passed'
-                                        },
-                                      ],
-                                      additionalInfo: 'Once approved, the LC will be issued and the exporter can proceed with coffee sourcing and shipment preparation.'
-                                    });
-                                    setValidationDialogOpen(true);
-                                  }}
-                                >
-                                  <CheckCircle />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Reject LC Request">
-                                <IconButton 
-                                  size="small" 
-                                  sx={{
-                                    color: '#000',
-                                    '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.05)' },
-                                  }}
-                                  onClick={() => {
-                                    const contract = contracts.find(c => c.contractId === lc.contractId);
-                                    setValidationData({
-                                      entityId: lc.lcId,
-                                      entityType: 'LETTER OF CREDIT',
-                                      title: `LC Rejection - ${lc.lcId}`,
-                                      summary: [
-                                        { label: 'LC ID', value: lc.lcId },
-                                        { label: 'Contract', value: lc.contractId },
-                                        { label: 'Exporter', value: lc.exporterId },
-                                        { label: 'Amount', value: `$${lc.amount.toLocaleString()} ${lc.currency}` },
-                                      ],
-                                      prerequisites: [
-                                        {
-                                          label: 'Contract Status',
-                                          status: contract?.status === 'NBE_APPROVED' ? 'PASSED' : 'FAILED',
-                                          details: `Contract status: ${contract?.status || 'Not found'}`
-                                        },
-                                      ],
-                                      documents: [
-                                        { id: '1', name: 'LC Application', type: 'PDF', status: 'AVAILABLE', uploadedDate: new Date().toLocaleDateString(), size: '245 KB' },
-                                      ],
-                                      additionalInfo: 'Provide a clear reason for rejection. The exporter will be notified and can resubmit after addressing the issues.'
-                                    });
-                                    setValidationDialogOpen(true);
-                                  }}
-                                >
-                                  <Cancel />
-                                </IconButton>
-                              </Tooltip>
-                            </>
-                          )}
-
-                          {/* Amend - Only for ISSUED/APPROVED status */}
-                          {(lc.status === 'ISSUED' || lc.status === 'APPROVED') && (
-                            <Tooltip title="Amend LC">
-                              <IconButton 
-                                size="small" 
-                                sx={{
-                                  color: '#9b30b7',
-                                  '&:hover': { bgcolor: 'rgba(155, 48, 183, 0.1)' },
-                                }}
-                                onClick={() => {
-                                  setSelectedLC(lc);
-                                  setDialogType('lcAmend');
-                                  setDialogOpen(true);
-                                }}
-                              >
-                                <Edit />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-
-          {/* Pagination Controls */}
-          {getFilteredLCs().length > 0 && (
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" color="black">Rows per page:</Typography>
-                <TextField
-                  select
-                  size="small"
-                  value={rowsPerPage}
-                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
-                  sx={{ width: 80 }}
-                >
-                  <MenuItem value={10}>10</MenuItem>
-                  <MenuItem value={25}>25</MenuItem>
-                  <MenuItem value={50}>50</MenuItem>
-                  <MenuItem value={100}>100</MenuItem>
-                </TextField>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography variant="body2" color="black">
-                  Page {currentPage + 1} of {Math.ceil(getFilteredLCs().length / rowsPerPage)}
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={currentPage === 0}
-                    onClick={() => handleChangePage(currentPage - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={currentPage >= Math.ceil(getFilteredLCs().length / rowsPerPage) - 1}
-                    onClick={() => handleChangePage(currentPage + 1)}
-                  >
-                    Next
-                  </Button>
-                </Box>
-              </Box>
-            </Box>
-          )}
-        </ModernCard>
-      )}
-
-      {/* Tab 1: Forex Allocations */}
-      {activeTab === 1 && (
-        <ModernCard>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Foreign Exchange Allocations
-          </Typography>
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>NBE Forex Retention Policy:</strong> 40% retained in USD, 60% converted to ETB<br />
-            Forex allocated after LC confirmation, valid for 180 days
+            <strong>Forex Allocation Workflow:</strong> LC ISSUED → FOREX REQUESTED → APPROVED → ALLOCATED<br />
+            Each issued LC enables NBE forex allocation with 40% USD retention and 60% ETB conversion.
           </Alert>
 
           {/* Search and Filter Controls */}
@@ -2627,6 +2324,7 @@ const BanksPortal: React.FC = () => {
             >
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="ALLOCATED">Allocated</MenuItem>
+              <MenuItem value="APPROVED_OR_ALLOCATED">Approved</MenuItem>
               <MenuItem value="PENDING">Pending</MenuItem>
               <MenuItem value="UTILIZED">Utilized</MenuItem>
               <MenuItem value="EXPIRED">Expired</MenuItem>
@@ -2665,7 +2363,7 @@ const BanksPortal: React.FC = () => {
             </Typography>
           </Box>
 
-          {forexAllocations.length === 0 ? (
+                    {forexAllocations.length === 0 ? (
             <Alert severity="warning">
               No forex allocations yet. Allocations are triggered by NBE after LC issuance.
             </Alert>
@@ -2691,51 +2389,85 @@ const BanksPortal: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {getPaginatedData(getFilteredForex()).map((forex) => (
-                    <TableRow key={forex.forexId}>
-                      <TableCell>{forex.forexId}</TableCell>
-                      <TableCell>{forex.lcId}</TableCell>
-                      <TableCell>{forex.exporterId}</TableCell>
-                      <TableCell>
-                        <strong>${forex.allocatedAmount.toLocaleString()}</strong>
-                      </TableCell>
-                      <TableCell>{forex.exchangeRate} ETB/USD</TableCell>
-                      <TableCell>
-                        ${(forex.allocatedAmount * 0.4).toLocaleString()} USD
-                      </TableCell>
-                      <TableCell>
-                        {(forex.allocatedAmount * 0.6 * forex.exchangeRate).toLocaleString()} ETB
-                      </TableCell>
-                      <TableCell>
-                        <StatusChip 
-                          label={forex.status} 
-                          status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
-                        />
-                      </TableCell>
-                      <TableCell>{new Date(forex.expiryDate).toLocaleDateString()}</TableCell>
-                      <TableCell>
-                        <Tooltip title="View Details">
-                          <IconButton 
-                            size="small" 
-                            sx={{
-                              color: '#9b30b7',
-                              '&:hover': { bgcolor: 'rgba(155, 48, 183, 0.1)' },
-                            }}
-                            onClick={() => {
-                              const contract = contracts.find(c => c.contractId === forex.contractId);
-                              const lc = letterOfCredits.find(l => l.lcId === forex.lcId);
-                              showInfo(
-                                'Forex Allocation Details',
-                                `Forex ID: ${forex.forexId}\nLC: ${forex.lcId}\nExporter: ${forex.exporterId}\n\nAllocated: $${forex.allocatedAmount.toLocaleString()} USD\nRate: ${forex.exchangeRate} ETB/USD\n\n40% USD Retention: $${(forex.allocatedAmount * 0.4).toLocaleString()}\n60% ETB Conversion: ${(forex.allocatedAmount * 0.6 * forex.exchangeRate).toLocaleString()} ETB\n\nStatus: ${forex.status}\nExpiry: ${new Date(forex.expiryDate).toLocaleDateString()}`
-                              );
-                            }}
-                          >
-                            <Visibility />
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {getPaginatedData(getFilteredForex()).map((forex) => {
+                    const allocatedAmount = forex.allocatedAmount || 0;
+                    const exchangeRate = forex.exchangeRate || 0;
+                    const usdRetention = allocatedAmount * 0.4;
+                    const etbConversion = allocatedAmount * 0.6 * exchangeRate;
+                    
+                    return (
+                      <TableRow key={forex.forexId}>
+                        <TableCell>{forex.forexId}</TableCell>
+                        <TableCell>{forex.lcId || 'N/A'}</TableCell>
+                        <TableCell>{forex.exporterId || 'N/A'}</TableCell>
+                        <TableCell>
+                          <strong>${allocatedAmount.toLocaleString()}</strong>
+                        </TableCell>
+                        <TableCell>{exchangeRate} ETB/USD</TableCell>
+                        <TableCell>
+                          ${usdRetention.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </TableCell>
+                        <TableCell>
+                          {etbConversion.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip 
+                            label={forex.status || 'PENDING'} 
+                            status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {forex.expiryDate ? new Date(forex.expiryDate).toLocaleDateString() : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Visibility />}
+                              onClick={() => {
+                                setSelectedForex(forex);
+                                setForexDetailsOpen(true);
+                              }}
+                              sx={{
+                                borderColor: '#9b30b7',
+                                color: '#9b30b7',
+                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
+                              }}
+                            >
+                              View Details
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              startIcon={<CheckCircle />}
+                              onClick={() => {
+                                setSelectedForex(forex);
+                                setAllocationForm({
+                                  forexId: forex.forexId,
+                                  lcId: forex.lcId || '',
+                                  amount: forex.allocatedAmount || forex.requestedAmount || 0,
+                                  exchangeRate: forex.exchangeRate || 115.5,
+                                  retentionRate: forex.retentionRate || 50,
+                                  officer: forex.officer || '',
+                                  approvalRef: `BANK-${Date.now()}`,
+                                  expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+                                });
+                                setAllocationDialogOpen(true);
+                              }}
+                              sx={{
+                                bgcolor: '#9b30b7',
+                                '&:hover': { bgcolor: '#7a2592' },
+                              }}
+                              disabled={forex.status === 'ALLOCATED'}
+                            >
+                              Allocate
+                            </Button>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -2753,6 +2485,7 @@ const BanksPortal: React.FC = () => {
                   onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
                   sx={{ width: 80 }}
                 >
+                  <MenuItem value={5}>5</MenuItem>
                   <MenuItem value={10}>10</MenuItem>
                   <MenuItem value={25}>25</MenuItem>
                   <MenuItem value={50}>50</MenuItem>
@@ -2761,7 +2494,7 @@ const BanksPortal: React.FC = () => {
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Typography variant="body2" color="black">
-                  Page {currentPage + 1} of {Math.ceil(getFilteredForex().length / rowsPerPage)}
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, getFilteredForex().length)} of {getFilteredForex().length}
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
@@ -2794,13 +2527,13 @@ const BanksPortal: React.FC = () => {
               <Grid item xs={12} sm={4}>
                 <Typography variant="body2" color="black">Total Allocated</Typography>
                 <Typography variant="h6">
-                  ${forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0).toLocaleString()}
+                  ${forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0).toLocaleString()}
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
                 <Typography variant="body2" color="black">USD Retained (40%)</Typography>
                 <Typography variant="h6">
-                  ${(forexAllocations.reduce((sum, f) => sum + f.allocatedAmount, 0) * 0.4).toLocaleString()}
+                  ${(forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) * 0.4).toLocaleString()}
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
@@ -2814,27 +2547,15 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Dialogs and Modals */}      {/* Contract Detail Dialog */}
+      {/* Dialogs and Modals */}
+      {/* Contract Detail Dialog */}
       <Dialog open={!!selectedContract && dialogType === null} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
         <DialogTitle>Contract Details</DialogTitle>
         <DialogContent>
           {selectedContract && (
             <Box sx={{ pt: 2 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="black">Contract ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedContract.contractId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="black">NBE Reference</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedContract.nbeReferenceNumber}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="black">Exporter</Typography>
-                  <Typography variant="body1">{selectedContract.exporterId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="black">Buyer / Country</Typography>
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
                   <Typography variant="body1">{selectedContract.buyerName}</Typography>
                   <Typography variant="caption" color="black">{selectedContract.buyerCountry}</Typography>
                 </Grid>
@@ -2892,8 +2613,477 @@ const BanksPortal: React.FC = () => {
         </DialogActions>
       </Dialog>
 
+      {/* KPI Data Dialog - Shows data in table format */}
+      <Dialog open={kpiDataDialogOpen} onClose={() => setKpiDataDialogOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle>{kpiDataDialogTitle}</DialogTitle>
+        <DialogContent>
+          {kpiDataDialogType === 'forex' && kpiDataDialogData.length > 0 && (
+            <>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Forex ID</strong></TableCell>
+                      <TableCell><strong>LC Reference</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Allocated Amount</strong></TableCell>
+                      <TableCell><strong>Exchange Rate</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Expiry Date</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {kpiDataDialogData
+                      .slice(kpiDialogPage * kpiDialogRowsPerPage, (kpiDialogPage + 1) * kpiDialogRowsPerPage)
+                      .map((forex: ForexAllocation) => (
+                        <TableRow key={forex.forexId}>
+                          <TableCell>{forex.forexId}</TableCell>
+                          <TableCell>{forex.lcId || 'N/A'}</TableCell>
+                          <TableCell>{forex.exporterId || 'N/A'}</TableCell>
+                          <TableCell><strong>${(forex.allocatedAmount || 0).toLocaleString()}</strong></TableCell>
+                          <TableCell>{forex.exchangeRate || 0} ETB/USD</TableCell>
+                          <TableCell>
+                            <StatusChip 
+                              label={forex.status || 'PENDING'} 
+                              status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {forex.expiryDate ? new Date(forex.expiryDate).toLocaleDateString() : 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Pagination */}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="black">Rows per page:</Typography>
+                  <TextField
+                    select
+                    size="small"
+                    value={kpiDialogRowsPerPage}
+                    onChange={(e) => {
+                      setKpiDialogRowsPerPage(parseInt(e.target.value));
+                      setKpiDialogPage(0);
+                    }}
+                    sx={{ width: 80 }}
+                  >
+                    <MenuItem value={5}>5</MenuItem>
+                    <MenuItem value={10}>10</MenuItem>
+                    <MenuItem value={25}>25</MenuItem>
+                    <MenuItem value={50}>50</MenuItem>
+                  </TextField>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="black">
+                    Page {kpiDialogPage + 1} shows items {kpiDialogPage * kpiDialogRowsPerPage + 1}-{Math.min((kpiDialogPage + 1) * kpiDialogRowsPerPage, kpiDataDialogData.length)} of {kpiDataDialogData.length}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage === 0}
+                      onClick={() => setKpiDialogPage(kpiDialogPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage >= Math.ceil(kpiDataDialogData.length / kpiDialogRowsPerPage) - 1}
+                      onClick={() => setKpiDialogPage(kpiDialogPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </Box>
+                </Box>
+              </Box>
+            </>
+          )}
+          
+          {kpiDataDialogType === 'lc' && kpiDataDialogData.length > 0 && (
+            <>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>LC ID</strong></TableCell>
+                      <TableCell><strong>Contract ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Expiry Date</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {kpiDataDialogData
+                      .slice(kpiDialogPage * kpiDialogRowsPerPage, (kpiDialogPage + 1) * kpiDialogRowsPerPage)
+                      .map((lc: LetterOfCredit) => (
+                        <TableRow key={lc.lcId}>
+                          <TableCell>{lc.lcId}</TableCell>
+                          <TableCell>{lc.contractId}</TableCell>
+                          <TableCell>{lc.exporterId}</TableCell>
+                          <TableCell><strong>${lc.amount?.toLocaleString()} {lc.currency}</strong></TableCell>
+                          <TableCell>
+                            <StatusChip label={lc.status} status={lc.status === 'ISSUED' ? 'APPROVED' : 'PENDING'} />
+                          </TableCell>
+                          <TableCell>
+                            {lc.expiryDate ? new Date(lc.expiryDate).toLocaleDateString() : 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Pagination */}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="black">Rows per page:</Typography>
+                  <TextField
+                    select
+                    size="small"
+                    value={kpiDialogRowsPerPage}
+                    onChange={(e) => {
+                      setKpiDialogRowsPerPage(parseInt(e.target.value));
+                      setKpiDialogPage(0);
+                    }}
+                    sx={{ width: 80 }}
+                  >
+                    <MenuItem value={5}>5</MenuItem>
+                    <MenuItem value={10}>10</MenuItem>
+                    <MenuItem value={25}>25</MenuItem>
+                    <MenuItem value={50}>50</MenuItem>
+                  </TextField>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="black">
+                    Page {kpiDialogPage + 1} shows items {kpiDialogPage * kpiDialogRowsPerPage + 1}-{Math.min((kpiDialogPage + 1) * kpiDialogRowsPerPage, kpiDataDialogData.length)} of {kpiDataDialogData.length}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage === 0}
+                      onClick={() => setKpiDialogPage(kpiDialogPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage >= Math.ceil(kpiDataDialogData.length / kpiDialogRowsPerPage) - 1}
+                      onClick={() => setKpiDialogPage(kpiDialogPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </Box>
+                </Box>
+              </Box>
+            </>
+          )}
+          
+          {kpiDataDialogType === 'swift' && kpiDataDialogData.length > 0 && (
+            <>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                    <TableCell><strong>Message ID</strong></TableCell>
+                    <TableCell><strong>Type</strong></TableCell>
+                    <TableCell><strong>SWIFT Reference</strong></TableCell>
+                    <TableCell><strong>Sender BIC</strong></TableCell>
+                    <TableCell><strong>Receiver BIC</strong></TableCell>
+                    <TableCell><strong>Amount</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Date</strong></TableCell>
+                    <TableCell><strong>Actions</strong></TableCell>
+                  </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {kpiDataDialogData
+                      .slice(kpiDialogPage * kpiDialogRowsPerPage, (kpiDialogPage + 1) * kpiDialogRowsPerPage)
+                      .map((swift: any) => (
+                        <TableRow key={swift.messageId}>
+                          <TableCell>{swift.messageId}</TableCell>
+                          <TableCell><Chip label={swift.messageType} size="small" color="primary" /></TableCell>
+                          <TableCell>{swift.swiftReference || 'N/A'}</TableCell>
+                          <TableCell>{swift.senderBic || 'N/A'}</TableCell>
+                          <TableCell>{swift.receiverBic || 'N/A'}</TableCell>
+                          <TableCell><strong>${(swift.amount || 0).toLocaleString()} {swift.currency}</strong></TableCell>
+                          <TableCell>
+                            <StatusChip 
+                              label={swift.status || 'PENDING'} 
+                              status={swift.status === 'SENT' || swift.status === 'SETTLED' ? 'APPROVED' : 'PENDING'} 
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {swift.sentDate ? new Date(swift.sentDate).toLocaleDateString() : 
+                             swift.createdAt ? new Date(swift.createdAt).toLocaleDateString() : 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Pagination */}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="black">Rows per page:</Typography>
+                  <TextField
+                    select
+                    size="small"
+                    value={kpiDialogRowsPerPage}
+                    onChange={(e) => {
+                      setKpiDialogRowsPerPage(parseInt(e.target.value));
+                      setKpiDialogPage(0);
+                    }}
+                    sx={{ width: 80 }}
+                  >
+                    <MenuItem value={5}>5</MenuItem>
+                    <MenuItem value={10}>10</MenuItem>
+                    <MenuItem value={25}>25</MenuItem>
+                    <MenuItem value={50}>50</MenuItem>
+                  </TextField>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="black">
+                    Page {kpiDialogPage + 1} shows items {kpiDialogPage * kpiDialogRowsPerPage + 1}-{Math.min((kpiDialogPage + 1) * kpiDialogRowsPerPage, kpiDataDialogData.length)} of {kpiDataDialogData.length}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage === 0}
+                      onClick={() => setKpiDialogPage(kpiDialogPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={kpiDialogPage >= Math.ceil(kpiDataDialogData.length / kpiDialogRowsPerPage) - 1}
+                      onClick={() => setKpiDialogPage(kpiDialogPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </Box>
+                </Box>
+              </Box>
+            </>
+          )}
+
+          {kpiDataDialogData.length === 0 && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              No data available for this selection.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setKpiDataDialogOpen(false);
+            setKpiDialogPage(0);
+          }}>Close</Button>
+          <Button 
+            variant="contained" 
+            startIcon={<Description />}
+            sx={{
+              bgcolor: '#9b30b7',
+              '&:hover': { bgcolor: '#7a2592' },
+            }}
+            onClick={() => {
+              // Export to CSV logic can be added here
+              showSuccess('Export', 'Data export feature coming soon', '');
+            }}
+          >
+            Export CSV
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Forex Allocation Details Dialog */}
+      <Dialog open={forexDetailsOpen} onClose={() => setForexDetailsOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <CurrencyExchange sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Forex Allocation Details
+        </DialogTitle>
+        <DialogContent>
+          {selectedForex && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={3}>
+                {/* Forex ID & LC Reference */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Forex ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedForex.forexId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">LC Reference</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedForex.lcId || 'N/A'}</Typography>
+                </Grid>
+
+                {/* Exporter & Status */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Exporter ID</Typography>
+                  <Typography variant="body1">{selectedForex.exporterId || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Status</Typography>
+                  <StatusChip 
+                    label={selectedForex.status || 'PENDING'} 
+                    status={selectedForex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                  />
+                </Grid>
+
+                {/* Divider */}
+                <Grid item xs={12}>
+                  <Divider />
+                  <Typography variant="subtitle2" sx={{ mt: 2, mb: 1, color: '#9b30b7' }}>
+                    Allocation Breakdown
+                  </Typography>
+                </Grid>
+
+                {/* Allocated Amount */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Allocated Amount</Typography>
+                  <Typography variant="h6" color="primary" fontWeight={700}>
+                    ${(selectedForex.allocatedAmount || 0).toLocaleString()} USD
+                  </Typography>
+                </Grid>
+
+                {/* Exchange Rate */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Exchange Rate</Typography>
+                  <Typography variant="h6" fontWeight={600}>
+                    {selectedForex.exchangeRate || 0} ETB/USD
+                  </Typography>
+                </Grid>
+
+                {/* USD Retention (40%) */}
+                <Grid item xs={12} md={6}>
+                  <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
+                    <Typography variant="body2" color="text.secondary">40% USD Retention</Typography>
+                    <Typography variant="h5" fontWeight={700} color="#1976d2">
+                      ${((selectedForex.allocatedAmount || 0) * 0.4).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Retained in USD account
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                {/* ETB Conversion (60%) */}
+                <Grid item xs={12} md={6}>
+                  <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
+                    <Typography variant="body2" color="text.secondary">60% ETB Conversion</Typography>
+                    <Typography variant="h5" fontWeight={700} color="#2e7d32">
+                      {((selectedForex.allocatedAmount || 0) * 0.6 * (selectedForex.exchangeRate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Converted to Ethiopian Birr
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                {/* Expiry Date */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 1 }} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Expiry Date</Typography>
+                  <Typography variant="body1" fontWeight={600}>
+                    {selectedForex.expiryDate ? new Date(selectedForex.expiryDate).toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric'
+                    }) : 'N/A'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Currency</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedForex.currency || 'USD'}</Typography>
+                </Grid>
+
+                {/* Info Alert */}
+                {selectedForex.status === 'ALLOCATED' && (
+                  <Grid item xs={12}>
+                    <Alert severity="success" sx={{ mt: 2 }}>
+                      <Typography variant="body2">
+                        <strong>Forex Allocated:</strong> This allocation is active and available for the exporter. 
+                        The 40/60 retention policy applies as per NBE regulations.
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
+              </Grid>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setForexDetailsOpen(false)}>Close</Button>
+          {selectedForex && selectedForex.status === 'ALLOCATED' && (
+            <Button onClick={() => {
+              showSuccess('Forex Confirmed', `Forex allocation ${selectedForex.forexId} is active and valid`, '');
+              setForexDetailsOpen(false);
+            }}
+            variant="contained"
+            startIcon={<CheckCircle />}
+            sx={{
+              bgcolor: '#9b30b7',
+              '&:hover': { bgcolor: '#7a2592' },
+            }}
+            >
+              Confirm
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
       {/* LC Details Dialog */}
       <Dialog open={dialogOpen && dialogType === 'lcDetails'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+
+      <ForexAllocationDialog
+        open={allocationDialogOpen}
+        form={allocationForm}
+        onChange={(f) => setAllocationForm(f)}
+        onClose={() => setAllocationDialogOpen(false)}
+        onConfirm={async (f) => {
+          if (!f.forexId || !f.lcId) {
+            showError('Validation', 'Forex ID and LC Reference are required');
+            return;
+          }
+          await handleAllocateForex({
+            forexId: f.forexId,
+            lcId: f.lcId,
+            allocatedAmount: f.amount,
+            exchangeRate: f.exchangeRate,
+            retentionRate: f.retentionRate,
+            officer: f.officer,
+            approvalRef: f.approvalRef,
+            expiryDate: f.expiryDate,
+          });
+          setAllocationDialogOpen(false);
+        }}
+      />
+
+      {/* SWIFT Compose Dialog */}
+      <SwiftComposeDialog
+        open={swiftComposeOpen}
+        form={swiftForm}
+        onChange={(f) => setSwiftForm(f)}
+        onClose={() => setSwiftComposeOpen(false)}
+        onConfirm={async (f) => {
+          if (f.messageType === 'MT700' && !f.linkedLcId) {
+            showError('Validation', 'Linked LC ID is required for MT700');
+            return;
+          }
+          await handleSendSwiftMessage(f);
+          setSwiftComposeOpen(false);
+        }}
+      />
         <DialogTitle>
           <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
           Letter of Credit Details
@@ -3479,13 +3669,532 @@ const BanksPortal: React.FC = () => {
 
       {/* Tab 2: SWIFT Messages */}
       {activeTab === 2 && (
-        <Box>
-          <SWIFTDashboardWrapper 
-            primaryColor={CBE_COLORS.purple}
-            secondaryColor={CBE_COLORS.golden}
-            accentColor={CBE_COLORS.black}
-          />
-        </Box>
+        <ModernCard>
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              SWIFT Message Management
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SendOutlined />}
+              onClick={() => {
+                setSearchTerm('');
+                setFilterStatus('ALL');
+                setCurrentPage(0);
+              }}
+            >
+              Reset Filters
+            </Button>
+          </Box>
+
+          <Alert severity="info" sx={{ mb: 3 }}>
+            Manage and review all SWIFT messages linked to LCs and payments. Search, filter, and paginate directly in the SWIFT tab.
+          </Alert>
+
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search SWIFT messages..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 300 }}
+              InputProps={{
+                startAdornment: <MessageOutlined sx={{ mr: 1, color: 'black' }} />,
+              }}
+            />
+            <TextField
+              select
+              size="small"
+              label="Status"
+              value={filterStatus}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 180 }}
+            >
+              <MenuItem value="ALL">All Status</MenuItem>
+              <MenuItem value="DRAFT">Draft</MenuItem>
+              <MenuItem value="PENDING_APPROVAL">Pending Approval</MenuItem>
+              <MenuItem value="SENT">Sent</MenuItem>
+              <MenuItem value="RECEIVED">Received</MenuItem>
+              <MenuItem value="SETTLED">Settled</MenuItem>
+              <MenuItem value="REJECTED">Rejected</MenuItem>
+            </TextField>
+            <TextField
+              size="small"
+              placeholder="Min amount"
+              value={amountMin}
+              onChange={(e) => {
+                setAmountMin(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ width: 140 }}
+            />
+            <TextField
+              size="small"
+              placeholder="Max amount"
+              value={amountMax}
+              onChange={(e) => {
+                setAmountMax(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ width: 140 }}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Description />}
+              onClick={() => {
+                const csv = generateSwiftCSV(getFilteredSwiftMessages());
+                downloadCSV(csv, 'SWIFT-Messages.csv');
+              }}
+              sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
+            >
+              Export CSV
+            </Button>
+          </Box>
+
+          {getFilteredSwiftMessages().length === 0 ? (
+            <Alert severity="warning">No SWIFT messages available for the selected filters.</Alert>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>Message ID</strong></TableCell>
+                    <TableCell><strong>Type</strong></TableCell>
+                    <TableCell><strong>SWIFT Reference</strong></TableCell>
+                    <TableCell><strong>Sender BIC</strong></TableCell>
+                    <TableCell><strong>Receiver BIC</strong></TableCell>
+                    <TableCell><strong>Amount</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Date</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {getPaginatedData(getFilteredSwiftMessages()).map((msg: any) => (
+                    <TableRow key={msg.messageId}>
+                      <TableCell>{msg.messageId}</TableCell>
+                      <TableCell>{msg.messageType}</TableCell>
+                      <TableCell>{msg.swiftReference || 'N/A'}</TableCell>
+                      <TableCell>{msg.senderBic || 'N/A'}</TableCell>
+                      <TableCell>{msg.receiverBic || 'N/A'}</TableCell>
+                      <TableCell><strong>${(msg.amount || 0).toLocaleString()} {msg.currency || 'USD'}</strong></TableCell>
+                      <TableCell>{msg.status || 'N/A'}</TableCell>
+                      <TableCell>{msg.sentDate ? new Date(msg.sentDate).toLocaleDateString() : msg.createdAt ? new Date(msg.createdAt).toLocaleDateString() : 'N/A'}</TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<Visibility />}
+                            onClick={() => {
+                              showInfo('SWIFT Message', `Message ID: ${msg.messageId}\nType: ${msg.messageType}\nRef: ${msg.swiftReference || 'N/A'}`);
+                            }}
+                            sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
+                          >
+                            View Details
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="contained"
+                            startIcon={<SendOutlined />}
+                            onClick={() => {
+                              setSwiftForm({
+                                messageID: msg.messageId || `MSG${Date.now()}`,
+                                messageType: msg.messageType || 'MT103',
+                                swiftReference: msg.swiftReference || `REF${Date.now()}`,
+                                senderBIC: msg.senderBic || 'CBETETAA',
+                                receiverBIC: msg.receiverBic || '',
+                                amount: msg.amount || '',
+                                currency: msg.currency || 'USD',
+                                valueDate: msg.sentDate || '',
+                                beneficiary: msg.beneficiary || '',
+                                remittanceInfo: msg.remittanceInfo || '',
+                                linkedLcId: msg.linkedLcId || '',
+                                linkedPaymentId: msg.linkedPaymentId || '',
+                                applicant: msg.applicant || '',
+                                lcExpiryDate: msg.lcExpiryDate || '',
+                              });
+                              setSwiftComposeOpen(true);
+                            }}
+                            sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}
+                            disabled={msg.status === 'SENT'}
+                          >
+                            {msg.status === 'SENT' ? 'Sent' : 'Send'}
+                          </Button>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+
+          {getFilteredSwiftMessages().length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={5}>5</MenuItem>
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, getFilteredSwiftMessages().length)} of {getFilteredSwiftMessages().length}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(getFilteredSwiftMessages().length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
+        </ModernCard>
+      )}
+
+      {/* Tab 3: Document Examination */}
+      {activeTab === 3 && (
+        <ModernCard title="Document Examination">
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              Review and examine export documents submitted by exporters for compliance with LC terms and UCP 600 standards.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search documents..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 280 }}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setSearchTerm('');
+                setAmountMin('');
+                setAmountMax('');
+                setDocumentExaminationFilter('PENDING_EXAMINATION');
+                setCurrentPage(0);
+              }}
+            >
+              Clear Filters
+            </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="black">
+              Showing {getPaginatedData(getFilteredDocumentExaminationLCs()).length} of {getFilteredDocumentExaminationLCs().length}
+            </Typography>
+          </Box>
+
+          {getFilteredDocumentExaminationLCs().length === 0 ? (
+            <Alert severity="warning">
+              No documents pending examination for the selected filter.
+            </Alert>
+          ) : (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>
+                {documentExaminationFilter === 'VERIFIED' ? 'Verified Documents' : 'LCs Pending Document Examination'} ({getFilteredDocumentExaminationLCs().length})
+              </Typography>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>LC ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Submitted Date</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {getPaginatedData(getFilteredDocumentExaminationLCs()).map((lc) => (
+                      <TableRow key={lc.lcId}>
+                        <TableCell>{lc.lcId}</TableCell>
+                        <TableCell>{lc.exporterId}</TableCell>
+                        <TableCell>
+                          <strong>${lc.amount?.toLocaleString()} {lc.currency}</strong>
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip label={lc.status} status="pending" />
+                        </TableCell>
+                        <TableCell>
+                          {lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Visibility />}
+                              onClick={() => handleViewLCDetails(lc)}
+                              sx={{
+                                borderColor: '#9b30b7',
+                                color: '#9b30b7',
+                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
+                              }}
+                            >
+                              View Details
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              startIcon={<CheckCircle />}
+                              onClick={() => handleViewLCDetails(lc)}
+                              sx={{
+                                bgcolor: '#9b30b7',
+                                '&:hover': { bgcolor: '#7a2592' },
+                              }}
+                            >
+                              Examine
+                            </Button>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Pagination Controls */}
+              {getFilteredDocumentExaminationLCs().length > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="black">Rows per page:</Typography>
+                    <TextField
+                      select
+                      size="small"
+                      value={rowsPerPage}
+                      onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                      sx={{ width: 80 }}
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                      <MenuItem value={100}>100</MenuItem>
+                    </TextField>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Typography variant="body2" color="black">
+                      Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, getFilteredDocumentExaminationLCs().length)} of {getFilteredDocumentExaminationLCs().length}
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage === 0}
+                        onClick={() => handleChangePage(currentPage - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage >= Math.ceil(getFilteredDocumentExaminationLCs().length / rowsPerPage) - 1}
+                        onClick={() => handleChangePage(currentPage + 1)}
+                      >
+                        Next
+                      </Button>
+                    </Box>
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )}
+        </ModernCard>
+      )}
+
+      {/* Tab 4: Payment Release */}
+      {activeTab === 4 && (
+        <ModernCard title="Payment Release">
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              Release payments for LCs where documents have been verified and accepted.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search payment releases..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 280 }}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setSearchTerm('');
+                setAmountMin('');
+                setAmountMax('');
+                setPaymentReleaseFilter('READY_FOR_PAYMENT');
+                setCurrentPage(0);
+              }}
+            >
+              Clear Filters
+            </Button>
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="black">
+              Showing {getPaginatedData(getFilteredPaymentReleaseLCs()).length} of {getFilteredPaymentReleaseLCs().length}
+            </Typography>
+          </Box>
+
+          {getFilteredPaymentReleaseLCs().length === 0 ? (
+            <Alert severity="warning">
+              No LCs ready for payment release for the selected filter.
+            </Alert>
+          ) : (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>
+                {paymentReleaseFilter === 'RELEASED_TODAY' ? 'Payments Released Today' : paymentReleaseFilter === 'TOTAL_RELEASED' ? 'Total Released Payments' : 'LCs Ready for Payment Release'} ({getFilteredPaymentReleaseLCs().length})
+              </Typography>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>LC ID</strong></TableCell>
+                      <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Amount</strong></TableCell>
+                      <TableCell><strong>Status</strong></TableCell>
+                      <TableCell><strong>Verified Date</strong></TableCell>
+                      <TableCell><strong>Actions</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {getPaginatedData(getFilteredPaymentReleaseLCs()).map((lc) => (
+                      <TableRow key={lc.lcId}>
+                        <TableCell>{lc.lcId}</TableCell>
+                        <TableCell>{lc.exporterId}</TableCell>
+                        <TableCell>
+                          <strong>${lc.amount?.toLocaleString()} {lc.currency}</strong>
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip label={lc.status} status="approved" />
+                        </TableCell>
+                        <TableCell>
+                          {lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Visibility />}
+                              onClick={() => handleViewLCDetails(lc)}
+                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
+                            >
+                              View Details
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              startIcon={<Payment />}
+                              onClick={() => {
+                                showInfo(
+                                  'Payment Release',
+                                  `Release payment for LC: ${lc.lcId}\nExporter: ${lc.exporterId}\nAmount: $${lc.amount?.toLocaleString()} ${lc.currency}\n\nThis will initiate SWIFT payment to the beneficiary bank.`
+                                );
+                              }}
+                              sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}
+                            >
+                              Release Payment
+                            </Button>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Pagination Controls */}
+              {getFilteredPaymentReleaseLCs().length > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="black">Rows per page:</Typography>
+                    <TextField
+                      select
+                      size="small"
+                      value={rowsPerPage}
+                      onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                      sx={{ width: 80 }}
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                      <MenuItem value={100}>100</MenuItem>
+                    </TextField>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Typography variant="body2" color="black">
+                      Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, getFilteredPaymentReleaseLCs().length)} of {getFilteredPaymentReleaseLCs().length}
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage === 0}
+                        onClick={() => handleChangePage(currentPage - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage >= Math.ceil(getFilteredPaymentReleaseLCs().length / rowsPerPage) - 1}
+                        onClick={() => handleChangePage(currentPage + 1)}
+                      >
+                        Next
+                      </Button>
+                    </Box>
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )}
+        </ModernCard>
       )}
     </Box>
     </ThemeProvider>

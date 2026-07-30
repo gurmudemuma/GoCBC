@@ -206,7 +206,7 @@ class CECBSServer {
 
     // V2.4 Real-World Workflow Alignment
     apiV1.use('/shipments', authMiddleware, landTransportRoutes); // Land transport tracking
-    apiV1.use('/forex', authMiddleware, retentionRoutes); // NBE retention policy
+    apiV1.use('/retention', authMiddleware, retentionRoutes); // NBE retention policy (FIXED: was /forex, conflicted with main forex routes)
     apiV1.use('/lc', authMiddleware, lcAmendmentsRoutes); // LC amendments & discrepancies
 
     // V2.5 SWIFT Message Management

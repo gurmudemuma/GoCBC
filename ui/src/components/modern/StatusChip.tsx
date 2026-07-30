@@ -32,6 +32,7 @@ export type StatusType =
   | 'REVOKED'
   | 'SUBMITTED'
   | 'UNDER_REVIEW'
+  | 'INSPECTING'
   | 'UNDER_INSPECTION'
   | 'QUALITY_APPROVED'
   | 'PERMIT_ISSUED'
@@ -61,7 +62,8 @@ export type StatusType =
   | 'RECEIVED'
   | 'DRAFT'
   | 'COMPLETED'
-  | 'CREATED';
+  | 'CREATED'
+  | 'INSPECTED';
 
 interface StatusChipProps extends Omit<ChipProps, 'color'> {
   /**
@@ -156,6 +158,7 @@ const StyledChip = styled(Chip, {
     BOOKED: restrictedColors.pending,
     REGISTERED: restrictedColors.pending,
     warning: restrictedColors.pending,
+    INSPECTING: restrictedColors.pending,
     UNDER_INSPECTION: restrictedColors.pending,
     DRAFT: restrictedColors.pending,
     
@@ -176,6 +179,7 @@ const StyledChip = styled(Chip, {
     SHIPPED: restrictedColors.processing,
     info: restrictedColors.processing,
     CREATED: restrictedColors.processing,
+    INSPECTED: restrictedColors.processing,
     
     default: restrictedColors.default,
   } : {
@@ -210,6 +214,7 @@ const StyledChip = styled(Chip, {
     SUBMITTED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     DOCUMENTS_SUBMITTED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     UNDER_REVIEW: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    INSPECTING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     UNDER_INSPECTION: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     QUALITY_APPROVED: { bg: alpha('#8bc34a', 0.15), text: '#558b2f', border: '#8bc34a' },
     PERMIT_ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
@@ -227,6 +232,7 @@ const StyledChip = styled(Chip, {
     DRAFT: { bg: alpha('#9e9e9e', 0.15), text: '#616161', border: '#9e9e9e' },
     COMPLETED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     CREATED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    INSPECTED: { bg: alpha('#0288d1', 0.15), text: '#01579b', border: '#0288d1' },
     default: { bg: alpha(theme.palette.text.primary, 0.08), text: theme.palette.text.primary, border: alpha(theme.palette.text.primary, 0.3) },
   };
   
@@ -296,7 +302,7 @@ const getStatusIcon = (status: StatusType): React.ReactElement => {
   }
   
   // Processing/In-Progress states
-  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'UNDER_INSPECTION', 'TRADING', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED'].includes(upperStatus)) {
+  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'INSPECTING', 'UNDER_INSPECTION', 'TRADING', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED'].includes(upperStatus)) {
     return <HourglassEmptyIcon />;
   }
   

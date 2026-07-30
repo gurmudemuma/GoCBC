@@ -51,8 +51,8 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Check if user account is active
-    if (user.status !== 'active') {
+    // Check if user account is active or rejected (rejected users can login to view rejection reason)
+    if (user.status !== 'active' && user.status !== 'rejected') {
       logger.warn(`Login attempt for ${user.status} account: ${username}`);
       return res.status(401).json({
         success: false,

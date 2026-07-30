@@ -18,9 +18,6 @@ import {
   Empty,
   Tooltip,
   Progress,
-  Row,
-  Col,
-  Statistic,
 } from 'antd';
 import {
   EyeOutlined,
@@ -69,7 +66,12 @@ interface LCStatus {
   messages: SWIFTMessage[];
 }
 
-const SWIFTMessagesView: React.FC = () => {
+interface SWIFTMessagesViewProps {
+  initialLcStatuses?: any[];
+  exporterId?: string;
+}
+
+const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses, exporterId: propsExporterId }) => {
   const [lcStatuses, setLcStatuses] = useState<LCStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedLC, setSelectedLC] = useState<LCStatus | null>(null);
@@ -77,16 +79,33 @@ const SWIFTMessagesView: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const exporterId = localStorage.getItem('userId');
+  const exporterId = propsExporterId || localStorage.getItem('userId');
 
   useEffect(() => {
-    loadLCStatuses();
+    // If initial LC data is provided, use it; otherwise load from API
+    if (initialLcStatuses && initialLcStatuses.length > 0) {
+      console.log('[SWIFT VIEW] Using initial LC data from parent:', initialLcStatuses.length);
+      // Map the initial data to include empty messages array if not present
+      const mappedLCs = initialLcStatuses.map((lc: any) => ({
+        lcId: lc.lcId,
+        lcNumber: lc.lcId,
+        amount: lc.amount || 0,
+        currency: lc.currency || 'USD',
+        status: lc.status || 'REQUESTED',
+        issuedDate: lc.issuedDate,
+        expiryDate: lc.expiryDate,
+        messages: lc.messages || [],
+      }));
+      setLcStatuses(mappedLCs);
+    } else {
+      loadLCStatuses();
+    }
     
     // Refresh every 60 seconds
     const interval = setInterval(loadLCStatuses, 60000);
     
     return () => clearInterval(interval);
-  }, []);
+  }, [initialLcStatuses]);
 
   const loadLCStatuses = async () => {
     setLoading(true);
@@ -303,49 +322,6 @@ const SWIFTMessagesView: React.FC = () => {
           showIcon
           style={{ marginBottom: 16 }}
         />
-
-        {/* Summary Statistics */}
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic
-                title="Total LCs"
-                value={lcStatuses.length}
-                prefix={<FileTextOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic
-                title="Active LCs"
-                value={lcStatuses.filter(lc => lc.status === 'ISSUED').length}
-                prefix={<CheckCircleOutlined />}
-                valueStyle={{ color: '#52c41a' }}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic
-                title="Under Review"
-                value={lcStatuses.filter(lc => lc.status === 'UNDER_REVIEW').length}
-                prefix={<ClockCircleOutlined />}
-                valueStyle={{ color: '#faad14' }}
-              />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card size="small">
-              <Statistic
-                title="Paid"
-                value={lcStatuses.filter(lc => lc.status === 'PAID').length}
-                prefix={<DollarOutlined />}
-                valueStyle={{ color: '#722ed1' }}
-              />
-            </Card>
-          </Col>
-        </Row>
 
         {/* Filters */}
         <Space style={{ marginBottom: 16 }}>

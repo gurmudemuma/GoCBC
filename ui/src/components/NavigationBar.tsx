@@ -39,6 +39,7 @@ import {
   LocalShipping,
   Description,
   VerifiedUser,
+  Gavel,
 } from '@mui/icons-material';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
@@ -82,6 +83,8 @@ const NavigationBar: React.FC = () => {
     router.push('/profile');
   };
 
+  // Admin quick links (appear in user menu for ADMIN or CUSTOMS roles)
+  const showRiskRulesLink = user?.role === 'ADMIN' || user?.role === 'CUSTOMS';
   const handleSettings = () => {
     handleMenuClose();
     router.push('/settings');
@@ -420,6 +423,17 @@ const NavigationBar: React.FC = () => {
                 primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 500 }}
               />
             </MenuItem>
+            {showRiskRulesLink && (
+              <MenuItem onClick={() => { handleMenuClose(); router.push('/admin/risk-rules'); }} sx={{ py: 1.5 }}>
+                <ListItemIcon>
+                  <Gavel fontSize="small" />
+                </ListItemIcon>
+                <ListItemText 
+                  primary="Risk Rules" 
+                  primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 500 }}
+                />
+              </MenuItem>
+            )}
             <MenuItem onClick={() => { handleMenuClose(); router.push('/help'); }} sx={{ py: 1.5 }}>
               <ListItemIcon>
                 <Help fontSize="small" />

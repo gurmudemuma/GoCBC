@@ -14,7 +14,9 @@ import 'react-toastify/dist/ReactToastify.css';
 function AppContent({ Component, pageProps }: AppProps) {
   const router = useRouter();
   const isLoginPage = router.pathname === '/login';
-  const isPublicPage = isLoginPage || router.pathname === '/unauthorized';
+  const isRegisterPage = router.pathname === '/register-exporter';
+  const isResubmitPage = router.pathname === '/resubmit-application';
+  const isPublicPage = isLoginPage || isRegisterPage || isResubmitPage || router.pathname === '/unauthorized';
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>

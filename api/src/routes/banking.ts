@@ -6,6 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
+import { dedupeById, isValidLC } from '../utils/dataFilters';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -91,6 +92,33 @@ router.post('/lc/request',
         }
       } catch (error) {
         logger.warn('[LC] Could not fetch contract for auto-mapping:', error);
+      }
+
+      // DUPLICATE CHECK: Ensure no LC already exists for this contract
+      try {
+        const allLCsResult = await fabricService.queryChaincode('QueryAllLCs', []);
+        if (allLCsResult.success && allLCsResult.data) {
+          const existingLC = allLCsResult.data.find((lc: any) => 
+            (lc.contractId === contractID || lc.ContractID === contractID)
+          );
+          
+          if (existingLC) {
+            logger.warn(`[LC] Duplicate LC request blocked for contract ${contractID}. Existing LC: ${existingLC.lcId || existingLC.LCID}`);
+            return res.status(409).json({
+              success: false,
+              error: {
+                code: 'DUPLICATE_LC',
+                message: `An LC already exists for contract ${contractID}`,
+                existingLC: existingLC.lcId || existingLC.LCID,
+                existingStatus: existingLC.status || existingLC.Status,
+              },
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn('[LC] Could not check for duplicate LCs:', error);
+        // Continue anyway - if check fails, let chaincode handle it
       }
 
       // Use provided values or auto-mapped values
@@ -206,6 +234,146 @@ router.post('/lc/:lcID/approve',
       }
     } catch (error) {
       logger.error('Error approving LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/reject:
+ *   post:
+ *     summary: Reject Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/reject',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('rejectionReason').notEmpty().withMessage('Rejection reason is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { lcID } = req.params;
+      const { rejectionReason } = req.body;
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await fabricService.invokeChaincode('RejectLC', [
+        lcID,
+        rejectionReason,
+        user.org,
+      ]);
+
+      if (result.success) {
+        logger.info(`LC rejected: ${lcID} by ${user.org}. Reason: ${rejectionReason}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_REJECTION_FAILED',
+            message: result.error || 'Failed to reject LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error rejecting LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/forex/{forexID}/reject:
+ *   post:
+ *     summary: Reject Forex Allocation Request
+ *     tags: [Forex]
+ */
+router.post('/forex/:forexID/reject',
+  authMiddleware,
+  [
+    param('forexID').notEmpty().withMessage('Forex ID is required'),
+    body('rejectionReason').notEmpty().withMessage('Rejection reason is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { forexID } = req.params;
+      const { rejectionReason } = req.body;
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await fabricService.invokeChaincode('RejectForex', [
+        forexID,
+        rejectionReason,
+        user.org,
+      ]);
+
+      if (result.success) {
+        logger.info(`Forex request rejected: ${forexID} by ${user.org}. Reason: ${rejectionReason}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FOREX_REJECTION_FAILED',
+            message: result.error || 'Failed to reject forex request',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error rejecting forex request:', error);
       res.status(500).json({
         success: false,
         error: {
@@ -362,20 +530,25 @@ router.post('/lc/:lcID/issue',
           const lcData = await fabricService.getLC(lcID);
           if (lcData.success && lcData.data) {
             const lc = lcData.data;
-            const forexId = `FOREX_${lcID}_${Date.now()}`;
+            const forexId = `FOREX_${lcID}_${Date.now()}_v2`; // Add _v2 suffix for proper schema
+            
+            // RequestForex takes 5 parameters: forexID, contractID, exporterID, amount, currency
+            // NOTE: LC ID is NOT part of RequestForex parameters (added during allocation)
             const forexResult = await fabricService.invokeChaincode('RequestForex', [
               forexId,
               lc.contractId || lc.ContractID || '',
               lc.exporterId || lc.ExporterID || '',
-              lcID,
               (lc.amount || lc.Amount || '0').toString(),
               lc.currency || lc.Currency || 'USD',
             ]);
+            
             if (forexResult.success) {
               logger.info(`✅ Forex request auto-created: ${forexId} for LC ${lcID}`);
             } else {
               logger.warn(`⚠️ Forex auto-request failed for LC ${lcID}: ${forexResult.error}`);
             }
+          } else {
+            logger.warn(`⚠️ Could not read LC ${lcID} for forex auto-creation: ${lcData.error}`);
           }
         } catch (forexErr) {
           logger.warn(`⚠️ Forex auto-request error for LC ${lcID}:`, forexErr);
@@ -489,9 +662,33 @@ router.get('/lc', async (req, res) => {
     const result = await fabricService.queryAllLCs();
 
     if (result.success) {
+      const normalizedLCs = (result.data || []).map((lc: any) => ({
+        lcId: lc?.lcId || lc?.LCID || lc?.id || '',
+        contractId: lc?.contractId || lc?.contractID || lc?.ContractID || '',
+        exporterId: lc?.exporterId || lc?.exporterID || lc?.ExporterID || '',
+        issuingBank: lc?.issuingBank || lc?.issuingBankName || lc?.bankName || '',
+        advisingBank: lc?.advisingBank || lc?.advisingBankName || '',
+        beneficiary: lc?.beneficiary || '',
+        amount: lc?.amount ?? 0,
+        currency: lc?.currency || 'USD',
+        status: lc?.status || 'PENDING',
+        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
+        requestDate: lc?.requestDate || lc?.request_date || null,
+        approvalDate: lc?.approvalDate || lc?.approval_date || null,
+        issueDate: lc?.issueDate || lc?.issue_date || null,
+        documents: lc?.documents || [],
+        terms: lc?.terms || '',
+        amendments: lc?.amendments || [],
+        amendmentCount: lc?.amendmentCount ?? (lc?.amendments ? lc.amendments.length : 0),
+        discrepancies: lc?.discrepancies || [],
+        discrepancyResolved: lc?.discrepancyResolved ?? false,
+        createdAt: lc?.createdAt || lc?.created_at || null,
+        updatedAt: lc?.updatedAt || lc?.updated_at || null,
+      }));
+
       res.json({
         success: true,
-        data: result.data || [],
+        data: normalizedLCs,
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -506,6 +703,68 @@ router.get('/lc', async (req, res) => {
     }
   } catch (error) {
     logger.error('Error retrieving LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+router.get('/lc/:lcID', authMiddleware, async (req, res) => {
+  try {
+    const { lcID } = req.params;
+    const result = await fabricService.getLC(lcID);
+
+    if (result.success) {
+      const lcData = result.data;
+      const requiredFields = {
+        lcId: lcData?.lcId || lcData?.LCID || lcData?.id || lcID,
+        contractId: lcData?.contractId || lcData?.contractID || lcData?.ContractID || '',
+        exporterId: lcData?.exporterId || lcData?.exporterID || lcData?.ExporterID || '',
+        issuingBank: lcData?.issuingBank || lcData?.issuingBankName || lcData?.bankName || '',
+        advisingBank: lcData?.advisingBank || lcData?.advisingBankName || '',
+        beneficiary: lcData?.beneficiary || '',
+        amount: lcData?.amount ?? 0,
+        currency: lcData?.currency || 'USD',
+        status: lcData?.status || 'PENDING',
+        expiryDate: lcData?.expiryDate || lcData?.expiry_date || null,
+        requestDate: lcData?.requestDate || lcData?.request_date || null,
+        approvalDate: lcData?.approvalDate || lcData?.approval_date || null,
+        issueDate: lcData?.issueDate || lcData?.issue_date || null,
+        documents: lcData?.documents || [],
+        terms: lcData?.terms || '',
+        amendments: lcData?.amendments || [],
+        amendmentCount: lcData?.amendmentCount ?? (lcData?.amendments ? lcData.amendments.length : 0),
+        discrepancies: lcData?.discrepancies || [],
+        discrepancyResolved: lcData?.discrepancyResolved ?? false,
+        createdAt: lcData?.createdAt || lcData?.created_at || null,
+        updatedAt: lcData?.updatedAt || lcData?.updated_at || null,
+      };
+
+      res.json({
+        success: true,
+        data: {
+          ...lcData,
+          ...requiredFields,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: result.error || 'LC not found',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving LC:', error);
     res.status(500).json({
       success: false,
       error: {
