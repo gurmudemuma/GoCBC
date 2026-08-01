@@ -304,8 +304,8 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
 
       try {
         const formData = new FormData();
-        formData.append('document', fileData.file);
-        formData.append('category', fileData.category);
+        formData.append('file', fileData.file); // Backend expects 'file' not 'document'
+        formData.append('documentType', fileData.category); // Backend expects 'documentType' not 'category'
         formData.append('encrypt', fileData.encrypt.toString());
         if (fileData.description) {
           formData.append('description', fileData.description);

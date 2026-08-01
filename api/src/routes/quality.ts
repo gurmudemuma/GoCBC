@@ -8,6 +8,7 @@ import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
+import { dedupeById, isValidInspection } from '../utils/dataFilters';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -657,6 +658,77 @@ router.get('/inspections', authMiddleware, async (req, res) => {
     });
   }
 });
+
+/**
+ * GET /api/v1/quality/inspections/by-shipment/:shipmentId - Get inspections by shipment ID
+ * This is the FIX for customs data flow - allows direct shipment-to-inspection lookup
+ */
+router.get('/inspections/by-shipment/:shipmentId',
+  authMiddleware,
+  [param('shipmentId').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      logger.info(`[QUALITY] Querying inspections for shipment: ${shipmentId}`);
+      
+      const userOrg = (req as any).user?.org || 'ECTAMSP';
+      await fabricService.connect(userOrg);
+      
+      // Call the chaincode function that exists in quality.go
+      const result = await fabricService.queryChaincode('QueryInspectionsByShipment', [shipmentId]);
+      
+      if (result.success) {
+        const inspections = result.data || [];
+        
+        // Normalize field names for consistent API response
+        const normalizedInspections = inspections.map((insp: any) => ({
+          inspectionId: insp.inspectionId || insp.InspectionID || insp.InspectionId || '',
+          shipmentId: insp.shipmentId || insp.ShipmentID || insp.ShipmentId || '',
+          contractId: insp.contractId || insp.ContractID || insp.ContractId || '',
+          exporterId: insp.exporterId || insp.ExporterID || insp.ExporterId || '',
+          status: insp.status || insp.Status || '',
+          exportPermitNo: insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '',
+          certificateNo: insp.certificateNo || insp.CertificateNo || insp.certificate || '',
+          qualityGrade: insp.qualityGrade || insp.QualityGrade || '',
+          totalScore: insp.totalScore || insp.TotalScore || 0,
+          classification: insp.classification || insp.Classification || '',
+          inspectorName: insp.inspectorName || insp.InspectorName || '',
+          scheduledDate: insp.scheduledDate || insp.ScheduledDate || '',
+          inspectionDate: insp.inspectionDate || insp.InspectionDate || '',
+          approvedDate: insp.approvedDate || insp.ApprovedDate || '',
+        }));
+        
+        logger.info(`[QUALITY] Found ${normalizedInspections.length} inspection(s) for shipment ${shipmentId}`);
+        
+        res.json({
+          success: true,
+          data: normalizedInspections,
+          count: normalizedInspections.length,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.warn(`[QUALITY] No inspections found for shipment ${shipmentId}`);
+        res.json({
+          success: true,
+          data: [],
+          count: 0,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[QUALITY] Error querying inspections by shipment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
 
 /**
  * GET /api/v1/quality/inspections/:inspectionID - Get inspection details

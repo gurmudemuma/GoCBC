@@ -1677,6 +1677,9 @@ router.post('/exporter-applications',
             bank_account_number, bank_branch_name, bank_branch_code,
             comments, documents, status, submitted_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      `;
+      
+      await new Promise((resolve, reject) => {
         db.run(query, [
           applicationId,
           applicationData.companyName,
@@ -1703,10 +1706,7 @@ router.post('/exporter-applications',
         });
       });
       
-      logger.info(`Exporter application submitted: ${applicationId} - ${applicationData.companyName}`);
-      
       res.status(201).json({
-        success: true,
         data: {
           applicationId,
           status: 'pending',
@@ -1942,8 +1942,6 @@ router.post('/applications/:applicationId/approve',
         );
       });
       
-      logger.info(`Exporter application approved: ${applicationId} -> ${exporterId}`);
-      
       res.json({
         success: true,
         data: {
@@ -2065,8 +2063,6 @@ router.post('/applications/:applicationId/reject',
           }
         );
       });
-      
-      logger.info(`Exporter application rejected: ${applicationId} - ${reason}`);
       
       res.json({
         success: true,

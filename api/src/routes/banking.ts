@@ -2077,6 +2077,68 @@ router.post('/lc/:lcID/release-payment',
         currency,
       });
 
+      // ✅ DOCUMENT VERIFICATION: Check shipping documents before payment release
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        
+        // Get LC details to find associated shipment
+        const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
+        if (lcResult.success && lcResult.data) {
+          const lc = lcResult.data;
+          const shipmentID = lc.ShipmentID || lc.shipmentID || lc.shipmentId;
+          
+          if (shipmentID) {
+            const db = DatabaseService.getInstance();
+            const documents = await db.all(
+              `SELECT document_type, verification_status FROM documents 
+               WHERE entity_type = 'shipping' AND entity_id = ? AND status = 'active'`,
+              [shipmentID]
+            );
+            
+            // Required shipping documents for payment release
+            const requiredDocs = ['BILL_OF_LADING', 'COMMERCIAL_INVOICE', 'PACKING_LIST'];
+            const docTypes = documents.map((d: any) => d.document_type);
+            const missing = requiredDocs.filter(type => !docTypes.includes(type));
+            
+            if (missing.length > 0) {
+              logger.warn(`Payment release ${lcID} blocked: Missing ${missing.length} shipping documents`);
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'MISSING_SHIPPING_DOCUMENTS',
+                  message: 'Cannot release payment: Required shipping documents are missing',
+                  missing: missing,
+                  hint: 'Upload all required shipping documents (Bill of Lading, Commercial Invoice, Packing List) before payment release'
+                }
+              });
+            }
+            
+            // Check if all required documents are verified
+            const unverifiedRequired = documents.filter((d: any) => 
+              requiredDocs.includes(d.document_type) && d.verification_status !== 'verified'
+            );
+            
+            if (unverifiedRequired.length > 0) {
+              logger.warn(`Payment release ${lcID} blocked: ${unverifiedRequired.length} unverified shipping documents`);
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'UNVERIFIED_SHIPPING_DOCUMENTS',
+                  message: 'Cannot release payment: All shipping documents must be verified',
+                  unverified: unverifiedRequired.map((d: any) => d.document_type),
+                  hint: 'Bank must verify all shipping documents before payment release'
+                }
+              });
+            }
+            
+            logger.info(`✅ Payment ${lcID}: All required shipping documents verified`);
+          }
+        }
+      } catch (docCheckError) {
+        logger.warn(`Non-fatal: Document check failed for payment ${lcID}:`, docCheckError);
+        // Continue with payment release - document check is best-effort
+      }
+
       const result = await fabricService.invokeChaincode('ReleaseLCPayment', [
         lcID,
         amount.toString(),

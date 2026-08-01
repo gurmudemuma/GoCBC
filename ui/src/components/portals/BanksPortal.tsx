@@ -299,6 +299,11 @@ const BanksPortal: React.FC = () => {
     permitAmount: '',
   });
 
+  // Audit Trail State
+  const [showAuditTrail, setShowAuditTrail] = useState(false);
+  const [auditEntityType, setAuditEntityType] = useState<'LC' | 'PAYMENT' | 'FOREX'>('LC');
+  const [auditEntityId, setAuditEntityId] = useState<string>('');
+
   // Search and Filter State
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
@@ -1995,35 +2000,79 @@ const BanksPortal: React.FC = () => {
                 <Card 
                   sx={{ 
                     cursor: kpi.clickable ? 'pointer' : 'default',
-                    height: 160,
-                    border: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `3px solid ${kpi.color}` : `1px solid #e0e0e0`,
-                    bgcolor: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `${kpi.color}10` : 'white',
-                    transition: 'all 0.2s ease',
+                    height: 140,
+                    border: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
+                    bgcolor: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `${kpi.color}08` : 'white',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    borderRadius: 2,
+                    boxShadow: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) 
+                      ? '0 4px 12px rgba(155, 48, 183, 0.15)' 
+                      : '0 1px 3px rgba(0,0,0,0.05)',
                     '&:hover': kpi.clickable ? {
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
+                      boxShadow: '0 8px 24px rgba(155, 48, 183, 0.2)',
+                      transform: 'translateY(-4px)',
+                      borderColor: kpi.color,
                     } : {},
                   }}
                   onClick={kpi.clickable ? (kpi.onClick || (() => kpi.method && setSelectedPaymentMethod(kpi.method))) : undefined}
                 >
-                  <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                    {React.cloneElement(kpi.icon, { 
-                      sx: { fontSize: 40, color: kpi.color, mb: 1 } 
-                    })}
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, display: 'block' }}>
+                  <CardContent sx={{ 
+                    textAlign: 'center', 
+                    py: 2.5, 
+                    px: 2,
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}>
+                    <Box sx={{ 
+                      width: 48, 
+                      height: 48, 
+                      borderRadius: '50%', 
+                      bgcolor: `${kpi.color}15`, 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      mb: 1.5
+                    }}>
+                      {React.cloneElement(kpi.icon, { 
+                        sx: { fontSize: 28, color: kpi.color } 
+                      })}
+                    </Box>
+                    <Typography 
+                      variant="caption" 
+                      sx={{ 
+                        color: '#666', 
+                        textTransform: 'uppercase', 
+                        fontWeight: 600, 
+                        fontSize: '0.7rem',
+                        letterSpacing: 0.5,
+                        mb: 0.5
+                      }}
+                    >
                       {kpi.label}
                     </Typography>
-                    <Typography variant="h3" sx={{ fontWeight: 700, color: kpi.color }}>
+                    <Typography 
+                      variant="h4" 
+                      sx={{ 
+                        fontWeight: 700, 
+                        color: kpi.color,
+                        lineHeight: 1,
+                        mb: 0.5
+                      }}
+                    >
                       {kpi.value}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    <Typography 
+                      variant="caption" 
+                      sx={{ 
+                        color: 'text.secondary',
+                        fontSize: '0.7rem'
+                      }}
+                    >
                       {kpi.subtitle}
                     </Typography>
-                    {kpi.description && (
-                      <Typography variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                        {kpi.description}
-                      </Typography>
-                    )}
                   </CardContent>
                 </Card>
               </Grid>
@@ -2032,41 +2081,68 @@ const BanksPortal: React.FC = () => {
         </Grid>
 
         {/* Main Tabs - 5 Tabs Like ShippingPortal */}
-        <Paper sx={{ mb: 3, borderRadius: 0, boxShadow: 'none', borderBottom: '2px solid #e0e0e0' }}>
+        <Paper sx={{ 
+          mb: 3, 
+          borderRadius: 2, 
+          boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
+          border: '1px solid #e0e0e0',
+          overflow: 'hidden'
+        }}>
           <Tabs 
             value={activeTab} 
             onChange={(e, v) => {
               setActiveTab(v);
               setCurrentPage(0); // Reset pagination when switching tabs
             }}
+            variant="fullWidth"
             sx={{
+              bgcolor: 'white',
               '& .MuiTab-root': {
-                fontSize: '0.95rem',
+                fontSize: '0.9rem',
                 fontWeight: 600,
                 textTransform: 'none',
-                minHeight: 56,
-                px: 4,
+                minHeight: 64,
+                px: 3,
                 color: '#666',
+                transition: 'all 0.3s ease',
                 '&.Mui-selected': {
+                  color: '#9b30b7',
+                  bgcolor: 'rgba(155, 48, 183, 0.04)',
+                },
+                '&:hover': {
+                  bgcolor: 'rgba(155, 48, 183, 0.08)',
                   color: '#9b30b7',
                 },
               },
               '& .MuiTabs-indicator': {
-                height: 3,
+                height: 4,
                 bgcolor: '#9b30b7',
+                borderRadius: '4px 4px 0 0',
               },
             }}
           >
-            <Tab label="💳 Payment Methods" icon={<Payment />} iconPosition="start" />
-            <Tab label="💱 Forex Allocations" icon={<CurrencyExchange />} iconPosition="start" />
-            <Tab label="📨 SWIFT Messages" icon={<AccountBalance />} iconPosition="start" />
             <Tab 
-              label={`📋 Document Examination ${lcsForExamination.length > 0 ? `(${lcsForExamination.length})` : ''}`}
+              label="Payment Methods" 
+              icon={<Payment />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label="Forex Allocations" 
+              icon={<CurrencyExchange />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label="SWIFT Messages" 
+              icon={<AccountBalance />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label={`Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`}
               icon={<Description />} 
               iconPosition="start" 
             />
             <Tab 
-              label={`💰 Payment Release ${lcsForPaymentRelease.length > 0 ? `(${lcsForPaymentRelease.length})` : ''}`}
+              label={`Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`}
               icon={<AttachMoney />} 
               iconPosition="start" 
             />
@@ -2376,16 +2452,16 @@ const BanksPortal: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell><strong>Forex ID</strong></TableCell>
-                    <TableCell><strong>LC Reference</strong></TableCell>
-                    <TableCell><strong>Exporter</strong></TableCell>
-                    <TableCell><strong>Allocated Amount</strong></TableCell>
-                    <TableCell><strong>Exchange Rate</strong></TableCell>
-                    <TableCell><strong>Retention (40%)</strong></TableCell>
-                    <TableCell><strong>Conversion (60%)</strong></TableCell>
-                    <TableCell><strong>Status</strong></TableCell>
-                    <TableCell><strong>Expiry</strong></TableCell>
-                    <TableCell><strong>Actions</strong></TableCell>
+                    <TableCell sx={{ width: '12%' }}><strong>Forex ID</strong></TableCell>
+                    <TableCell sx={{ width: '12%' }}><strong>LC Reference</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Exporter</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Allocated Amount</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Exchange Rate</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Retention (40%)</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Conversion (60%)</strong></TableCell>
+                    <TableCell sx={{ width: '8%' }}><strong>Status</strong></TableCell>
+                    <TableCell sx={{ width: '8%' }}><strong>Expiry</strong></TableCell>
+                    <TableCell align="right" sx={{ width: '10%' }}><strong>Actions</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -3766,14 +3842,15 @@ const BanksPortal: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell><strong>Message ID</strong></TableCell>
-                    <TableCell><strong>Type</strong></TableCell>
-                    <TableCell><strong>SWIFT Reference</strong></TableCell>
-                    <TableCell><strong>Sender BIC</strong></TableCell>
-                    <TableCell><strong>Receiver BIC</strong></TableCell>
-                    <TableCell><strong>Amount</strong></TableCell>
-                    <TableCell><strong>Status</strong></TableCell>
-                    <TableCell><strong>Date</strong></TableCell>
+                    <TableCell sx={{ width: '15%' }}><strong>Message ID</strong></TableCell>
+                    <TableCell sx={{ width: '8%' }}><strong>Type</strong></TableCell>
+                    <TableCell sx={{ width: '15%' }}><strong>SWIFT Reference</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Sender BIC</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Receiver BIC</strong></TableCell>
+                    <TableCell sx={{ width: '12%' }}><strong>Amount</strong></TableCell>
+                    <TableCell sx={{ width: '10%' }}><strong>Status</strong></TableCell>
+                    <TableCell sx={{ width: '8%' }}><strong>Date</strong></TableCell>
+                    <TableCell align="right" sx={{ width: '12%' }}><strong>Actions</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -3935,12 +4012,12 @@ const BanksPortal: React.FC = () => {
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableCell><strong>LC ID</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Amount</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Submitted Date</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
+                      <TableCell sx={{ width: '15%' }}><strong>LC ID</strong></TableCell>
+                      <TableCell sx={{ width: '20%' }}><strong>Exporter</strong></TableCell>
+                      <TableCell sx={{ width: '15%' }}><strong>Amount</strong></TableCell>
+                      <TableCell sx={{ width: '12%' }}><strong>Status</strong></TableCell>
+                      <TableCell sx={{ width: '13%' }}><strong>Submitted Date</strong></TableCell>
+                      <TableCell align="right" sx={{ width: '25%' }}><strong>Actions</strong></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -3959,6 +4036,23 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Assignment />}
+                              onClick={() => {
+                                setAuditEntityType('LC');
+                                setAuditEntityId(lc.lcId);
+                                setShowAuditTrail(true);
+                              }}
+                              sx={{
+                                borderColor: '#9b30b7',
+                                color: '#9b30b7',
+                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
+                              }}
+                            >
+                              Audit Trail
+                            </Button>
                             <Button
                               size="small"
                               variant="outlined"
@@ -4093,12 +4187,12 @@ const BanksPortal: React.FC = () => {
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableCell><strong>LC ID</strong></TableCell>
-                      <TableCell><strong>Exporter</strong></TableCell>
-                      <TableCell><strong>Amount</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Verified Date</strong></TableCell>
-                      <TableCell><strong>Actions</strong></TableCell>
+                      <TableCell sx={{ width: '15%' }}><strong>LC ID</strong></TableCell>
+                      <TableCell sx={{ width: '20%' }}><strong>Exporter</strong></TableCell>
+                      <TableCell sx={{ width: '15%' }}><strong>Amount</strong></TableCell>
+                      <TableCell sx={{ width: '12%' }}><strong>Status</strong></TableCell>
+                      <TableCell sx={{ width: '13%' }}><strong>Verified Date</strong></TableCell>
+                      <TableCell align="right" sx={{ width: '25%' }}><strong>Actions</strong></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -4117,6 +4211,19 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Assignment />}
+                              onClick={() => {
+                                setAuditEntityType('LC');
+                                setAuditEntityId(lc.lcId);
+                                setShowAuditTrail(true);
+                              }}
+                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
+                            >
+                              Audit Trail
+                            </Button>
                             <Button
                               size="small"
                               variant="outlined"
@@ -4195,6 +4302,16 @@ const BanksPortal: React.FC = () => {
             </Box>
           )}
         </ModernCard>
+      )}
+
+      {/* Audit Trail Viewer */}
+      {showAuditTrail && auditEntityType && (
+        <AuditTrailViewer
+          open={showAuditTrail}
+          entityType={auditEntityType as 'LC' | 'PAYMENT' | 'FOREX'}
+          entityId={auditEntityId}
+          onClose={() => setShowAuditTrail(false)}
+        />
       )}
     </Box>
     </ThemeProvider>

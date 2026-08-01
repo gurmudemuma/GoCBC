@@ -34,6 +34,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  Snackbar,
 } from '@mui/material';
 import {
   Add,
@@ -106,6 +107,12 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
   </div>
 );
 
+// ✅ FIX: Normalize shipment IDs for fuzzy matching (handles different formats)
+const normalizeShipmentId = (id: string): string => {
+  if (!id) return '';
+  return id.replace(/[_\s-]/g, '').toUpperCase().trim();
+};
+
 const CustomsPortal: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [declarations, setDeclarations] = useState<CustomsDeclaration[]>([]);
@@ -136,7 +143,79 @@ const CustomsPortal: React.FC = () => {
     clearanceNumber: '',
     companyName: '',
   });
+
+  // Inspection Dialog Form State
+  const [inspectionForm, setInspectionForm] = useState({
+    inspectionType: 'STANDARD',
+    priorityLevel: 'NORMAL',
+    scheduledDate: new Date().toISOString().split('T')[0],
+    scheduledTime: '09:00',
+    location: 'PORT',
+    assignedInspector: 'OFFICER_ALEMAYEHU',
+    contactPerson: '',
+    contactPhone: '',
+    specialInstructions: '',
+    internalNotes: '',
+  });
+
+  // Clearance Dialog Form State
+  const [clearanceForm, setClearanceForm] = useState({
+    clearanceNumber: '',
+    clearanceDate: new Date().toISOString().split('T')[0],
+    clearedBy: 'OFFICER_ALEMAYEHU',
+    clearanceType: 'FULL',
+    customsDuties: '0',
+    vatAmount: '0',
+    exitPoint: 'DJIBOUTI',
+    validityPeriod: '30',
+    clearanceRemarks: '',
+    officerNotes: '',
+  });
+
+  // Rejection Dialog Form State
+  const [rejectionForm, setRejectionForm] = useState({
+    rejectionCategory: 'DOCUMENTATION',
+    severityLevel: 'CORRECTABLE',
+    rejectedBy: 'OFFICER_ALEMAYEHU',
+    rejectionDate: new Date().toISOString().split('T')[0],
+    detailedReason: '',
+    requiredActions: '',
+    legalReference: '',
+    appealDeadline: '14',
+    officerNotes: '',
+  });
   
+  // Auto-populate inspection form when dialog opens
+  useEffect(() => {
+    if (inspectionDialogOpen && selectedDeclaration) {
+      // Set inspection type based on EUDR compliance
+      const defaultType = selectedDeclaration.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD';
+      
+      // Set location based on auto-detected shipment location
+      const defaultLocation = inspectionAutoData.shipmentLocation === 'ECX Warehouse' ? 'ECX' : 'PORT';
+      
+      setInspectionForm({
+        ...inspectionForm,
+        inspectionType: defaultType,
+        location: defaultLocation,
+        contactPerson: inspectionAutoData.contactPerson || '',
+        contactPhone: inspectionAutoData.contactPhone || '',
+      });
+    }
+  }, [inspectionDialogOpen, selectedDeclaration, inspectionAutoData]);
+
+  // Auto-populate clearance form when dialog opens
+  useEffect(() => {
+    if (clearanceDialogOpen && selectedDeclaration) {
+      const clearanceNum = clearanceAutoData.clearanceNumber || `CLR-${Date.now()}`;
+      
+      setClearanceForm({
+        ...clearanceForm,
+        clearanceNumber: clearanceNum,
+      });
+    }
+  }, [clearanceDialogOpen, selectedDeclaration, clearanceAutoData]);
+
   // New Declaration Form State
   const [newDeclarationForm, setNewDeclarationForm] = useState({
     shipmentId: '',
@@ -154,7 +233,7 @@ const CustomsPortal: React.FC = () => {
   const [isLoadingShipmentData, setIsLoadingShipmentData] = useState(false);
 
   // Auto-map shipment data when Shipment ID is entered
-  const handleShipmentIdChange = async (shipmentId: string) => {
+  const handleShipmentIdChange = async (shipmentId: string, skipValidation: boolean = false) => {
     setNewDeclarationForm({ ...newDeclarationForm, shipmentId });
     
     if (shipmentId.length > 10) { // Only fetch if ID looks valid
@@ -164,6 +243,7 @@ const CustomsPortal: React.FC = () => {
       try {
         console.log('[CUSTOMS] ═══════════════════════════════════════');
         console.log('[CUSTOMS] 🔍 Starting validation for shipment:', shipmentId);
+        console.log('[CUSTOMS] Skip validation:', skipValidation);
         console.log('[CUSTOMS] ═══════════════════════════════════════');
         
         // STEP 1: Fetch shipment data
@@ -175,7 +255,9 @@ const CustomsPortal: React.FC = () => {
         const result = await response.json();
         
         if (!result.success || !result.data) {
-          alert('❌ Shipment Not Found\n\nThis shipment does not exist in the blockchain.');
+          if (!skipValidation) {
+            alert('❌ Shipment Not Found\n\nThis shipment does not exist in the blockchain.');
+          }
           setIsLoadingShipmentData(false);
           return;
         }
@@ -196,121 +278,76 @@ const CustomsPortal: React.FC = () => {
         };
         
         console.log('[CUSTOMS] 📊 Extracted shipment data:', shipmentData);
+        console.log('[CUSTOMS] 🔍 Validation:', {
+          hasExporterId: !!shipmentData.exporterId,
+          hasQuantity: !!shipmentData.quantity,
+          hasValue: !!shipmentData.valueUSD,
+          hasContractId: !!shipmentData.contractId
+        });
         
-        // STEP 2: Verify quality inspection exists and is approved
+        // STEP 2: Verify quality inspection exists and is approved (skip if from permit-ready list)
+        if (!skipValidation) {
         console.log('[CUSTOMS] 🔬 Step 2: Verifying quality inspection...');
         try {
-          // Fetch ALL inspections since the API doesn't support shipmentID filter
-          const inspectionResponse = await apiFetch(`/quality/inspections?limit=1000`, {
+          // ✅ FIX: Use new shipment-specific endpoint instead of fetching all inspections
+          const inspectionResponse = await apiFetch(`/quality/inspections/by-shipment/${shipmentId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const inspectionResult = await inspectionResponse.json();
           
           if (!inspectionResult.success || !inspectionResult.data || inspectionResult.data.length === 0) {
-            alert('❌ No Quality Inspections Found\n\nNo inspections exist in the system.\n\nRequired Steps:\n1. ECTA must perform quality inspection\n2. ECTA must approve inspection\n3. ECTA must issue export permit\n\nThen customs declaration can be submitted.');
-            setIsLoadingShipmentData(false);
-            return;
-          }
-          
-          console.log(`[CUSTOMS] 📝 Fetched ${inspectionResult.data.length} total inspections`);
-          
-          // DEBUG: Log all shipment IDs to see what's available
-          console.log('[CUSTOMS] 🔍 DEBUG: All shipment IDs in inspection data:');
-          inspectionResult.data.forEach((insp: any, index: number) => {
-            const inspId = insp.inspectionId || insp.InspectionID || 'NO_ID';
-            const inspShipmentId = insp.shipmentId || insp.ShipmentID || insp.shipmentID || 'NO_SHIPMENT_ID';
-            console.log(`  [${index}] ${inspId} → shipmentId: "${inspShipmentId}"`);
-          });
-          
-          console.log(`[CUSTOMS] 🔍 DEBUG: Looking for shipmentId: "${shipmentId}"`);
-          
-          // CLIENT-SIDE FILTER: Find inspection matching this shipmentId
-          const inspection = inspectionResult.data.find((insp: any) => {
-            const inspShipmentId = insp.shipmentId || insp.ShipmentID || insp.shipmentID || '';
-            const match = inspShipmentId === shipmentId;
-            if (match) {
-              console.log(`[CUSTOMS] ✅ Found matching inspection: ${insp.inspectionId || insp.InspectionID} for shipment ${inspShipmentId}`);
-            }
-            return match;
-          });
-          
-          if (!inspection) {
             console.error(`[CUSTOMS] ❌ No inspection found for shipment ${shipmentId}`);
-            const availableShipments = inspectionResult.data.map((i: any) => i.shipmentId || i.ShipmentID || 'NO_ID');
-            console.log('[CUSTOMS] 🔍 Available shipment IDs in all inspections:', availableShipments);
             
-            // Check if there's a similar shipment ID (maybe different format)
-            const similarInspections = inspectionResult.data.filter((i: any) => {
-              const inspShipId = (i.shipmentId || i.ShipmentID || '').toString();
-              return inspShipId.includes('1784792899407') || shipmentId.includes(inspShipId);
+            // ✅ FIX: Try fuzzy matching with normalized IDs as fallback
+            console.log('[CUSTOMS] 🔄 Attempting fuzzy match with all inspections...');
+            const allInspectionsResponse = await apiFetch(`/quality/inspections?limit=1000`, {
+              headers: { 'Authorization': `Bearer ${token}` }
             });
+            const allInspectionsResult = await allInspectionsResponse.json();
             
-            if (similarInspections.length > 0) {
-              console.warn('[CUSTOMS] ⚠️ Found similar shipment IDs:', similarInspections.map((i: any) => ({
-                inspectionId: i.inspectionId || i.InspectionID,
-                shipmentId: i.shipmentId || i.ShipmentID,
-              })));
-              alert(`⚠️ Inspection ID Mismatch\n\nLooking for: ${shipmentId}\nFound similar: ${similarInspections[0].shipmentId || similarInspections[0].ShipmentID}\n\nInspection ID: ${similarInspections[0].inspectionId || similarInspections[0].InspectionID}\n\nThe shipment ID format might not match. Please check the ECTA portal to verify the correct shipment ID.`);
+            if (allInspectionsResult.success && allInspectionsResult.data) {
+              const normalizedShipmentId = normalizeShipmentId(shipmentId);
+              const fuzzyMatch = allInspectionsResult.data.find((insp: any) => {
+                const inspShipmentId = insp.shipmentId || insp.ShipmentID || insp.shipmentID || '';
+                return normalizeShipmentId(inspShipmentId) === normalizedShipmentId;
+              });
+              
+              if (fuzzyMatch) {
+                console.log(`[CUSTOMS] ✅ Fuzzy match found! Inspection: ${fuzzyMatch.inspectionId || fuzzyMatch.InspectionID}`);
+                inspectionResult.data = [fuzzyMatch]; // Use fuzzy match
+              } else {
+                alert('❌ No Quality Inspection Found\n\nNo inspection exists for this shipment.\n\nRequired Steps:\n1. ECTA must perform quality inspection\n2. ECTA must approve inspection\n3. ECTA must issue export permit\n\nThen customs declaration can be submitted.');
+                setIsLoadingShipmentData(false);
+                return;
+              }
             } else {
-              alert(`❌ No Quality Inspection Found\n\nNo inspection exists for shipment: ${shipmentId}\n\nAvailable inspections: ${availableShipments.length}\nFirst 5: ${availableShipments.slice(0, 5).join(', ')}\n\nThis shipment has not been inspected yet.\n\nRequired Steps:\n1. ECTA must perform quality inspection\n2. ECTA must approve inspection\n3. ECTA must issue export permit\n\nThen customs declaration can be submitted.`);
+              alert('❌ No Quality Inspections Found\n\nNo inspections exist in the system.');
+              setIsLoadingShipmentData(false);
+              return;
             }
-            setIsLoadingShipmentData(false);
-            return;
           }
           
-          console.log('[CUSTOMS] 📝 Inspection source: Client-side filtered from all inspections');
-          console.log('[CUSTOMS] 📝 Raw inspection data:', JSON.stringify(inspection, null, 2));
-          console.log('[CUSTOMS] 📝 All inspection fields:', Object.keys(inspection));
+          // Get the first (should be only) inspection for this shipment
+          const inspection = inspectionResult.data[0];
+          console.log(`[CUSTOMS] 📝 Found inspection for shipment ${shipmentId}`);
+          console.log('[CUSTOMS] 📝 Inspection data:', inspection);
           
-          // Universal field extractor - handles ANY field name variation
-          const getField = (obj: any, ...fieldNames: string[]): string => {
-            for (const name of fieldNames) {
-              // Check exact match
-              if (obj[name] !== undefined && obj[name] !== null && obj[name] !== '') {
-                return String(obj[name]);
-              }
-              // Check case-insensitive match
-              const keys = Object.keys(obj);
-              const matchingKey = keys.find(k => k.toLowerCase() === name.toLowerCase());
-              if (matchingKey && obj[matchingKey] !== undefined && obj[matchingKey] !== null && obj[matchingKey] !== '') {
-                return String(obj[matchingKey]);
-              }
-            }
-            return '';
-          };
-          
-          // Extract fields with ALL possible variations
-          const inspStatus = getField(
-            inspection,
-            'status', 'Status', 'inspection_status', 'inspectionStatus', 'InspectionStatus', 
-            'statusValue', 'StatusValue', 'state', 'State'
-          );
-          
-          const exportPermitNo = getField(
-            inspection,
-            'exportPermitNo', 'ExportPermitNo', 'exportPermit', 'export_permit_no',
-            'exportPermitNumber', 'ExportPermitNumber', 'permitNo', 'PermitNo',
-            'permit', 'Permit', 'permitNumber', 'PermitNumber', 'exportPermit_no'
-          );
-          
-          const certificateNo = getField(
-            inspection,
-            'certificateNo', 'CertificateNo', 'certificate', 'certificate_no',
-            'certificateNumber', 'CertificateNumber', 'certNo', 'CertNo',
-            'cert', 'Cert', 'certNumber', 'CertNumber', 'certificate_number'
-          );
+          // ✅ FIX: Fields are already normalized by the API endpoint
+          const inspStatus = inspection.status || '';
+          const exportPermitNo = inspection.exportPermitNo || '';
+          const certificateNo = inspection.certificateNo || '';
           
           console.log('[CUSTOMS] 🔍 Extracted inspection details:');
           console.log('  - Status:', inspStatus || '(empty)');
           console.log('  - Certificate:', certificateNo || '(empty)');
           console.log('  - Export Permit:', exportPermitNo || '(empty)');
           
-          // Check if inspection is approved by status OR by having both certificate and permit issued
+          // Check if inspection is approved
           const statusApproved = inspStatus.toUpperCase().includes('APPROVED');
           const hasCertificate = certificateNo.trim().length > 0 && !['N/A', 'NA', 'NONE', 'NULL'].includes(certificateNo.toUpperCase());
           const hasPermit = exportPermitNo.trim().length > 0 && !['NOT ISSUED', 'N/A', 'NA', 'NONE', 'NULL'].includes(exportPermitNo.toUpperCase());
           
-          // CRITICAL: If both certificate AND permit exist, inspection IS approved (regardless of status field)
+          // CRITICAL: If both certificate AND permit exist, inspection IS approved
           const isApprovedByDocuments = hasCertificate && hasPermit;
           const isApproved = statusApproved || isApprovedByDocuments;
           
@@ -413,8 +450,14 @@ ${solution}`);
           return;
         }
         
-        // STEP 3: Fetch contract data for destination and currency
-        console.log('[CUSTOMS] 📄 Step 3: Fetching contract data...');
+        } // End of !skipValidation validation block
+        
+        // ═══════════════════════════════════════════════════════════════
+        // ALWAYS FETCH CONTRACT AND UPDATE FORM (regardless of skipValidation)
+        // ═══════════════════════════════════════════════════════════════
+        
+        // Fetch contract data for destination and currency
+        console.log('[CUSTOMS] 📄 Fetching contract data...');
         let destination = '';
         let currency = 'USD';
         const contractId = shipmentData.contractId;
@@ -453,8 +496,9 @@ ${solution}`);
           console.warn('[CUSTOMS] ⚠️ No contract ID found on shipment');
         }
         
-        // STEP 4: Check if declaration already exists
-        console.log('[CUSTOMS] 🔍 Step 4: Checking for existing declarations...');
+        // Check if declaration already exists (only if NOT skipping validation)
+        if (!skipValidation) {
+        console.log('[CUSTOMS] 🔍 Checking for existing declarations...');
         try {
           const existingDeclResponse = await apiFetch('/customs/declarations', {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -480,8 +524,9 @@ ${solution}`);
         } catch (err) {
           console.warn('[CUSTOMS] Could not check for existing declarations:', err);
         }
+        } // End check for existing declarations
         
-        // STEP 5: Calculate or extract customs value
+        // Calculate or extract customs value
         console.log('[CUSTOMS] 💰 Step 5: Calculating customs value...');
         let customsValue = shipmentData.valueUSD;
         
@@ -533,17 +578,24 @@ ${solution}`);
         // Update form state
         setNewDeclarationForm(extractedData);
         
-        // Show appropriate alert
-        if (missingFields.length > 0) {
-          alert(`⚠️ Partial Auto-Fill\n\nShipment: ${shipmentId}\n✓ Quality inspection approved\n✓ Export permit issued\n\n⚠️ Missing fields (must enter manually):\n${missingFields.map(f => '• ' + f).join('\n')}\n\nPlease fill in the missing information before submitting.`);
-        } else {
-          alert(`✅ All Prerequisites Verified!\n\nShipment: ${shipmentId}\n✓ Quality inspection approved\n✓ Export permit issued\n✓ Contract validated\n✓ All fields auto-populated\n\n📋 Form Data:\n• Exporter: ${extractedData.exporterId}\n• Quantity: ${extractedData.quantity} kg\n• Value: $${extractedData.value}\n• Destination: ${extractedData.destination}\n• Currency: ${extractedData.currency}\n\nForm ready for declaration submission.`);
+        // Show appropriate alert only if not skipping validation
+        if (!skipValidation) {
+          if (missingFields.length > 0) {
+            alert(`⚠️ Partial Auto-Fill\n\nShipment: ${shipmentId}\n✓ Quality inspection approved\n✓ Export permit issued\n\n⚠️ Missing fields (must enter manually):\n${missingFields.map(f => '• ' + f).join('\n')}\n\nPlease fill in the missing information before submitting.`);
+          } else {
+            alert(`✅ All Prerequisites Verified!\n\nShipment: ${shipmentId}\n✓ Quality inspection approved\n✓ Export permit issued\n✓ Contract validated\n✓ All fields auto-populated\n\n📋 Form Data:\n• Exporter: ${extractedData.exporterId}\n• Quantity: ${extractedData.quantity} kg\n• Value: $${extractedData.value}\n• Destination: ${extractedData.destination}\n• Currency: ${extractedData.currency}\n\nForm ready for declaration submission.`);
+          }
         }
         
       } catch (error) {
-        console.error('[CUSTOMS] ❌ Error during validation:', error);
+        console.error('[CUSTOMS] ❌ Error during data fetching:', error);
         console.log('[CUSTOMS] ═══════════════════════════════════════');
-        alert('❌ System Error\n\nFailed to validate shipment prerequisites.\n\n' + error);
+        if (!skipValidation) {
+          alert('❌ System Error\n\nFailed to validate shipment prerequisites.\n\n' + error);
+        } else {
+          // Even if we skip validation, we should still update the form with whatever data we got
+          console.warn('[CUSTOMS] ⚠️ Auto-fill partially failed, but continuing because skipValidation=true');
+        }
       } finally {
         setIsLoadingShipmentData(false);
       }
@@ -555,6 +607,17 @@ ${solution}`);
   const [auditEntityType, setAuditEntityType] = useState<'DECLARATION' | 'SHIPMENT' | 'INSPECTION'>('DECLARATION');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
   const [rejectionDetailsDialogOpen, setRejectionDetailsDialogOpen] = useState(false);
+  
+  // Snackbar state for professional success/error messages
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'warning' | 'info';
+  }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
 
   // Auto-map exporter and shipment data for inspection scheduling
   const autoMapInspectionData = async (declaration: CustomsDeclaration) => {
@@ -703,17 +766,27 @@ ${solution}`);
   const handleCreateDeclarationFromPermit = async (shipmentId: string, inspectionId: string) => {
     console.log('[CUSTOMS] Creating declaration from permit:', { shipmentId, inspectionId });
     
-    // Auto-populate form with shipment ID and open dialog
+    // Since this shipment is coming from the permit-ready list, we KNOW it has:
+    // 1. Quality inspection completed
+    // 2. Inspection approved by ECTA
+    // 3. Export permit issued
+    // So we can skip the validation checks and directly open the form
+    
+    // Open the new declaration dialog first
+    setNewDeclarationDialogOpen(true);
+    
+    // Auto-populate form with shipment ID
     setNewDeclarationForm({
       ...newDeclarationForm,
       shipmentId,
     });
     
-    // Open the new declaration dialog
-    setNewDeclarationDialogOpen(true);
-    
-    // Trigger auto-mapping by calling the shipment ID change handler
-    handleShipmentIdChange(shipmentId);
+    // Small delay to ensure dialog is fully rendered before auto-filling
+    setTimeout(() => {
+      // Trigger auto-mapping WITHOUT showing validation alerts
+      // Pass a flag to skip validation since we already know this is permit-ready
+      handleShipmentIdChange(shipmentId, true);
+    }, 100);
   };
 
   const loadData = async () => {
@@ -829,29 +902,38 @@ ${solution}`);
     
     try {
       console.log('[CUSTOMS] Scheduling inspection for:', declarationId);
+      console.log('[CUSTOMS] Inspection form data:', inspectionForm);
       
-      // Collect all form values from the inspection dialog
-      const dialogElement = document.querySelector('[role="dialog"]');
-      if (!dialogElement) return;
+      // Map officer codes to readable names
+      const officerNames: Record<string, string> = {
+        'OFFICER_ALEMAYEHU': 'Officer Alemayehu T. (Senior Inspector)',
+        'OFFICER_TIGIST': 'Officer Tigist M. (EUDR Specialist)',
+        'OFFICER_DAWIT': 'Officer Dawit K. (Physical Inspection)',
+        'OFFICER_SARA': 'Officer Sara H. (Documentary Review)',
+        'AUTO_ASSIGN': 'Auto-Assign (System will assign)',
+      };
       
-      const inspectionType = dialogElement.querySelector<HTMLInputElement>('input[value]')?.value || 'STANDARD';
-      const priorityLevel = 'NORMAL';
-      const scheduledDate = dialogElement.querySelector<HTMLInputElement>('input[type="date"]')?.value || new Date().toISOString().split('T')[0];
-      const scheduledTime = dialogElement.querySelector<HTMLInputElement>('input[type="time"]')?.value || '09:00';
-      const location = 'PORT';
-      const assignedInspector = 'Officer Alemayehu T.';
-      const specialInstructions = dialogElement.querySelector<HTMLTextAreaElement>('textarea[placeholder*="special requirements"]')?.value || '';
-      const internalNotes = dialogElement.querySelector<HTMLTextAreaElement>('textarea[placeholder*="Internal"]')?.value || '';
+      const locationNames: Record<string, string> = {
+        'PORT': 'Djibouti Port - Customs Area',
+        'WAREHOUSE': 'Bonded Warehouse',
+        'FACTORY': 'Exporter\'s Facility',
+        'CUSTOMS_OFFICE': 'Customs Office',
+        'ECX': 'ECX Warehouse',
+      };
       
-      // Combine notes
+      const assignedInspector = officerNames[inspectionForm.assignedInspector] || 'Officer Alemayehu T.';
+      const location = locationNames[inspectionForm.location] || 'Port';
+      
+      // Combine notes for blockchain recording
       const inspectorNotes = `
-📅 Scheduled: ${scheduledDate} at ${scheduledTime}
+📅 Scheduled: ${inspectionForm.scheduledDate} at ${inspectionForm.scheduledTime}
 📍 Location: ${location}
 👤 Inspector: ${assignedInspector}
-🎯 Priority: ${priorityLevel}
+🎯 Priority: ${inspectionForm.priorityLevel}
+👤 Contact: ${inspectionForm.contactPerson} (${inspectionForm.contactPhone})
 
-${specialInstructions ? '📝 Special Instructions:\n' + specialInstructions : ''}
-${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
+${inspectionForm.specialInstructions ? '📝 Special Instructions:\n' + inspectionForm.specialInstructions : ''}
+${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.internalNotes : ''}
       `.trim();
       
       // Call customs review API to schedule inspection
@@ -863,8 +945,11 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         },
         body: JSON.stringify({
           inspectorNotes,
-          inspectionType: selectedDeclaration?.eudrCompliant ? 'EUDR_ENHANCED' : inspectionType,
-          scheduledDate: `${scheduledDate}T${scheduledTime}:00.000Z`,
+          inspectionType: selectedDeclaration?.eudrCompliant ? 'EUDR_ENHANCED' : inspectionForm.inspectionType,
+          scheduledDate: `${inspectionForm.scheduledDate}T${inspectionForm.scheduledTime}:00.000Z`,
+          priorityLevel: inspectionForm.priorityLevel,
+          location: inspectionForm.location,
+          assignedInspector: inspectionForm.assignedInspector,
         })
       });
       
@@ -872,39 +957,45 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       if (result.success) {
         console.log('[CUSTOMS] ✅ Inspection scheduled successfully');
         
-        // Show professional confirmation with all details
-        alert(
-          `✅ Inspection Scheduled\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `Declaration: ${declarationId}\n` +
-          `Type: ${selectedDeclaration?.eudrCompliant ? 'EUDR Enhanced' : inspectionType}\n` +
-          `Priority: ${priorityLevel}\n\n` +
-          `📅 Date & Time:\n` +
-          `   ${scheduledDate} at ${scheduledTime}\n\n` +
-          `📍 Location:\n` +
-          `   ${location}\n\n` +
-          `👤 Assigned Inspector:\n` +
-          `   ${assignedInspector}\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `Status: UNDER_INSPECTION\n\n` +
-          `📧 Notification sent to exporter\n` +
-          `📋 Inspector briefing package prepared\n\n` +
-          `The exporter will be notified with:\n` +
-          `• Inspection date, time, and location\n` +
-          `• Required documents to provide\n` +
-          `• Contact information\n` +
-          `• Special instructions`
-        );
+        // Show professional confirmation
+        setSnackbar({
+          open: true,
+          message: `Inspection scheduled for ${inspectionForm.scheduledDate} at ${inspectionForm.scheduledTime}. Status updated to UNDER_INSPECTION.`,
+          severity: 'success',
+        });
         
         setInspectionDialogOpen(false);
-        loadData();
+        
+        // Reset form
+        setInspectionForm({
+          inspectionType: 'STANDARD',
+          priorityLevel: 'NORMAL',
+          scheduledDate: new Date().toISOString().split('T')[0],
+          scheduledTime: '09:00',
+          location: 'PORT',
+          assignedInspector: 'OFFICER_ALEMAYEHU',
+          contactPerson: '',
+          contactPhone: '',
+          specialInstructions: '',
+          internalNotes: '',
+        });
+        
+        await loadData();
       } else {
         console.error('[CUSTOMS] ❌ Failed to schedule inspection:', result);
-        alert(`❌ Failed to schedule inspection\n\n${result.error || 'Unknown error'}`);
+        setSnackbar({
+          open: true,
+          message: `Failed to schedule inspection: ${result.error || 'Unknown error'}`,
+          severity: 'error',
+        });
       }
     } catch (error) {
       console.error('[CUSTOMS] Failed to schedule inspection:', error);
-      alert(`❌ Network Error\n\nFailed to schedule inspection: ${error}`);
+      setSnackbar({
+        open: true,
+        message: `Network error: ${error}`,
+        severity: 'error',
+      });
     }
   };
 
@@ -949,6 +1040,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
     
     try {
       console.log('[CUSTOMS] Clearing declaration:', declarationId);
+      console.log('[CUSTOMS] Clearance form data:', clearanceForm);
       
       // STEP 1: Verify certificates exist before clearance
       const declaration = declarations.find(d => d.declarationId === declarationId);
@@ -975,7 +1067,11 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           } else {
             const validCert = phytoResult.data.find((c: any) => c.status === 'ISSUED');
             if (!validCert) {
-              alert('⚠️ Phytosanitary certificate exists but is not valid (expired or revoked)');
+              setSnackbar({
+                open: true,
+                message: 'Phytosanitary certificate exists but is not valid (expired or revoked)',
+                severity: 'warning',
+              });
               return;
             }
             console.log('[CUSTOMS] ✅ Valid phytosanitary certificate found:', validCert.certificateNumber);
@@ -1009,8 +1105,15 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          clearanceNumber: `CLR-${Date.now()}`,
-          dutiesAmount: '0', // Can be calculated based on value
+          clearanceNumber: clearanceForm.clearanceNumber || `CLR-${Date.now()}`,
+          dutiesAmount: clearanceForm.customsDuties,
+          vatAmount: clearanceForm.vatAmount,
+          clearanceType: clearanceForm.clearanceType,
+          clearedBy: clearanceForm.clearedBy,
+          exitPoint: clearanceForm.exitPoint,
+          validityPeriod: clearanceForm.validityPeriod,
+          clearanceRemarks: clearanceForm.clearanceRemarks,
+          officerNotes: clearanceForm.officerNotes,
         })
       });
       
@@ -1047,56 +1150,69 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
               console.log('[CUSTOMS] ✅ Shipment status updated to READY_FOR_SHIPPING');
               
               // Show clearance success with shipping info
-              alert(
-                `✅ Declaration Cleared Successfully!\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `Declaration: ${declarationId}\n` +
-                `Clearance Number: ${result.clearanceNumber}\n` +
-                `Shipment: ${shipmentId}\n\n` +
-                `STATUS: CLEARED ✓\n` +
-                `Export Authorized: YES\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `📦 NEXT STEP: SHIPPING\n\n` +
-                `Shipment status updated to READY_FOR_SHIPPING\n\n` +
-                `Required Actions:\n` +
-                `1. Navigate to Shipping Portal\n` +
-                `2. Book freight (sea or air)\n` +
-                `3. Record Bill of Lading\n` +
-                `4. Arrange transport to port\n\n` +
-                `The exporter will be notified to proceed with shipping arrangements.`
-              );
+              setSnackbar({
+                open: true,
+                message: `Declaration cleared! Clearance #${result.clearanceNumber}. Shipment ready for shipping - navigate to Shipping Portal to book freight.`,
+                severity: 'success',
+              });
             } else {
               console.warn('[CUSTOMS] ⚠️ Could not update shipment status:', shipmentResult.error);
+              setSnackbar({
+                open: true,
+                message: `Declaration cleared! Clearance #${result.clearanceNumber}. Please manually trigger shipping workflow.`,
+                severity: 'success',
+              });
             }
           } catch (shippingError) {
             console.error('[CUSTOMS] ⚠️ Shipping workflow trigger failed:', shippingError);
             // Still show clearance success even if shipping trigger fails
-            alert(
-              `✅ Declaration Cleared Successfully!\n\n` +
-              `Clearance Number: ${result.clearanceNumber}\n` +
-              `Shipment: ${shipmentId}\n\n` +
-              `⚠️ Note: Please manually trigger shipping workflow\n` +
-              `Navigate to Shipping Portal to continue`
-            );
+            setSnackbar({
+              open: true,
+              message: `Declaration cleared! Clearance #${result.clearanceNumber}. Please navigate to Shipping Portal to continue.`,
+              severity: 'success',
+            });
           }
         } else {
           // Fallback: no shipment ID
-          alert(
-            `✅ Declaration Cleared\n\n` +
-            `Clearance Number: ${result.clearanceNumber}\n\n` +
-            `Export authorized. Proceed to shipping.`
-          );
+          setSnackbar({
+            open: true,
+            message: `Declaration cleared! Clearance #${result.clearanceNumber}. Export authorized.`,
+            severity: 'success',
+          });
         }
         
         setClearanceDialogOpen(false);
-        loadData();
+        
+        // Reset form
+        setClearanceForm({
+          clearanceNumber: '',
+          clearanceDate: new Date().toISOString().split('T')[0],
+          clearedBy: 'OFFICER_ALEMAYEHU',
+          clearanceType: 'FULL',
+          customsDuties: '0',
+          vatAmount: '0',
+          exitPoint: 'DJIBOUTI',
+          validityPeriod: '30',
+          clearanceRemarks: '',
+          officerNotes: '',
+        });
+        
+        await loadData();
       } else {
         console.error('[CUSTOMS] ❌ Failed to clear declaration:', result);
-        alert('Failed to clear declaration: ' + (result.error?.message || 'Unknown error'));
+        setSnackbar({
+          open: true,
+          message: `Failed to clear declaration: ${result.error?.message || 'Unknown error'}`,
+          severity: 'error',
+        });
       }
     } catch (error) {
       console.error('[CUSTOMS] Failed to clear declaration:', error);
-      alert('Error clearing declaration. Please try again.');
+      setSnackbar({
+        open: true,
+        message: `Error clearing declaration: ${error}`,
+        severity: 'error',
+      });
     }
   };
 
@@ -1106,18 +1222,45 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
     
     try {
       console.log('[CUSTOMS] Rejecting declaration:', declarationId);
+      console.log('[CUSTOMS] Rejection form data:', rejectionForm);
       
-      // Collect form values
-      const dialogElement = document.querySelector('[role="dialog"]');
-      if (!dialogElement) return;
+      // Validate required fields
+      if (!rejectionForm.detailedReason || rejectionForm.detailedReason.trim() === '') {
+        setSnackbar({
+          open: true,
+          message: 'Detailed rejection reason is required',
+          severity: 'error',
+        });
+        return;
+      }
       
-      const rejectionCategory = 'DOCUMENTATION';
-      const severityLevel = 'CORRECTABLE';
-      const rejectedBy = 'Officer Alemayehu T.';
-      const rejectionDate = new Date().toISOString().split('T')[0];
-      const detailedReason = dialogElement.querySelector<HTMLTextAreaElement>('textarea[placeholder*="specific details"]')?.value || 'Documentation incomplete or invalid';
-      const requiredActions = dialogElement.querySelector<HTMLTextAreaElement>('textarea[placeholder*="Required Actions"]')?.value || '';
-      const appealDeadline = '14';
+      const officerNames: Record<string, string> = {
+        'OFFICER_ALEMAYEHU': 'Officer Alemayehu T.',
+        'OFFICER_TIGIST': 'Officer Tigist M.',
+        'OFFICER_DAWIT': 'Officer Dawit K.',
+        'OFFICER_SARA': 'Officer Sara H.',
+      };
+      
+      const rejectedBy = officerNames[rejectionForm.rejectedBy] || 'Officer Alemayehu T.';
+      
+      // Build comprehensive rejection reason
+      const fullRejectionReason = `
+Category: ${rejectionForm.rejectionCategory}
+Severity: ${rejectionForm.severityLevel}
+Rejected By: ${rejectedBy}
+Date: ${rejectionForm.rejectionDate}
+
+REASON:
+${rejectionForm.detailedReason}
+
+${rejectionForm.requiredActions ? 'REQUIRED ACTIONS FOR RESUBMISSION:\n' + rejectionForm.requiredActions : ''}
+
+${rejectionForm.legalReference ? 'LEGAL REFERENCE: ' + rejectionForm.legalReference : ''}
+
+Appeal Deadline: ${rejectionForm.appealDeadline} days from rejection date
+
+${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n' + rejectionForm.officerNotes : ''}
+      `.trim();
       
       const response = await apiFetch(`/customs/declaration/${declarationId}/reject`, {
         method: 'POST',
@@ -1127,7 +1270,10 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         },
         body: JSON.stringify({
           rejectedBy,
-          rejectionReason: `${rejectionCategory}: ${detailedReason}${requiredActions ? '\n\nRequired Actions:\n' + requiredActions : ''}`
+          rejectionReason: fullRejectionReason,
+          rejectionCategory: rejectionForm.rejectionCategory,
+          severityLevel: rejectionForm.severityLevel,
+          appealDeadline: rejectionForm.appealDeadline,
         })
       });
       
@@ -1135,34 +1281,43 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       if (result.success) {
         console.log('[CUSTOMS] ✅ Declaration rejected successfully');
         
-        alert(
-          `❌ Declaration Rejected\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `Declaration: ${declarationId}\n` +
-          `Category: ${rejectionCategory}\n` +
-          `Severity: ${severityLevel}\n` +
-          `Rejected By: ${rejectedBy}\n` +
-          `Date: ${rejectionDate}\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `Status: REJECTED\n\n` +
-          `📧 Exporter notification sent with:\n` +
-          `• Detailed rejection reason\n` +
-          `• Required corrective actions\n` +
-          `• Appeal rights (${appealDeadline} days)\n` +
-          `• Resubmission instructions\n\n` +
-          `🔒 Rejection recorded on blockchain\n` +
-          `📋 Export blocked until corrected`
-        );
+        setSnackbar({
+          open: true,
+          message: `Declaration rejected. Exporter notified with rejection details and appeal rights (${rejectionForm.appealDeadline} days).`,
+          severity: 'warning',
+        });
         
         setRejectionDialogOpen(false);
-        loadData();
+        
+        // Reset form
+        setRejectionForm({
+          rejectionCategory: 'DOCUMENTATION',
+          severityLevel: 'CORRECTABLE',
+          rejectedBy: 'OFFICER_ALEMAYEHU',
+          rejectionDate: new Date().toISOString().split('T')[0],
+          detailedReason: '',
+          requiredActions: '',
+          legalReference: '',
+          appealDeadline: '14',
+          officerNotes: '',
+        });
+        
+        await loadData();
       } else {
         console.error('[CUSTOMS] ❌ Failed to reject declaration:', result);
-        alert(`❌ Failed to reject declaration\n\n${result.error?.message || 'Unknown error'}`);
+        setSnackbar({
+          open: true,
+          message: `Failed to reject declaration: ${result.error?.message || 'Unknown error'}`,
+          severity: 'error',
+        });
       }
     } catch (error) {
       console.error('[CUSTOMS] Failed to reject declaration:', error);
-      alert(`❌ Network Error\n\n${error}`);
+      setSnackbar({
+        open: true,
+        message: `Network error: ${error}`,
+        severity: 'error',
+      });
     }
   };
 
@@ -1256,16 +1411,15 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
       const result = await response.json();
       
       if (result.success) {
-        alert(
-          `✅ Declaration Submitted Successfully\n\n` +
-          `Declaration ID: ${declarationId}\n` +
-          `Shipment: ${newDeclarationForm.shipmentId}\n` +
-          `Quantity: ${parseFloat(newDeclarationForm.quantity).toLocaleString()} kg\n` +
-          `Value: $${parseFloat(newDeclarationForm.value).toLocaleString()}\n` +
-          `Destination: ${newDeclarationForm.destination}\n\n` +
-          `Status: SUBMITTED - Ready for customs inspection`
-        );
+        // Close the dialog immediately
         setNewDeclarationDialogOpen(false);
+        
+        // Show professional success message
+        setSnackbar({
+          open: true,
+          message: `Declaration ${declarationId} submitted successfully. Status: SUBMITTED - Ready for inspection.`,
+          severity: 'success',
+        });
         
         // Reset form
         setNewDeclarationForm({
@@ -1282,13 +1436,30 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           additionalNotes: '',
         });
         
-        loadData(); // Reload declarations
+        // Reload declarations to show the new one
+        await loadData();
+        
+        // Reload permit-ready shipments (remove the one we just submitted)
+        await loadPermitReadyShipments();
+        
+        // Switch to Tab 1 (Submitted) to show the new declaration
+        setTabValue(1);
+        
+        console.log('[CUSTOMS] ✅ Declaration submitted, switched to Submitted tab');
       } else {
-        alert(`❌ Failed to submit declaration\n\n${result.error?.message || 'Unknown error'}`);
+        setSnackbar({
+          open: true,
+          message: `Failed to submit declaration: ${result.error?.message || 'Unknown error'}`,
+          severity: 'error',
+        });
       }
     } catch (error) {
       console.error('[CUSTOMS] Failed to submit declaration:', error);
-      alert(`❌ Network Error\n\n${error}`);
+      setSnackbar({
+        open: true,
+        message: `Network error: ${error}`,
+        severity: 'error',
+      });
     }
   };
   const declarationColumns: GridColDef[] = [
@@ -1468,68 +1639,88 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         p: { xs: 2, md: 3 },
       }}
     >
-      {/* Workflow Status Cards - Clickable to switch tabs */}
-      <Grid container spacing={3} mb={3}>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(0)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Permit Ready"
-              value={stats.permitReady}
-              icon={<Assignment />}
-              brandColor="#9c27b0"
-            />
-          </Box>
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(1)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Submitted"
-              value={stats.submitted}
-              icon={<LocalShipping />}
-              brandColor="#2196f3"
-            />
-          </Box>
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(2)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Inspecting"
-              value={stats.underInspection}
-              icon={<Security />}
-              brandColor="#ff9800"
-            />
-          </Box>
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(3)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Under Review"
-              value={stats.underReview}
-              icon={<Warning />}
-              brandColor="#ffc107"
-            />
-          </Box>
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(4)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Cleared"
-              value={stats.cleared}
-              icon={<CheckCircle />}
-              brandColor="#4caf50"
-            />
-          </Box>
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <Box onClick={() => setTabValue(5)} sx={{ cursor: 'pointer' }}>
-            <DashboardKPI
-              title="Rejected"
-              value={stats.rejected}
-              icon={<Cancel />}
-              brandColor="#f44336"
-            />
-          </Box>
-        </Grid>
+      {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        {[
+          { icon: <Assignment />, label: 'Permit Ready', value: stats.permitReady, color: '#9c27b0', index: 0 },
+          { icon: <LocalShipping />, label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 1 },
+          { icon: <Security />, label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 2 },
+          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 3 },
+          { icon: <CheckCircle />, label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 4 },
+          { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 5 },
+        ].map((kpi, idx) => (
+          <Grid item xs={12} sm={6} md={2} key={idx}>
+            <Card 
+              sx={{ 
+                cursor: 'pointer',
+                height: 140,
+                border: tabValue === kpi.index ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
+                bgcolor: tabValue === kpi.index ? `${kpi.color}08` : 'white',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                borderRadius: 2,
+                boxShadow: tabValue === kpi.index 
+                  ? `0 4px 12px ${kpi.color}40` 
+                  : '0 1px 3px rgba(0,0,0,0.05)',
+                '&:hover': {
+                  boxShadow: `0 8px 24px ${kpi.color}40`,
+                  transform: 'translateY(-4px)',
+                  borderColor: kpi.color,
+                },
+              }}
+              onClick={() => setTabValue(kpi.index)}
+            >
+              <CardContent sx={{ 
+                textAlign: 'center', 
+                py: 2.5, 
+                px: 2,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}>
+                <Box sx={{ 
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: '50%', 
+                  bgcolor: `${kpi.color}15`, 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  mb: 1.5
+                }}>
+                  {React.cloneElement(kpi.icon, { 
+                    sx: { fontSize: 28, color: kpi.color } 
+                  })}
+                </Box>
+                <Typography 
+                  variant="caption" 
+                  sx={{ 
+                    color: '#666', 
+                    textTransform: 'uppercase', 
+                    fontWeight: 600, 
+                    fontSize: '0.7rem',
+                    letterSpacing: 0.5,
+                    mb: 0.5
+                  }}
+                >
+                  {kpi.label}
+                </Typography>
+                <Typography 
+                  variant="h4" 
+                  sx={{ 
+                    fontWeight: 700, 
+                    color: kpi.color,
+                    lineHeight: 1,
+                    mb: 0.5
+                  }}
+                >
+                  {kpi.value}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
       {/* Workflow Progress Alert */}
       <Alert severity="info" sx={{ mb: 2 }}>
@@ -1564,18 +1755,55 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
         </Typography>
       </Alert>
 
-      {/* Tabs - Customs Workflow Only */}
-      <ModernCard>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)} variant="scrollable" scrollButtons="auto">
-            <Tab label="📋 Permit Ready" icon={<Assignment />} iconPosition="start" />
-            <Tab label="📤 Submitted" icon={<LocalShipping />} iconPosition="start" />
-            <Tab label="🔍 Inspecting" icon={<Security />} iconPosition="start" />
-            <Tab label="⚖️ Under Review" icon={<Warning />} iconPosition="start" />
-            <Tab label="✅ Cleared" icon={<CheckCircle />} iconPosition="start" />
-            <Tab label="❌ Rejected" icon={<Cancel />} iconPosition="start" />
-          </Tabs>
-        </Box>
+      {/* Tabs - Customs Workflow (Banks/ECTA Portal Style) */}
+      <Paper sx={{ 
+        mb: 3, 
+        borderRadius: 2, 
+        boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
+        border: '1px solid #e0e0e0',
+        overflow: 'hidden'
+      }}>
+        <Tabs 
+          value={tabValue} 
+          onChange={(e, newValue) => setTabValue(newValue)} 
+          variant="fullWidth"
+          sx={{ 
+            borderBottom: 2,
+            borderColor: 'divider',
+            '& .MuiTab-root': {
+              minHeight: 64,
+              textTransform: 'none',
+              fontSize: '0.95rem',
+              fontWeight: 600,
+              color: '#666',
+              transition: 'all 0.3s ease',
+              '&.Mui-selected': {
+                color: '#0F47AF',
+                fontWeight: 700,
+                bgcolor: 'rgba(15, 71, 175, 0.05)',
+              },
+              '&:hover': {
+                color: '#0F47AF',
+                bgcolor: 'rgba(15, 71, 175, 0.03)',
+              }
+            },
+            '& .MuiTabs-indicator': {
+              height: 4,
+              backgroundColor: '#0F47AF',
+              borderRadius: '4px 4px 0 0',
+            }
+          }}
+        >
+          <Tab label="Permit Ready" icon={<Assignment />} iconPosition="start" />
+          <Tab label="Submitted" icon={<LocalShipping />} iconPosition="start" />
+          <Tab label="Inspecting" icon={<Security />} iconPosition="start" />
+          <Tab label="Under Review" icon={<Warning />} iconPosition="start" />
+          <Tab label="Cleared" icon={<CheckCircle />} iconPosition="start" />
+          <Tab label="Rejected" icon={<Cancel />} iconPosition="start" />
+        </Tabs>
+      </Paper>
+
+      <Box>
 
         {/* Tab 0: Permit Ready (Shipments with ECTA Export Permits) */}
         <TabPanel value={tabValue} index={0}>
@@ -1594,7 +1822,64 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           </Alert>
 
           <Box sx={{ mb: 3 }}>
-            <CustomsInspection onCreateDeclaration={handleCreateDeclarationFromPermit} />
+            {permitReadyShipments.length > 0 ? (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Inspection ID</TableCell>
+                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Shipment ID</TableCell>
+                      <TableCell sx={{ width: '12%', fontWeight: 600 }}>Exporter</TableCell>
+                      <TableCell sx={{ width: '12%', fontWeight: 600 }}>Quality Grade</TableCell>
+                      <TableCell sx={{ width: '10%', fontWeight: 600 }}>Score</TableCell>
+                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Certificate No</TableCell>
+                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Export Permit</TableCell>
+                      <TableCell align="right" sx={{ width: '6%', fontWeight: 600 }}>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {permitReadyShipments.map((shipment: any) => (
+                      <TableRow key={shipment.inspectionId} hover>
+                        <TableCell>{shipment.inspectionId}</TableCell>
+                        <TableCell>{shipment.shipmentId}</TableCell>
+                        <TableCell>{shipment.exporterId}</TableCell>
+                        <TableCell>{shipment.qualityGrade || shipment.classification || 'N/A'}</TableCell>
+                        <TableCell>{shipment.totalScore ? `${shipment.totalScore}/10` : 'N/A'}</TableCell>
+                        <TableCell>{shipment.certificateNo || 'N/A'}</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={shipment.exportPermitNo || 'N/A'} 
+                            color="success" 
+                            size="small"
+                            icon={<CheckCircle />}
+                          />
+                        </TableCell>
+                        <TableCell align="right">
+                          <Button
+                            variant="contained"
+                            size="small"
+                            startIcon={<Assignment />}
+                            onClick={() => handleCreateDeclarationFromPermit(shipment.shipmentId, shipment.inspectionId)}
+                            sx={{
+                              backgroundColor: '#9c27b0',
+                              '&:hover': { backgroundColor: '#7b1fa2' }
+                            }}
+                          >
+                            Create Declaration
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Alert severity="warning">
+                <Typography variant="body2">
+                  No permit-ready shipments found. Inspections must be completed by ECTA before customs declarations can be processed.
+                </Typography>
+              </Alert>
+            )}
           </Box>
         </TabPanel>
 
@@ -1718,7 +2003,7 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
             />
           </Box>
         </TabPanel>
-      </ModernCard>
+      </Box>
 
       {/* Declaration Detail Dialog */}
       <Dialog open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen && !rejectionDialogOpen} onClose={() => setSelectedDeclaration(null)} maxWidth="md" fullWidth>
@@ -2506,7 +2791,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     select
                     required
                     label="Inspection Type"
-                    defaultValue={selectedDeclaration.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD'}
+                    value={inspectionForm.inspectionType}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, inspectionType: e.target.value })}
                     helperText="Select the type of inspection required"
                   >
                     <MenuItem value="DOCUMENTARY">Documentary Review (Desk-based)</MenuItem>
@@ -2525,7 +2811,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     select
                     required
                     label="Priority Level"
-                    defaultValue="NORMAL"
+                    value={inspectionForm.priorityLevel}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, priorityLevel: e.target.value })}
                     helperText="Urgency of inspection"
                   >
                     <MenuItem value="URGENT">🔴 Urgent (Within 24 hours)</MenuItem>
@@ -2542,6 +2829,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     required
                     type="date"
                     label="Inspection Date"
+                    value={inspectionForm.scheduledDate}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, scheduledDate: e.target.value })}
                     InputLabelProps={{ shrink: true }}
                     inputProps={{
                       min: new Date().toISOString().split('T')[0]
@@ -2557,8 +2846,9 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     required
                     type="time"
                     label="Inspection Time"
+                    value={inspectionForm.scheduledTime}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, scheduledTime: e.target.value })}
                     InputLabelProps={{ shrink: true }}
-                    defaultValue="09:00"
                     helperText="Start time (working hours 08:00-17:00)"
                   />
                 </Grid>
@@ -2570,7 +2860,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     select
                     required
                     label="Inspection Location"
-                    defaultValue={inspectionAutoData.shipmentLocation === 'ECX Warehouse' ? 'ECX' : 'PORT'}
+                    value={inspectionForm.location}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, location: e.target.value })}
                     helperText="Auto-detected from shipment channel"
                   >
                     <MenuItem value="PORT">Djibouti Port - Customs Area</MenuItem>
@@ -2588,7 +2879,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     select
                     required
                     label="Assigned Inspector"
-                    defaultValue="OFFICER_ALEMAYEHU"
+                    value={inspectionForm.assignedInspector}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, assignedInspector: e.target.value })}
                     helperText="Customs officer responsible"
                   >
                     <MenuItem value="OFFICER_ALEMAYEHU">Officer Alemayehu T. (Senior Inspector)</MenuItem>
@@ -2605,7 +2897,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     fullWidth
                     required
                     label="Exporter Contact Person"
-                    defaultValue={inspectionAutoData.contactPerson}
+                    value={inspectionForm.contactPerson}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, contactPerson: e.target.value })}
                     placeholder="Name of person to contact"
                     helperText="Auto-filled from exporter registration"
                     InputProps={{
@@ -2620,7 +2913,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     fullWidth
                     required
                     label="Contact Phone"
-                    defaultValue={inspectionAutoData.contactPhone}
+                    value={inspectionForm.contactPhone}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, contactPhone: e.target.value })}
                     placeholder="+251-XX-XXX-XXXX"
                     helperText="Auto-filled from exporter registration"
                     InputProps={{
@@ -2669,6 +2963,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     label="Special Instructions"
                     multiline
                     rows={3}
+                    value={inspectionForm.specialInstructions}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, specialInstructions: e.target.value })}
                     placeholder="Enter any special requirements, specific samples needed, or additional instructions for the inspection..."
                     helperText="e.g., 'Sample from lot ECX-2026-22943-31578', 'Verify traceability documentation', 'Check moisture content'"
                   />
@@ -2681,6 +2977,8 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
                     label="Internal Notes (Officer Only)"
                     multiline
                     rows={2}
+                    value={inspectionForm.internalNotes}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, internalNotes: e.target.value })}
                     placeholder="Internal customs notes (not visible to exporter)..."
                     helperText="Risk assessment notes, previous inspection history, etc."
                   />
@@ -3075,6 +3373,23 @@ ${internalNotes ? '\n🔒 Internal Notes:\n' + internalNotes : ''}
           setCustomsDocUploadOpen(false);
         }}
       />
+      
+      {/* Professional Snackbar for Success/Error Messages */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: '100%', minWidth: 400 }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

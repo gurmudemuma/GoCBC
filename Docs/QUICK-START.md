@@ -1,53 +1,116 @@
 # CECBS Quick Start Guide
 
-## Fresh Installation
+## 🚀 Quick Start (3 Options)
 
+### Option 1: Double-Click (Easiest)
+1. Double-click `START-SYSTEM.bat` to start
+2. Double-click `STOP-SYSTEM.bat` to stop
+
+### Option 2: PowerShell (Recommended)
 ```powershell
-# Run installation script (first time only)
-.\install.ps1
+# Start the system
+.\start-all.ps1 -SkipBuild
+
+# Check status
+.\status.ps1
+
+# Stop the system
+.\stop-all.ps1 -KeepData
 ```
 
-This will:
-- Check prerequisites (Docker, Node.js, Go)
-- Install dependencies
-- Build chaincode
-- Start Fabric network
-- Create channel
-- Deploy chaincode
-
-## Daily Usage
-
-### Start System
+### Option 3: Development Mode (For Developers)
 ```powershell
-# Start all services
-.\start-services.ps1
+# Opens 4 terminal tabs with hot-reload
+.\dev-mode.ps1
 ```
 
-### Stop System
+---
+
+## 📋 First Time Setup
+
+### Prerequisites
+- **Docker Desktop** - Must be running
+- **Node.js 18+** - https://nodejs.org/
+- **Go 1.20+** - https://go.dev/dl/
+
+### Initial Installation
+
 ```powershell
-# Stop all services
-.\stop-services.ps1
+# 1. Open PowerShell in project directory
+cd c:\goCBC
+
+# 2. First-time full startup (takes 5-10 minutes)
+.\start-all.ps1
+
+# This will:
+# ✓ Check prerequisites
+# ✓ Install npm dependencies
+# ✓ Build chaincode and TypeScript
+# ✓ Start Fabric network
+# ✓ Deploy smart contracts
+# ✓ Start API and UI servers
 ```
 
-### Deploy Updates
+---
+
+## 🎯 Daily Usage
+
+### Starting Your Day
 ```powershell
-# After making code changes
-.\deploy.ps1
-
-# With custom commit message
-.\deploy.ps1 -CommitMessage "Added new feature"
-
-# Skip tests for faster deployment
-.\deploy.ps1 -SkipTests
-
-# Skip backup
-.\deploy.ps1 -SkipBackup
+# Quick start (30-60 seconds)
+.\start-all.ps1 -SkipBuild
 ```
 
-## Access System
+### During Development
+```powershell
+# Option 1: Full dev environment
+.\dev-mode.ps1
 
-- **UI**: http://localhost:3000
-- **API**: http://localhost:3001
+# Option 2: Manual control
+# Terminal 1: Infrastructure
+.\start-all.ps1 -SkipBuild
+
+# Terminal 2: API with hot-reload
+cd api
+npm run dev
+
+# Terminal 3: UI with hot-reload
+cd ui
+npm run dev
+```
+
+### Ending Your Day
+```powershell
+# Keep data for tomorrow
+.\stop-all.ps1 -KeepData
+
+# Or clean slate
+.\stop-all.ps1
+```
+
+---
+
+## 🔧 Available Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `start-all.ps1` | Start everything | `.\start-all.ps1 -SkipBuild` |
+| `stop-all.ps1` | Stop everything | `.\stop-all.ps1 -KeepData` |
+| `restart-all.ps1` | Restart system | `.\restart-all.ps1 -KeepData -SkipBuild` |
+| `status.ps1` | Check status | `.\status.ps1` |
+| `dev-mode.ps1` | Dev environment | `.\dev-mode.ps1` |
+| `START-SYSTEM.bat` | Quick start | Double-click |
+| `STOP-SYSTEM.bat` | Quick stop | Double-click |
+
+**Detailed documentation:** See `STARTUP-GUIDE.md`
+
+---
+
+## 🌐 Access System
+
+- **Frontend UI**: http://localhost:3000
+- **Backend API**: http://localhost:3001
+- **API Documentation**: http://localhost:3001/api-docs
 
 ## Default Logins
 

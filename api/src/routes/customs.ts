@@ -4,9 +4,46 @@ import { logger } from '../utils/logger';
 import { authMiddleware } from '../middleware/auth';
 import DatabaseService from '../services/databaseService';
 import RiskService from '../services/riskService';
+import { dedupeById, isValidDeclaration } from '../utils/dataFilters';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+
+// ✅ FIX: Field normalization helpers for consistent API responses
+function normalizeShipment(shipment: any) {
+  return {
+    shipmentId: shipment.shipmentId || shipment.ShipmentID || shipment.shipmentID || '',
+    contractId: shipment.contractId || shipment.ContractID || shipment.contractID || '',
+    exporterId: shipment.exporterId || shipment.ExporterID || shipment.exporterID || '',
+    quantity: shipment.quantity || shipment.Quantity || 0,
+    valueUSD: shipment.valueUSD || shipment.ValueUSD || shipment.value || 0,
+    eudrCompliant: shipment.eudrCompliant || shipment.EUDRCompliant || false,
+    status: shipment.status || shipment.Status || '',
+    origin: shipment.origin || shipment.Origin || '',
+    destination: shipment.destination || shipment.Destination || '',
+  };
+}
+
+function normalizeDeclaration(declaration: any) {
+  return {
+    declarationId: declaration.declarationId || declaration.DeclarationID || '',
+    shipmentId: declaration.shipmentId || declaration.ShipmentID || declaration.shipmentID || '',
+    exporterId: declaration.exporterId || declaration.ExporterID || declaration.exporterID || '',
+    hsCode: declaration.hsCode || declaration.HSCode || declaration.hs_code || '',
+    quantity: Number(declaration.quantity ?? declaration.Quantity ?? 0),
+    value: Number(declaration.value ?? declaration.Value ?? 0),
+    currency: declaration.currency || declaration.Currency || 'USD',
+    destination: declaration.destination || declaration.Destination || '',
+    portOfExit: declaration.portOfExit || declaration.PortOfExit || '',
+    eudrCompliant: declaration.eudrCompliant ?? declaration.EUDRCompliant ?? false,
+    status: declaration.status || declaration.Status || '',
+    declarationType: declaration.declarationType || declaration.DeclarationType || 'STANDARD',
+    customsOfficer: declaration.customsOfficer || declaration.CustomsOfficer || '',
+    clearanceNumber: declaration.clearanceNumber || declaration.ClearanceNumber || '',
+    createdAt: declaration.createdAt || declaration.created_at || null,
+    updatedAt: declaration.updatedAt || declaration.updated_at || null,
+  };
+}
 
 // ==================== CUSTOMS DECLARATION ROUTES ====================
 
@@ -215,6 +252,61 @@ router.post('/declaration/:declarationId/clear', async (req, res) => {
         success: false,
         error: { message: `Declaration cannot be cleared, current status: ${currentStatus}. It must be UNDER_REVIEW before customs clearance.` }
       });
+    }
+
+    // ✅ DOCUMENT VERIFICATION: Check required export documents before clearance
+    try {
+      const { DatabaseService } = await import('../services/databaseService');
+      const shipmentID = declarationId.replace('CD-', '');
+      
+      const db = DatabaseService.getInstance();
+      const documents = await db.all(
+        `SELECT document_type, verification_status FROM documents 
+         WHERE (entity_type = 'customs' AND entity_id = ?) 
+         OR (entity_type = 'shipment' AND entity_id = ?)
+         AND status = 'active'`,
+        [declarationId, shipmentID]
+      );
+      
+      // Required documents for customs clearance
+      const requiredDocs = ['EXPORT_PERMIT', 'PHYTOSANITARY_CERTIFICATE', 'CERTIFICATE_OF_ORIGIN'];
+      const docTypes = documents.map((d: any) => d.document_type);
+      const missing = requiredDocs.filter(type => !docTypes.includes(type));
+      
+      if (missing.length > 0) {
+        logger.warn(`Customs clearance ${declarationId} blocked: Missing ${missing.length} required documents`);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_EXPORT_DOCUMENTS',
+            message: 'Cannot clear customs: Required export documents are missing',
+            missing: missing,
+            hint: 'Upload all required export documents before customs clearance'
+          }
+        });
+      }
+      
+      // Check if all required documents are verified
+      const unverifiedRequired = documents.filter((d: any) => 
+        requiredDocs.includes(d.document_type) && d.verification_status !== 'verified'
+      );
+      
+      if (unverifiedRequired.length > 0) {
+        logger.warn(`Customs clearance ${declarationId} blocked: ${unverifiedRequired.length} unverified documents`);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'UNVERIFIED_EXPORT_DOCUMENTS',
+            message: 'Cannot clear customs: All export documents must be verified',
+            unverified: unverifiedRequired.map((d: any) => d.document_type)
+          }
+        });
+      }
+      
+      logger.info(`✅ Customs ${declarationId}: All required export documents verified`);
+    } catch (docCheckError) {
+      logger.warn(`Non-fatal: Document check failed for customs ${declarationId}:`, docCheckError);
+      // Continue with clearance - document check is best-effort
     }
 
     const clearanceNum = clearanceNumber || `CLR-${Date.now()}`;
@@ -441,8 +533,8 @@ router.get('/declarations', authMiddleware, async (req, res) => {
         exporterId: d?.exporterId || d?.ExporterID || d?.exporterID || '',
         declarationType: d?.declarationType || d?.DeclarationType || 'STANDARD',
         hsCode: d?.hsCode || d?.HSCode || d?.hs_code || '',
-        quantity: d?.quantity ?? d?.Quantity ?? 0,
-        value: d?.value ?? d?.Value ?? 0,
+        quantity: Number(d?.quantity ?? d?.Quantity ?? 0),
+        value: Number(d?.value ?? d?.Value ?? 0),
         currency: d?.currency || d?.Currency || 'USD',
         destination: d?.destination || d?.Destination || '',
         portOfExit: d?.portOfExit || d?.PortOfExit || '',
@@ -455,7 +547,22 @@ router.get('/declarations', authMiddleware, async (req, res) => {
         notes: d?.additionalNotes || d?.notes || '',
       }));
 
-      const validDeclarations = dedupeById(normalizedDeclarations.filter(isValidDeclaration), (declaration: any) => declaration.declarationId);
+      const validDeclarations = dedupeById(normalizedDeclarations.filter((d: any) => {
+        const isValid = isValidDeclaration(d);
+        if (!isValid && normalizedDeclarations.length <= 5) {
+          // Log first few invalid declarations for debugging
+          logger.warn(`[CUSTOMS] Invalid declaration: ${JSON.stringify({
+            declarationId: d.declarationId,
+            shipmentId: d.shipmentId,
+            hsCode: d.hsCode,
+            quantity: d.quantity,
+            quantityType: typeof d.quantity,
+            value: d.value,
+            valueType: typeof d.value
+          })}`);
+        }
+        return isValid;
+      }), (declaration: any) => declaration.declarationId);
       logger.info(`[CUSTOMS] Filtered ${declarations.length} to ${validDeclarations.length} valid declarations`);
       res.json({ success: true, data: validDeclarations });
     } else {
@@ -504,11 +611,31 @@ router.get('/permit-ready', authMiddleware, async (req, res) => {
     }
 
     const inspections = inspectionsResult.data || [];
+    
+    // Get all existing declarations to filter out shipments that already have declarations
+    const declarationsResult = await fabricService.queryChaincode('QueryAllCustomsDeclarations', []);
+    const existingDeclarations = declarationsResult.success && declarationsResult.data ? declarationsResult.data : [];
+    const shipmentIdsWithDeclarations = new Set(
+      existingDeclarations.map((d: any) => d.ShipmentID || d.shipmentId || d.shipmentID || '')
+    );
+    
+    logger.info(`[CUSTOMS] Found ${existingDeclarations.length} existing declarations, ${shipmentIdsWithDeclarations.size} unique shipments`);
+    
     const ready = inspections
       .filter((insp: any) => {
         const status = insp.status || insp.Status || '';
         const permit = insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '';
-        return (status === 'APPROVED' || status === 'QUALITY_APPROVED') && permit && permit.trim() !== '';
+        const shipmentId = insp.shipmentId || insp.ShipmentID || insp.ShipmentId || '';
+        
+        // Check if approved with permit AND no declaration exists yet
+        const hasPermit = (status === 'APPROVED' || status === 'QUALITY_APPROVED') && permit && permit.trim() !== '';
+        const noDeclaration = !shipmentIdsWithDeclarations.has(shipmentId);
+        
+        if (hasPermit && !noDeclaration) {
+          logger.debug(`[CUSTOMS] Filtering out shipment ${shipmentId} - declaration already exists`);
+        }
+        
+        return hasPermit && noDeclaration;
       })
       .map((insp: any) => ({
         inspectionId: insp.inspectionId || insp.InspectionID || insp.InspectionId || '',
@@ -521,6 +648,8 @@ router.get('/permit-ready', authMiddleware, async (req, res) => {
         exportPermitNo: insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '',
         status: insp.status || insp.Status || '',
       }));
+
+    logger.info(`[CUSTOMS] Permit-ready shipments: ${ready.length} (after filtering out ${inspections.length - ready.length} with existing declarations)`);
 
     res.json({ success: true, data: ready });
   } catch (error: any) {

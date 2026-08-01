@@ -1,226 +1,358 @@
 # CECBS Documentation Index
 
-**Ethiopian Coffee Export Consortium Blockchain System**  
-**Consolidated Documentation Structure**
+Complete index of all documentation files for the Coffee Export Consortium Blockchain System.
 
 ---
 
-## 📚 Main Documentation (Read These First)
+## 🎯 Start Here
 
-### 1. **SYSTEM-DOCUMENTATION.md** ⭐
-**The single authoritative source for CECBS**
+### For First-Time Users
+1. **[GETTING-STARTED.md](Docs/GETTING-STARTED.md)** ⭐ START HERE
+   - Complete beginner guide
+   - 5-minute quick start
+   - Prerequisites and setup
 
-**Contents:**
-- Complete system overview
-- Architecture and technical specifications
-- All 11 modules documented
-- Getting started guide
-- Deployment procedures
-- Testing guide
-- Operations and maintenance
-- Troubleshooting
-- Production readiness checklist
+2. **[README.md](README.md)** ⭐ PROJECT OVERVIEW
+   - What is CECBS?
+   - Technology stack
+   - Quick reference
 
-**When to use:** For complete system understanding, deployment, operations, and troubleshooting.
+### For Developers
+1. **[STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md)** 📚 COMPLETE GUIDE
+   - Detailed startup instructions
+   - Development workflows
+   - Comprehensive troubleshooting
 
----
-
-### 2. **README.md**
-**Project introduction and quick overview**
-
-**Contents:**
-- Project description
-- Key features summary
-- Quick links to main documentation
-- Repository structure
-
-**When to use:** First-time visitors, GitHub repository front page.
+2. **[SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md)** 🔧 SCRIPT REFERENCE
+   - Visual guide to all scripts
+   - When to use each script
+   - Common scenarios
 
 ---
 
-### 3. **CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md**
-**Professional technical review and justification**
+## 📂 Documentation Categories
 
-**Contents:**
-- Technical justification for blockchain vs database
-- Architecture review against industry standards
-- Identification of strengths and limitations
-- Risk assessment
-- ROI analysis
-- Comparison with global implementations
-- Production readiness assessment
-- Phased deployment recommendations
+### 🚀 Getting Started
 
-**When to use:** Executive briefings, technical reviews, business case presentations, stakeholder justification.
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [GETTING-STARTED.md](Docs/GETTING-STARTED.md) | First-time setup and basics | Everyone |
+| [README.md](README.md) | Project overview | Everyone |
+| [Docs/QUICK-START.md](Docs/QUICK-START.md) | Quick reference card | Everyone |
 
----
+### 🔧 System Management
 
-### 4. **QUICK-START.md**
-**Fast installation guide**
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md) | Complete startup & troubleshooting | Developers, DevOps |
+| [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md) | Script selection guide | Developers |
 
-**Contents:**
-- Prerequisites
-- Installation commands
-- Quick deployment steps
-- Common issues and fixes
+### 🔄 Workflows & Testing
 
-**When to use:** Quick system setup for development/testing.
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md) | End-to-end workflow | Testers, Product |
+| [WORKFLOW-VERIFICATION.md](WORKFLOW-VERIFICATION.md) | Testing procedures | QA, Testers |
+| [CUSTOMS-PORTAL-WORKFLOW-BUTTONS.md](CUSTOMS-PORTAL-WORKFLOW-BUTTONS.md) | Customs workflows | Customs Officers |
 
----
+### 🏗️ Architecture & Implementation
 
-## 📂 Detailed Technical Documentation (Docs/ Folder)
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md) | Business case & architecture | Stakeholders, Architects |
+| [IMPLEMENTATION-ROADMAP.md](IMPLEMENTATION-ROADMAP.md) | Feature roadmap | Product, Management |
+| [BANKS-PORTAL-IMPLEMENTATION-PLAN.md](BANKS-PORTAL-IMPLEMENTATION-PLAN.md) | Banks portal features | Developers |
+| [AUDIT-TRAIL-IMPLEMENTATION-STATUS.md](AUDIT-TRAIL-IMPLEMENTATION-STATUS.md) | Audit trail status | Developers |
 
-### Architecture & Design
-- `Docs/ARCHITECTURE.md` - Network design philosophy and structure
-- `Docs/ORGANIZATION-ROLES-RESPONSIBILITIES.md` - Complete consortium roles
-- `Docs/ORGANIZATION-BRANDING.md` - Brand colors and styling
+### ⚙️ Configuration & Setup
 
-### Requirements & Regulations
-- `Docs/ETHIOPIAN-COFFEE-EXPORT-REQUIREMENTS.md` - Verified export requirements
-- `Docs/EXPORTER-REQUIREMENTS-2026.md` - 2026 exporter registration requirements
-- `Docs/ESWS-DATA-MAPPING.md` - Complete data field mapping
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [EMAIL-NOTIFICATIONS-SETUP.md](EMAIL-NOTIFICATIONS-SETUP.md) | Email configuration | DevOps, Admins |
+| [api/.env.example](api/.env.example) | API environment variables | Developers |
+| [ui/.env.example](ui/.env.example) | UI environment variables | Developers |
 
-### Implementation Guides
-- `Docs/EXPORTER-REGISTRATION-SYSTEM.md` - Public registration system
-- `Docs/EXPORTER-PORTAL-IMPLEMENTATION.md` - Exporter portal details
-- `Docs/USER-MANAGEMENT-SYSTEM.md` - System-wide user management
-- `Docs/PORTAL-DETAIL-VIEWS-IMPLEMENTATION.md` - Detail views and workflows
+### 📜 Project Status
 
-### Chaincode Documentation
-- `Docs/DOCUMENTATION-INDEX.md` - Chaincode v1.3+ documentation
-- `Docs/QUICK-REFERENCE-CARD.md` - Quick reference for chaincode functions
-- `Docs/CHAINCODE-V1.4-IMPLEMENTATION-PLAN.md` - Future chaincode planning
-
-### UI/UX Documentation
-- `Docs/NAVIGATION-BAR-LAYOUT.md` - Navigation structure
-- `Docs/THEME-COLOR-APPLICATION.md` - Theme and color guide
-- `Docs/ORGANIZATION-LOGO-IMPLEMENTATION.md` - Logo implementation
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [ALL-WORK-COMPLETE-FINAL-SUMMARY.md](ALL-WORK-COMPLETE-FINAL-SUMMARY.md) | Final implementation summary | Everyone |
 
 ---
 
-## 📋 Documentation Structure Summary
+## 🎭 By User Role
 
-```
-goCBC/
-├── SYSTEM-DOCUMENTATION.md                      # 📖 Main comprehensive documentation
-├── README.md                                    # 🏠 Project introduction
-├── CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md  # 💼 Technical review & justification
-├── QUICK-START.md                              # ⚡ Quick installation guide
-│
-├── Docs/                                       # 📂 Detailed technical documentation
-│   ├── ARCHITECTURE.md
-│   ├── ETHIOPIAN-COFFEE-EXPORT-REQUIREMENTS.md
-│   ├── ORGANIZATION-ROLES-RESPONSIBILITIES.md
-│   ├── EXPORTER-REGISTRATION-SYSTEM.md
-│   ├── USER-MANAGEMENT-SYSTEM.md
-│   ├── DOCUMENTATION-INDEX.md
-│   └── [15+ other detailed technical docs]
-│
-├── api/                                        # Backend source code
-├── ui/                                         # Frontend source code
-├── blockchain/                                 # Blockchain network config
-└── chaincodes/                                 # Smart contracts
-```
+### Non-Technical User / Stakeholder
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md) - How to start the system
+2. [README.md](README.md) - What CECBS does
+3. [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md) - Business value
+4. [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md) - How workflows work
 
----
+**How to Start:** Double-click `START-SYSTEM.bat`
 
-## 🎯 Reading Path by Role
+### Developer
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md) - Initial setup
+2. [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md) - Development workflows
+3. [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md) - Script reference
+4. [README.md](README.md) - Architecture overview
+5. [IMPLEMENTATION-ROADMAP.md](IMPLEMENTATION-ROADMAP.md) - What's next
 
-### **New Developer**
-1. README.md (5 min)
-2. QUICK-START.md (15 min)
-3. SYSTEM-DOCUMENTATION.md - Section 3 (Getting Started)
-4. Docs/ARCHITECTURE.md (30 min)
-5. Explore source code with documentation as reference
+**How to Start:** `.\dev-mode.ps1` for hot-reload development
 
-### **System Administrator**
-1. SYSTEM-DOCUMENTATION.md - Sections 5, 10 (Deployment, Operations)
-2. Docs/ARCHITECTURE.md
-3. Production readiness checklist (Appendix C)
-4. Troubleshooting guide (Appendix B)
+### QA / Tester
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md) - Setup
+2. [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md) - Test workflows
+3. [WORKFLOW-VERIFICATION.md](WORKFLOW-VERIFICATION.md) - Verification steps
+4. [Docs/QUICK-START.md](Docs/QUICK-START.md) - Quick reference
 
-### **Business Stakeholder**
-1. README.md
-2. CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md (focus on Executive Summary, Business Value sections)
-3. SYSTEM-DOCUMENTATION.md - Section 1 (Overview)
-4. Docs/ORGANIZATION-ROLES-RESPONSIBILITIES.md
+**How to Start:** `.\start-all.ps1 -SkipBuild`
 
-### **Security Auditor**
-1. CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md - Architecture Review section
-2. SYSTEM-DOCUMENTATION.md - Section 7 (Technical Specifications)
-3. Docs/ARCHITECTURE.md
-4. Review source code: api/src/middleware/, blockchain/configtx.yaml
+### DevOps / System Administrator
+1. [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md) - Complete system guide
+2. [EMAIL-NOTIFICATIONS-SETUP.md](EMAIL-NOTIFICATIONS-SETUP.md) - Email config
+3. [docker-compose-fabric.yml](docker-compose-fabric.yml) - Container setup
+4. [nginx-configs/](nginx-configs/) - Production deployment
 
-### **QA Tester**
-1. SYSTEM-DOCUMENTATION.md - Section 6 (Testing Guide)
-2. End-to-end workflow test procedures
-3. Verification points checklist
-4. Troubleshooting guide for common issues
+**How to Start:** `.\start-all.ps1`
+
+### Product Manager
+1. [README.md](README.md) - System overview
+2. [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md) - Value prop
+3. [IMPLEMENTATION-ROADMAP.md](IMPLEMENTATION-ROADMAP.md) - Roadmap
+4. [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md) - User journeys
 
 ---
 
-## 🗑️ Cleaned Up Files (Removed 50+ Redundant Docs)
+## 📑 By Task
 
-**Removed categories:**
-- ✅ Historical status reports (10+ files)
-- ✅ Implementation completion summaries (15+ files)
-- ✅ Workflow verification docs (8+ files)
-- ✅ Redundant deployment guides (5+ files)
-- ✅ Payment method historical docs (6+ files)
-- ✅ Audit trail historical docs (5+ files)
-- ✅ Outdated checklists and verifications (10+ files)
+### "I want to start the system"
+→ [GETTING-STARTED.md](Docs/GETTING-STARTED.md)  
+→ [Docs/QUICK-START.md](Docs/QUICK-START.md)  
+→ [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md)
 
-**All content consolidated into:** SYSTEM-DOCUMENTATION.md
+### "I want to understand how it works"
+→ [README.md](README.md)  
+→ [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md)  
+→ [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md)
+
+### "I want to develop/modify code"
+→ [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md)  
+→ [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md)  
+→ API Docs: http://localhost:3001/api-docs
+
+### "Something is broken"
+→ [STARTUP-GUIDE.md#troubleshooting](STARTUP-GUIDE.md#troubleshooting)  
+→ Run: `.\status.ps1`  
+→ View logs: `docker-compose -f docker-compose-fabric.yml logs -f`
+
+### "I want to test workflows"
+→ [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md)  
+→ [WORKFLOW-VERIFICATION.md](WORKFLOW-VERIFICATION.md)  
+→ [Docs/QUICK-START.md#testing-workflow](Docs/QUICK-START.md#testing-workflow)
+
+### "I want to deploy to production"
+→ [nginx-configs/deploy-cecbs-nginx.sh](nginx-configs/deploy-cecbs-nginx.sh)  
+→ [api/.env.production.example](api/.env.production.example)  
+→ [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md)
+
+### "I want to configure email"
+→ [EMAIL-NOTIFICATIONS-SETUP.md](EMAIL-NOTIFICATIONS-SETUP.md)  
+→ [api/.env.example](api/.env.example)
+
+### "I want to see the roadmap"
+→ [IMPLEMENTATION-ROADMAP.md](IMPLEMENTATION-ROADMAP.md)  
+→ [ALL-WORK-COMPLETE-FINAL-SUMMARY.md](ALL-WORK-COMPLETE-FINAL-SUMMARY.md)
 
 ---
 
-## 📝 Document Maintenance
+## 🔍 Quick Reference
 
-### Update Frequency
+### Essential Commands
+```powershell
+# Start system
+.\start-all.ps1 -SkipBuild
 
-**SYSTEM-DOCUMENTATION.md:** Update after major changes (quarterly or after significant features)
+# Check status
+.\status.ps1
 
-**CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md:** Update annually or when architecture significantly changes
+# Development mode
+.\dev-mode.ps1
 
-**README.md:** Update when project goals or structure changes
+# Stop system
+.\stop-all.ps1 -KeepData
 
-**QUICK-START.md:** Update when installation process changes
-
-**Docs/ folder:** Update as features are added/changed
-
-### Version Control
-
-All documentation is version controlled in Git. Use meaningful commit messages when updating:
-
-```bash
-git add SYSTEM-DOCUMENTATION.md
-git commit -m "docs: Update module 11 analytics section with new dashboard features"
+# View logs
+docker-compose -f docker-compose-fabric.yml logs -f
 ```
 
----
+### Essential URLs
+- **Frontend**: http://localhost:3000
+- **API**: http://localhost:3001
+- **API Docs**: http://localhost:3001/api-docs
 
-## ✅ Documentation Quality Checklist
-
-**Complete:** ✅ All 11 modules documented  
-**Accurate:** ✅ Reflects current system (v1.13, Sequence 4)  
-**Consolidated:** ✅ 50+ redundant files removed  
-**Organized:** ✅ Clear structure with 4 main docs + detailed Docs/ folder  
-**Accessible:** ✅ Reading paths for different roles  
-**Maintainable:** ✅ Single source of truth (SYSTEM-DOCUMENTATION.md)  
-
----
-
-**Last Updated:** July 2, 2026  
-**Documentation Version:** 1.0  
-**System Version:** CECBS 1.13 (95% Complete)
+### Default Credentials
+- **ECTA**: ecta_admin / password123
+- **Banks**: bank_admin / password123
+- **Customs**: customs_admin / password123
+- **Exporter**: EXP1087072 / password123
 
 ---
 
-## 🆘 Need Help?
+## 📊 Document Metadata
 
-- **System setup issues:** See QUICK-START.md
-- **Technical questions:** See SYSTEM-DOCUMENTATION.md
-- **Business justification:** See CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md
-- **Detailed feature docs:** See Docs/ folder
-- **Can't find something:** Search across all .md files or ask system administrator
+### Documentation Statistics
+- **Total Documents**: 15+ main guides
+- **Total Scripts**: 7 PowerShell + 2 Batch
+- **Last Updated**: 2026-01-31
+- **Version**: 1.2.0
 
+### Document Status
+
+| Document | Status | Last Updated |
+|----------|--------|--------------|
+| GETTING-STARTED.md | ✅ Complete | 2026-01-31 |
+| README.md | ✅ Complete | 2026-01-31 |
+| STARTUP-GUIDE.md | ✅ Complete | 2026-01-31 |
+| SCRIPTS-OVERVIEW.md | ✅ Complete | 2026-01-31 |
+| COMPLETE-WORKFLOW-SEQUENCE.md | ✅ Complete | Earlier |
+| WORKFLOW-VERIFICATION.md | ✅ Complete | Earlier |
+| IMPLEMENTATION-ROADMAP.md | ✅ Complete | Earlier |
+
+---
+
+## 🎯 Recommended Reading Order
+
+### For New Users
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md) (5 min read)
+2. [README.md](README.md) (10 min read)
+3. [Docs/QUICK-START.md](Docs/QUICK-START.md) (3 min read)
+4. [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md) (15 min read)
+
+### For Developers
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md) (5 min)
+2. [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md) (20 min)
+3. [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md) (10 min)
+4. [README.md](README.md) (10 min)
+5. [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md) (30 min)
+6. Explore codebase
+
+### For Administrators
+1. [GETTING-STARTED.md](Docs/GETTING-STARTED.md)
+2. [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md)
+3. [EMAIL-NOTIFICATIONS-SETUP.md](EMAIL-NOTIFICATIONS-SETUP.md)
+4. [nginx-configs/](nginx-configs/)
+5. Environment files (.env.example)
+
+---
+
+## 📞 Support Resources
+
+### Documentation
+- This index - Overview of all docs
+- Individual docs - Specific topics
+
+### Scripts & Tools
+- `.\status.ps1` - Check system health
+- `.\start-all.ps1 -SkipBuild` - Quick start
+- `.\dev-mode.ps1` - Development environment
+
+### Online Resources
+- API Documentation: http://localhost:3001/api-docs
+- GitHub Repository: [Your repo URL]
+- Issue Tracker: [Your issues URL]
+
+---
+
+## ✅ Documentation Checklist
+
+Use this checklist to ensure you've read the essentials:
+
+### Basics
+- [ ] Read GETTING-STARTED.md
+- [ ] Read README.md
+- [ ] Started system successfully
+- [ ] Accessed UI at localhost:3000
+
+### Understanding
+- [ ] Read COMPLETE-WORKFLOW-SEQUENCE.md
+- [ ] Tested at least one workflow
+- [ ] Explored all portals
+- [ ] Reviewed system architecture
+
+### Development (for developers)
+- [ ] Read STARTUP-GUIDE.md
+- [ ] Read SCRIPTS-OVERVIEW.md
+- [ ] Used dev-mode.ps1
+- [ ] Made a test change
+- [ ] Reviewed API docs
+
+### Deployment (for DevOps)
+- [ ] Read deployment guides
+- [ ] Configured environment variables
+- [ ] Set up email notifications
+- [ ] Tested production build
+
+---
+
+## 🔄 Keeping Documentation Updated
+
+This documentation is a living resource. As the system evolves:
+
+1. **Check dates** - Look for "Last Updated" timestamps
+2. **Review changelogs** - See what's changed recently
+3. **Test instructions** - Verify commands still work
+4. **Report issues** - Let the team know if something's wrong
+5. **Contribute** - Help improve documentation
+
+---
+
+## 🎓 Learning Resources
+
+### Beginner Level
+- [GETTING-STARTED.md](Docs/GETTING-STARTED.md)
+- [README.md](README.md)
+- [Docs/QUICK-START.md](Docs/QUICK-START.md)
+
+### Intermediate Level
+- [STARTUP-GUIDE.md](Docs/STARTUP-GUIDE.md)
+- [SCRIPTS-OVERVIEW.md](SCRIPTS-OVERVIEW.md)
+- [COMPLETE-WORKFLOW-SEQUENCE.md](COMPLETE-WORKFLOW-SEQUENCE.md)
+
+### Advanced Level
+- [Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md](Docs/CONSORTIUM-BLOCKCHAIN-VALUE-PROPOSITION.md)
+- Source code exploration
+- Hyperledger Fabric documentation
+
+### External Resources
+- **Hyperledger Fabric**: https://hyperledger-fabric.readthedocs.io/
+- **Next.js**: https://nextjs.org/docs
+- **Node.js**: https://nodejs.org/docs
+- **Docker**: https://docs.docker.com/
+
+---
+
+<div align="center">
+
+## 🎉 You Have Everything You Need!
+
+**Start your journey here:**  
+[GETTING-STARTED.md](Docs/GETTING-STARTED.md)
+
+**Quick commands:**
+```powershell
+.\start-all.ps1 -SkipBuild  # Start
+.\status.ps1                 # Status
+.\dev-mode.ps1              # Develop
+.\stop-all.ps1 -KeepData    # Stop
+```
+
+**Access the system:**  
+http://localhost:3000
+
+---
+
+[README](README.md) • [Getting Started](Docs/GETTING-STARTED.md) • [Startup Guide](Docs/STARTUP-GUIDE.md) • [Scripts](SCRIPTS-OVERVIEW.md)
+
+☕ CECBS - Powering Ethiopian Coffee Exports 🇪🇹
+
+</div>

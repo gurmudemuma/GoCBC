@@ -279,14 +279,9 @@ const ECTAPortal: React.FC = () => {
         else setContracts(allContracts);
         break;
         
-      case 4: // Quality Inspection
-        if (filterKey === 'ALL_SHIPMENTS') setShipments(allShipments);
-        else if (filterKey === 'PENDING_INSPECTION') setShipments(allShipments.filter(s => !inspectionRecords.some(i => i.shipmentID === s.shipmentId)));
-        else if (filterKey === 'APPROVED_INSPECTION') setInspectionRecords(allInspectionRecords.filter(i => i.status === 'APPROVED' || i.Status === 'APPROVED'));
-        else {
-          setShipments(allShipments);
-          setInspectionRecords(allInspectionRecords);
-        }
+      case 4: // Quality Inspection - filtering handled by table's computed function
+        // No need to update state arrays - activeKPIFilter triggers table re-render
+        // Table reads from allShipments and allInspectionRecords directly
         break;
         
       default:
@@ -1201,63 +1196,264 @@ The exporter can reapply once all requirements are met.`,
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {(() => {
           const kpis = tabValue === 0 ? [
-            { icon: <Assignment />, label: 'Pending Applications', value: allApplications.filter(a => a.status === 'pending').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Approved This Month', value: allApplications.filter(a => a.status === 'approved' && new Date(a.approved_at || '').getMonth() === new Date().getMonth()).length, color: '#4caf50' },
-            { icon: <Science />, label: 'Lab Certified', value: allApplications.filter(a => a.laboratory_facility === 'yes' || a.laboratory_facility === 'contracted').length, color: '#2196f3' },
-            { icon: <TrendingUp />, label: 'Avg Processing Days', value: allApplications.filter(a => a.approved_at).length > 0 ? Math.round(allApplications.filter(a => a.approved_at).reduce((sum, a) => sum + (new Date(a.approved_at!).getTime() - new Date(a.submitted_at).getTime()) / (1000 * 60 * 60 * 24), 0) / allApplications.filter(a => a.approved_at).length) : 0, color: '#9c27b0' },
+            { 
+              icon: <Assignment />, 
+              label: 'All Applications', 
+              value: allApplications.length, 
+              color: '#2196f3',
+              clickable: true,
+              filterKey: 'ALL_APPS',
+              selected: activeKPIFilter === 'ALL_APPS'
+            },
+            { 
+              icon: <Warning />, 
+              label: 'Pending Applications', 
+              value: allApplications.filter(a => a.status === 'pending').length, 
+              color: '#ff9800',
+              clickable: true,
+              filterKey: 'PENDING_APPS',
+              selected: activeKPIFilter === 'PENDING_APPS'
+            },
+            { 
+              icon: <CheckCircle />, 
+              label: 'Approved This Month', 
+              value: allApplications.filter(a => a.status === 'approved' && new Date(a.approved_at || '').getMonth() === new Date().getMonth()).length, 
+              color: '#4caf50',
+              clickable: true,
+              filterKey: 'APPROVED_APPS',
+              selected: activeKPIFilter === 'APPROVED_APPS'
+            },
+            { 
+              icon: <TrendingUp />, 
+              label: 'Avg Processing Days', 
+              value: allApplications.filter(a => a.approved_at).length > 0 ? Math.round(allApplications.filter(a => a.approved_at).reduce((sum, a) => sum + (new Date(a.approved_at!).getTime() - new Date(a.submitted_at).getTime()) / (1000 * 60 * 60 * 24), 0) / allApplications.filter(a => a.approved_at).length) : 0, 
+              color: '#9c27b0',
+              clickable: false
+            },
           ] : tabValue === 1 ? [
-            { icon: <Coffee />, label: 'Total Licensed', value: approvedApplications.length, color: BRAND_COLOR },
-            { icon: <Science />, label: 'Lab Certified', value: approvedApplications.filter(a => a.laboratory_facility === 'yes' || a.laboratory_facility === 'contracted').length, color: '#4caf50' },
-            { icon: <CheckCircle />, label: 'Active Licenses', value: approvedApplications.filter(a => a.license_expiry_date && new Date(a.license_expiry_date) > new Date()).length, color: '#2196f3' },
-            { icon: <AccountBalance />, label: 'Total Capital (M ETB)', value: Math.round(approvedApplications.reduce((sum, a) => sum + parseFloat(a.capital_requirement || '0'), 0) / 1000000), color: '#9c27b0' },
+            { 
+              icon: <Coffee />, 
+              label: 'Total Licensed', 
+              value: approvedApplications.length, 
+              color: BRAND_COLOR,
+              clickable: true,
+              filterKey: 'ALL_EXPORTERS',
+              selected: activeKPIFilter === 'ALL_EXPORTERS'
+            },
+            { 
+              icon: <Science />, 
+              label: 'Lab Certified', 
+              value: approvedApplications.filter(a => a.laboratory_facility === 'yes' || a.laboratory_facility === 'contracted').length, 
+              color: '#4caf50',
+              clickable: false
+            },
+            { 
+              icon: <CheckCircle />, 
+              label: 'Active Licenses', 
+              value: approvedApplications.filter(a => a.license_expiry_date && new Date(a.license_expiry_date) > new Date()).length, 
+              color: '#2196f3',
+              clickable: false
+            },
+            { 
+              icon: <AccountBalance />, 
+              label: 'Total Capital (M ETB)', 
+              value: Math.round(approvedApplications.reduce((sum, a) => sum + parseFloat(a.capital_requirement || '0'), 0) / 1000000), 
+              color: '#9c27b0',
+              clickable: false
+            },
           ] : tabValue === 2 ? [
-            { icon: <Description />, label: 'Total Contracts', value: allContracts.length, color: '#2196f3' },
-            { icon: <Warning />, label: 'Pending Approval', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-            { icon: <Cancel />, label: 'Rejected', value: allContracts.filter(c => c.contractStatus === 'REJECTED').length, color: '#f44336' },
+            { 
+              icon: <Description />, 
+              label: 'Total Contracts', 
+              value: allContracts.length, 
+              color: '#2196f3',
+              clickable: true,
+              filterKey: 'ALL_CONTRACTS',
+              selected: activeKPIFilter === 'ALL_CONTRACTS'
+            },
+            { 
+              icon: <Warning />, 
+              label: 'Pending Approval', 
+              value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, 
+              color: '#ff9800',
+              clickable: true,
+              filterKey: 'PENDING_CONTRACTS',
+              selected: activeKPIFilter === 'PENDING_CONTRACTS'
+            },
+            { 
+              icon: <CheckCircle />, 
+              label: 'Approved', 
+              value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, 
+              color: '#4caf50',
+              clickable: true,
+              filterKey: 'APPROVED_CONTRACTS',
+              selected: activeKPIFilter === 'APPROVED_CONTRACTS'
+            },
+            { 
+              icon: <Cancel />, 
+              label: 'Rejected', 
+              value: allContracts.filter(c => c.contractStatus === 'REJECTED').length, 
+              color: '#f44336',
+              clickable: true,
+              filterKey: 'REJECTED_CONTRACTS',
+              selected: activeKPIFilter === 'REJECTED_CONTRACTS'
+            },
           ] : tabValue === 4 ? [
-            { icon: <Science />, label: 'Total Inspections', value: allInspectionRecords.length, color: '#2196f3' },
-            { icon: <HourglassTop />, label: 'Pending', value: allInspectionRecords.filter(i => i.status === 'PENDING' || i.Status === 'PENDING').length, color: '#ff9800' },
-            { icon: <Assignment />, label: 'Inspected', value: allInspectionRecords.filter(i => i.status === 'INSPECTED' || i.Status === 'INSPECTED').length, color: '#4caf50' },
-            { icon: <CheckCircle />, label: 'Approved', value: allInspectionRecords.filter(i => i.status === 'APPROVED' || i.Status === 'APPROVED').length, color: BRAND_COLOR },
+            { 
+              icon: <Science />, 
+              label: 'Total Inspections', 
+              value: (() => {
+                // Count: pending shipments + all inspection records
+                const pendingShipments = allShipments.filter(s => {
+                  const status = (s.status || (s as any).Status || '').toUpperCase();
+                  return (status === 'CREATED' || status === 'REGISTERED') && 
+                         !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                });
+                return pendingShipments.length + allInspectionRecords.length;
+              })(), 
+              color: '#2196f3',
+              clickable: true,
+              filterKey: 'ALL_SHIPMENTS',
+              selected: activeKPIFilter === 'ALL_SHIPMENTS'
+            },
+            { 
+              icon: <HourglassTop />, 
+              label: 'Pending', 
+              value: (() => {
+                // Count: pending shipments (not yet scheduled for inspection)
+                const pendingShipments = allShipments.filter(s => {
+                  const status = (s.status || (s as any).Status || '').toUpperCase();
+                  return (status === 'CREATED' || status === 'REGISTERED') && 
+                         !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                });
+                return pendingShipments.length;
+              })(), 
+              color: '#ff9800',
+              clickable: true,
+              filterKey: 'PENDING_INSPECTION',
+              selected: activeKPIFilter === 'PENDING_INSPECTION'
+            },
+            { 
+              icon: <Assignment />, 
+              label: 'Inspected', 
+              value: allInspectionRecords.filter(i => i.status === 'INSPECTED' || i.Status === 'INSPECTED').length, 
+              color: '#4caf50',
+              clickable: true,
+              filterKey: 'INSPECTED',
+              selected: activeKPIFilter === 'INSPECTED'
+            },
+            { 
+              icon: <CheckCircle />, 
+              label: 'Approved', 
+              value: allInspectionRecords.filter(i => i.status === 'APPROVED' || i.Status === 'APPROVED').length, 
+              color: BRAND_COLOR,
+              clickable: true,
+              filterKey: 'APPROVED_INSPECTION',
+              selected: activeKPIFilter === 'APPROVED_INSPECTION'
+            },
           ] : [
-            { icon: <Coffee />, label: 'Licensed Exporters', value: approvedApplications.length, color: BRAND_COLOR },
-            { icon: <Assignment />, label: 'Pending Applications', value: allApplications.filter(a => a.status === 'pending').length, color: '#ff9800' },
-            { icon: <Science />, label: 'Lab Certified', value: approvedApplications.filter(a => a.laboratory_facility === 'yes').length, color: '#4caf50' },
-            { icon: <Warning />, label: 'Expiring Soon', value: approvedApplications.filter(a => {
-              if (!a.license_expiry_date) return false;
-              const expiryDate = new Date(a.license_expiry_date);
-              const threeMonthsFromNow = new Date();
-              threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
-              return expiryDate <= threeMonthsFromNow;
-            }).length, color: '#f44336' },
+            { 
+              icon: <Coffee />, 
+              label: 'Licensed Exporters', 
+              value: approvedApplications.length, 
+              color: BRAND_COLOR,
+              clickable: false
+            },
+            { 
+              icon: <Assignment />, 
+              label: 'Pending Applications', 
+              value: allApplications.filter(a => a.status === 'pending').length, 
+              color: '#ff9800',
+              clickable: false
+            },
+            { 
+              icon: <Science />, 
+              label: 'Lab Certified', 
+              value: approvedApplications.filter(a => a.laboratory_facility === 'yes').length, 
+              color: '#4caf50',
+              clickable: false
+            },
+            { 
+              icon: <Warning />, 
+              label: 'Expiring Soon', 
+              value: approvedApplications.filter(a => {
+                if (!a.license_expiry_date) return false;
+                const expiryDate = new Date(a.license_expiry_date);
+                const threeMonthsFromNow = new Date();
+                threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+                return expiryDate <= threeMonthsFromNow;
+              }).length, 
+              color: '#f44336',
+              clickable: false
+            },
           ];
 
           return kpis.map((kpi, index) => (
             <Grid item xs={12} sm={6} md={3} key={index}>
               <Card sx={{ 
-                bgcolor: '#fff', 
-                border: `2px solid ${kpi.color}`,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+                cursor: kpi.clickable ? 'pointer' : 'default',
+                height: 140,
+                border: kpi.clickable && kpi.selected ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
+                bgcolor: kpi.clickable && kpi.selected ? `${kpi.color}08` : 'white',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                borderRadius: 2,
+                boxShadow: kpi.clickable && kpi.selected 
+                  ? `0 4px 12px ${kpi.color}40` 
+                  : '0 1px 3px rgba(0,0,0,0.05)',
+                '&:hover': kpi.clickable ? {
+                  boxShadow: `0 8px 24px ${kpi.color}40`,
                   transform: 'translateY(-4px)',
-                }
-              }}>
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
-                  <Typography variant="caption" sx={{ 
-                    color: '#666', 
-                    textTransform: 'uppercase', 
-                    fontWeight: 700, 
-                    display: 'block',
-                    letterSpacing: '0.8px',
-                    mb: 1
+                  borderColor: kpi.color,
+                } : {},
+              }}
+              onClick={kpi.clickable ? () => handleKPIFilter(kpi.filterKey!, kpi.label) : undefined}
+              >
+                <CardContent sx={{ 
+                  textAlign: 'center', 
+                  py: 2.5, 
+                  px: 2,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}>
+                  <Box sx={{ 
+                    width: 48, 
+                    height: 48, 
+                    borderRadius: '50%', 
+                    bgcolor: `${kpi.color}15`, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    mb: 1.5
                   }}>
+                    {React.cloneElement(kpi.icon, { 
+                      sx: { fontSize: 28, color: kpi.color } 
+                    })}
+                  </Box>
+                  <Typography 
+                    variant="caption" 
+                    sx={{ 
+                      color: '#666', 
+                      textTransform: 'uppercase', 
+                      fontWeight: 600, 
+                      fontSize: '0.7rem',
+                      letterSpacing: 0.5,
+                      mb: 0.5
+                    }}
+                  >
                     {kpi.label}
                   </Typography>
-                  <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color }}>
+                  <Typography 
+                    variant="h4" 
+                    sx={{ 
+                      fontWeight: 700, 
+                      color: kpi.color,
+                      lineHeight: 1,
+                      mb: 0.5
+                    }}
+                  >
                     {kpi.value}
                   </Typography>
                 </CardContent>
@@ -1267,21 +1463,26 @@ The exporter can reapply once all requirements are met.`,
         })()}
       </Grid>
 
-      {/* Main Tabs - Text-based with dynamic data, linked to KPI cards */}
-      <Box sx={{ mb: 2 }}>
+      {/* Main Tabs - Enhanced with full-width, rounded corners */}
+      <Paper sx={{ 
+        mb: 3, 
+        borderRadius: 2, 
+        boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
+        border: '1px solid #e0e0e0',
+        overflow: 'hidden'
+      }}>
         <Tabs 
           value={tabValue} 
           onChange={(e, newValue) => {
             setTabValue(newValue);
             setSubTabValue(0);
           }}
-          variant="scrollable"
-          scrollButtons="auto"
+          variant="fullWidth"
           sx={{ 
             borderBottom: 2,
             borderColor: 'divider',
             '& .MuiTab-root': {
-              minHeight: 48,
+              minHeight: 64,
               textTransform: 'none',
               fontSize: '0.95rem',
               fontWeight: 600,
@@ -1290,16 +1491,17 @@ The exporter can reapply once all requirements are met.`,
               '&.Mui-selected': {
                 color: BRAND_COLOR,
                 fontWeight: 700,
+                bgcolor: 'rgba(7, 137, 48, 0.05)',
               },
               '&:hover': {
                 color: BRAND_COLOR,
-                opacity: 0.8,
+                bgcolor: 'rgba(7, 137, 48, 0.03)',
               }
             },
             '& .MuiTabs-indicator': {
-              height: 3,
+              height: 4,
               backgroundColor: BRAND_COLOR,
-              borderRadius: '3px 3px 0 0',
+              borderRadius: '4px 4px 0 0',
             }
           }}
         >
@@ -1340,94 +1542,9 @@ The exporter can reapply once all requirements are met.`,
             }).length})`}
           />
         </Tabs>
-      </Box>
+      </Paper>
 
-      {/* Sub-Tabs - Professional card-style for filtering */}
-      <Box sx={{ mb: 2 }}>
-        <Tabs 
-          value={subTabValue} 
-          onChange={(e, newValue) => {
-            setSubTabValue(newValue);
-            const kpis = tabValue === 0 ? [
-              { key: 'ALL_APPS', title: 'All Applications' },
-              { key: 'PENDING_APPS', title: 'Pending' },
-              { key: 'APPROVED_APPS', title: 'Approved' },
-            ] : tabValue === 1 ? [
-              { key: 'ALL_EXPORTERS', title: 'All Exporters' },
-            ] : tabValue === 2 ? [
-              { key: 'ALL_CONTRACTS', title: 'All Contracts' },
-              { key: 'PENDING_CONTRACTS', title: 'Pending' },
-              { key: 'APPROVED_CONTRACTS', title: 'Approved' },
-              { key: 'REJECTED_CONTRACTS', title: 'Rejected' },
-            ] : tabValue === 4 ? [
-              { key: 'ALL_SHIPMENTS', title: 'All Inspections' },
-              { key: 'PENDING_INSPECTION', title: 'Pending' },
-              { key: 'APPROVED_INSPECTION', title: 'Approved' },
-            ] : [
-              { key: 'ALL_APPS', title: 'All' },
-            ];
-            handleKPIFilter(kpis[newValue].key, kpis[newValue].title);
-          }}
-          variant="scrollable"
-          scrollButtons="auto"
-          sx={{ 
-            borderBottom: 1,
-            borderColor: 'divider',
-            bgcolor: 'rgba(0,0,0,0.02)',
-            '& .MuiTab-root': {
-              minHeight: 70,
-              flexDirection: 'column',
-              gap: 0.5,
-              color: '#666',
-              transition: 'all 0.3s ease',
-              '&.Mui-selected': {
-                color: BRAND_COLOR,
-                bgcolor: 'rgba(7, 137, 48, 0.08)',
-              },
-              '&:hover': {
-                bgcolor: 'rgba(0,0,0,0.04)',
-              }
-            },
-            '& .MuiTabs-indicator': {
-              height: 4,
-              backgroundColor: BRAND_COLOR,
-              borderRadius: '4px 4px 0 0',
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-            }
-          }}
-        >
-          {(tabValue === 0 ? [
-            { icon: <Assignment />, label: 'All Applications', value: allApplications.length, color: '#2196f3' },
-            { icon: <Warning />, label: 'Pending', value: allApplications.filter(a => a.status === 'pending').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Approved', value: allApplications.filter(a => a.status === 'approved').length, color: '#4caf50' },
-          ] : tabValue === 1 ? [
-            { icon: <Coffee />, label: 'All Exporters', value: allExporters.length, color: BRAND_COLOR },
-          ] : tabValue === 2 ? [
-            { icon: <Description />, label: 'All Contracts', value: allContracts.length, color: '#2196f3' },
-            { icon: <Warning />, label: 'Pending', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-            { icon: <Cancel />, label: 'Rejected', value: allContracts.filter(c => c.contractStatus === 'REJECTED').length, color: '#f44336' },
-          ] : tabValue === 4 ? [
-            { icon: <Science />, label: 'All Inspections', value: allInspectionRecords.length, color: '#2196f3' },
-            { icon: <HourglassTop />, label: 'Pending', value: allInspectionRecords.filter(i => i.status === 'PENDING' || i.Status === 'PENDING').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Approved', value: allInspectionRecords.filter(i => i.status === 'APPROVED' || i.Status === 'APPROVED').length, color: '#4caf50' },
-          ] : [
-            { icon: <Assignment />, label: 'All', value: allApplications.length, color: BRAND_COLOR },
-          ]).map((kpi, index) => (
-            <Tab key={index} label={
-              <Box sx={{ textAlign: 'center' }}>
-                <Box sx={{ color: kpi.color, mb: 0.5 }}>{kpi.icon}</Box>
-                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, fontSize: '0.7rem' }}>
-                  {kpi.label}
-                </Typography>
-                <Typography variant="h6" sx={{ fontWeight: 700, color: kpi.color }}>
-                  {kpi.value}
-                </Typography>
-              </Box>
-            } />
-          ))}
-        </Tabs>
-      </Box>
+
 
       {/* Content Panels */}
       <Box>
@@ -1442,13 +1559,13 @@ The exporter can reapply once all requirements are met.`,
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Application ID</TableCell>
-                    <TableCell>Company Name</TableCell>
-                    <TableCell>Contact Person</TableCell>
-                    <TableCell>Email</TableCell>
-                    <TableCell>Capital (ETB)</TableCell>
-                    <TableCell>Submitted</TableCell>
-                    <TableCell>Actions</TableCell>
+                    <TableCell width="15%">Application ID</TableCell>
+                    <TableCell width="20%">Company Name</TableCell>
+                    <TableCell width="15%">Contact Person</TableCell>
+                    <TableCell width="18%">Email</TableCell>
+                    <TableCell width="12%">Capital (ETB)</TableCell>
+                    <TableCell width="10%">Submitted</TableCell>
+                    <TableCell width="10%" align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1514,15 +1631,15 @@ The exporter can reapply once all requirements are met.`,
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Exporter ID</TableCell>
-                    <TableCell>Company Name</TableCell>
-                    <TableCell>License Number</TableCell>
-                    <TableCell>Exporter Type</TableCell>
-                    <TableCell>Capital (ETB)</TableCell>
-                    <TableCell>Lab Certified</TableCell>
-                    <TableCell>Approved Date</TableCell>
-                    <TableCell>Expires</TableCell>
-                    <TableCell>Status</TableCell>
+                    <TableCell width="10%">Exporter ID</TableCell>
+                    <TableCell width="18%">Company Name</TableCell>
+                    <TableCell width="15%">License Number</TableCell>
+                    <TableCell width="11%">Exporter Type</TableCell>
+                    <TableCell width="12%">Capital (ETB)</TableCell>
+                    <TableCell width="10%">Lab Certified</TableCell>
+                    <TableCell width="10%">Approved Date</TableCell>
+                    <TableCell width="8%">Expires</TableCell>
+                    <TableCell width="6%">Status</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1607,15 +1724,15 @@ The exporter can reapply once all requirements are met.`,
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Contract ID</TableCell>
-                    <TableCell>Exporter</TableCell>
-                    <TableCell>Buyer</TableCell>
-                    <TableCell>Coffee Type</TableCell>
-                    <TableCell>Quantity (kg)</TableCell>
-                    <TableCell>Value</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>EUDR</TableCell>
-                    <TableCell>Actions</TableCell>
+                    <TableCell width="12%">Contract ID</TableCell>
+                    <TableCell width="15%">Exporter</TableCell>
+                    <TableCell width="15%">Buyer</TableCell>
+                    <TableCell width="12%">Coffee Type</TableCell>
+                    <TableCell width="10%">Quantity (kg)</TableCell>
+                    <TableCell width="12%">Value</TableCell>
+                    <TableCell width="8%">Status</TableCell>
+                    <TableCell width="8%">EUDR</TableCell>
+                    <TableCell width="8%" align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1688,364 +1805,252 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="h6" gutterBottom>
             Exporters Management
           </Typography>
-          <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
-              rows={exporters}
-              columns={exporterColumns}
-              getRowId={(row) => row.exporterId}
-              loading={loading}
-              pageSizeOptions={[25, 50, 100]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 25 } },
-              }}
-              checkboxSelection
-              disableRowSelectionOnClick
-            />
-          </Box>
+          {exporters.length === 0 ? (
+            <Alert severity="info">No exporters found in blockchain.</Alert>
+          ) : (
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell width="12%">Exporter ID</TableCell>
+                    <TableCell width="20%">Company Name</TableCell>
+                    <TableCell width="15%">License Number</TableCell>
+                    <TableCell width="10%">Status</TableCell>
+                    <TableCell width="12%">Capital (ETB)</TableCell>
+                    <TableCell width="10%">Lab Certified</TableCell>
+                    <TableCell width="10%">Expires</TableCell>
+                    <TableCell width="11%" align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {exporters.map((exporter) => (
+                    <TableRow key={exporter.exporterId}>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight="bold" color="primary">
+                          {exporter.exporterId}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{exporter.companyName}</TableCell>
+                      <TableCell>{exporter.ectaLicenseNumber || 'N/A'}</TableCell>
+                      <TableCell>
+                        <StatusChip
+                          status={exporter.licenseStatus === 'ACTIVE' ? 'approved' : exporter.licenseStatus === 'SUSPENDED' ? 'rejected' : 'pending'}
+                          label={exporter.licenseStatus}
+                          brandColor={BRAND_COLOR}
+                        />
+                      </TableCell>
+                      <TableCell>{formatCurrency(exporter.capitalRequirement, 'ETB')}</TableCell>
+                      <TableCell>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={exporter.laboratoryCertified}
+                              onChange={(e) => handleUpdateLaboratory(exporter.exporterId, e.target.checked)}
+                              size="small"
+                            />
+                          }
+                          label=""
+                        />
+                      </TableCell>
+                      <TableCell>{formatDate(exporter.licenseExpiryDate)}</TableCell>
+                      <TableCell align="right">
+                        <Tooltip title="View Details">
+                          <IconButton
+                            size="small"
+                            onClick={() => {
+                              setSelectedExporter(exporter);
+                              setDialogOpen(true);
+                            }}
+                          >
+                            <Visibility />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={exporter.licenseStatus === 'SUSPENDED' ? 'Activate License' : 'Suspend License'}>
+                          <IconButton
+                            size="small"
+                            color={exporter.licenseStatus === 'SUSPENDED' ? 'success' : 'warning'}
+                            onClick={() => handleSuspendLicense(exporter.exporterId, exporter.licenseStatus)}
+                          >
+                            {exporter.licenseStatus === 'SUSPENDED' ? <CheckCircle /> : <Warning />}
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
         </TabPanel>
 
         <TabPanel value={tabValue} index={4}>
-          {/* Quality Control Tab - 5-Stage Workflow */}
+          {/* Quality Control Tab - Clean Table View */}
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Science /> Quality Inspection Workflow (5 Stages)
+            <Science /> Quality Inspection Records
           </Typography>
           
           <Alert severity="info" sx={{ mb: 3 }}>
-            <Typography variant="body2" fontWeight="bold">ECTA Quality Inspection Process:</Typography>
-            <Typography variant="caption" component="div">
-              1. <strong>Pending Inspection</strong> → Request/Schedule Inspection (CREATED → REQUESTED)
-              <br/>2. <strong>Scheduled</strong> → Perform Physical Inspection (REQUESTED → INSPECTED)
-              <br/>3. <strong>Under Review</strong> → Approve or Reject Quality (INSPECTED → APPROVED/REJECTED)
-              <br/>4. <strong>Approved</strong> → Issue Export Permit (APPROVED → PERMIT_ISSUED)
-              <br/>5. <strong>Rejected</strong> → Final state (quality issues must be addressed)
-            </Typography>
+            Click the KPI cards above to filter by inspection status: Pending, Scheduled, Under Review, Inspected, or Approved.
           </Alert>
 
-          {/* Workflow Status Tabs */}
-          <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-            <Tabs 
-              value={inspectionFilterTab === 'PENDING' ? 0 : inspectionFilterTab === 'SCHEDULED' ? 1 : inspectionFilterTab === 'UNDER_REVIEW' ? 2 : inspectionFilterTab === 'APPROVED' ? 3 : 4}
-              onChange={(e, newValue) => {
-                const tabs: ('PENDING' | 'SCHEDULED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED')[] = ['PENDING', 'SCHEDULED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'];
-                setInspectionFilterTab(tabs[newValue]);
-              }}
-              variant="scrollable"
-              scrollButtons="auto"
-              sx={{
-                '& .MuiTab-root': {
-                  minHeight: 64,
-                  textTransform: 'none',
-                  fontSize: '0.9rem',
-                  fontWeight: 600,
-                  '&.Mui-selected': {
-                    color: BRAND_COLOR,
-                    fontWeight: 700,
-                  }
-                },
-                '& .MuiTabs-indicator': {
-                  height: 3,
-                  backgroundColor: BRAND_COLOR,
-                }
-              }}
-            >
-              <Tab label={
-                <Box textAlign="center">
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <HourglassTop sx={{ fontSize: 20, color: '#ff9800' }} />
-                    <span>Pending Inspection</span>
-                  </Box>
-                  <Typography variant="caption" color="textSecondary">
-                    {allShipments.filter(s => {
-                      const status = (s.status || (s as any).Status || '').toUpperCase();
-                      return status === 'CREATED' || status === 'REGISTERED';
-                    }).length} shipments
-                  </Typography>
-                </Box>
-              } />
-              <Tab label={
-                <Box textAlign="center">
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Assignment sx={{ fontSize: 20, color: '#2196f3' }} />
-                    <span>Scheduled</span>
-                  </Box>
-                  <Typography variant="caption" color="textSecondary">
-                    {allInspectionRecords.filter(i => (i.status || i.Status) === 'REQUESTED').length} inspections
-                  </Typography>
-                </Box>
-              } />
-              <Tab label={
-                <Box textAlign="center">
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Science sx={{ fontSize: 20, color: '#9c27b0' }} />
-                    <span>Under Review</span>
-                  </Box>
-                  <Typography variant="caption" color="textSecondary">
-                    {allInspectionRecords.filter(i => (i.status || i.Status) === 'INSPECTED').length} inspections
-                  </Typography>
-                </Box>
-              } />
-              <Tab label={
-                <Box textAlign="center">
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <CheckCircle sx={{ fontSize: 20, color: '#4caf50' }} />
-                    <span>Approved</span>
-                  </Box>
-                  <Typography variant="caption" color="textSecondary">
-                    {allInspectionRecords.filter(i => (i.status || i.Status) === 'APPROVED').length} permits ready
-                  </Typography>
-                </Box>
-              } />
-              <Tab label={
-                <Box textAlign="center">
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Cancel sx={{ fontSize: 20, color: '#f44336' }} />
-                    <span>Rejected</span>
-                  </Box>
-                  <Typography variant="caption" color="textSecondary">
-                    {allInspectionRecords.filter(i => (i.status || i.Status) === 'REJECTED').length} rejected
-                  </Typography>
-                </Box>
-              } />
-            </Tabs>
-          </Box>
+          {/* Unified Table for All Inspection Data */}
+          {(() => {
+            // Determine which data to show based on activeKPIFilter
+            const getPendingShipments = () => allShipments.filter(s => {
+              const status = (s.status || (s as any).Status || '').toUpperCase();
+              return (status === 'CREATED' || status === 'REGISTERED') && 
+                     !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+            });
 
-          {/* Stage 1: Pending Inspection - Shipments needing inspection */}
-          {inspectionFilterTab === 'PENDING' && (
-            <Grid container spacing={3}>
-              {allShipments
-                .filter(s => {
-                  const status = (s.status || (s as any).Status || '').toUpperCase();
-                  return (status === 'CREATED' || status === 'REGISTERED') && 
-                         !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-                })
-                .map((shipment) => (
-                  <Grid item xs={12} md={6} key={shipment.shipmentId}>
-                    <Card sx={{ border: '2px solid #ff9800', '&:hover': { boxShadow: 6 } }}>
-                      <CardContent>
-                        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                          <Typography variant="h6" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
-                            {shipment.shipmentId}
-                          </Typography>
-                          <Chip label="PENDING" size="small" sx={{ bgcolor: '#ff9800', color: 'white' }} />
-                        </Box>
-                        <Divider sx={{ my: 1.5 }} />
-                        <Box display="flex" flexDirection="column" gap={1}>
-                          <Typography variant="body2"><strong>Origin:</strong> {shipment.origin}</Typography>
-                          <Typography variant="body2"><strong>Quantity:</strong> {shipment.quantity?.toLocaleString()} kg</Typography>
-                          <Typography variant="body2"><strong>Grade:</strong> {shipment.grade || 'N/A'}</Typography>
-                          <Typography variant="body2"><strong>Exporter:</strong> {shipment.exporterId}</Typography>
-                        </Box>
-                        <Box mt={2}>
-                          <Button 
-                            variant="contained" 
-                            fullWidth
-                            startIcon={<Assignment />}
-                            sx={{ bgcolor: '#ff9800', '&:hover': { bgcolor: '#f57c00' } }}
-                            onClick={() => handleRequestInspection(shipment)}
-                          >
-                            Schedule Inspection
-                          </Button>
-                        </Box>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              {allShipments.filter(s => {
-                const status = (s.status || (s as any).Status || '').toUpperCase();
-                return (status === 'CREATED' || status === 'REGISTERED') && 
-                       !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-              }).length === 0 && (
-                <Grid item xs={12}>
-                  <Alert severity="info">No shipments pending inspection scheduling</Alert>
-                </Grid>
-              )}
-            </Grid>
-          )}
+            const getFilteredInspections = () => {
+              if (activeKPIFilter === 'PENDING_INSPECTION') {
+                // Show only pending shipments (not yet scheduled)
+                return getPendingShipments();
+              } else if (activeKPIFilter === 'INSPECTED') {
+                // Show only inspections with INSPECTED status
+                return allInspectionRecords.filter(i => (i.status || i.Status) === 'INSPECTED');
+              } else if (activeKPIFilter === 'APPROVED_INSPECTION') {
+                // Show only inspections with APPROVED status
+                return allInspectionRecords.filter(i => (i.status || i.Status) === 'APPROVED');
+              } else if (activeKPIFilter === 'ALL_SHIPMENTS' || !activeKPIFilter) {
+                // Show all: pending shipments + all inspection records
+                return [...getPendingShipments(), ...allInspectionRecords];
+              } else {
+                // Default: show all
+                return [...getPendingShipments(), ...allInspectionRecords];
+              }
+            };
 
-          {/* Stage 2: Scheduled - Inspections ready for physical inspection */}
-          {inspectionFilterTab === 'SCHEDULED' && (
-            <Grid container spacing={3}>
-              {allInspectionRecords
-                .filter(i => (i.status || i.Status) === 'REQUESTED')
-                .map((inspection) => (
-                  <Grid item xs={12} md={6} key={inspection.inspectionID || inspection.InspectionID}>
-                    <Card sx={{ border: '2px solid #2196f3', '&:hover': { boxShadow: 6 } }}>
-                      <CardContent>
-                        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                          <Typography variant="h6" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
-                            {inspection.inspectionID || inspection.InspectionID}
-                          </Typography>
-                          <Chip label="SCHEDULED" size="small" sx={{ bgcolor: '#2196f3', color: 'white' }} />
-                        </Box>
-                        <Divider sx={{ my: 1.5 }} />
-                        <Box display="flex" flexDirection="column" gap={1}>
-                          <Typography variant="body2"><strong>Shipment:</strong> {inspection.shipmentID || inspection.ShipmentID}</Typography>
-                          <Typography variant="body2"><strong>Exporter:</strong> {inspection.exporterID || inspection.ExporterID}</Typography>
-                          <Typography variant="body2"><strong>Scheduled:</strong> {inspection.scheduledDate ? new Date(inspection.scheduledDate).toLocaleDateString() : 'N/A'}</Typography>
-                        </Box>
-                        <Box mt={2}>
-                          <Button 
-                            variant="contained" 
-                            fullWidth
-                            startIcon={<Science />}
-                            sx={{ bgcolor: '#2196f3', '&:hover': { bgcolor: '#1976d2' } }}
-                            onClick={() => handlePerformInspection(inspection)}
-                          >
-                            Perform Inspection
-                          </Button>
-                        </Box>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              {allInspectionRecords.filter(i => (i.status || i.Status) === 'REQUESTED').length === 0 && (
-                <Grid item xs={12}>
-                  <Alert severity="info">No scheduled inspections</Alert>
-                </Grid>
-              )}
-            </Grid>
-          )}
+            const dataToShow = getFilteredInspections();
+            const isPendingShipment = (item: any) => item.shipmentId && !item.inspectionID && !item.InspectionID;
 
-          {/* Stage 3: Under Review - Inspections completed, awaiting approval/rejection */}
-          {inspectionFilterTab === 'UNDER_REVIEW' && (
-            <Grid container spacing={3}>
-              {allInspectionRecords
-                .filter(i => (i.status || i.Status) === 'INSPECTED')
-                .map((inspection) => (
-                  <Grid item xs={12} md={6} key={inspection.inspectionID || inspection.InspectionID}>
-                    <Card sx={{ border: '2px solid #9c27b0', '&:hover': { boxShadow: 6 } }}>
-                      <CardContent>
-                        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                          <Typography variant="h6" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
-                            {inspection.inspectionID || inspection.InspectionID}
-                          </Typography>
-                          <Chip label="UNDER REVIEW" size="small" sx={{ bgcolor: '#9c27b0', color: 'white' }} />
-                        </Box>
-                        <Divider sx={{ my: 1.5 }} />
-                        <Box display="flex" flexDirection="column" gap={1}>
-                          <Typography variant="body2"><strong>Shipment:</strong> {inspection.shipmentID || inspection.ShipmentID}</Typography>
-                          <Typography variant="body2"><strong>Moisture:</strong> {inspection.moistureContent || 'N/A'}%</Typography>
-                          <Typography variant="body2"><strong>Defects:</strong> {inspection.defectCount || 'N/A'}</Typography>
-                          <Typography variant="body2"><strong>Overall Score:</strong> {inspection.overall || 'N/A'}</Typography>
-                        </Box>
-                        <Box mt={2} display="flex" gap={1}>
-                          <Button 
-                            variant="contained" 
-                            fullWidth
-                            startIcon={<CheckCircle />}
-                            sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
-                            onClick={() => handleApproveInspection(inspection)}
-                          >
-                            Approve
-                          </Button>
-                          <Button 
-                            variant="outlined" 
-                            fullWidth
-                            startIcon={<Cancel />}
-                            color="error"
-                            onClick={() => {
-                              const reason = prompt('Enter rejection reason:');
-                              if (reason) handleRejectInspection(inspection, reason);
-                            }}
-                          >
-                            Reject
-                          </Button>
-                        </Box>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              {allInspectionRecords.filter(i => (i.status || i.Status) === 'INSPECTED').length === 0 && (
-                <Grid item xs={12}>
-                  <Alert severity="info">No inspections under review</Alert>
-                </Grid>
-              )}
-            </Grid>
-          )}
+            return dataToShow.length === 0 ? (
+              <Alert severity="info">No inspection records to display</Alert>
+            ) : (
+              <TableContainer component={Paper}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell width="15%">ID</TableCell>
+                      <TableCell width="15%">Shipment ID</TableCell>
+                      <TableCell width="12%">Exporter</TableCell>
+                      <TableCell width="10%">Status</TableCell>
+                      <TableCell width="10%">Date</TableCell>
+                      <TableCell width="10%">Quality Score</TableCell>
+                      <TableCell width="10%">Certificate</TableCell>
+                      <TableCell width="18%" align="right">Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {dataToShow.map((item: any, index) => {
+                      const isShipment = isPendingShipment(item);
+                      const itemId = isShipment ? item.shipmentId : (item.inspectionID || item.InspectionID);
+                      const shipmentId = isShipment ? item.shipmentId : (item.shipmentID || item.ShipmentID);
+                      const exporterId = isShipment ? item.exporterId : (item.exporterID || item.ExporterID);
+                      const status = isShipment ? 'PENDING' : (item.status || item.Status || 'UNKNOWN');
+                      const date = isShipment 
+                        ? (item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'N/A')
+                        : (item.inspectionDate || item.approvalDate || item.scheduledDate) 
+                          ? new Date(item.inspectionDate || item.approvalDate || item.scheduledDate).toLocaleDateString() 
+                          : 'N/A';
+                      const qualityScore = isShipment ? 'N/A' : (item.overall || item.overallScore || 'N/A');
+                      const certificate = isShipment ? '-' : (item.certificateNo || '-');
 
-          {/* Stage 4: Approved - Ready to issue export permits */}
-          {inspectionFilterTab === 'APPROVED' && (
-            <Grid container spacing={3}>
-              {allInspectionRecords
-                .filter(i => (i.status || i.Status) === 'APPROVED')
-                .map((inspection) => (
-                  <Grid item xs={12} md={6} key={inspection.inspectionID || inspection.InspectionID}>
-                    <Card sx={{ border: '2px solid #4caf50', '&:hover': { boxShadow: 6 } }}>
-                      <CardContent>
-                        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                          <Typography variant="h6" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
-                            {inspection.inspectionID || inspection.InspectionID}
-                          </Typography>
-                          <Chip label="APPROVED" size="small" sx={{ bgcolor: '#4caf50', color: 'white' }} />
-                        </Box>
-                        <Divider sx={{ my: 1.5 }} />
-                        <Box display="flex" flexDirection="column" gap={1}>
-                          <Typography variant="body2"><strong>Shipment:</strong> {inspection.shipmentID || inspection.ShipmentID}</Typography>
-                          <Typography variant="body2"><strong>Certificate:</strong> {inspection.certificateNo || 'N/A'}</Typography>
-                          <Typography variant="body2"><strong>Approved By:</strong> {inspection.approvedBy || 'N/A'}</Typography>
-                          <Typography variant="body2"><strong>Approval Date:</strong> {inspection.approvalDate ? new Date(inspection.approvalDate).toLocaleDateString() : 'N/A'}</Typography>
-                        </Box>
-                        <Box mt={2}>
-                          <Button 
-                            variant="contained" 
-                            fullWidth
-                            startIcon={<Description />}
-                            sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
-                            onClick={() => handleIssueExportPermit(inspection)}
-                          >
-                            Issue Export Permit
-                          </Button>
-                        </Box>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              {allInspectionRecords.filter(i => (i.status || i.Status) === 'APPROVED').length === 0 && (
-                <Grid item xs={12}>
-                  <Alert severity="info">No approved inspections ready for permit issuance</Alert>
-                </Grid>
-              )}
-            </Grid>
-          )}
-
-          {/* Stage 5: Rejected - Final state */}
-          {inspectionFilterTab === 'REJECTED' && (
-            <Grid container spacing={3}>
-              {allInspectionRecords
-                .filter(i => (i.status || i.Status) === 'REJECTED')
-                .map((inspection) => (
-                  <Grid item xs={12} md={6} key={inspection.inspectionID || inspection.InspectionID}>
-                    <Card sx={{ border: '2px solid #f44336', '&:hover': { boxShadow: 6 } }}>
-                      <CardContent>
-                        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                          <Typography variant="h6" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
-                            {inspection.inspectionID || inspection.InspectionID}
-                          </Typography>
-                          <Chip label="REJECTED" size="small" sx={{ bgcolor: '#f44336', color: 'white' }} />
-                        </Box>
-                        <Divider sx={{ my: 1.5 }} />
-                        <Box display="flex" flexDirection="column" gap={1}>
-                          <Typography variant="body2"><strong>Shipment:</strong> {inspection.shipmentID || inspection.ShipmentID}</Typography>
-                          <Typography variant="body2"><strong>Rejected By:</strong> {inspection.rejectedBy || 'N/A'}</Typography>
-                          <Typography variant="body2" color="error"><strong>Reason:</strong> {inspection.rejectionReason || 'Quality standards not met'}</Typography>
-                          <Typography variant="body2"><strong>Rejection Date:</strong> {inspection.rejectionDate ? new Date(inspection.rejectionDate).toLocaleDateString() : 'N/A'}</Typography>
-                        </Box>
-                        <Alert severity="error" sx={{ mt: 2 }}>
-                          <Typography variant="caption">
-                            Exporter must address quality issues before re-submitting for inspection
-                          </Typography>
-                        </Alert>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              {allInspectionRecords.filter(i => (i.status || i.Status) === 'REJECTED').length === 0 && (
-                <Grid item xs={12}>
-                  <Alert severity="success">No rejected inspections</Alert>
-                </Grid>
-              )}
-            </Grid>
-          )}
+                      return (
+                        <TableRow key={`${itemId}-${index}`}>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight="bold" sx={{ fontFamily: 'monospace' }}>
+                              {itemId}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>{shipmentId}</TableCell>
+                          <TableCell>{exporterId}</TableCell>
+                          <TableCell>
+                            <StatusChip
+                              status={
+                                status === 'PENDING' ? 'pending' :
+                                status === 'REQUESTED' ? 'pending' :
+                                status === 'INSPECTED' ? 'warning' :
+                                status === 'APPROVED' ? 'approved' :
+                                status === 'REJECTED' ? 'rejected' :
+                                'default'
+                              }
+                              label={status}
+                              brandColor={BRAND_COLOR}
+                            />
+                          </TableCell>
+                          <TableCell>{date}</TableCell>
+                          <TableCell>{qualityScore}</TableCell>
+                          <TableCell>{certificate}</TableCell>
+                          <TableCell align="right">
+                            {isShipment ? (
+                              <Button
+                                variant="contained"
+                                size="small"
+                                startIcon={<Assignment />}
+                                sx={{ bgcolor: '#ff9800', '&:hover': { bgcolor: '#f57c00' } }}
+                                onClick={() => handleRequestInspection(item)}
+                              >
+                                Schedule
+                              </Button>
+                            ) : status === 'REQUESTED' ? (
+                              <Button
+                                variant="contained"
+                                size="small"
+                                startIcon={<Science />}
+                                sx={{ bgcolor: '#2196f3', '&:hover': { bgcolor: '#1976d2' } }}
+                                onClick={() => handlePerformInspection(item)}
+                              >
+                                Inspect
+                              </Button>
+                            ) : status === 'INSPECTED' ? (
+                              <Box display="flex" gap={1} justifyContent="flex-end">
+                                <Button
+                                  variant="contained"
+                                  size="small"
+                                  startIcon={<CheckCircle />}
+                                  sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
+                                  onClick={() => handleApproveInspection(item)}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  variant="outlined"
+                                  size="small"
+                                  startIcon={<Cancel />}
+                                  color="error"
+                                  onClick={() => {
+                                    const reason = prompt('Enter rejection reason:');
+                                    if (reason) handleRejectInspection(item, reason);
+                                  }}
+                                >
+                                  Reject
+                                </Button>
+                              </Box>
+                            ) : status === 'APPROVED' ? (
+                              <Button
+                                variant="contained"
+                                size="small"
+                                startIcon={<Description />}
+                                sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
+                                onClick={() => handleIssueExportPermit(item)}
+                              >
+                                Issue Permit
+                              </Button>
+                            ) : status === 'REJECTED' ? (
+                              <Chip label="Rejected" size="small" color="error" />
+                            ) : (
+                              <Chip label={status} size="small" />
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            );
+          })()}
         </TabPanel>
 
         <TabPanel value={tabValue} index={5}>

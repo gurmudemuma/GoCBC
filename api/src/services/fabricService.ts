@@ -1601,6 +1601,47 @@ export class FabricService {
     return this.queryChaincode('QueryCustomsDeclarationsByStatus', [status]);
   }
 
+  // ==================== DOCUMENT HASH OPERATIONS ====================
+
+  public async registerDocumentHash(
+    documentId: string,
+    entityId: string,
+    entityType: string,
+    hash: string,
+    ipfsCID: string,
+    filename: string,
+    category: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('RegisterDocumentHash', [
+      documentId,
+      entityId,
+      entityType,
+      hash,
+      ipfsCID || '',
+      filename,
+      category,
+    ]);
+  }
+
+  public async readDocumentHash(documentId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('ReadDocumentHash', [documentId]);
+  }
+
+  public async verifyDocumentHash(
+    documentId: string,
+    verifierComments: string
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('VerifyDocumentHash', [documentId, verifierComments || '']);
+  }
+
+  public async queryDocumentsByEntity(entityId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryDocumentsByEntity', [entityId]);
+  }
+
+  public async queryDocumentsByCategory(category: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QueryDocumentsByCategory', [category]);
+  }
+
   // ==================== PASS-THROUGH METHODS ====================
   // These provide a lower-level interface for routes that call chaincode directly
 

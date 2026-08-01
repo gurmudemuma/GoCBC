@@ -8,8 +8,6 @@ import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { dedupeById, isValidContract } from '../utils/dataFilters';
-import { dedupeById, isValidContract } from '../utils/dataFilters';
-import { dedupeById, isValidContract } from '../utils/dataFilters';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -308,6 +306,87 @@ router.get('/', async (req, res) => {
 
 /**
  * @swagger
+ * /api/v1/contracts/{contractID}/documents:
+ *   get:
+ *     summary: Get all documents for a contract
+ *     tags: [Contracts]
+ *     parameters:
+ *       - in: path
+ *         name: contractID
+ *         required: true
+ */
+router.get('/:contractID/documents',
+  authMiddleware,
+  [param('contractID').notEmpty().withMessage('Contract ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { contractID } = req.params;
+      const { DatabaseService } = await import('../services/databaseService');
+      const { checkRequiredDocuments, DOCUMENT_TYPES } = await import('../utils/documentValidation');
+      
+      const db = DatabaseService.getInstance();
+      
+      // Get all documents for this contract
+      const documents = await db.all(
+        `SELECT * FROM documents 
+         WHERE entity_type = 'contract' AND entity_id = ? AND status != 'deleted'
+         ORDER BY uploaded_at DESC`,
+        [contractID]
+      );
+      
+      // Parse metadata
+      documents.forEach((doc: any) => {
+        try {
+          doc.metadata = JSON.parse(doc.metadata || '{}');
+        } catch {
+          doc.metadata = {};
+        }
+      });
+      
+      // Check requirements
+      const docTypes = documents
+        .filter((d: any) => d.status === 'active')
+        .map((d: any) => d.document_type);
+      const requirementCheck = checkRequiredDocuments('contract', docTypes);
+      
+      // Get requirement details
+      const requirements = ['CONTRACT_SIGNED', 'PROFORMA_INVOICE'].map(type => ({
+        type,
+        name: (DOCUMENT_TYPES as any)[type].name,
+        required: (DOCUMENT_TYPES as any)[type].required,
+        uploaded: docTypes.includes(type)
+      }));
+      
+      res.json({
+        success: true,
+        data: {
+          documents,
+          count: documents.length,
+          requirements: {
+            allRequired: requirementCheck.valid,
+            missing: requirementCheck.errors,
+            details: requirements
+          }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error fetching contract documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /api/v1/contracts/{contractID}:
  *   get:
  *     summary: Get contract details by ID
@@ -457,6 +536,56 @@ router.post('/:contractID/approve',
           },
           timestamp: new Date().toISOString(),
         });
+      }
+
+      // ✅ DOCUMENT VERIFICATION: Check required documents before approval
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        const { checkRequiredDocuments } = await import('../utils/documentValidation');
+        
+        const db = DatabaseService.getInstance();
+        const documents = await db.all(
+          `SELECT document_type, verification_status FROM documents 
+           WHERE entity_type = 'contract' AND entity_id = ? AND status = 'active'`,
+          [contractID]
+        );
+        
+        const docTypes = documents.map((d: any) => d.document_type);
+        const requirementCheck = checkRequiredDocuments('contract', docTypes);
+        
+        if (!requirementCheck.valid) {
+          logger.warn(`Contract ${contractID} approval blocked: Missing required documents`, requirementCheck.errors);
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'MISSING_DOCUMENTS',
+              message: 'Cannot approve contract: Required documents are missing',
+              missing: requirementCheck.errors,
+              hint: 'Upload CONTRACT_SIGNED document before approval'
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        
+        // Check if CONTRACT_SIGNED is verified
+        const contractDoc = documents.find((d: any) => d.document_type === 'CONTRACT_SIGNED');
+        if (contractDoc && contractDoc.verification_status !== 'verified') {
+          logger.warn(`Contract ${contractID} approval blocked: CONTRACT_SIGNED not verified`);
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'UNVERIFIED_DOCUMENT',
+              message: 'Cannot approve contract: Signed contract document must be verified first',
+              documentStatus: contractDoc.verification_status
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        
+        logger.info(`✅ Contract ${contractID}: Document requirements satisfied for approval`);
+      } catch (docCheckError) {
+        logger.warn(`Non-fatal: Document check failed for contract ${contractID}:`, docCheckError);
+        // Continue with approval - document check is best-effort
       }
 
       // Log which organization is approving

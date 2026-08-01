@@ -201,8 +201,7 @@ class CECBSServer {
     apiV1.use('/payments', authMiddleware, paymentsRoutes);
 
     // V2.3 Document Storage (Off-chain with IPFS)
-    // NOTE: Auth is applied per-route in documentsRoutes to allow public registration endpoint
-    apiV1.use('/documents', documentsRoutes);
+    apiV1.use('/documents', authMiddleware, documentsRoutes);
 
     // V2.4 Real-World Workflow Alignment
     apiV1.use('/shipments', authMiddleware, landTransportRoutes); // Land transport tracking

@@ -382,27 +382,8 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
       )}
 
       {/* Payments Table */}
-      <Paper sx={{ border: `2px solid ${CBE_COLORS.black}` }}>
-        <Box sx={{ 
-          bgcolor: CBE_COLORS.black, 
-          color: CBE_COLORS.golden, 
-          p: 2,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            {selectedMethodConfig?.name} Transactions
-          </Typography>
-          <Chip 
-            label={`${payments.length} Active`}
-            sx={{ 
-              bgcolor: CBE_COLORS.golden, 
-              color: CBE_COLORS.black,
-              fontWeight: 700,
-            }}
-          />
-        </Box>
+      <Paper sx={{ border: `1px solid #e0e0e0`, borderRadius: 2, overflow: 'hidden' }}>
+        {/* Removed the large black header box - table has its own headers */}
 
         {payments.length === 0 ? (
           <Box sx={{ p: 6, textAlign: 'center' }}>
@@ -453,13 +434,73 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           <TableContainer>
             <Table>
               <TableHead>
-                <TableRow sx={{ bgcolor: CBE_COLORS.black }}>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>ID</TableCell>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>Exporter</TableCell>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>Amount</TableCell>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>Workflow Progress</TableCell>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>Status</TableCell>
-                  <TableCell sx={{ color: CBE_COLORS.golden, fontWeight: 700 }}>Actions</TableCell>
+                <TableRow>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    ID
+                  </TableCell>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    Exporter
+                  </TableCell>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    Amount
+                  </TableCell>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    Workflow Progress
+                  </TableCell>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    Status
+                  </TableCell>
+                  <TableCell sx={{ 
+                    bgcolor: CBE_COLORS.black,
+                    color: CBE_COLORS.golden,
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    py: 1,
+                    px: 2,
+                    borderBottom: 'none'
+                  }}>
+                    Actions
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>

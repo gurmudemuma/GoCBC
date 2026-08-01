@@ -219,6 +219,34 @@ router.post('/',
         });
       }
 
+      // ✅ DOCUMENT VERIFICATION: Check quality documents before shipment creation
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        
+        const db = DatabaseService.getInstance();
+        const documents = await db.all(
+          `SELECT document_type, verification_status FROM documents 
+           WHERE entity_type = 'shipment' AND entity_id = ? AND status = 'active'`,
+          [shipmentID]
+        );
+        
+        // Required quality documents for shipment
+        const requiredDocs = ['QUALITY_CERTIFICATE', 'CUPPING_REPORT'];
+        const docTypes = documents.map((d: any) => d.document_type);
+        const missing = requiredDocs.filter(type => !docTypes.includes(type));
+        
+        if (missing.length > 0) {
+          logger.warn(`Shipment ${shipmentID} creation: Missing ${missing.length} quality documents (non-blocking)`);
+          // Note: This is informational only - we don't block shipment creation
+          // Quality documents can be uploaded after shipment creation
+        } else {
+          logger.info(`✅ Shipment ${shipmentID}: Quality documents already uploaded`);
+        }
+      } catch (docCheckError) {
+        logger.warn(`Non-fatal: Document check failed for shipment ${shipmentID}:`, docCheckError);
+        // Continue with shipment creation - document check is best-effort
+      }
+
       // Extract document IDs for blockchain storage
       let documentIDs: string[] = [];
       if (documents && Array.isArray(documents)) {
@@ -495,6 +523,90 @@ router.get('/', async (req, res) => {
     });
   }
 });
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/documents:
+ *   get:
+ *     summary: Get all documents for a shipment
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ */
+router.get('/:shipmentID/documents',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { DatabaseService } = await import('../services/databaseService');
+      const { checkRequiredDocuments, DOCUMENT_TYPES } = await import('../utils/documentValidation');
+      
+      const db = DatabaseService.getInstance();
+      
+      // Get all documents for this shipment
+      const documents = await db.all(
+        `SELECT * FROM documents 
+         WHERE entity_type = 'shipment' AND entity_id = ? AND status != 'deleted'
+         ORDER BY uploaded_at DESC`,
+        [shipmentID]
+      );
+      
+      // Parse metadata
+      documents.forEach((doc: any) => {
+        try {
+          doc.metadata = JSON.parse(doc.metadata || '{}');
+        } catch {
+          doc.metadata = {};
+        }
+      });
+      
+      // Check requirements
+      const docTypes = documents
+        .filter((d: any) => d.status === 'active')
+        .map((d: any) => d.document_type);
+      const requirementCheck = checkRequiredDocuments('shipment', docTypes);
+      
+      // Get requirement details for shipment
+      const shipmentRequirements = ['QUALITY_CERTIFICATE', 'CUPPING_REPORT', 'EXPORT_PERMIT', 
+                                     'PHYTOSANITARY_CERTIFICATE', 'CERTIFICATE_OF_ORIGIN'];
+      const requirements = shipmentRequirements
+        .filter(type => type in DOCUMENT_TYPES)
+        .map(type => ({
+          type,
+          name: (DOCUMENT_TYPES as any)[type].name,
+          required: (DOCUMENT_TYPES as any)[type].required,
+          uploaded: docTypes.includes(type)
+        }));
+      
+      res.json({
+        success: true,
+        data: {
+          documents,
+          count: documents.length,
+          requirements: {
+            allRequired: requirementCheck.valid,
+            missing: requirementCheck.errors,
+            details: requirements
+          }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error fetching shipment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
 
 /**
  * @swagger

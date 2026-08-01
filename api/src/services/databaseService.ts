@@ -216,6 +216,34 @@ export class DatabaseService {
       );
     `;
 
+    // Documents table for document management workflow
+    const documentsTableSQL = `
+      CREATE TABLE IF NOT EXISTS documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id TEXT UNIQUE NOT NULL,
+        document_type TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        storage_path TEXT NOT NULL,
+        uploaded_by TEXT NOT NULL,
+        uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived', 'deleted')),
+        blockchain_hash TEXT,
+        blockchain_tx_id TEXT,
+        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending', 'verified', 'rejected')),
+        verified_by TEXT,
+        verified_at TEXT,
+        expiry_date TEXT,
+        version INTEGER DEFAULT 1,
+        parent_document_id TEXT,
+        metadata TEXT DEFAULT '{}',
+        FOREIGN KEY (parent_document_id) REFERENCES documents(document_id)
+      );
+    `;
+
     this.run(usersTableSQL).then(() => {
         logger.info('✅ Users table ready');
         this.createIndexes();
@@ -238,6 +266,8 @@ export class DatabaseService {
       .catch(err => logger.error('Failed to create declarations table:', err));
     this.run(declarationAuditTableSQL).then(() => logger.info('✅ Declaration audit table ready'))
       .catch(err => logger.error('Failed to create declaration_audit table:', err));
+    this.run(documentsTableSQL).then(() => logger.info('✅ Documents table ready'))
+      .catch(err => logger.error('Failed to create documents table:', err));
   }
 
   private runMigrations(): void {
@@ -278,7 +308,13 @@ export class DatabaseService {
       'CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)',
       'CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_declaration_risk_declaration_id ON declaration_risk(declaration_id)',
-      'CREATE INDEX IF NOT EXISTS idx_declaration_risk_assessed_at ON declaration_risk(assessed_at)'
+      'CREATE INDEX IF NOT EXISTS idx_declaration_risk_assessed_at ON declaration_risk(assessed_at)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_entity ON documents(entity_type, entity_id)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_uploaded_by ON documents(uploaded_by)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_uploaded_at ON documents(uploaded_at)',
+      'CREATE INDEX IF NOT EXISTS idx_documents_verification ON documents(verification_status)'
     ];
 
     indexes.forEach((indexSQL) => {
