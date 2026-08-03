@@ -59,6 +59,7 @@ import {
   Cancel,
   Message as MessageOutlined,
   Send as SendOutlined,
+  Person,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 import DocumentVerificationPanel from './DocumentVerificationPanel';
@@ -80,6 +81,7 @@ import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
 import { PaymentMethodTab } from './PaymentMethodTab';
+import UserManagement from '@/components/admin/UserManagement';
 
 interface SalesContract {
   contractId: string;
@@ -2144,6 +2146,11 @@ const BanksPortal: React.FC = () => {
             <Tab 
               label={`Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`}
               icon={<AttachMoney />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label="User Management"
+              icon={<Person />} 
               iconPosition="start" 
             />
           </Tabs>
@@ -4302,6 +4309,11 @@ const BanksPortal: React.FC = () => {
             </Box>
           )}
         </ModernCard>
+      )}
+
+      {/* Tab 5: User Management */}
+      {activeTab === 5 && (
+        <UserManagement />
       )}
 
       {/* Audit Trail Viewer */}

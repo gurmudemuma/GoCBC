@@ -48,6 +48,7 @@ import {
   LightMode,
   FaceRetouchingNatural,
   AccountCircle,
+  AdminPanelSettings,
 } from '@mui/icons-material';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
@@ -148,12 +149,12 @@ const LoginPage2026: React.FC = () => {
   ];
 
   const organizations = [
-    { name: 'ECTA Admin', user: 'ecta_admin', password: 'password123', color: '#078930', icon: <Coffee />, role: 'Coffee & Tea Authority' },
-    { name: 'ECX Admin', user: 'ecx_admin', password: 'password123', color: '#0F47AF', icon: <Store />, role: 'Commodity Exchange' },
+    { name: 'Super Admin', user: 'admin', password: 'admin123', color: '#DC143C', icon: <AdminPanelSettings />, role: 'System Administrator' },
+    { name: 'ECTA Admin', user: 'admin@ecta.gov.et', password: 'password123', color: '#078930', icon: <Coffee />, role: 'Coffee & Tea Authority' },
+    { name: 'ECX Admin', user: 'admin@ecx.com.et', password: 'password123', color: '#0F47AF', icon: <Store />, role: 'Commodity Exchange' },
     { name: 'NBE Admin', user: 'nbe_admin', password: 'password123', color: '#8B6F47', icon: <AccountBalance />, role: 'National Bank' },
-    { name: 'Bank Admin', user: 'bank_admin', password: 'password123', color: '#9b30b7', icon: <AccountBalance />, role: 'Commercial Banks' },
+    { name: 'Bank Admin', user: 'admin@cbe.com.et', password: 'password123', color: '#9b30b7', icon: <AccountBalance />, role: 'Commercial Banks' },
     { name: 'Customs Admin', user: 'customs_admin', password: 'password123', color: '#0F47AF', icon: <Security />, role: 'Customs Authority' },
-    { name: 'Shipping Admin', user: 'shipping_admin', password: 'password123', color: '#006064', icon: <LocalShipping />, role: 'Logistics Companies' },
     { name: 'Exporter Demo', user: 'ethiopianpremium', password: 'password123', color: '#2E7D32', icon: <Coffee />, role: 'Coffee Exporters' },
   ];
 

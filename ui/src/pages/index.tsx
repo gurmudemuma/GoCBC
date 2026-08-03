@@ -31,7 +31,7 @@ export default function Home() {
           CUSTOMS: '/portals/customs',
           SHIPPING: '/portals/shipping',
           EXPORTER: '/portals/exporter',
-          ADMIN: '/portals/ecta',
+          ADMIN: '/admin', // Super Admin Portal
         };
         
         const targetPortal = portalRoutes[user.role] || '/portals/ecta';

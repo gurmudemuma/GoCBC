@@ -26,6 +26,8 @@ import {
   IconButton,
   Tooltip,
   Divider,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import {
   Add,
@@ -43,10 +45,14 @@ import {
   Phone,
   Save,
   Cancel,
+  History,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
 import api from '@/utils/api';
+import BlockchainIdentityPanel from './BlockchainIdentityPanel';
+
+import { useAuth } from '@/contexts/AuthContext';
 
 interface User {
   id: number;
@@ -64,6 +70,25 @@ interface User {
   last_login?: string;
 }
 
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => {
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`user-details-tabpanel-${index}`}
+      aria-labelledby={`user-details-tab-${index}`}
+    >
+      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
+    </div>
+  );
+};
+
 interface UserFormData {
   username: string;
   email: string;
@@ -77,6 +102,8 @@ interface UserFormData {
 }
 
 const UserManagement: React.FC = () => {
+  const { user: currentUser } = useAuth();
+  
   // State
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
@@ -95,6 +122,7 @@ const UserManagement: React.FC = () => {
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [resetPasswordDialogOpen, setResetPasswordDialogOpen] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [detailsTab, setDetailsTab] = useState(0);
   
   // Snackbar
   const [snackbar, setSnackbar] = useState<{
@@ -364,6 +392,7 @@ const UserManagement: React.FC = () => {
 
   const handleDetailsClick = (user: User) => {
     setSelectedUser(user);
+    setDetailsTab(0); // Reset to first tab
     setDetailsDialogOpen(true);
   };
 
@@ -692,14 +721,74 @@ const UserManagement: React.FC = () => {
                     <FormControl fullWidth error={!!errors.role}>
                       <InputLabel>Role</InputLabel>
                       <Select {...field} label="Role">
-                        <MenuItem value="ECTA">ECTA</MenuItem>
-                        <MenuItem value="ECX">ECX</MenuItem>
-                        <MenuItem value="NBE">NBE</MenuItem>
-                        <MenuItem value="BANKS">Banks</MenuItem>
-                        <MenuItem value="CUSTOMS">Customs</MenuItem>
-                        <MenuItem value="SHIPPING">Shipping</MenuItem>
-                        <MenuItem value="EXPORTER">Exporter</MenuItem>
-                        <MenuItem value="ADMIN">Admin</MenuItem>
+                        {currentUser?.role === 'ADMIN' ? (
+                          // Super admin sees all organization roles
+                          <>
+                            <MenuItem value="ECTA">ECTA</MenuItem>
+                            <MenuItem value="ECX">ECX</MenuItem>
+                            <MenuItem value="NBE">NBE</MenuItem>
+                            <MenuItem value="BANKS">Banks</MenuItem>
+                            <MenuItem value="CUSTOMS">Customs</MenuItem>
+                            <MenuItem value="SHIPPING">Shipping</MenuItem>
+                            <MenuItem value="EXPORTER">Exporter</MenuItem>
+                            <MenuItem value="ADMIN">Admin</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'ECTA' ? (
+                          <>
+                            <MenuItem value="Quality Inspector">Quality Inspector</MenuItem>
+                            <MenuItem value="Lab Analyst">Lab Analyst</MenuItem>
+                            <MenuItem value="Phytosanitary Officer">Phytosanitary Officer</MenuItem>
+                            <MenuItem value="License Officer">License Officer</MenuItem>
+                            <MenuItem value="Permit Officer">Permit Officer</MenuItem>
+                            <MenuItem value="ECTA Officer">ECTA Officer</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'BANKS' ? (
+                          <>
+                            <MenuItem value="Bank Officer">Bank Officer</MenuItem>
+                            <MenuItem value="Branch Manager">Branch Manager</MenuItem>
+                            <MenuItem value="Trade Finance Officer">Trade Finance Officer</MenuItem>
+                            <MenuItem value="Credit Analyst">Credit Analyst</MenuItem>
+                            <MenuItem value="Forex Officer">Forex Officer</MenuItem>
+                            <MenuItem value="Compliance Officer">Compliance Officer</MenuItem>
+                            <MenuItem value="LC Officer">LC Officer</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'NBE' ? (
+                          <>
+                            <MenuItem value="NBE Officer">NBE Officer</MenuItem>
+                            <MenuItem value="Forex Officer">Forex Officer</MenuItem>
+                            <MenuItem value="Screening Officer">Screening Officer</MenuItem>
+                            <MenuItem value="Compliance Officer">Compliance Officer</MenuItem>
+                            <MenuItem value="Exchange Rate Officer">Exchange Rate Officer</MenuItem>
+                            <MenuItem value="Settlement Officer">Settlement Officer</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'ECX' ? (
+                          <>
+                            <MenuItem value="Grading Officer">Grading Officer</MenuItem>
+                            <MenuItem value="Warehouse Officer">Warehouse Officer</MenuItem>
+                            <MenuItem value="Registration Officer">Registration Officer</MenuItem>
+                            <MenuItem value="Release Officer">Release Officer</MenuItem>
+                            <MenuItem value="ECX Officer">ECX Officer</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'CUSTOMS' ? (
+                          <>
+                            <MenuItem value="Customs Officer">Customs Officer</MenuItem>
+                            <MenuItem value="Inspection Officer">Inspection Officer</MenuItem>
+                            <MenuItem value="Clearance Officer">Clearance Officer</MenuItem>
+                            <MenuItem value="Risk Analyst">Risk Analyst</MenuItem>
+                            <MenuItem value="ASYCUDA Officer">ASYCUDA Officer</MenuItem>
+                            <MenuItem value="Duty Assessment Officer">Duty Assessment Officer</MenuItem>
+                          </>
+                        ) : currentUser?.role === 'SHIPPING' ? (
+                          <>
+                            <MenuItem value="Logistics Officer">Logistics Officer</MenuItem>
+                            <MenuItem value="Documentation Officer">Documentation Officer</MenuItem>
+                            <MenuItem value="Operations Manager">Operations Manager</MenuItem>
+                            <MenuItem value="Shipping Coordinator">Shipping Coordinator</MenuItem>
+                            <MenuItem value="Freight Forwarder">Freight Forwarder</MenuItem>
+                          </>
+                        ) : (
+                          <MenuItem value={currentUser?.role}>{currentUser?.role}</MenuItem>
+                        )}
                       </Select>
                       {errors.role && (
                         <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
@@ -997,11 +1086,11 @@ const UserManagement: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* User Details Dialog */}
+      {/* User Details Dialog with Tabs */}
       <Dialog 
         open={detailsDialogOpen} 
         onClose={() => setDetailsDialogOpen(false)}
-        maxWidth="md"
+        maxWidth="lg"
         fullWidth
       >
         <DialogTitle>
@@ -1012,145 +1101,180 @@ const UserManagement: React.FC = () => {
         </DialogTitle>
         <DialogContent>
           {selectedUser && (
-            <Box sx={{ mt: 2 }}>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Username
-                  </Typography>
-                  <Typography variant="body1" fontWeight="bold">
-                    {selectedUser.username}
-                  </Typography>
-                </Grid>
+            <Box sx={{ width: '100%' }}>
+              <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+                <Tabs 
+                  value={detailsTab} 
+                  onChange={(e, newValue) => setDetailsTab(newValue)}
+                  aria-label="user details tabs"
+                >
+                  <Tab label="Profile" icon={<Person />} iconPosition="start" />
+                  <Tab label="Blockchain Identity" icon={<Lock />} iconPosition="start" />
+                  <Tab label="Activity Log" icon={<History />} iconPosition="start" />
+                </Tabs>
+              </Box>
 
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Email
-                  </Typography>
-                  <Typography variant="body1">
-                    {selectedUser.email}
-                  </Typography>
-                </Grid>
+              {/* Profile Tab */}
+              <TabPanel value={detailsTab} index={0}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Username
+                    </Typography>
+                    <Typography variant="body1" fontWeight="bold">
+                      {selectedUser.username}
+                    </Typography>
+                  </Grid>
 
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Full Name
-                  </Typography>
-                  <Typography variant="body1">
-                    {selectedUser.full_name}
-                  </Typography>
-                </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Email
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedUser.email}
+                    </Typography>
+                  </Grid>
 
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Phone Number
-                  </Typography>
-                  <Typography variant="body1">
-                    {selectedUser.phone || <em style={{ color: '#999' }}>Not provided</em>}
-                  </Typography>
-                </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Full Name
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedUser.full_name}
+                    </Typography>
+                  </Grid>
 
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Role
-                  </Typography>
-                  <Box sx={{ mt: 0.5 }}>
-                    <Chip
-                      label={selectedUser.role}
-                      size="small"
-                      color={
-                        selectedUser.role === 'ADMIN' ? 'error' :
-                        selectedUser.role === 'ECTA' ? 'primary' :
-                        selectedUser.role === 'EXPORTER' ? 'success' : 'default'
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Phone Number
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedUser.phone || <em style={{ color: '#999' }}>Not provided</em>}
+                    </Typography>
+                  </Grid>
+
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Role
+                    </Typography>
+                    <Box sx={{ mt: 0.5 }}>
+                      <Chip
+                        label={selectedUser.role}
+                        size="small"
+                        color={
+                          selectedUser.role === 'ADMIN' ? 'error' :
+                          selectedUser.role === 'ECTA' ? 'primary' :
+                          selectedUser.role === 'EXPORTER' ? 'success' : 'default'
+                        }
+                      />
+                    </Box>
+                  </Grid>
+
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Status
+                    </Typography>
+                    <Box sx={{ mt: 0.5 }}>
+                      <Chip
+                        label={selectedUser.status.toUpperCase()}
+                        size="small"
+                        color={
+                          selectedUser.status === 'active' ? 'success' :
+                          selectedUser.status === 'suspended' ? 'warning' : 'default'
+                        }
+                      />
+                    </Box>
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">
+                      Organization
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedUser.organization}
+                    </Typography>
+                  </Grid>
+
+                  {selectedUser.role === 'EXPORTER' && (
+                    <>
+                      <Grid item xs={12} sm={6}>
+                        <Typography variant="caption" color="text.secondary">
+                          Exporter ID
+                        </Typography>
+                        <Typography variant="body1">
+                          {selectedUser.exporter_id || <em style={{ color: '#999' }}>Not provided</em>}
+                        </Typography>
+                      </Grid>
+
+                      <Grid item xs={12} sm={6}>
+                        <Typography variant="caption" color="text.secondary">
+                          ECTA License
+                        </Typography>
+                        <Typography variant="body1">
+                          {selectedUser.ecta_license || <em style={{ color: '#999' }}>Not provided</em>}
+                        </Typography>
+                      </Grid>
+                    </>
+                  )}
+
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Created At
+                    </Typography>
+                    <Typography variant="body1">
+                      {new Date(selectedUser.created_at).toLocaleString()}
+                    </Typography>
+                  </Grid>
+
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Last Login
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedUser.last_login 
+                        ? new Date(selectedUser.last_login).toLocaleString()
+                        : <em style={{ color: '#999' }}>Never</em>
                       }
-                    />
-                  </Box>
+                    </Typography>
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary" gutterBottom>
+                      Permissions
+                    </Typography>
+                    <Divider sx={{ mb: 2 }} />
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {selectedUser.permissions && selectedUser.permissions.length > 0 ? (
+                        selectedUser.permissions.map((permission) => (
+                          <Chip key={permission} label={permission} size="small" variant="outlined" />
+                        ))
+                      ) : (
+                        <em style={{ color: '#999' }}>No permissions assigned</em>
+                      )}
+                    </Box>
+                  </Grid>
                 </Grid>
+              </TabPanel>
 
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Status
-                  </Typography>
-                  <Box sx={{ mt: 0.5 }}>
-                    <Chip
-                      label={selectedUser.status.toUpperCase()}
-                      size="small"
-                      color={
-                        selectedUser.status === 'active' ? 'success' :
-                        selectedUser.status === 'suspended' ? 'warning' : 'default'
-                      }
-                    />
-                  </Box>
-                </Grid>
+              {/* Blockchain Identity Tab */}
+              <TabPanel value={detailsTab} index={1}>
+                <BlockchainIdentityPanel
+                  userId={selectedUser.id}
+                  username={selectedUser.username}
+                  role={selectedUser.role}
+                  organization={selectedUser.organization}
+                />
+              </TabPanel>
 
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary">
-                    Organization
-                  </Typography>
-                  <Typography variant="body1">
-                    {selectedUser.organization}
-                  </Typography>
-                </Grid>
-
-                {selectedUser.role === 'EXPORTER' && (
-                  <>
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="caption" color="text.secondary">
-                        Exporter ID
-                      </Typography>
-                      <Typography variant="body1">
-                        {selectedUser.exporter_id || <em style={{ color: '#999' }}>Not provided</em>}
-                      </Typography>
-                    </Grid>
-
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="caption" color="text.secondary">
-                        ECTA License
-                      </Typography>
-                      <Typography variant="body1">
-                        {selectedUser.ecta_license || <em style={{ color: '#999' }}>Not provided</em>}
-                      </Typography>
-                    </Grid>
-                  </>
-                )}
-
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Created At
-                  </Typography>
-                  <Typography variant="body1">
-                    {new Date(selectedUser.created_at).toLocaleString()}
-                  </Typography>
-                </Grid>
-
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Last Login
-                  </Typography>
-                  <Typography variant="body1">
-                    {selectedUser.last_login 
-                      ? new Date(selectedUser.last_login).toLocaleString()
-                      : <em style={{ color: '#999' }}>Never</em>
-                    }
-                  </Typography>
-                </Grid>
-
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary" gutterBottom>
-                    Permissions
-                  </Typography>
-                  <Divider sx={{ mb: 2 }} />
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                    {selectedUser.permissions && selectedUser.permissions.length > 0 ? (
-                      selectedUser.permissions.map((permission) => (
-                        <Chip key={permission} label={permission} size="small" variant="outlined" />
-                      ))
-                    ) : (
-                      <em style={{ color: '#999' }}>No permissions assigned</em>
-                    )}
-                  </Box>
-                </Grid>
-              </Grid>
+              {/* Activity Log Tab */}
+              <TabPanel value={detailsTab} index={2}>
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Activity log shows recent actions performed by or on this user.
+                </Alert>
+                <Typography variant="body2" color="text.secondary" align="center" sx={{ py: 4 }}>
+                  Activity log feature coming soon...
+                </Typography>
+              </TabPanel>
             </Box>
           )}
         </DialogContent>
@@ -1159,6 +1283,7 @@ const UserManagement: React.FC = () => {
             onClick={() => {
               setDetailsDialogOpen(false);
               setSelectedUser(null);
+              setDetailsTab(0);
             }}
             variant="contained"
           >

@@ -52,6 +52,7 @@ import {
   Upload,
   DirectionsBoat,
   FlightTakeoff,
+  Person,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -71,6 +72,7 @@ import { CustomsInspection } from './CustomsInspection';
 import { CustomsClearedShipments } from './CustomsClearedShipments';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
+import UserManagement from '@/components/admin/UserManagement';
 
 
 // Status types for chips
@@ -1800,6 +1802,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           <Tab label="Under Review" icon={<Warning />} iconPosition="start" />
           <Tab label="Cleared" icon={<CheckCircle />} iconPosition="start" />
           <Tab label="Rejected" icon={<Cancel />} iconPosition="start" />
+          <Tab label="User Management" icon={<Person />} iconPosition="start" />
         </Tabs>
       </Paper>
 
@@ -2002,6 +2005,11 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={6}>
+          {/* User Management Tab */}
+          <UserManagement />
         </TabPanel>
       </Box>
 

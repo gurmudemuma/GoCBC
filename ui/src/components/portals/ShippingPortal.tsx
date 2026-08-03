@@ -52,6 +52,7 @@ import {
   Inventory,
   Anchor,
   Assessment,
+  Person,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -59,6 +60,7 @@ import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
+import UserManagement from '@/components/admin/UserManagement';
 
 // Modern Components - 2026 Design
 import {
@@ -1711,6 +1713,7 @@ const ShippingPortal: React.FC = () => {
             <Tab label="🌊 In Transit" icon={<DirectionsBoat />} iconPosition="start" />
             <Tab label="🏁 Destination Port" icon={<LocationOn />} iconPosition="start" />
             <Tab label="✅ Delivered" icon={<CheckCircle />} iconPosition="start" />
+            <Tab label="User Management" icon={<Person />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -1930,6 +1933,11 @@ const ShippingPortal: React.FC = () => {
               initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
             />
           </Box>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={9}>
+          {/* User Management Tab */}
+          <UserManagement />
         </TabPanel>
       </ModernCard>
       {/* Shipping Record Detail Dialog */}

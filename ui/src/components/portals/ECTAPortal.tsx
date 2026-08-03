@@ -58,6 +58,7 @@ import {
   AccountBalance,
   TrendingUp,
   HourglassTop,
+  Person,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 
@@ -1540,6 +1541,11 @@ The exporter can reapply once all requirements are met.`,
               threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
               return expiryDate <= threeMonthsFromNow;
             }).length})`}
+          />
+          <Tab 
+            icon={<Person sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+            label="User Management"
           />
         </Tabs>
       </Paper>

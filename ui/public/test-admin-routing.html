@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Admin Routing - CECBS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 3rem;
+            max-width: 700px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 2rem;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+        }
+        .test-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        .test-section h3 {
+            color: #444;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .icon {
+            font-size: 1.5rem;
+        }
+        .test-item {
+            background: white;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 0.5rem 0;
+            border-left: 4px solid #667eea;
+        }
+        .test-item strong {
+            color: #667eea;
+            display: block;
+            margin-bottom: 0.3rem;
+        }
+        .code {
+            background: #2d3748;
+            color: #68d391;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 8px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+            font-size: 1rem;
+        }
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102,126,234,0.4);
+        }
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #38a169;
+        }
+        .btn-danger {
+            background: #f56565;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #e53e3e;
+        }
+        .status {
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            font-weight: 600;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 2px solid #bee5eb;
+        }
+        .result-box {
+            background: #2d3748;
+            color: #68d391;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            font-family: 'Courier New', monospace;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Admin Routing Test</h1>
+        <p class="subtitle">Test and verify the admin portal routing fix</p>
+
+        <div class="test-section">
+            <h3><span class="icon">🔍</span>Current Status</h3>
+            <div class="test-item">
+                <strong>localStorage Status:</strong>
+                <span id="localStorageStatus">Checking...</span>
+            </div>
+            <div class="test-item">
+                <strong>Current User:</strong>
+                <span id="currentUser">Not logged in</span>
+            </div>
+            <div class="test-item">
+                <strong>Expected Route for ADMIN:</strong>
+                <span class="code">/admin</span>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3><span class="icon">✅</span>Quick Actions</h3>
+            
+            <div class="action-grid">
+                <button onclick="testRouting()" class="button btn-primary">
+                    🧪 Test Routing Logic
+                </button>
+                <button onclick="clearAndTest()" class="button btn-danger">
+                    🧹 Clear & Test
+                </button>
+                <button onclick="goToLogin()" class="button btn-success">
+                    🔐 Go to Login
+                </button>
+                <button onclick="goToAdmin()" class="button btn-primary">
+                    🛡️ Go to Admin Portal
+                </button>
+            </div>
+        </div>
+
+        <div id="resultSection" style="display: none;">
+            <div class="test-section">
+                <h3><span class="icon">📊</span>Test Results</h3>
+                <div id="testResults" class="result-box"></div>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3><span class="icon">📝</span>Expected Behavior</h3>
+            <div class="test-item">
+                <strong>When admin logs in:</strong>
+                URL should be: <span class="code">http://localhost:3000/admin</span>
+            </div>
+            <div class="test-item">
+                <strong>Page should show:</strong>
+                "System Administrator Portal" header
+            </div>
+            <div class="test-item">
+                <strong>Badge should show:</strong>
+                "SUPER ADMIN" in red
+            </div>
+            <div class="test-item">
+                <strong>Tabs should be:</strong>
+                User Management | System Overview | Analytics | Settings
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check localStorage on load
+        window.onload = function() {
+            checkLocalStorage();
+            checkCurrentUser();
+        };
+
+        function checkLocalStorage() {
+            const count = localStorage.length;
+            const statusEl = document.getElementById('localStorageStatus');
+            
+            if (count === 0) {
+                statusEl.innerHTML = '<span style="color: #48bb78;">✅ Empty (Ready for fresh login)</span>';
+            } else {
+                statusEl.innerHTML = `<span style="color: #ed8936;">⚠️ ${count} items stored (May need clearing)</span>`;
+            }
+        }
+
+        function checkCurrentUser() {
+            const userEl = document.getElementById('currentUser');
+            const userStr = localStorage.getItem('user');
+            
+            if (!userStr) {
+                userEl.innerHTML = '<span style="color: #a0aec0;">No user session</span>';
+                return;
+            }
+
+            try {
+                const user = JSON.parse(userStr);
+                const roleColor = user.role === 'ADMIN' ? '#48bb78' : '#ed8936';
+                userEl.innerHTML = `<span style="color: ${roleColor};">
+                    ${user.username} (${user.role})
+                </span>`;
+            } catch (e) {
+                userEl.innerHTML = '<span style="color: #f56565;">Invalid user data</span>';
+            }
+        }
+
+        function testRouting() {
+            const resultSection = document.getElementById('resultSection');
+            const testResults = document.getElementById('testResults');
+            resultSection.style.display = 'block';
+            
+            let results = '🧪 Testing Admin Routing Logic...\n\n';
+            
+            // Test 1: Check portal routes object
+            results += '📌 Test 1: Portal Routes Mapping\n';
+            const portalRoutes = {
+                ECTA: '/portals/ecta',
+                ECX: '/portals/ecx',
+                NBE: '/portals/nbe',
+                BANKS: '/portals/banks',
+                CUSTOMS: '/portals/customs',
+                SHIPPING: '/portals/shipping',
+                EXPORTER: '/portals/exporter',
+                ADMIN: '/admin'
+            };
+            results += `   ADMIN route: ${portalRoutes.ADMIN}\n`;
+            results += `   ✅ ${portalRoutes.ADMIN === '/admin' ? 'CORRECT' : '❌ WRONG! Should be /admin'}\n\n`;
+            
+            // Test 2: Check localStorage
+            results += '📌 Test 2: localStorage Status\n';
+            const userStr = localStorage.getItem('user');
+            if (userStr) {
+                try {
+                    const user = JSON.parse(userStr);
+                    results += `   User: ${user.username}\n`;
+                    results += `   Role: ${user.role}\n`;
+                    results += `   Expected Route: ${portalRoutes[user.role]}\n`;
+                    results += `   ${user.role === 'ADMIN' && portalRoutes[user.role] === '/admin' ? '✅ CORRECT' : '⚠️ May need fresh login'}\n\n`;
+                } catch (e) {
+                    results += '   ❌ Invalid user data in localStorage\n\n';
+                }
+            } else {
+                results += '   ℹ️ No user session (not logged in)\n\n';
+            }
+            
+            // Test 3: Check token
+            results += '📌 Test 3: Authentication Token\n';
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                results += `   ✅ Token exists (${token.length} chars)\n`;
+                try {
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    results += `   Token Role: ${payload.role}\n`;
+                    results += `   Expires: ${new Date(payload.exp * 1000).toLocaleString()}\n`;
+                } catch (e) {
+                    results += '   ⚠️ Could not decode token\n';
+                }
+            } else {
+                results += '   ℹ️ No token (not logged in)\n';
+            }
+            results += '\n';
+            
+            // Test 4: Recommendations
+            results += '📌 Recommendations:\n';
+            if (!userStr || !token) {
+                results += '   ➡️ Login with admin/admin123\n';
+            } else {
+                results += '   ➡️ Try clearing storage and logging in again\n';
+            }
+            
+            testResults.textContent = results;
+        }
+
+        function clearAndTest() {
+            if (confirm('This will clear localStorage and sessionStorage. Continue?')) {
+                localStorage.clear();
+                sessionStorage.clear();
+                alert('✅ Storage cleared! Now login with admin/admin123');
+                checkLocalStorage();
+                checkCurrentUser();
+                goToLogin();
+            }
+        }
+
+        function goToLogin() {
+            window.location.href = '/login';
+        }
+
+        function goToAdmin() {
+            window.location.href = '/admin';
+        }
+    </script>
+</body>
+</html>

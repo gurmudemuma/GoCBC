@@ -42,6 +42,7 @@ import {
   FlightTakeoff,
   Assessment,
   Gavel,
+  Person,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
@@ -50,6 +51,7 @@ import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
 import SWIFTMonitoringWrapper from '@/components/nbe/SWIFTMonitoringWrapper';
 import AuditTrailViewer from './AuditTrailViewer';
+import UserManagement from '@/components/admin/UserManagement';
 
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
@@ -1267,6 +1269,7 @@ const NBEPortal: React.FC = () => {
             <Tab label="SWIFT Monitoring" icon={<FlightTakeoff sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Policy & Compliance" icon={<Gavel sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Analytics" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="User Management" icon={<Person sx={{ fontSize: 20 }} />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -1546,6 +1549,11 @@ const NBEPortal: React.FC = () => {
               </Card>
             </Grid>
           </Grid>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={5}>
+          {/* User Management Tab */}
+          <UserManagement />
         </TabPanel>
       </Card>
 

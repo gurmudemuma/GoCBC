@@ -161,7 +161,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         CUSTOMS: '/portals/customs',
         SHIPPING: '/portals/shipping',
         EXPORTER: '/portals/exporter',  // Route exporters to their own portal
-        ADMIN: '/portals/ecta', // Default to ECTA portal
+        ADMIN: '/admin', // Super Admin Portal
       };
 
       // Always redirect to specific portal, never to home

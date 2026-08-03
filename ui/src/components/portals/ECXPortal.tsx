@@ -12,7 +12,7 @@ import {
 import {
   Add, Warehouse, Assignment, CheckCircle, LocalShipping,
   Coffee, TrendingUp, Assessment, Visibility, Refresh,
-  AttachMoney, Warning, Science,
+  AttachMoney, Warning, Science, Person,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -23,6 +23,7 @@ import { NotificationDialog } from '@/components/common/NotificationDialog';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
+import UserManagement from '@/components/admin/UserManagement';
 
 
 interface CoffeeLot {
@@ -413,6 +414,7 @@ const ECXPortal: React.FC = () => {
             <Tab label={`Coffee Lots (${allLots.length})`} icon={<Coffee sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Market Prices" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Grading Standards" icon={<Science sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="User Management" icon={<Person sx={{ fontSize: 20 }} />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -635,6 +637,11 @@ const ECXPortal: React.FC = () => {
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             Sources: ECTA Quality Standards Directive, ECX Trading Rules, ICO quality criteria. Content paraphrased for compliance with licensing restrictions.
           </Typography>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
+          {/* User Management Tab */}
+          <UserManagement />
         </TabPanel>
       </ModernCard>
 
