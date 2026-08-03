@@ -13,6 +13,54 @@ const router = Router();
 const db = DatabaseService.getInstance();
 
 // ============================================================================
+// AUDIT LOGGING HELPER
+// ============================================================================
+
+/**
+ * Log user management activity to audit trail
+ */
+async function logUserActivity(
+  userId: string,
+  username: string,
+  action: string,
+  targetUserId: string | null,
+  targetUsername: string | null,
+  details: any,
+  performedBy: string,
+  performedByRole: string,
+  req: Request
+) {
+  try {
+    const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+
+    await db.run(
+      `INSERT INTO user_activity_log (
+        user_id, username, action, target_user_id, target_username,
+        details, ip_address, user_agent, performed_by, performed_by_role, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        userId,
+        username,
+        action,
+        targetUserId,
+        targetUsername,
+        JSON.stringify(details),
+        ipAddress,
+        userAgent,
+        performedBy,
+        performedByRole,
+      ]
+    );
+
+    logger.info(`[AUDIT] ${action}: ${targetUsername || username} by ${performedBy} (${performedByRole})`);
+  } catch (error) {
+    logger.error('Failed to log user activity:', error);
+    // Don't throw - audit logging failure shouldn't break the operation
+  }
+}
+
+// ============================================================================
 // USER MANAGEMENT ROUTES (Admin Only)
 // ============================================================================
 
@@ -61,14 +109,21 @@ router.get('/',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      // Check if user is admin
-      const userRole = (req as any).user?.role;
-      if (userRole !== 'ADMIN' && userRole !== 'ECTA') {
+      const requestingUser = (req as any).user;
+      const userRole = requestingUser?.role;
+      const userOrganization = requestingUser?.organization;
+
+      // Check if user has permission to view users
+      // ADMIN can see all, other roles can only see their organization
+      const isAdmin = userRole === 'ADMIN';
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(userRole);
+
+      if (!canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only administrators can view all users',
+            message: 'You do not have permission to view users',
           },
           timestamp: new Date().toISOString(),
         });
@@ -78,6 +133,12 @@ router.get('/',
 
       let query = 'SELECT id, username, email, full_name, role, organization, status, created_at, last_login FROM users WHERE 1=1';
       const params: any[] = [];
+
+      // Organization-scoped access: non-ADMIN users can only see their organization
+      if (!isAdmin) {
+        query += ' AND organization = ?';
+        params.push(userOrganization);
+      }
 
       if (role) {
         query += ' AND role = ?';
@@ -97,6 +158,11 @@ router.get('/',
       // Get total count
       let countQuery = 'SELECT COUNT(*) as total FROM users WHERE 1=1';
       const countParams: any[] = [];
+
+      if (!isAdmin) {
+        countQuery += ' AND organization = ?';
+        countParams.push(userOrganization);
+      }
 
       if (role) {
         countQuery += ' AND role = ?';
@@ -119,6 +185,7 @@ router.get('/',
           offset: parseInt(offset as string),
           hasMore: parseInt(offset as string) + parseInt(limit as string) < countResult.total,
         },
+        scope: isAdmin ? 'all' : 'organization',
         timestamp: new Date().toISOString(),
       });
 
@@ -210,14 +277,20 @@ router.post('/',
   validateRequest,
   async (req: Request, res: Response) => {
     try {
-      // Check if user is admin
-      const userRole = (req as any).user?.role;
-      if (userRole !== 'ADMIN' && userRole !== 'ECTA') {
+      const requestingUser = (req as any).user;
+      const userRole = requestingUser?.role;
+      const userOrganization = requestingUser?.organization;
+      const isAdmin = userRole === 'ADMIN';
+
+      // Check permissions
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(userRole);
+
+      if (!canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only administrators can create users',
+            message: 'You do not have permission to create users',
           },
           timestamp: new Date().toISOString(),
         });
@@ -235,6 +308,30 @@ router.post('/',
         phone,
         permissions,
       } = req.body;
+
+      // Organization-scoped creation: non-ADMIN users can only create users in their organization
+      if (!isAdmin && organization !== userOrganization) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: `You can only create users in your organization (${userOrganization})`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Role validation: non-ADMIN users cannot create ADMIN users
+      if (!isAdmin && role === 'ADMIN') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only super admins can create ADMIN users',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Validate exporter-specific fields
       if (role === 'EXPORTER' && (!exporterId || !ectaLicense)) {
@@ -288,7 +385,20 @@ router.post('/',
         ]
       );
 
-      logger.info(`User created: ${username} (${role})`);
+      logger.info(`User created: ${username} (${role}) by ${requestingUser.username} (${userRole})`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        'CREATE_USER',
+        result.lastID.toString(),
+        username,
+        { role, organization, email },
+        requestingUser.username,
+        userRole,
+        req
+      );
 
       res.status(201).json({
         success: true,
@@ -351,13 +461,17 @@ router.get('/:userId',
     try {
       const { userId } = req.params;
       const requestingUser = (req as any).user;
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const isSameOrg = async (targetUserId: string) => {
+        const targetUser = await db.get('SELECT organization FROM users WHERE id = ?', [targetUserId]);
+        return targetUser && targetUser.organization === requestingUser.organization;
+      };
 
-      // Check permissions: Admin, ECTA, or own profile
-      if (
-        requestingUser.role !== 'ADMIN' &&
-        requestingUser.role !== 'ECTA' &&
-        requestingUser.userId !== userId
-      ) {
+      // Check permissions: Admin, same organization admin, or own profile
+      const isOwnProfile = requestingUser.userId === userId;
+      const canViewOrgUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
+
+      if (!isAdmin && !isOwnProfile && !canViewOrgUsers) {
         return res.status(403).json({
           success: false,
           error: {
@@ -366,6 +480,21 @@ router.get('/:userId',
           },
           timestamp: new Date().toISOString(),
         });
+      }
+
+      // If not admin and not own profile, must be same organization
+      if (!isAdmin && !isOwnProfile) {
+        const sameOrg = await isSameOrg(userId);
+        if (!sameOrg) {
+          return res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'You can only view users in your organization',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
 
       const user = await db.get(
@@ -461,16 +590,41 @@ router.put('/:userId',
       const requestingUser = (req as any).user;
       const { email, fullName, phone, permissions } = req.body;
 
-      // Check permissions: Admin, ECTA, or own profile
-      const isAdmin = requestingUser.role === 'ADMIN' || requestingUser.role === 'ECTA';
+      const isAdmin = requestingUser.role === 'ADMIN';
       const isOwnProfile = requestingUser.userId === userId;
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
 
-      if (!isAdmin && !isOwnProfile) {
+      // Get target user to check organization
+      const targetUser = await db.get('SELECT organization FROM users WHERE id = ?', [userId]);
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'User not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const isSameOrg = targetUser.organization === requestingUser.organization;
+
+      // Check permissions
+      if (!isOwnProfile && !canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
             message: 'You can only update your own profile',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Non-admin organization managers can only update users in their organization
+      if (!isAdmin && !isOwnProfile && !isSameOrg) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only update users in your organization',
           },
           timestamp: new Date().toISOString(),
         });
@@ -495,8 +649,8 @@ router.put('/:userId',
         params.push(phone);
       }
 
-      // Only admins can update permissions
-      if (permissions && isAdmin) {
+      // Only admins and org managers can update permissions
+      if (permissions && (isAdmin || (canManageUsers && isSameOrg))) {
         updates.push('permissions = ?');
         params.push(JSON.stringify(permissions));
       }
@@ -518,7 +672,7 @@ router.put('/:userId',
       const query = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
       await db.run(query, params);
 
-      logger.info(`User updated: ${userId}`);
+      logger.info(`User updated: ${userId} by ${requestingUser.username}`);
 
       // Fetch updated user
       const updatedUser = await db.get(
@@ -729,13 +883,39 @@ router.put('/:userId/status',
       const requestingUser = (req as any).user;
       const { status, reason } = req.body;
 
-      // Only admins can change user status
-      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
+
+      if (!canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only administrators can change user status',
+            message: 'You do not have permission to change user status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get target user to check organization
+      const targetUser = await db.get('SELECT username, organization FROM users WHERE id = ?', [userId]);
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'User not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const isSameOrg = targetUser.organization === requestingUser.organization;
+
+      // Non-admin users can only change status of users in their organization
+      if (!isAdmin && !isSameOrg) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only change status of users in your organization',
           },
           timestamp: new Date().toISOString(),
         });
@@ -747,7 +927,20 @@ router.put('/:userId/status',
         [status, userId]
       );
 
-      logger.info(`User status updated: ${userId} -> ${status} (Reason: ${reason || 'N/A'})`);
+      logger.info(`User status updated: ${userId} -> ${status} by ${requestingUser.username} (Reason: ${reason || 'N/A'})`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        status === 'active' ? 'ACTIVATE_USER' : status === 'suspended' ? 'SUSPEND_USER' : 'DEACTIVATE_USER',
+        userId,
+        targetUser.username,
+        { status, reason },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
 
       res.json({
         success: true,
@@ -908,6 +1101,19 @@ router.post('/:userId/reset-password',
       );
 
       logger.info(`Password reset to default for user: ${user.username} (${userId}) by admin: ${requestingUser.username}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        'RESET_PASSWORD',
+        userId,
+        user.username,
+        { method: 'admin_reset', resetTo: 'default' },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
 
       res.json({
         success: true,
@@ -1073,13 +1279,16 @@ router.delete('/:userId',
       const { userId } = req.params;
       const requestingUser = (req as any).user;
 
-      // Only admins can delete users
-      if (requestingUser.role !== 'ADMIN') {
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
+
+      // Check if user has permission to delete
+      if (!canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only system administrators can delete users',
+            message: 'You do not have permission to delete users',
           },
           timestamp: new Date().toISOString(),
         });
@@ -1097,17 +1306,62 @@ router.delete('/:userId',
         });
       }
 
+      // Get target user to check organization
+      const targetUser = await db.get('SELECT username, organization FROM users WHERE id = ?', [userId]);
+      
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const isSameOrg = targetUser.organization === requestingUser.organization;
+
+      // Non-admin users can only delete users in their organization
+      if (!isAdmin && !isSameOrg) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only delete users in your organization',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // Soft delete: set status to inactive
       await db.run(
         'UPDATE users SET status = "inactive", updated_at = datetime("now") WHERE id = ?',
         [userId]
       );
 
-      logger.info(`User deleted (soft): ${userId}`);
+      logger.info(`User deleted (soft): ${userId} by ${requestingUser.username} (${requestingUser.role})`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        'DELETE_USER',
+        userId,
+        targetUser.username,
+        { method: 'soft_delete', organization: targetUser.organization },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
 
       res.json({
         success: true,
-        data: { message: 'User deleted successfully' },
+        data: { 
+          message: 'User deleted successfully',
+          userId: userId,
+          username: targetUser.username,
+        },
         timestamp: new Date().toISOString(),
       });
 
@@ -1118,6 +1372,280 @@ router.delete('/:userId',
         error: {
           code: 'INTERNAL_ERROR',
           message: 'Failed to delete user',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/users/{userId}/permissions:
+ *   put:
+ *     summary: Update user permissions (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - permissions
+ *             properties:
+ *               permissions:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of permission strings
+ *               action:
+ *                 type: string
+ *                 enum: [set, grant, revoke]
+ *                 default: set
+ *                 description: Action to perform (set=replace all, grant=add, revoke=remove)
+ *     responses:
+ *       200:
+ *         description: Permissions updated successfully
+ *       403:
+ *         description: Forbidden - Admin only
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
+router.put('/:userId/permissions',
+  authMiddleware,
+  [
+    param('userId').notEmpty().withMessage('User ID is required'),
+    body('permissions').isArray().withMessage('Permissions must be an array'),
+    body('action').optional().isIn(['set', 'grant', 'revoke']).withMessage('Invalid action'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const requestingUser = (req as any).user;
+      const { permissions, action = 'set' } = req.body;
+
+      // Only admins can update permissions
+      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only administrators can update user permissions',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get current user
+      const user = await db.get(
+        'SELECT id, username, permissions FROM users WHERE id = ?',
+        [userId]
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Parse current permissions
+      let currentPermissions: string[] = JSON.parse(user.permissions || '[]');
+      let newPermissions: string[];
+
+      // Handle action
+      switch (action) {
+        case 'grant':
+          // Add new permissions (avoid duplicates)
+          newPermissions = Array.from(new Set([...currentPermissions, ...permissions]));
+          break;
+        case 'revoke':
+          // Remove specified permissions
+          newPermissions = currentPermissions.filter(p => !permissions.includes(p));
+          break;
+        case 'set':
+        default:
+          // Replace all permissions
+          newPermissions = permissions;
+          break;
+      }
+
+      // Update permissions
+      await db.run(
+        'UPDATE users SET permissions = ?, updated_at = datetime("now") WHERE id = ?',
+        [JSON.stringify(newPermissions), userId]
+      );
+
+      // Log to audit trail
+      logger.info(`Permissions updated for user ${user.username}: ${action} - ${permissions.join(', ')}`);
+      logger.info(`Updated by: ${requestingUser.username} (${requestingUser.role})`);
+
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        action === 'grant' ? 'GRANT_PERMISSION' : action === 'revoke' ? 'REVOKE_PERMISSION' : 'UPDATE_PERMISSIONS',
+        userId,
+        user.username,
+        { action, permissions, newPermissions },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId: user.id,
+          username: user.username,
+          action,
+          permissions: newPermissions,
+          added: action === 'grant' ? permissions : undefined,
+          removed: action === 'revoke' ? permissions : undefined,
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error updating permissions:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to update permissions',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/users/activity-log:
+ *   get:
+ *     summary: Get user management activity log (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *         description: Filter by specific user ID
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *           enum: [CREATE, UPDATE, DELETE, SUSPEND, ACTIVATE, GRANT_PERMISSION, REVOKE_PERMISSION, RESET_PASSWORD]
+ *         description: Filter by action type
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: Activity log retrieved successfully
+ */
+router.get('/activity-log',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const requestingUser = (req as any).user;
+
+      // Only admins can view activity log
+      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only administrators can view activity log',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const { userId, action, limit = 50, offset = 0 } = req.query;
+
+      // Query from audit table (assuming we have one)
+      let query = `
+        SELECT * FROM user_activity_log 
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+
+      if (userId) {
+        query += ' AND user_id = ?';
+        params.push(userId);
+      }
+
+      if (action) {
+        query += ' AND action = ?';
+        params.push(action);
+      }
+
+      query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+      params.push(parseInt(limit as string), parseInt(offset as string));
+
+      const logs = await db.all(query, params);
+
+      // Get total count
+      let countQuery = 'SELECT COUNT(*) as total FROM user_activity_log WHERE 1=1';
+      const countParams: any[] = [];
+
+      if (userId) {
+        countQuery += ' AND user_id = ?';
+        countParams.push(userId);
+      }
+
+      if (action) {
+        countQuery += ' AND action = ?';
+        countParams.push(action);
+      }
+
+      const countResult = await db.get(countQuery, countParams);
+
+      res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          total: countResult.total,
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error retrieving activity log:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to retrieve activity log',
         },
         timestamp: new Date().toISOString(),
       });

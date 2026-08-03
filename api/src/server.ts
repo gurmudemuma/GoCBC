@@ -40,6 +40,7 @@ import { WebSocketService } from './services/websocketService';
 // Import routes
 import authRoutes from './routes/auth';
 import usersRoutes from './routes/users';
+import cryptoUsersRoutes from './routes/crypto-users';
 import exporterRoutes from './routes/exporters';
 import contractRoutes from './routes/contracts';
 import shipmentRoutes from './routes/shipments';
@@ -170,6 +171,7 @@ class CECBSServer {
     
     // Protected routes (authentication required)
     apiV1.use('/users', authMiddleware, usersRoutes); // User management routes
+    apiV1.use('/crypto-users', authMiddleware, cryptoUsersRoutes); // Cryptographic user management
     apiV1.use('/contracts', authMiddleware, contractRoutes);
     apiV1.use('/banking', authMiddleware, bankingRoutes);
     apiV1.use('/shipments', authMiddleware, shipmentRoutes);

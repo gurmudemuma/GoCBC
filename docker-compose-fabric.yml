@@ -50,6 +50,7 @@ services:
     volumes:
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp:/var/hyperledger/orderer/msp
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/tls:/var/hyperledger/orderer/tls
+      - ./blockchain/channel-artifacts:/var/hyperledger/channel-artifacts
       - orderer.cecbs.et:/var/hyperledger/production/orderer
     ports:
       - 7050:7050
@@ -92,6 +93,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.ecta.cecbs.et:/var/hyperledger/production
@@ -148,6 +151,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.ecx.cecbs.et:/var/hyperledger/production
@@ -204,6 +209,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.banks.cecbs.et:/var/hyperledger/production
@@ -260,6 +267,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.nbe.cecbs.et:/var/hyperledger/production
@@ -315,6 +324,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.customs.cecbs.et:/var/hyperledger/production
@@ -371,6 +382,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock
       - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et:/etc/hyperledger/fabric
       - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/users:/etc/hyperledger/fabric/users
+      - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
+      - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.shipping.cecbs.et:/var/hyperledger/production

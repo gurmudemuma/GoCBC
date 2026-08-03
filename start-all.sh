@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Complete startup script for CECBS (Coffee Export Consortium Blockchain System)
 # Usage: ./start-all.sh [options]
-# Options: --skip-build, --dev-mode, --skip-tests
+# Options: 
+#   --skip-build     Skip building TypeScript
+#   --dev-mode       Start in development mode
+#   --skip-tests     Skip running tests
+#   --no-services    Start only blockchain, skip API and UI (for manual start)
 
 # Ensure we have a clean environment
 set +e  # Don't exit on error - we want to show better error messages
@@ -56,6 +60,7 @@ CHAINCODE_PORT=9999
 SKIP_BUILD=false
 DEV_MODE=false
 SKIP_TESTS=false
+NO_SERVICES=false
 
 for arg in "$@"; do
     case $arg in
@@ -69,6 +74,10 @@ for arg in "$@"; do
             ;;
         --skip-tests)
             SKIP_TESTS=true
+            shift
+            ;;
+        --no-services)
+            NO_SERVICES=true
             shift
             ;;
     esac
@@ -354,21 +363,17 @@ install_dependencies() {
     # Install API dependencies
     print_step "Installing API dependencies..."
     cd "$API_DIR"
-    if npm install --silent 2>&1 | grep -v "^npm WARN"; then
-        print_success "API dependencies installed"
-    else
+    npm install --prefer-offline --no-audit --no-fund --silent >/dev/null 2>&1 && \
+        print_success "API dependencies installed" || \
         print_warning "Some API dependencies had warnings (continuing...)"
-    fi
     cd "$PROJECT_ROOT"
     
     # Install UI dependencies
     print_step "Installing UI dependencies..."
     cd "$UI_DIR"
-    if npm install --silent 2>&1 | grep -v "^npm WARN"; then
-        print_success "UI dependencies installed"
-    else
+    npm install --prefer-offline --no-audit --no-fund --silent >/dev/null 2>&1 && \
+        print_success "UI dependencies installed" || \
         print_warning "Some UI dependencies had warnings (continuing...)"
-    fi
     cd "$PROJECT_ROOT"
 }
 
@@ -430,6 +435,39 @@ start_fabric_network() {
     sleep 10
     
     print_success "Fabric network is operational"
+    
+    # Initialize blockchain (create channel, join peers, deploy chaincode)
+    print_header "Initializing Blockchain"
+    print_step "Checking blockchain status..."
+    
+    # Check if channel exists
+    if docker exec peer0.ecta.cecbs.et peer channel list 2>/dev/null | grep -q "coffeechannel"; then
+        print_success "Channel 'coffeechannel' exists"
+        
+        # Deploy chaincode (install, approve, commit)
+        print_step "Deploying chaincode..."
+        if [ -f "$SCRIPT_DIR/scripts/deploy-chaincode-complete.sh" ]; then
+            if bash "$SCRIPT_DIR/scripts/deploy-chaincode-complete.sh"; then
+                print_success "Chaincode deployed successfully"
+            else
+                print_warning "Chaincode deployment had issues (may already be deployed)"
+            fi
+        else
+            print_warning "deploy-chaincode-complete.sh not found"
+        fi
+    else
+        # Full initialization needed
+        print_step "Running full blockchain initialization..."
+        if [ -f "$SCRIPT_DIR/scripts/init-blockchain.sh" ]; then
+            if bash "$SCRIPT_DIR/scripts/init-blockchain.sh"; then
+                print_success "Blockchain initialized successfully"
+            else
+                print_warning "Blockchain initialization had issues (API will continue without blockchain)"
+            fi
+        else
+            print_warning "init-blockchain.sh not found at $SCRIPT_DIR/scripts/init-blockchain.sh"
+        fi
+    fi
 }
 
 show_container_status() {
@@ -667,6 +705,32 @@ main() {
     build_typescript
     start_fabric_network
     show_container_status
+    
+    # Skip API and UI if --no-services flag is set
+    if [ "$NO_SERVICES" = true ]; then
+        echo ""
+        print_header "Services Startup Skipped"
+        print_info "Blockchain infrastructure started. API and UI not started."
+        print_info ""
+        print_info "To start services manually:"
+        print_info "  API: cd api && npm start"
+        print_info "  UI:  cd ui && npm run build && npm start"
+        print_info ""
+        print_info "Or for development mode:"
+        print_info "  API: cd api && npm run dev"
+        print_info "  UI:  cd ui && npm run dev"
+        echo ""
+        
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        
+        echo -e "${COLOR_GREEN}============================================================================${COLOR_RESET}"
+        echo -e "${COLOR_GREEN}Blockchain infrastructure ready!${COLOR_RESET}"
+        echo -e "${COLOR_GREEN}Total startup time: ${duration} seconds${COLOR_RESET}"
+        echo -e "${COLOR_GREEN}============================================================================${COLOR_RESET}"
+        echo ""
+        return 0
+    fi
     
     if [ "$DEV_MODE" = true ]; then
         echo ""

@@ -89,6 +89,214 @@ router.get('/types', authMiddleware, async (req: Request, res: Response) => {
 
 /**
  * @swagger
+ * /api/v1/documents/upload-registration:
+ *   post:
+ *     summary: Upload a document for exporter registration (PUBLIC - no auth required)
+ *     tags: [Documents]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *               - documentType
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               documentType:
+ *                 type: string
+ *                 description: Type of document (TIN_CERTIFICATE, BUSINESS_LICENSE, etc.)
+ *               description:
+ *                 type: string
+ *                 description: Optional description of the document
+ *               encrypt:
+ *                 type: boolean
+ *                 description: Whether to encrypt the document
+ */
+router.post(
+  '/upload-registration',
+  // NO authMiddleware - this is a public endpoint for registration
+  (req: Request, res: Response, next: any) => {
+    upload.single('file')(req, res, (err: any) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'FILE_TOO_LARGE',
+              message: 'File size exceeds 10MB limit',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        if (err.message && err.message.includes('Unexpected field')) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_FIELD_NAME',
+              message: `Wrong form field name. Expected 'file'. Please ensure the file input has name="file"`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'UPLOAD_ERROR',
+            message: err.message || 'File upload failed',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      next();
+    });
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const { documentType, description, encrypt = 'true' } = req.body;
+      const file = req.file;
+
+      // Validate required fields
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'NO_FILE',
+            message: 'No file uploaded',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (!documentType) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_FIELDS',
+            message: 'documentType is required',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Validate document type
+      if (!validateDocumentType(documentType)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_DOCUMENT_TYPE',
+            message: `Invalid document type: ${documentType}`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Validate file
+      const validationResult = validateDocument(
+        documentType,
+        file.mimetype,
+        file.size
+      );
+
+      if (!validationResult.valid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_FAILED',
+            message: 'Document validation failed',
+            errors: validationResult.errors,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Validate file extension
+      if (!validateFileExtension(file.originalname, file.mimetype)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_FILE_EXTENSION',
+            message: 'File extension does not match mime type',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Generate document ID
+      const documentId = `DOC_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+
+      // Upload to storage service
+      const shouldEncrypt = encrypt === 'true' || encrypt === true;
+      const metadata = await storage.uploadDocument(
+        file.buffer,
+        sanitizeFilename(file.originalname),
+        file.mimetype,
+        documentType,
+        'REGISTRATION_SYSTEM', // System user for public uploads
+        shouldEncrypt
+      );
+
+      // Calculate hash for blockchain
+      const hash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+
+      // Store in database with temporary entity (will be linked to application later)
+      await db.run(
+        `INSERT INTO documents (
+          document_id, document_type, entity_type, entity_id,
+          file_name, file_size, mime_type, file_hash,
+          ipfs_cid, uploaded_by, encrypted, description,
+          upload_date, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'active')`,
+        [
+          documentId,
+          documentType,
+          'EXPORTER_APPLICATION',
+          'PENDING', // Temporary entityId until application is created
+          metadata.filename,
+          file.size,
+          file.mimetype,
+          hash,
+          metadata.ipfsCID || null,
+          'REGISTRATION_SYSTEM',
+          shouldEncrypt ? 1 : 0,
+          description || null,
+        ]
+      );
+
+      logger.info(`✅ Registration document uploaded: ${documentId} (Type: ${documentType})`);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          documentId,
+          fileName: metadata.filename,
+          fileSize: file.size,
+          documentType,
+          hash,
+          ipfsCID: metadata.ipfsCID || null,
+          encrypted: shouldEncrypt,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error uploading registration document:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'UPLOAD_FAILED',
+          message: error.message || 'Failed to upload document',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /api/v1/documents/requirements/{entityType}:
  *   get:
  *     summary: Get document requirements for entity type

@@ -77,8 +77,15 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Parse permissions
-    const permissions = JSON.parse(user.permissions || '[]');
+    // Parse permissions - handle both JSON string (SQLite) and native array (PostgreSQL)
+    let permissions;
+    if (typeof user.permissions === 'string') {
+      permissions = JSON.parse(user.permissions || '[]');
+    } else if (Array.isArray(user.permissions)) {
+      permissions = user.permissions;
+    } else {
+      permissions = [];
+    }
 
     // Generate JWT token
     const signOptions: jwt.SignOptions = { expiresIn: '24h' };
@@ -100,7 +107,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Update last login
     await db.run(
-      'UPDATE users SET last_login = datetime("now") WHERE id = ?',
+      'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
       [user.id]
     );
 
@@ -196,8 +203,12 @@ router.get('/me', async (req: Request, res: Response) => {
       });
     }
 
-    // Parse permissions
-    user.permissions = JSON.parse(user.permissions || '[]');
+    // Parse permissions - handle both JSON string (SQLite) and native array (PostgreSQL)
+    if (typeof user.permissions === 'string') {
+      user.permissions = JSON.parse(user.permissions || '[]');
+    } else if (!Array.isArray(user.permissions)) {
+      user.permissions = [];
+    }
 
     res.json({
       success: true,
