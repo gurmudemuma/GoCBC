@@ -12,62 +12,146 @@ async function createAdminUser() {
   console.log('🔄 Connecting to PostgreSQL...\n');
 
   try {
-    // Hash the password
-    const password = 'admin123';
-    const hash = await bcrypt.hash(password, 10);
+    // Admin users to create
+    const adminUsers = [
+      {
+        username: 'admin',
+        email: 'admin@cecbs.et',
+        password: 'admin123',
+        full_name: 'System Administrator',
+        role: 'ADMIN',
+        organization: 'Admin',
+        permissions: JSON.stringify(['*'])
+      },
+      {
+        username: 'ecta_admin',
+        email: 'ecta@cecbs.et',
+        password: 'password123',
+        full_name: 'ECTA Administrator',
+        role: 'ECTA',
+        organization: 'ECTA',
+        permissions: JSON.stringify(['quality', 'inspection', 'permits'])
+      },
+      {
+        username: 'ecx_admin',
+        email: 'ecx@cecbs.et',
+        password: 'password123',
+        full_name: 'ECX Administrator',
+        role: 'ECX',
+        organization: 'ECX',
+        permissions: JSON.stringify(['contracts', 'trading'])
+      },
+      {
+        username: 'nbe_admin',
+        email: 'nbe@cecbs.et',
+        password: 'password123',
+        full_name: 'NBE Administrator',
+        role: 'NBE',
+        organization: 'NBE',
+        permissions: JSON.stringify(['forex', 'compliance'])
+      },
+      {
+        username: 'bank_admin',
+        email: 'bank@cecbs.et',
+        password: 'password123',
+        full_name: 'Bank Administrator',
+        role: 'BANKS',
+        organization: 'Banks',
+        permissions: JSON.stringify(['lc', 'payments', 'banking'])
+      },
+      {
+        username: 'customs_admin',
+        email: 'customs@cecbs.et',
+        password: 'password123',
+        full_name: 'Customs Administrator',
+        role: 'CUSTOMS',
+        organization: 'Customs',
+        permissions: JSON.stringify(['customs', 'clearance'])
+      },
+      {
+        username: 'shipping_admin',
+        email: 'shipping@cecbs.et',
+        password: 'password123',
+        full_name: 'Shipping Administrator',
+        role: 'SHIPPING',
+        organization: 'Shipping',
+        permissions: JSON.stringify(['shipping', 'logistics'])
+      },
+      {
+        username: 'testexporter',
+        email: 'exporter@cecbs.et',
+        password: 'password123',
+        full_name: 'Test Exporter',
+        role: 'EXPORTER',
+        organization: 'Exporters',
+        exporter_id: 'EXP001',
+        ecta_license: 'ECTA-LIC-001',
+        permissions: JSON.stringify(['export', 'contracts', 'shipments'])
+      }
+    ];
 
-    // Check if admin user exists
-    const result = await pool.query(
-      'SELECT * FROM users WHERE username = $1',
-      ['admin']
-    );
+    for (const user of adminUsers) {
+      const hash = await bcrypt.hash(user.password, 10);
 
-    if (result.rows.length > 0) {
-      console.log('👤 Admin user exists. Updating password...');
-      
-      // Update existing admin user
-      await pool.query(
-        `UPDATE users 
-         SET password_hash = $1,
-             email = 'admin@cecbs.et',
-             full_name = 'System Administrator',
-             status = 'active',
-             updated_at = CURRENT_TIMESTAMP
-         WHERE username = 'admin'`,
-        [hash]
+      // Check if user exists
+      const result = await pool.query(
+        'SELECT * FROM users WHERE username = $1',
+        [user.username]
       );
 
-      console.log('✅ Admin user updated successfully!\n');
-    } else {
-      console.log('👤 Admin user does not exist. Creating...');
-      
-      // Create new admin user
-      await pool.query(
-        `INSERT INTO users (
-          username, email, password_hash, full_name, role, organization,
-          permissions, status, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-        [
-          'admin',
-          'admin@cecbs.et',
-          hash,
-          'System Administrator',
-          'ADMIN',
-          'CECBS System',
-          JSON.stringify(['*']),
-          'active'
-        ]
-      );
-
-      console.log('✅ Admin user created successfully!\n');
+      if (result.rows.length > 0) {
+        // Update existing user
+        await pool.query(
+          `UPDATE users 
+           SET password_hash = $1,
+               email = $2,
+               full_name = $3,
+               role = $4,
+               organization = $5,
+               permissions = $6,
+               exporter_id = $7,
+               ecta_license = $8,
+               status = 'active',
+               updated_at = CURRENT_TIMESTAMP
+           WHERE username = $9`,
+          [hash, user.email, user.full_name, user.role, user.organization, 
+           user.permissions, user.exporter_id || null, user.ecta_license || null, user.username]
+        );
+        console.log(`✅ Updated user: ${user.username}`);
+      } else {
+        // Create new user
+        await pool.query(
+          `INSERT INTO users (
+            username, email, password_hash, full_name, role, organization,
+            permissions, exporter_id, ecta_license, status, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [
+            user.username,
+            user.email,
+            hash,
+            user.full_name,
+            user.role,
+            user.organization,
+            user.permissions,
+            user.exporter_id || null,
+            user.ecta_license || null
+          ]
+        );
+        console.log(`✅ Created user: ${user.username}`);
+      }
     }
 
+    console.log('\n═══════════════════════════════════════');
+    console.log('   ALL USERS CREATED/UPDATED');
     console.log('═══════════════════════════════════════');
-    console.log('   LOGIN CREDENTIALS');
-    console.log('═══════════════════════════════════════');
-    console.log('   Username: admin');
-    console.log('   Password: admin123');
-    console.log('   Portal:   http://localhost:3001/admin');
+    console.log('   Super Admin:  admin / admin123');
+    console.log('   ECTA Admin:   ecta_admin / password123');
+    console.log('   ECX Admin:    ecx_admin / password123');
+    console.log('   NBE Admin:    nbe_admin / password123');
+    console.log('   Bank Admin:   bank_admin / password123');
+    console.log('   Customs:      customs_admin / password123');
+    console.log('   Shipping:     shipping_admin / password123');
+    console.log('   Exporter:     testexporter / password123');
     console.log('═══════════════════════════════════════\n');
 
     // List all users

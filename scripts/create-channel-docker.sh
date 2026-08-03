@@ -94,4 +94,60 @@ docker run --rm \
     hyperledger/fabric-tools:2.5 \
     peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
 
-echo "All peers joined channel successfully!"
+# Join Banks peer to channel
+echo "Joining Banks peer to channel..."
+docker run --rm \
+    --network cecbs-network \
+    -v "${WORK_DIR}:/work" \
+    -w /work \
+    -e CORE_PEER_TLS_ENABLED=true \
+    -e CORE_PEER_LOCALMSPID="BanksMSP" \
+    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et/tls/ca.crt \
+    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/banks.cecbs.et/users/Admin@banks.cecbs.et/msp \
+    -e CORE_PEER_ADDRESS=peer0.banks.cecbs.et:9051 \
+    hyperledger/fabric-tools:2.5 \
+    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+
+# Join NBE peer to channel
+echo "Joining NBE peer to channel..."
+docker run --rm \
+    --network cecbs-network \
+    -v "${WORK_DIR}:/work" \
+    -w /work \
+    -e CORE_PEER_TLS_ENABLED=true \
+    -e CORE_PEER_LOCALMSPID="NBEMSP" \
+    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/tls/ca.crt \
+    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/nbe.cecbs.et/users/Admin@nbe.cecbs.et/msp \
+    -e CORE_PEER_ADDRESS=peer0.nbe.cecbs.et:10051 \
+    hyperledger/fabric-tools:2.5 \
+    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+
+# Join Customs peer to channel
+echo "Joining Customs peer to channel..."
+docker run --rm \
+    --network cecbs-network \
+    -v "${WORK_DIR}:/work" \
+    -w /work \
+    -e CORE_PEER_TLS_ENABLED=true \
+    -e CORE_PEER_LOCALMSPID="CustomsMSP" \
+    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et/tls/ca.crt \
+    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/customs.cecbs.et/users/Admin@customs.cecbs.et/msp \
+    -e CORE_PEER_ADDRESS=peer0.customs.cecbs.et:11051 \
+    hyperledger/fabric-tools:2.5 \
+    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+
+# Join Shipping peer to channel
+echo "Joining Shipping peer to channel..."
+docker run --rm \
+    --network cecbs-network \
+    -v "${WORK_DIR}:/work" \
+    -w /work \
+    -e CORE_PEER_TLS_ENABLED=true \
+    -e CORE_PEER_LOCALMSPID="ShippingMSP" \
+    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/tls/ca.crt \
+    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/shipping.cecbs.et/users/Admin@shipping.cecbs.et/msp \
+    -e CORE_PEER_ADDRESS=peer0.shipping.cecbs.et:12051 \
+    hyperledger/fabric-tools:2.5 \
+    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+
+echo "All 6 peers joined channel successfully!"

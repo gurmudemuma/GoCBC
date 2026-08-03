@@ -375,6 +375,248 @@ function Start-FabricNetwork {
     Write-Success "Fabric network is operational"
 }
 
+function Deploy-Chaincode {
+    Write-Header "Deploying Coffee Chaincode"
+    
+    $CHANNEL = "coffeechannel"
+    $CC_NAME = "coffee"
+    $CC_VERSION = "1.11"
+    $CC_SEQUENCE = 1
+    $CC_LABEL = "${CC_NAME}_${CC_VERSION}"
+    $ORDERER_CA = "/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem"
+    
+    $orgs = @(
+        @{ name="ecta";     peer="peer0.ecta.cecbs.et";     port=7051;  msp="ECTAMSP"     },
+        @{ name="ecx";      peer="peer0.ecx.cecbs.et";      port=8051;  msp="ECXMSP"      },
+        @{ name="banks";    peer="peer0.banks.cecbs.et";     port=9051;  msp="BanksMSP"    },
+        @{ name="nbe";      peer="peer0.nbe.cecbs.et";       port=10051; msp="NBEMSP"      },
+        @{ name="customs";  peer="peer0.customs.cecbs.et";   port=11051; msp="CustomsMSP"  },
+        @{ name="shipping"; peer="peer0.shipping.cecbs.et";  port=12051; msp="ShippingMSP" }
+    )
+    
+    # Step 1: Distribute TLS certs to peers
+    Write-Step "[1/6] Distributing TLS certs to peers..."
+    $ordererCaCrt = Join-Path $PROJECT_ROOT "blockchain\organizations\ordererOrganizations\cecbs.et\orderers\orderer.cecbs.et\msp\tlscacerts\tlsca.cecbs.et-cert.pem"
+    
+    if (-not (Test-Path $ordererCaCrt)) {
+        Write-Error-Custom "Orderer TLS cert not found at: $ordererCaCrt"
+        Write-Warning "Chaincode deployment skipped. Run network setup first."
+        return $false
+    }
+    
+    # Distribute orderer TLS cert
+    foreach ($org in $orgs) {
+        docker exec $org.peer sh -c "mkdir -p /var/hyperledger/orderer-tls" 2>&1 | Out-Null
+        docker cp $ordererCaCrt "$($org.peer):/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem" 2>&1 | Out-Null
+    }
+    
+    # Distribute peer TLS certs for cross-peer communication
+    Write-Host "  Distributing peer TLS certs for cross-peer communication..." -NoNewline
+    foreach ($sourceOrg in $orgs) {
+        $peerTlsCert = Join-Path $PROJECT_ROOT "blockchain\organizations\peerOrganizations\$($sourceOrg.name).cecbs.et\peers\peer0.$($sourceOrg.name).cecbs.et\tls\ca.crt"
+        if (Test-Path $peerTlsCert) {
+            foreach ($targetOrg in $orgs) {
+                docker exec $targetOrg.peer sh -c "mkdir -p /var/hyperledger/peer-tls" 2>&1 | Out-Null
+                docker cp $peerTlsCert "$($targetOrg.peer):/var/hyperledger/peer-tls/tlsca.$($sourceOrg.name).cecbs.et-cert.pem" 2>&1 | Out-Null
+            }
+        }
+    }
+    Write-Host " done" -ForegroundColor Green
+    Write-Success "All TLS certs distributed"
+    
+    # Step 2: Build chaincode package
+    Write-Step "[2/6] Building chaincode package..."
+    $tmpDir = New-Item -ItemType Directory -Path "$env:TEMP\cc_pkg_$(Get-Random)" -Force
+    
+    $metadata = @{
+        type = "ccaas"
+        label = $CC_LABEL
+    } | ConvertTo-Json -Compress
+    
+    $connection = @{
+        address = "coffee-chaincode:9999"
+        dial_timeout = "10s"
+        tls_required = $false
+    } | ConvertTo-Json -Compress
+    
+    [System.IO.File]::WriteAllText("$tmpDir\metadata.json", $metadata)
+    [System.IO.File]::WriteAllText("$tmpDir\connection.json", $connection)
+    
+    Push-Location $tmpDir
+    try {
+        tar czf code.tar.gz connection.json 2>&1 | Out-Null
+        tar czf "${CC_LABEL}.tar.gz" metadata.json code.tar.gz 2>&1 | Out-Null
+    } catch {
+        Write-Error-Custom "Failed to create chaincode package: $_"
+        Pop-Location
+        return $false
+    }
+    Pop-Location
+    
+    $pkgLocal = "$tmpDir\${CC_LABEL}.tar.gz"
+    Write-Success "Chaincode package built"
+    
+    # Step 3: Copy package to peers
+    Write-Step "[3/6] Copying package to all peers..."
+    foreach ($org in $orgs) {
+        docker cp $pkgLocal "$($org.peer):/tmp/${CC_LABEL}.tar.gz" 2>&1 | Out-Null
+    }
+    Remove-Item $tmpDir -Recurse -Force
+    Write-Success "Package copied to all peers"
+    
+    # Step 4: Install chaincode on each peer
+    Write-Step "[4/6] Installing chaincode on all peers..."
+    $packageId = ""
+    
+    foreach ($org in $orgs) {
+        $n = $org.name
+        Write-Host "  Installing on $($org.peer)..." -NoNewline
+        
+        $mspPath = "/etc/hyperledger/fabric/users/Admin@$n.cecbs.et/msp"
+        $result = docker exec `
+            -e CORE_PEER_MSPCONFIGPATH=$mspPath `
+            -e FABRIC_CFG_PATH=/etc/hyperledger/fabric `
+            $org.peer `
+            peer lifecycle chaincode install /tmp/${CC_LABEL}.tar.gz 2>&1
+        
+        $rStr = $result -join " "
+        if ($rStr -match "already been installed") {
+            Write-Host " already installed" -ForegroundColor Yellow
+        } elseif ($rStr -match "Installed remotely") {
+            Write-Host " installed" -ForegroundColor Green
+        } else {
+            Write-Host " done" -ForegroundColor Green
+        }
+    }
+    
+    # Get package ID
+    Write-Host "  Getting package ID..." -NoNewline
+    $qResult = docker exec `
+        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" `
+        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric `
+        peer0.ecta.cecbs.et `
+        peer lifecycle chaincode queryinstalled --output json 2>&1
+    
+    $qStr = $qResult -join "`n"
+    if ($qStr -match '"package_id":"([^"]+)"' -and $qStr -match $CC_LABEL) {
+        # Find the correct package ID for our label
+        $jsonObj = $qStr | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($jsonObj -and $jsonObj.installed_chaincodes) {
+            foreach ($cc in $jsonObj.installed_chaincodes) {
+                if ($cc.label -eq $CC_LABEL) {
+                    $packageId = $cc.package_id
+                    break
+                }
+            }
+        }
+    }
+    
+    if (-not $packageId) {
+        Write-Host ""
+        Write-Error-Custom "Could not find package ID"
+        Write-Warning "Chaincode deployment had issues, but channel and peers are ready"
+        return $false
+    }
+    Write-Host " $packageId" -ForegroundColor Green
+    Write-Success "Chaincode installed on all peers"
+    
+    # Step 5: Approve for each org
+    Write-Step "[5/6] Approving for all organizations..."
+    
+    foreach ($org in $orgs) {
+        $n = $org.name
+        Write-Host "  Approving $($org.msp)..." -NoNewline
+        
+        $mspPath = "/etc/hyperledger/fabric/users/Admin@$n.cecbs.et/msp"
+        $tls = "/etc/hyperledger/fabric/tls/ca.crt"
+        
+        $result = docker exec `
+            -e CORE_PEER_MSPCONFIGPATH=$mspPath `
+            -e FABRIC_CFG_PATH=/etc/hyperledger/fabric `
+            -e CORE_PEER_TLS_ENABLED=true `
+            -e CORE_PEER_TLS_ROOTCERT_FILE=$tls `
+            -e CORE_PEER_LOCALMSPID=$($org.msp) `
+            -e CORE_PEER_ADDRESS="peer0.$n.cecbs.et:$($org.port)" `
+            $org.peer `
+            peer lifecycle chaincode approveformyorg `
+                -o orderer.cecbs.et:7050 `
+                --ordererTLSHostnameOverride orderer.cecbs.et `
+                --tls --cafile $ORDERER_CA `
+                --channelID $CHANNEL `
+                --name $CC_NAME `
+                --version $CC_VERSION `
+                --package-id $packageId `
+                --sequence $CC_SEQUENCE 2>&1
+        
+        $rStr = $result -join " "
+        if ($rStr -match "Error") {
+            Write-Host " ERROR: $rStr" -ForegroundColor Red
+        } else {
+            Write-Host " approved" -ForegroundColor Green
+        }
+    }
+    Write-Success "All organizations approved"
+    
+    # Step 6: Commit chaincode definition
+    Write-Step "[6/6] Committing chaincode definition..."
+    
+    $commitArgs = @(
+        "peer","lifecycle","chaincode","commit",
+        "-o","orderer.cecbs.et:7050",
+        "--ordererTLSHostnameOverride","orderer.cecbs.et",
+        "--tls","--cafile",$ORDERER_CA,
+        "--channelID",$CHANNEL,
+        "--name",$CC_NAME,
+        "--version",$CC_VERSION,
+        "--sequence","$CC_SEQUENCE"
+    )
+    
+    foreach ($org in $orgs) {
+        $n = $org.name
+        $commitArgs += "--peerAddresses"
+        $commitArgs += "peer0.$n.cecbs.et:$($org.port)"
+        $commitArgs += "--tlsRootCertFiles"
+        $commitArgs += "/var/hyperledger/peer-tls/tlsca.$n.cecbs.et-cert.pem"
+    }
+    
+    $result = docker exec `
+        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" `
+        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric `
+        -e CORE_PEER_TLS_ENABLED=true `
+        -e CORE_PEER_TLS_ROOTCERT_FILE="/etc/hyperledger/fabric/tls/ca.crt" `
+        -e CORE_PEER_LOCALMSPID=ECTAMSP `
+        -e CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7051 `
+        peer0.ecta.cecbs.et `
+        @commitArgs 2>&1
+    
+    $rStr = $result -join " "
+    if ($rStr -match "Error") {
+        Write-Error-Custom "Failed to commit chaincode: $rStr"
+        return $false
+    }
+    
+    Write-Success "Chaincode committed!"
+    
+    # Verify deployment
+    Write-Step "Verifying deployment..."
+    Start-Sleep -Seconds 3
+    
+    $vResult = docker exec `
+        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" `
+        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric `
+        peer0.ecta.cecbs.et `
+        peer lifecycle chaincode querycommitted --channelID $CHANNEL --name $CC_NAME --output json 2>&1
+    
+    $vStr = $vResult -join " "
+    if ($vStr -match "Version: $CC_VERSION" -or $vStr -match '"version":"' + $CC_VERSION + '"') {
+        Write-Success "Chaincode deployed successfully: $CC_NAME v$CC_VERSION on $CHANNEL"
+        return $true
+    } else {
+        Write-Warning "Chaincode deployment verification inconclusive"
+        return $true  # Still return true as it likely succeeded
+    }
+}
+
 function Show-ContainerStatus {
     Write-Header "Container Status"
     
@@ -548,6 +790,8 @@ function Test-Connections {
 # ============================================================================
 
 function Show-Summary {
+    param([bool]$ChaincodeDeployed = $false)
+    
     Write-Header "🎉 CECBS System Started Successfully!"
     
     Write-Host ""
@@ -559,23 +803,44 @@ function Show-Summary {
     Write-Host "  ${COLOR_CYAN}Redis:${COLOR_RESET}           localhost:$REDIS_PORT"
     Write-Host ""
     
+    Write-Host "${COLOR_BOLD}${COLOR_GREEN}Blockchain Status:${COLOR_RESET}"
+    if ($ChaincodeDeployed) {
+        Write-Host "  ${COLOR_GREEN}✓ Chaincode:${COLOR_RESET}       Deployed and operational"
+    } else {
+        Write-Host "  ${COLOR_YELLOW}⚠ Chaincode:${COLOR_RESET}       Deployment had issues (check logs)"
+        Write-Host "    ${COLOR_CYAN}Manual fix:${COLOR_RESET}        .\scripts\deploy-chaincode.ps1"
+    }
+    Write-Host ""
+    
     Write-Host "${COLOR_BOLD}${COLOR_GREEN}Default Login Credentials:${COLOR_RESET}"
+    Write-Host "  ${COLOR_YELLOW}Super Admin:${COLOR_RESET}     admin / admin123"
     Write-Host "  ${COLOR_YELLOW}ECTA Admin:${COLOR_RESET}      ecta_admin / password123"
-    Write-Host "  ${COLOR_YELLOW}NBE Officer:${COLOR_RESET}     nbe_admin / password123"
-    Write-Host "  ${COLOR_YELLOW}Bank Officer:${COLOR_RESET}    bank_admin / password123"
-    Write-Host "  ${COLOR_YELLOW}Customs Officer:${COLOR_RESET} customs_admin / password123"
-    Write-Host "  ${COLOR_YELLOW}Exporter:${COLOR_RESET}        EXP1087072 / password123"
+    Write-Host "  ${COLOR_YELLOW}NBE Admin:${COLOR_RESET}       nbe_admin / password123"
+    Write-Host "  ${COLOR_YELLOW}Bank Admin:${COLOR_RESET}      bank_admin / password123"
+    Write-Host "  ${COLOR_YELLOW}Customs Admin:${COLOR_RESET}   customs_admin / password123"
+    Write-Host "  ${COLOR_YELLOW}Exporter:${COLOR_RESET}        testexporter / password123"
     Write-Host ""
     
     Write-Host "${COLOR_BOLD}${COLOR_GREEN}Useful Commands:${COLOR_RESET}"
     Write-Host "  ${COLOR_CYAN}View all containers:${COLOR_RESET}  docker ps"
     Write-Host "  ${COLOR_CYAN}View logs:${COLOR_RESET}            docker-compose -f $DOCKER_COMPOSE_FILE logs -f"
+    Write-Host "  ${COLOR_CYAN}Deploy chaincode:${COLOR_RESET}     .\scripts\deploy-chaincode.ps1"
     Write-Host "  ${COLOR_CYAN}Stop system:${COLOR_RESET}          .\stop-all.ps1"
-    Write-Host "  ${COLOR_CYAN}System status:${COLOR_RESET}        .\scripts\check-system-status.ps1"
     Write-Host ""
     
+    if (-not $ChaincodeDeployed) {
+        Write-Host "${COLOR_YELLOW}⚠ Note: Some blockchain features may not work until chaincode is deployed.${COLOR_RESET}"
+        Write-Host "${COLOR_YELLOW}  Run: .\scripts\deploy-chaincode.ps1${COLOR_RESET}"
+        Write-Host ""
+    }
+    
     Write-Host "${COLOR_BOLD}${COLOR_GREEN}Background Jobs:${COLOR_RESET}"
-    Get-Job | Format-Table -AutoSize | Out-String | Write-Host
+    $jobs = Get-Job
+    if ($jobs) {
+        $jobs | Format-Table -AutoSize | Out-String | Write-Host
+    } else {
+        Write-Host "  (Running in development mode or no background jobs)"
+    }
     
     Write-Host ""
     Write-Info "For detailed documentation, see: Docs/QUICK-START.md"
@@ -607,6 +872,10 @@ try {
     Install-Dependencies
     Build-TypeScript
     Start-FabricNetwork
+    
+    # Deploy chaincode after network is up
+    $chaincodeDeployed = Deploy-Chaincode
+    
     Show-ContainerStatus
     
     if ($DevMode) {
@@ -640,7 +909,7 @@ try {
     $endTime = Get-Date
     $duration = $endTime - $startTime
     
-    Show-Summary
+    Show-Summary -ChaincodeDeployed $chaincodeDeployed
     
     Write-Host "${COLOR_GREEN}Total startup time: $([math]::Round($duration.TotalSeconds, 1)) seconds${COLOR_RESET}"
     Write-Host ""

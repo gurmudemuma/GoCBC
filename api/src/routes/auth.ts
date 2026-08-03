@@ -77,15 +77,115 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Parse permissions - handle both JSON string (SQLite) and native array (PostgreSQL)
-    let permissions;
-    if (typeof user.permissions === 'string') {
-      permissions = JSON.parse(user.permissions || '[]');
-    } else if (Array.isArray(user.permissions)) {
-      permissions = user.permissions;
-    } else {
-      permissions = [];
-    }
+    // Role-based permissions mapping
+    const rolePermissionsMap: Record<string, string[]> = {
+      ADMIN: [
+        'admin:system',
+        'users:create',
+        'users:read',
+        'users:update',
+        'users:delete',
+        'users:manage-all',
+        'blockchain:enroll',
+        'blockchain:revoke',
+        'blockchain:renew',
+        'analytics:view-all',
+        'settings:manage',
+        'audit:view-all',
+        'organizations:manage-all',
+      ],
+      ECTA: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'quality:manage',
+        'permits:manage',
+        'phytosanitary:manage',
+        'licenses:manage',
+        'analytics:view-org',
+        'exporters:approve',
+        'exporters:verify',
+      ],
+      ECX: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'contracts:manage',
+        'grading:manage',
+        'warehouse:manage',
+        'release:manage',
+        'analytics:view-org',
+      ],
+      NBE: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'forex:manage',
+        'forex:allocate',
+        'forex:approve',
+        'compliance:verify',
+        'analytics:view-org',
+        'payments:monitor',
+      ],
+      BANKS: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'lc:issue',
+        'lc:manage',
+        'payments:process',
+        'advance:manage',
+        'collections:manage',
+        'analytics:view-org',
+      ],
+      CUSTOMS: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'customs:declare',
+        'customs:inspect',
+        'customs:clear',
+        'customs:assess-duty',
+        'analytics:view-org',
+      ],
+      SHIPPING: [
+        'users:create-org',
+        'users:read-org',
+        'users:update-org',
+        'users:delete-org',
+        'blockchain:enroll-org',
+        'shipments:create',
+        'shipments:update',
+        'shipments:track',
+        'logistics:manage',
+        'analytics:view-org',
+      ],
+      EXPORTER: [
+        'contracts:create',
+        'contracts:view-own',
+        'shipments:create-own',
+        'shipments:view-own',
+        'documents:upload-own',
+        'documents:view-own',
+        'permits:apply',
+        'lc:view-own',
+        'payments:view-own',
+        'analytics:view-own',
+      ],
+    };
+
+    // Get permissions based on role
+    const permissions = rolePermissionsMap[user.role] || rolePermissionsMap.EXPORTER;
 
     // Generate JWT token
     const signOptions: jwt.SignOptions = { expiresIn: '24h' };

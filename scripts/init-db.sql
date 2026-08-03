@@ -8,6 +8,13 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) UNIQUE NOT NULL,
     organization VARCHAR(100) NOT NULL,
     role VARCHAR(50) NOT NULL,
+    full_name VARCHAR(255),
+    exporter_id VARCHAR(50),
+    ecta_license VARCHAR(100),
+    phone VARCHAR(50),
+    permissions TEXT,
+    status VARCHAR(50) DEFAULT 'active',
+    last_login TIMESTAMP,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

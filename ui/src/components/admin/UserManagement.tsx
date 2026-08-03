@@ -48,6 +48,7 @@ import {
   History,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { getRolesByOrganization, ADMIN_CONFIG } from '@/config/organizationConfig';
 import { useForm, Controller } from 'react-hook-form';
 import api from '@/utils/api';
 import BlockchainIdentityPanel from './BlockchainIdentityPanel';
@@ -298,6 +299,14 @@ const UserManagement: React.FC = () => {
 
   // Handler functions
   const handleCreateUser = async (data: UserFormData) => {
+    console.log('🔵 Create User Form Data:', data);
+    console.log('🔵 Form Errors:', errors);
+    console.log('🔵 Current User Context:', {
+      role: currentUser?.role,
+      organization: currentUser?.organization,
+      userId: currentUser?.id,
+    });
+    
     try {
       const payload = {
         username: data.username,
@@ -311,7 +320,11 @@ const UserManagement: React.FC = () => {
         ectaLicense: data.ecta_license,
       };
 
+      console.log('🟢 Sending payload to API:', payload);
+
       const response = await api.post('/users', payload);
+      
+      console.log('✅ API Response:', response.data);
       
       if (response.data.success) {
         showSnackbar('User created successfully', 'success');
@@ -320,8 +333,30 @@ const UserManagement: React.FC = () => {
         loadUsers();
       }
     } catch (error: any) {
-      const errorMessage = error.response?.data?.error?.message || 'Failed to create user';
-      showSnackbar(errorMessage, 'error');
+      console.error('❌ Error creating user:', error);
+      console.error('❌ Error response:', error.response?.data);
+      console.error('❌ Error details:', JSON.stringify(error.response?.data, null, 2));
+      
+      const errorData = error.response?.data?.error;
+      let errorMessage = errorData?.message || 'Failed to create user';
+      
+      // Special handling for organization undefined error
+      if (errorMessage.includes('undefined') && errorMessage.includes('organization')) {
+        errorMessage = '⚠️ Session Error: Your login session has outdated organization data. Please LOG OUT and LOG IN again to refresh your session, then try creating the user.';
+      }
+      
+      showSnackbar(`❌ ${errorMessage}`, 'error');
+    }
+  };
+
+  // Add onError handler for form validation failures
+  const handleCreateUserError = (errors: any) => {
+    console.log('❌ Form Validation Errors:', errors);
+    const firstError = Object.values(errors)[0] as any;
+    if (firstError?.message) {
+      showSnackbar(`Validation Error: ${firstError.message}`, 'error');
+    } else {
+      showSnackbar('Please fill in all required fields', 'error');
     }
   };
 
@@ -397,7 +432,45 @@ const UserManagement: React.FC = () => {
   };
 
   const handleCreateClick = () => {
-    reset();
+    // Normalize organization value to key (BANKS, NBE, etc.) instead of full name
+    const normalizeOrgKey = (org: string | undefined): string => {
+      if (!org) return '';
+      
+      // Check if it's already a valid key
+      const validKeys = ADMIN_CONFIG.organizations.map(o => o.value);
+      if (validKeys.includes(org)) return org;
+      
+      // Try to map full name to key
+      const orgConfig = ADMIN_CONFIG.organizations.find(
+        o => o.label.toLowerCase() === org.toLowerCase() || 
+             o.value.toUpperCase() === org.toUpperCase().replace(/[^A-Z]/g, '')
+      );
+      
+      return orgConfig?.value || '';
+    };
+    
+    const orgValue = currentUser?.role === 'ADMIN' ? '' : normalizeOrgKey(currentUser?.organization);
+    
+    // Reset form with proper default values
+    reset({
+      username: '',
+      email: '',
+      password: '',
+      full_name: '',
+      role: '',
+      organization: orgValue,
+      phone: '',
+      exporter_id: '',
+      ecta_license: '',
+    });
+    
+    console.log('🔵 Opening Create User Dialog. Current User:', {
+      role: currentUser?.role,
+      organization: currentUser?.organization,
+      normalizedOrg: orgValue,
+    });
+    console.log('🔵 Available organizations:', ADMIN_CONFIG.organizations);
+    
     setCreateDialogOpen(true);
   };
 
@@ -511,14 +584,26 @@ const UserManagement: React.FC = () => {
                   onChange={(e) => setRoleFilter(e.target.value)}
                 >
                   <MenuItem value="all">All Roles</MenuItem>
-                  <MenuItem value="ECTA">ECTA</MenuItem>
-                  <MenuItem value="ECX">ECX</MenuItem>
-                  <MenuItem value="NBE">NBE</MenuItem>
-                  <MenuItem value="BANKS">Banks</MenuItem>
-                  <MenuItem value="CUSTOMS">Customs</MenuItem>
-                  <MenuItem value="SHIPPING">Shipping</MenuItem>
-                  <MenuItem value="EXPORTER">Exporter</MenuItem>
-                  <MenuItem value="ADMIN">Admin</MenuItem>
+                  {currentUser?.role === 'ADMIN' ? (
+                    // Super admin filters by organization type
+                    <>
+                      <MenuItem value="ADMIN">Admin</MenuItem>
+                      <MenuItem value="ECTA">ECTA</MenuItem>
+                      <MenuItem value="ECX">ECX</MenuItem>
+                      <MenuItem value="NBE">NBE</MenuItem>
+                      <MenuItem value="BANKS">Banks</MenuItem>
+                      <MenuItem value="CUSTOMS">Customs</MenuItem>
+                      <MenuItem value="SHIPPING">Shipping</MenuItem>
+                      <MenuItem value="EXPORTER">Exporter</MenuItem>
+                    </>
+                  ) : (
+                    // Organization admins filter by specific job titles
+                    getRolesByOrganization(currentUser?.organization || '').map((role) => (
+                      <MenuItem key={role.value} value={role.value}>
+                        {role.label}
+                      </MenuItem>
+                    ))
+                  )}
                 </Select>
               </FormControl>
             </Grid>
@@ -610,7 +695,7 @@ const UserManagement: React.FC = () => {
             <Typography variant="h6">Create New User</Typography>
           </Box>
         </DialogTitle>
-        <form onSubmit={handleSubmit(handleCreateUser)}>
+        <form onSubmit={handleSubmit(handleCreateUser, handleCreateUserError)}>
           <DialogContent>
             <Grid container spacing={2} sx={{ mt: 1 }}>
               <Grid item xs={12} sm={6}>
@@ -722,77 +807,41 @@ const UserManagement: React.FC = () => {
                       <InputLabel>Role</InputLabel>
                       <Select {...field} label="Role">
                         {currentUser?.role === 'ADMIN' ? (
-                          // Super admin sees all organization roles
+                          // Super admin sees organization admin roles
                           <>
-                            <MenuItem value="ECTA">ECTA</MenuItem>
-                            <MenuItem value="ECX">ECX</MenuItem>
-                            <MenuItem value="NBE">NBE</MenuItem>
-                            <MenuItem value="BANKS">Banks</MenuItem>
-                            <MenuItem value="CUSTOMS">Customs</MenuItem>
-                            <MenuItem value="SHIPPING">Shipping</MenuItem>
+                            <MenuItem value="ADMIN">Super Administrator</MenuItem>
+                            <MenuItem value="ECTA">ECTA Administrator</MenuItem>
+                            <MenuItem value="ECX">ECX Administrator</MenuItem>
+                            <MenuItem value="NBE">NBE Administrator</MenuItem>
+                            <MenuItem value="BANKS">Banks Administrator</MenuItem>
+                            <MenuItem value="CUSTOMS">Customs Administrator</MenuItem>
+                            <MenuItem value="SHIPPING">Shipping Administrator</MenuItem>
                             <MenuItem value="EXPORTER">Exporter</MenuItem>
-                            <MenuItem value="ADMIN">Admin</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'ECTA' ? (
-                          <>
-                            <MenuItem value="Quality Inspector">Quality Inspector</MenuItem>
-                            <MenuItem value="Lab Analyst">Lab Analyst</MenuItem>
-                            <MenuItem value="Phytosanitary Officer">Phytosanitary Officer</MenuItem>
-                            <MenuItem value="License Officer">License Officer</MenuItem>
-                            <MenuItem value="Permit Officer">Permit Officer</MenuItem>
-                            <MenuItem value="ECTA Officer">ECTA Officer</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'BANKS' ? (
-                          <>
-                            <MenuItem value="Bank Officer">Bank Officer</MenuItem>
-                            <MenuItem value="Branch Manager">Branch Manager</MenuItem>
-                            <MenuItem value="Trade Finance Officer">Trade Finance Officer</MenuItem>
-                            <MenuItem value="Credit Analyst">Credit Analyst</MenuItem>
-                            <MenuItem value="Forex Officer">Forex Officer</MenuItem>
-                            <MenuItem value="Compliance Officer">Compliance Officer</MenuItem>
-                            <MenuItem value="LC Officer">LC Officer</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'NBE' ? (
-                          <>
-                            <MenuItem value="NBE Officer">NBE Officer</MenuItem>
-                            <MenuItem value="Forex Officer">Forex Officer</MenuItem>
-                            <MenuItem value="Screening Officer">Screening Officer</MenuItem>
-                            <MenuItem value="Compliance Officer">Compliance Officer</MenuItem>
-                            <MenuItem value="Exchange Rate Officer">Exchange Rate Officer</MenuItem>
-                            <MenuItem value="Settlement Officer">Settlement Officer</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'ECX' ? (
-                          <>
-                            <MenuItem value="Grading Officer">Grading Officer</MenuItem>
-                            <MenuItem value="Warehouse Officer">Warehouse Officer</MenuItem>
-                            <MenuItem value="Registration Officer">Registration Officer</MenuItem>
-                            <MenuItem value="Release Officer">Release Officer</MenuItem>
-                            <MenuItem value="ECX Officer">ECX Officer</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'CUSTOMS' ? (
-                          <>
-                            <MenuItem value="Customs Officer">Customs Officer</MenuItem>
-                            <MenuItem value="Inspection Officer">Inspection Officer</MenuItem>
-                            <MenuItem value="Clearance Officer">Clearance Officer</MenuItem>
-                            <MenuItem value="Risk Analyst">Risk Analyst</MenuItem>
-                            <MenuItem value="ASYCUDA Officer">ASYCUDA Officer</MenuItem>
-                            <MenuItem value="Duty Assessment Officer">Duty Assessment Officer</MenuItem>
-                          </>
-                        ) : currentUser?.role === 'SHIPPING' ? (
-                          <>
-                            <MenuItem value="Logistics Officer">Logistics Officer</MenuItem>
-                            <MenuItem value="Documentation Officer">Documentation Officer</MenuItem>
-                            <MenuItem value="Operations Manager">Operations Manager</MenuItem>
-                            <MenuItem value="Shipping Coordinator">Shipping Coordinator</MenuItem>
-                            <MenuItem value="Freight Forwarder">Freight Forwarder</MenuItem>
                           </>
                         ) : (
-                          <MenuItem value={currentUser?.role}>{currentUser?.role}</MenuItem>
+                          // Organization admins see their specific job title roles from centralized config
+                          getRolesByOrganization(currentUser?.organization || '').map((role) => (
+                            <MenuItem key={role.value} value={role.value}>
+                              <Box>
+                                <Typography variant="body2" fontWeight={500}>{role.label}</Typography>
+                                {'description' in role && role.description && (
+                                  <Typography variant="caption" color="text.secondary" display="block">
+                                    {role.description}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </MenuItem>
+                          ))
                         )}
                       </Select>
                       {errors.role && (
                         <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
                           {errors.role.message}
+                        </Typography>
+                      )}
+                      {currentUser?.role !== 'ADMIN' && (
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.5 }}>
+                          Select a job title within {currentUser?.organization}
                         </Typography>
                       )}
                     </FormControl>
@@ -804,23 +853,79 @@ const UserManagement: React.FC = () => {
                 <Controller
                   name="organization"
                   control={control}
-                  defaultValue=""
                   rules={{ required: 'Organization is required' }}
                   render={({ field }) => (
-                    <TextField
-                      {...field}
-                      fullWidth
-                      label="Organization"
-                      error={!!errors.organization}
-                      helperText={errors.organization?.message}
-                      InputProps={{
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <Business />
-                          </InputAdornment>
-                        ),
-                      }}
-                    />
+                    <FormControl fullWidth error={!!errors.organization}>
+                      <InputLabel>Organization</InputLabel>
+                      <Select
+                        {...field}
+                        value={field.value || ''}
+                        label="Organization"
+                        disabled={currentUser?.role !== 'ADMIN'}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          // Reset role when organization changes
+                          setValue('role', '');
+                        }}
+                      >
+                        {currentUser?.role === 'ADMIN' ? (
+                          // Super admin can select any organization
+                          ADMIN_CONFIG.organizations.map((org) => (
+                            <MenuItem key={org.value} value={org.value}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box
+                                  sx={{
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: '50%',
+                                    bgcolor: org.color,
+                                  }}
+                                />
+                                <Typography>{org.label}</Typography>
+                              </Box>
+                            </MenuItem>
+                          ))
+                        ) : (
+                          // Organization admins can only create users in their org
+                          ADMIN_CONFIG.organizations
+                            .filter(org => org.value === currentUser?.organization)
+                            .map((org) => (
+                              <MenuItem key={org.value} value={org.value}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Box
+                                    sx={{
+                                      width: 12,
+                                      height: 12,
+                                      borderRadius: '50%',
+                                      bgcolor: org.color,
+                                    }}
+                                  />
+                                  <Typography>{org.label}</Typography>
+                                </Box>
+                              </MenuItem>
+                            ))
+                        )}
+                      </Select>
+                      {errors.organization && (
+                        <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
+                          {errors.organization.message}
+                        </Typography>
+                      )}
+                      {currentUser?.role !== 'ADMIN' && (
+                        <>
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.5 }}>
+                            Fixed to your organization
+                          </Typography>
+                          {ADMIN_CONFIG.organizations.filter(org => org.value === currentUser?.organization).length === 0 && (
+                            <Alert severity="error" sx={{ mt: 1 }}>
+                              ⚠️ <strong>Session Error:</strong> Your organization data is not properly set. 
+                              Please <strong>LOG OUT</strong> and <strong>LOG IN</strong> again to refresh your session.
+                              Current organization value: "{currentUser?.organization}"
+                            </Alert>
+                          )}
+                        </>
+                      )}
+                    </FormControl>
                   )}
                 />
               </Grid>
@@ -902,6 +1007,11 @@ const UserManagement: React.FC = () => {
               type="submit" 
               variant="contained"
               startIcon={<Save />}
+              onClick={(e) => {
+                console.log('🔵 Create User button clicked');
+                console.log('🔵 Current form values:', watch());
+                console.log('🔵 Current form errors:', errors);
+              }}
             >
               Create User
             </Button>

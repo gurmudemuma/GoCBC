@@ -270,8 +270,8 @@ router.post('/',
     body('email').isEmail().withMessage('Valid email is required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('fullName').notEmpty().withMessage('Full name is required'),
-    body('role').isIn(['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING', 'EXPORTER', 'ADMIN'])
-      .withMessage('Invalid role'),
+    body('role').notEmpty().withMessage('Role is required')
+      .isString().withMessage('Role must be a string'),
     body('organization').notEmpty().withMessage('Organization is required'),
   ],
   validateRequest,

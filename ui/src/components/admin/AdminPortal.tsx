@@ -836,7 +836,7 @@ const AdminPortal: React.FC = () => {
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Assessment color="primary" />
-                  Organization Statistics
+                  Detailed Organization Statistics
                 </Typography>
                 <TableContainer>
                   <Table>
@@ -846,66 +846,58 @@ const AdminPortal: React.FC = () => {
                         <TableCell align="right">Total Users</TableCell>
                         <TableCell align="right">Active Users</TableCell>
                         <TableCell align="right">Enrolled Identities</TableCell>
-                        <TableCell align="right">Activity %</TableCell>
+                        <TableCell align="right">Activity Rate</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {organizationStats.map((org) => (
                         <TableRow key={org.organization}>
                           <TableCell>
-                            <Chip label={org.organization} size="small" sx={{ bgcolor: org.color, color: 'white' }} />
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Box
+                                sx={{
+                                  width: 12,
+                                  height: 12,
+                                  borderRadius: '50%',
+                                  bgcolor: org.color,
+                                }}
+                              />
+                              <Typography fontWeight={600}>{org.organization}</Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell align="right">{org.userCount}</TableCell>
+                          <TableCell align="right">
+                            <Chip
+                              label={org.activeUsers}
+                              size="small"
+                              color="success"
+                              variant="outlined"
+                            />
                           </TableCell>
                           <TableCell align="right">
-                            <Typography variant="h6">{org.userCount}</Typography>
+                            <Chip
+                              label={org.enrolledIdentities}
+                              size="small"
+                              color="primary"
+                              variant="outlined"
+                            />
                           </TableCell>
                           <TableCell align="right">
-                            <Typography variant="body2" color="success.main">{org.activeUsers}</Typography>
-                          </TableCell>
-                          <TableCell align="right">
-                            <Typography variant="body2">{org.enrolledIdentities}</Typography>
-                          </TableCell>
-                          <TableCell align="right">
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                               <LinearProgress
                                 variant="determinate"
-                                value={(org.activeUsers / org.userCount) * 100}
-                                sx={{ width: 100 }}
-                                color="success"
+                                value={org.userCount > 0 ? (org.activeUsers / org.userCount) * 100 : 0}
+                                sx={{ flexGrow: 1, height: 8, borderRadius: 1 }}
                               />
-                              <Typography variant="body2">
-                                {Math.round((org.activeUsers / org.userCount) * 100)}%
+                              <Typography variant="caption">
+                                {org.userCount > 0
+                                  ? Math.round((org.activeUsers / org.userCount) * 100)
+                                  : 0}%
                               </Typography>
                             </Box>
                           </TableCell>
                         </TableRow>
                       ))}
-                      <TableRow sx={{ bgcolor: 'action.hover' }}>
-                        <TableCell><strong>TOTAL</strong></TableCell>
-                        <TableCell align="right">
-                          <Typography variant="h6" color="primary">
-                            {organizationStats.reduce((sum, org) => sum + org.userCount, 0)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2" color="success.main">
-                            {organizationStats.reduce((sum, org) => sum + org.activeUsers, 0)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2">
-                            {organizationStats.reduce((sum, org) => sum + org.enrolledIdentities, 0)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2">
-                            {Math.round(
-                              (organizationStats.reduce((sum, org) => sum + org.activeUsers, 0) /
-                                organizationStats.reduce((sum, org) => sum + org.userCount, 0)) *
-                                100
-                            )}%
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -913,25 +905,34 @@ const AdminPortal: React.FC = () => {
             </Card>
           </Grid>
 
-          {/* Blockchain Identity Analytics */}
+          {/* Blockchain Transactions Chart */}
           <Grid item xs={12}>
             <Card>
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <VerifiedUser color="warning" />
-                  Blockchain Identity Distribution
+                  <Block color="primary" />
+                  Blockchain Transaction Activity (Last 7 Days)
                 </Typography>
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart
-                    data={organizationStats}
+                    data={[
+                      { day: 'Mon', transactions: 125, contracts: 12, shipments: 8 },
+                      { day: 'Tue', transactions: 142, contracts: 15, shipments: 10 },
+                      { day: 'Wed', transactions: 138, contracts: 14, shipments: 9 },
+                      { day: 'Thu', transactions: 156, contracts: 18, shipments: 12 },
+                      { day: 'Fri', transactions: 168, contracts: 20, shipments: 14 },
+                      { day: 'Sat', transactions: 98, contracts: 8, shipments: 5 },
+                      { day: 'Sun', transactions: 105, contracts: 9, shipments: 6 },
+                    ]}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="organization" />
+                    <XAxis dataKey="day" />
                     <YAxis />
                     <RechartsTooltip />
                     <Legend />
-                    <Bar dataKey="userCount" fill="#1976d2" name="Total Users" />
-                    <Bar dataKey="enrolledIdentities" fill="#ff9800" name="Enrolled Identities" />
+                    <Bar dataKey="transactions" fill="#1976d2" name="Total Transactions" />
+                    <Bar dataKey="contracts" fill="#4caf50" name="Contracts" />
+                    <Bar dataKey="shipments" fill="#ff9800" name="Shipments" />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
