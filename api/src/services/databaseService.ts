@@ -343,13 +343,22 @@ export class DatabaseService {
 
       const defaultUsers = [
         {
+          username: 'admin',
+          email: 'admin@cecbs.et',
+          password: hash,
+          fullName: 'System Administrator',
+          role: 'ADMIN',
+          organization: 'Admin',
+          permissions: JSON.stringify(['admin:system', 'users:manage-all', 'blockchain:enroll', 'analytics:view-all', 'settings:manage']),
+        },
+        {
           username: 'ecta_admin',
           email: 'admin@ecta.gov.et',
           password: hash,
           fullName: 'ECTA Administrator',
           role: 'ECTA',
-          organization: 'Ethiopian Coffee & Tea Authority',
-          permissions: JSON.stringify(['exporter.view', 'exporter.create', 'exporter.update', 'quality.manage']),
+          organization: 'ECTA',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'quality:manage', 'permits:manage']),
         },
         {
           username: 'ecx_admin',
@@ -357,8 +366,8 @@ export class DatabaseService {
           password: hash,
           fullName: 'ECX Administrator',
           role: 'ECX',
-          organization: 'Ethiopian Commodity Exchange',
-          permissions: JSON.stringify(['lot.view', 'lot.create', 'lot.trade', 'market.manage']),
+          organization: 'ECX',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'contracts:manage', 'grading:manage']),
         },
         {
           username: 'nbe_admin',
@@ -366,8 +375,8 @@ export class DatabaseService {
           password: hash,
           fullName: 'NBE Administrator',
           role: 'NBE',
-          organization: 'National Bank of Ethiopia',
-          permissions: JSON.stringify(['contract.view', 'contract.approve', 'forex.allocate', 'forex.manage']),
+          organization: 'NBE',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'forex:manage', 'forex:allocate']),
         },
         {
           username: 'bank_admin',
@@ -375,8 +384,8 @@ export class DatabaseService {
           password: hash,
           fullName: 'Bank Administrator',
           role: 'BANKS',
-          organization: 'Commercial Bank of Ethiopia',
-          permissions: JSON.stringify(['permit.view', 'permit.approve', 'payment.process']),
+          organization: 'Banks',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'lc:issue', 'payments:process']),
         },
         {
           username: 'customs_admin',
@@ -384,8 +393,8 @@ export class DatabaseService {
           password: hash,
           fullName: 'Customs Administrator',
           role: 'CUSTOMS',
-          organization: 'Ethiopian Customs Commission',
-          permissions: JSON.stringify(['declaration.view', 'declaration.clear', 'inspection.schedule', 'eudr.verify']),
+          organization: 'Customs',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'customs:declare', 'customs:clear']),
         },
         {
           username: 'shipping_admin',
@@ -393,8 +402,8 @@ export class DatabaseService {
           password: hash,
           fullName: 'Shipping Administrator',
           role: 'SHIPPING',
-          organization: 'Ethiopian Shipping Lines',
-          permissions: JSON.stringify(['shipment.view', 'shipment.track', 'shipment.update', 'logistics.manage']),
+          organization: 'Shipping',
+          permissions: JSON.stringify(['users:create-org', 'users:read-org', 'shipments:create', 'shipments:track']),
         },
         {
           username: 'ethiopianpremium',
@@ -402,12 +411,12 @@ export class DatabaseService {
           password: hash,
           fullName: 'Ethiopian Premium Coffee Exporters PLC',
           role: 'EXPORTER',
-          organization: 'Ethiopian Premium Coffee Exporters PLC',
+          organization: 'Exporters',
           exporterId: 'EXP2026001',
           ectaLicense: 'ECTA-LIC-2026-001',
           permissions: JSON.stringify([
-            'contract.create', 'contract.view', 'shipment.view', 'shipment.create',
-            'payment.view', 'document.upload', 'document.view', 'report.generate',
+            'contracts:create', 'contracts:view-own', 'shipments:view-own', 'shipments:create-own',
+            'payments:view-own', 'documents:upload-own', 'documents:view-own',
           ]),
         },
         {
@@ -416,12 +425,12 @@ export class DatabaseService {
           password: hash,
           fullName: 'Test Coffee Exporters Ltd',
           role: 'EXPORTER',
-          organization: 'Test Coffee Exporters Ltd',
+          organization: 'Exporters',
           exporterId: 'EXP2026002',
           ectaLicense: 'ECTA-LIC-2026-002',
           permissions: JSON.stringify([
-            'contract.create', 'contract.view', 'shipment.view', 'shipment.create',
-            'payment.view', 'document.upload', 'document.view', 'report.generate',
+            'contracts:create', 'contracts:view-own', 'shipments:view-own', 'shipments:create-own',
+            'payments:view-own', 'documents:upload-own', 'documents:view-own',
           ]),
         },
       ];

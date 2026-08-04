@@ -198,43 +198,16 @@ export const authMiddleware = (
     const rawOrg = decoded.organization || decoded.org || '';
     const role = decoded.role || 'EXPORTER';
 
-    const normalizeOrg = (org: string): string => {
-      const normalized = org.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      switch (normalized) {
-        case 'NBE':
-        case 'NBEMSP':
-        case 'NATIONALBANKOFETHIOPIA':
-          return 'NBEMSP';
-        case 'ECTA':
-        case 'ECTAMSP':
-        case 'ETHIOPIANCOFFEEANDTEAAUTHORITY':
-          return 'ECTAMSP';
-        case 'ECX':
-        case 'ECXMSP':
-          return 'ECXMSP';
-        case 'BANKS':
-        case 'BANKSMSP':
-        case 'COMMERCIALBANKOFETHIOPIA':
-          return 'BanksMSP';
-        case 'CUSTOMS':
-        case 'CUSTOMSMSP':
-          return 'CustomsMSP';
-        case 'SHIPPING':
-        case 'SHIPPINGMSP':
-          return 'ShippingMSP';
-        default:
-          return org;
-      }
-    };
-
     // Get role-based permissions
     const roleConfig = ROLE_PERMISSIONS[role as keyof typeof ROLE_PERMISSIONS] || ROLE_PERMISSIONS.EXPORTER;
     const permissions = decoded.permissions || roleConfig.permissions;
 
+    // Use organization as-is from JWT - no normalization needed
+    // The JWT already contains the correct organization value from the database
     req.user = {
       sub: decoded.sub,
-      org: normalizeOrg(rawOrg),
-      organization: normalizeOrg(rawOrg), // Add this for compatibility
+      org: rawOrg,
+      organization: rawOrg,
       role: role,
       permissions: permissions,
       userId: decoded.userId || decoded.sub,

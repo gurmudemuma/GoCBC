@@ -39,30 +39,10 @@ print_warning() {
 
 print_header "Stopping CECBS System"
 
-# Stop Node.js processes
-print_step "Stopping Node.js processes..."
-if [ -f /tmp/cecbs-api.pid ]; then
-    api_pid=$(cat /tmp/cecbs-api.pid)
-    if kill -0 "$api_pid" 2>/dev/null; then
-        kill "$api_pid" 2>/dev/null || true
-        print_success "Stopped API (PID: $api_pid)"
-    fi
-    rm /tmp/cecbs-api.pid
-fi
-
-if [ -f /tmp/cecbs-ui.pid ]; then
-    ui_pid=$(cat /tmp/cecbs-ui.pid)
-    if kill -0 "$ui_pid" 2>/dev/null; then
-        kill "$ui_pid" 2>/dev/null || true
-        print_success "Stopped UI (PID: $ui_pid)"
-    fi
-    rm /tmp/cecbs-ui.pid
-fi
-
-# Fallback: kill any remaining node processes
-pkill -f "node.*api" 2>/dev/null || true
-pkill -f "node.*next" 2>/dev/null || true
-print_success "All Node.js processes stopped"
+# Stop Node.js processes and free ports
+print_step "Stopping Node.js processes and freeing ports..."
+bash kill-ports.sh
+print_success "All Node.js processes stopped and ports freed"
 
 # Stop Docker containers
 print_step "Stopping Docker containers..."

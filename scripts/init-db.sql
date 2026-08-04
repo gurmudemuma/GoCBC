@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS users (
     exporter_id VARCHAR(50),
     ecta_license VARCHAR(100),
     phone VARCHAR(50),
+    bank_name VARCHAR(255),
+    bank_account_number VARCHAR(100),
+    bank_branch VARCHAR(255),
+    bank_branch_code VARCHAR(50),
     permissions TEXT,
     status VARCHAR(50) DEFAULT 'active',
     last_login TIMESTAMP,
@@ -171,13 +175,14 @@ CREATE INDEX idx_exporter_applications_email ON exporter_applications(email);
 CREATE INDEX idx_audit_trail_entity ON audit_trail(entity_type, entity_id);
 
 -- Insert default admin user (password: admin123)
-INSERT INTO users (username, password_hash, email, organization, role) 
-VALUES ('admin', '$2a$10$rKZqYqYqYqYqYqYqYqYqYuO7K7K7K7K7K7K7K7K7K7K7K7K7K7K7K', 'admin@cecbs.et', 'ECTA', 'admin')
-ON CONFLICT (username) DO NOTHING;
+-- Note: The password hash below needs to be generated with: bcrypt.hash('admin123', 10)
+INSERT INTO users (username, password_hash, email, organization, role, full_name, status) 
+VALUES ('admin', '$2a$10$K7K7K7K7K7K7K7K7K7K7K.O7K7K7K7K7K7K7K7K7K7K7K7K7K7K7K', 'admin@cecbs.et', 'Admin', 'ADMIN', 'System Administrator', 'active')
+ON CONFLICT (username) DO UPDATE SET organization = 'Admin', role = 'ADMIN';
 
 -- Insert test exporter user (password: password123)
-INSERT INTO users (username, password_hash, email, organization, role) 
-VALUES ('exporter1', '$2a$10$rKZqYqYqYqYqYqYqYqYqYuO7K7K7K7K7K7K7K7K7K7K7K7K7K7K7K', 'exporter1@cecbs.et', 'Exporters', 'exporter')
+INSERT INTO users (username, password_hash, email, organization, role, full_name, status) 
+VALUES ('exporter1', '$2a$10$rKZqYqYqYqYqYqYqYqYqYuO7K7K7K7K7K7K7K7K7K7K7K7K7K7K7K', 'exporter1@cecbs.et', 'Exporters', 'EXPORTER', 'Test Exporter', 'active')
 ON CONFLICT (username) DO NOTHING;
 
 COMMIT;

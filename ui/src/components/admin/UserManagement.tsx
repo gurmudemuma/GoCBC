@@ -162,7 +162,7 @@ const UserManagement: React.FC = () => {
             : (user.permissions || [])
         }));
         setUsers(parsedUsers);
-        setTotalUsers(response.data.pagination.total);
+        setTotalUsers(parseInt(response.data.pagination.total) || 0);
         
         console.log('Loaded users:', parsedUsers.length, 'Total:', response.data.pagination.total);
         console.log('User IDs:', parsedUsers.map((u: any) => ({ id: u.id, username: u.username })));
@@ -183,16 +183,30 @@ const UserManagement: React.FC = () => {
     setSnackbar({ ...snackbar, open: false });
   };
 
-  // DataGrid columns
+  // Professional DataGrid columns with enhanced styling
   const columns: GridColDef[] = [
     {
       field: 'username',
       headerName: 'Username',
-      width: 150,
+      width: 160,
+      headerClassName: 'professional-header',
       renderCell: (params) => (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Person fontSize="small" color="action" />
-          <Typography variant="body2" fontWeight="bold">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box
+            sx={{
+              width: 32,
+              height: 32,
+              borderRadius: '8px',
+              bgcolor: 'primary.main',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+            }}
+          >
+            <Person fontSize="small" />
+          </Box>
+          <Typography variant="body2" fontWeight={600} sx={{ color: 'text.primary' }}>
             {params.value}
           </Typography>
         </Box>
@@ -202,36 +216,67 @@ const UserManagement: React.FC = () => {
       field: 'full_name',
       headerName: 'Full Name',
       width: 200,
+      headerClassName: 'professional-header',
+      renderCell: (params) => (
+        <Typography variant="body2" sx={{ color: 'text.primary', fontWeight: 500 }}>
+          {params.value}
+        </Typography>
+      ),
     },
     {
       field: 'email',
-      headerName: 'Email',
-      width: 200,
+      headerName: 'Email Address',
+      width: 220,
+      headerClassName: 'professional-header',
+      renderCell: (params) => (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Email fontSize="small" sx={{ color: 'text.secondary' }} />
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {params.value}
+          </Typography>
+        </Box>
+      ),
     },
     {
       field: 'role',
       headerName: 'Role',
-      width: 120,
-      renderCell: (params) => (
-        <Chip
-          label={params.value}
-          size="small"
-          color={
-            params.value === 'ADMIN' ? 'error' :
-            params.value === 'ECTA' ? 'primary' :
-            params.value === 'EXPORTER' ? 'success' : 'default'
-          }
-        />
-      ),
+      width: 140,
+      headerClassName: 'professional-header',
+      renderCell: (params) => {
+        const roleColors: Record<string, string> = {
+          ADMIN: '#d32f2f',
+          ECTA: '#1976d2',
+          ECX: '#388e3c',
+          NBE: '#f57c00',
+          BANKS: '#7b1fa2',
+          CUSTOMS: '#0097a7',
+          SHIPPING: '#5d4037',
+          EXPORTER: '#689f38',
+        };
+        return (
+          <Chip
+            label={params.value}
+            size="small"
+            sx={{
+              bgcolor: roleColors[params.value] || '#666',
+              color: 'white',
+              fontWeight: 600,
+              fontSize: '0.75rem',
+              borderRadius: '6px',
+            }}
+          />
+        );
+      },
     },
     {
       field: 'organization',
       headerName: 'Organization',
-      width: 150,
+      width: 160,
+      headerClassName: 'professional-header',
       renderCell: (params) => (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Business fontSize="small" color="action" />
-          <Typography variant="body2" noWrap>
+          <Business fontSize="small" sx={{ color: 'primary.main' }} />
+          <Typography variant="body2" fontWeight={500} noWrap sx={{ color: 'text.primary' }}>
             {params.value}
           </Typography>
         </Box>
@@ -240,49 +285,101 @@ const UserManagement: React.FC = () => {
     {
       field: 'status',
       headerName: 'Status',
-      width: 110,
-      renderCell: (params) => (
-        <Chip
-          label={params.value.toUpperCase()}
-          size="small"
-          color={params.value === 'active' ? 'success' : params.value === 'suspended' ? 'warning' : 'default'}
-        />
-      ),
+      width: 120,
+      headerClassName: 'professional-header',
+      renderCell: (params) => {
+        const isActive = params.value === 'active';
+        return (
+          <Chip
+            icon={isActive ? <CheckCircle sx={{ fontSize: 16 }} /> : <Block sx={{ fontSize: 16 }} />}
+            label={params.value.charAt(0).toUpperCase() + params.value.slice(1)}
+            size="small"
+            sx={{
+              bgcolor: isActive ? '#e8f5e9' : '#fff3e0',
+              color: isActive ? '#2e7d32' : '#f57c00',
+              fontWeight: 600,
+              fontSize: '0.75rem',
+              borderRadius: '6px',
+              '& .MuiChip-icon': {
+                color: isActive ? '#2e7d32' : '#f57c00',
+              },
+            }}
+          />
+        );
+      },
     },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 250,
+      width: 280,
       sortable: false,
+      headerClassName: 'professional-header',
+      headerAlign: 'center',
+      align: 'center',
       renderCell: (params) => (
-        <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Tooltip title="View Details">
-            <IconButton size="small" color="primary" onClick={() => handleDetailsClick(params.row)}>
-              <Visibility fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Edit User">
-            <IconButton size="small" color="info" onClick={() => handleEditClick(params.row)}>
-              <Edit fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Reset Password">
-            <IconButton size="small" color="secondary" onClick={() => handleResetPasswordClick(params.row)}>
-              <Lock fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={params.row.status === 'active' ? 'Suspend User' : 'Activate User'}>
+        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+          <Tooltip title="View Details" arrow>
             <IconButton 
               size="small" 
-              color={params.row.status === 'active' ? 'warning' : 'success'}
-              onClick={() => handleChangeStatus(params.row.id, params.row.status === 'active' ? 'suspended' : 'active')}
+              onClick={() => handleDetailsClick(params.row)}
+              sx={{
+                bgcolor: 'primary.50',
+                '&:hover': { bgcolor: 'primary.100' },
+              }}
             >
-              {params.row.status === 'active' ? <Block fontSize="small" /> : <CheckCircle fontSize="small" />}
+              <Visibility fontSize="small" color="primary" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Delete User">
-            <IconButton size="small" color="error" onClick={() => handleDeleteClick(params.row)}>
-              <Delete fontSize="small" />
+          <Tooltip title="Edit User" arrow>
+            <IconButton 
+              size="small" 
+              onClick={() => handleEditClick(params.row)}
+              sx={{
+                bgcolor: 'info.50',
+                '&:hover': { bgcolor: 'info.100' },
+              }}
+            >
+              <Edit fontSize="small" color="info" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Reset Password" arrow>
+            <IconButton 
+              size="small" 
+              onClick={() => handleResetPasswordClick(params.row)}
+              sx={{
+                bgcolor: 'secondary.50',
+                '&:hover': { bgcolor: 'secondary.100' },
+              }}
+            >
+              <Lock fontSize="small" color="secondary" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={params.row.status === 'active' ? 'Suspend User' : 'Activate User'} arrow>
+            <IconButton 
+              size="small" 
+              onClick={() => handleChangeStatus(params.row.id, params.row.status === 'active' ? 'suspended' : 'active')}
+              sx={{
+                bgcolor: params.row.status === 'active' ? 'warning.50' : 'success.50',
+                '&:hover': { bgcolor: params.row.status === 'active' ? 'warning.100' : 'success.100' },
+              }}
+            >
+              {params.row.status === 'active' ? (
+                <Block fontSize="small" color="warning" />
+              ) : (
+                <CheckCircle fontSize="small" color="success" />
+              )}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete User" arrow>
+            <IconButton 
+              size="small" 
+              onClick={() => handleDeleteClick(params.row)}
+              sx={{
+                bgcolor: 'error.50',
+                '&:hover': { bgcolor: 'error.100' },
+              }}
+            >
+              <Delete fontSize="small" color="error" />
             </IconButton>
           </Tooltip>
         </Box>
@@ -290,12 +387,22 @@ const UserManagement: React.FC = () => {
     },
   ];
 
-  // Filter users by search term
-  const filteredUsers = users.filter(user =>
-    user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Enhanced filter logic - search term + role + status
+  const filteredUsers = users.filter(user => {
+    // Search term filter
+    const matchesSearch = searchTerm === '' || 
+      user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchTerm.toLowerCase());
+
+    // Role filter
+    const matchesRole = roleFilter === 'all' || user.role === roleFilter;
+
+    // Status filter
+    const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
+
+    return matchesSearch && matchesRole && matchesStatus;
+  });
 
   // Handler functions
   const handleCreateUser = async (data: UserFormData) => {
@@ -633,9 +740,9 @@ const UserManagement: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Users DataGrid */}
-      <Card>
-        <CardContent>
+      {/* Professional Users DataGrid */}
+      <Card sx={{ boxShadow: 3, borderRadius: 2 }}>
+        <CardContent sx={{ p: 0 }}>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
               <CircularProgress />
@@ -651,13 +758,72 @@ const UserManagement: React.FC = () => {
                 setPageSize(model.pageSize);
               }}
               pageSizeOptions={[10, 25, 50, 100]}
-              rowCount={totalUsers}
-              paginationMode="server"
+              rowCount={filteredUsers.length}
+              paginationMode="client"
               autoHeight
               disableRowSelectionOnClick
+              getRowHeight={() => 60}
               sx={{
-                '& .MuiDataGrid-row:hover': {
-                  bgcolor: 'action.hover',
+                border: 'none',
+                '& .MuiDataGrid-root': {
+                  border: 'none',
+                },
+                '& .professional-header': {
+                  backgroundColor: '#f8f9fa',
+                  color: '#1a1a1a',
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                },
+                '& .MuiDataGrid-columnHeaders': {
+                  backgroundColor: '#f8f9fa',
+                  borderBottom: '2px solid #e0e0e0',
+                  borderRadius: 0,
+                },
+                '& .MuiDataGrid-columnHeader': {
+                  '&:focus, &:focus-within': {
+                    outline: 'none',
+                  },
+                },
+                '& .MuiDataGrid-columnHeaderTitle': {
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  color: '#1a1a1a',
+                },
+                '& .MuiDataGrid-row': {
+                  borderBottom: '1px solid #f0f0f0',
+                  '&:hover': {
+                    backgroundColor: '#f8f9fa',
+                    transition: 'all 0.2s ease',
+                  },
+                  '&.Mui-selected': {
+                    backgroundColor: '#e3f2fd !important',
+                    '&:hover': {
+                      backgroundColor: '#bbdefb !important',
+                    },
+                  },
+                },
+                '& .MuiDataGrid-cell': {
+                  borderBottom: 'none',
+                  padding: '12px 16px',
+                  '&:focus, &:focus-within': {
+                    outline: 'none',
+                  },
+                },
+                '& .MuiDataGrid-footerContainer': {
+                  borderTop: '2px solid #e0e0e0',
+                  backgroundColor: '#fafafa',
+                  minHeight: 56,
+                },
+                '& .MuiTablePagination-root': {
+                  color: '#666',
+                },
+                '& .MuiDataGrid-virtualScroller': {
+                  minHeight: '400px',
+                },
+                '& .MuiDataGrid-overlayWrapper': {
+                  minHeight: '400px',
                 },
               }}
             />

@@ -338,6 +338,169 @@ const AdminPortal: React.FC = () => {
     }
   };
 
+  // Dynamic KPI data based on active tab
+  const getKPICards = () => {
+    switch (tabValue) {
+      case 0: // User Management
+        return [
+          {
+            title: 'Total Users',
+            value: stats.totalUsers,
+            icon: <Group color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: `${stats.activeUsers} active`,
+          },
+          {
+            title: 'Active Users',
+            value: stats.activeUsers,
+            icon: <CheckCircle color="success" />,
+            bgcolor: '#e8f5e9',
+            subtitle: `${Math.round((stats.activeUsers / stats.totalUsers) * 100 || 0)}% active rate`,
+          },
+          {
+            title: 'Exporters',
+            value: stats.totalExporters,
+            icon: <Coffee color="warning" />,
+            bgcolor: '#fff3e0',
+            subtitle: 'Licensed exporters',
+          },
+          {
+            title: 'Organizations',
+            value: stats.totalOrganizations,
+            icon: <Business color="secondary" />,
+            bgcolor: '#f3e5f5',
+            subtitle: 'Consortium members',
+          },
+        ];
+      case 1: // System Overview
+        return [
+          {
+            title: 'Block Height',
+            value: blockchainHealth.blockHeight.toLocaleString(),
+            icon: <Storage color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: 'Current block',
+          },
+          {
+            title: 'TPS',
+            value: blockchainHealth.transactionsPerSecond,
+            icon: <Speed color="success" />,
+            bgcolor: '#e8f5e9',
+            subtitle: 'Transactions/sec',
+          },
+          {
+            title: 'Peers',
+            value: blockchainHealth.peers,
+            icon: <CloudQueue color="info" />,
+            bgcolor: '#e1f5fe',
+            subtitle: 'Network nodes',
+          },
+          {
+            title: 'Status',
+            value: blockchainHealth.status.toUpperCase(),
+            icon: blockchainHealth.status === 'healthy' ? <CheckCircle color="success" /> : <Warning color="warning" />,
+            bgcolor: blockchainHealth.status === 'healthy' ? '#e8f5e9' : '#fff3e0',
+            subtitle: 'Network health',
+          },
+        ];
+      case 2: // Analytics
+        return [
+          {
+            title: 'Transactions',
+            value: stats.totalTransactions.toLocaleString(),
+            icon: <DataUsage color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: 'On blockchain',
+          },
+          {
+            title: 'Contracts',
+            value: stats.totalContracts,
+            icon: <Description color="success" />,
+            bgcolor: '#e8f5e9',
+            subtitle: 'Total contracts',
+          },
+          {
+            title: 'Shipments',
+            value: stats.totalShipments,
+            icon: <LocalShipping color="warning" />,
+            bgcolor: '#fff3e0',
+            subtitle: 'Total shipments',
+          },
+          {
+            title: 'Avg Block Time',
+            value: `${blockchainHealth.averageBlockTime}s`,
+            icon: <Timeline color="secondary" />,
+            bgcolor: '#f3e5f5',
+            subtitle: 'Block creation',
+          },
+        ];
+      case 3: // Settings
+        return [
+          {
+            title: 'Identities',
+            value: stats.enrolledIdentities,
+            icon: <VerifiedUser color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: 'Blockchain IDs',
+          },
+          {
+            title: 'Expiring Soon',
+            value: stats.expiringCertificates,
+            icon: <Warning color="error" />,
+            bgcolor: stats.expiringCertificates > 0 ? '#ffebee' : '#e8f5e9',
+            subtitle: 'Certificates',
+          },
+          {
+            title: 'Chaincodes',
+            value: blockchainHealth.chaincodes,
+            icon: <Gavel color="info" />,
+            bgcolor: '#e1f5fe',
+            subtitle: 'Deployed',
+          },
+          {
+            title: 'Orderers',
+            value: blockchainHealth.orderers,
+            icon: <AccountBalance color="secondary" />,
+            bgcolor: '#f3e5f5',
+            subtitle: 'Consensus nodes',
+          },
+        ];
+      default:
+        return [
+          {
+            title: 'Total Users',
+            value: stats.totalUsers,
+            icon: <Group color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: `${stats.activeUsers} active`,
+          },
+          {
+            title: 'Organizations',
+            value: stats.totalOrganizations,
+            icon: <Business color="success" />,
+            bgcolor: '#e8f5e9',
+            subtitle: 'Consortium members',
+          },
+          {
+            title: 'Blockchain IDs',
+            value: stats.enrolledIdentities,
+            icon: <VerifiedUser color="warning" />,
+            bgcolor: '#fff3e0',
+            subtitle: 'Enrolled identities',
+          },
+          {
+            title: 'Certificates',
+            value: stats.expiringCertificates,
+            icon: <Assessment color={stats.expiringCertificates > 0 ? 'error' : 'action'} />,
+            bgcolor: stats.expiringCertificates > 0 ? '#ffebee' : '#f5f5f5',
+            subtitle: 'Expiring soon',
+          },
+        ];
+    }
+  };
+
+  const kpiCards = getKPICards();
+
   return (
     <Box
       sx={{
@@ -373,71 +536,28 @@ const AdminPortal: React.FC = () => {
         )}
       </Box>
 
-      {/* System Statistics */}
+      {/* Dynamic KPI Cards - Change based on active tab */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: '#e3f2fd' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Group color="primary" />
-                <Typography variant="h6" fontWeight={600}>
-                  {stats.totalUsers}
+        {kpiCards.map((card, index) => (
+          <Grid item xs={12} sm={6} md={3} key={index}>
+            <Card sx={{ bgcolor: card.bgcolor, transition: 'all 0.3s ease', '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 } }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  {card.icon}
+                  <Typography variant="h6" fontWeight={600}>
+                    {card.value}
+                  </Typography>
+                </Box>
+                <Typography variant="body2" fontWeight={600} color="text.primary" gutterBottom>
+                  {card.title}
                 </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                Total Users
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: '#e8f5e9' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Business color="success" />
-                <Typography variant="h6" fontWeight={600}>
-                  {stats.totalOrganizations}
+                <Typography variant="caption" color="text.secondary">
+                  {card.subtitle}
                 </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                Organizations
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: '#fff3e0' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <VerifiedUser color="warning" />
-                <Typography variant="h6" fontWeight={600}>
-                  {stats.enrolledIdentities}
-                </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                Blockchain Identities
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: stats.expiringCertificates > 0 ? '#ffebee' : '#f5f5f5' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Assessment color={stats.expiringCertificates > 0 ? 'error' : 'action'} />
-                <Typography variant="h6" fontWeight={600}>
-                  {stats.expiringCertificates}
-                </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                Expiring Certificates
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
 
       {/* Alert for Admin */}

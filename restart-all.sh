@@ -1,40 +1,47 @@
 #!/bin/bash
-# Restart CECBS system
-# Usage: ./restart-all.sh [options]
-# Options: --keep-data, --skip-build, --dev-mode
+# Restart All CECBS Services (API + UI)
 
-# Parse arguments
-KEEP_DATA_FLAG=""
-START_FLAGS=""
+set -e
 
-for arg in "$@"; do
-    case $arg in
-        --keep-data)
-            KEEP_DATA_FLAG="--keep-data"
-            ;;
-        --skip-build)
-            START_FLAGS="$START_FLAGS --skip-build"
-            ;;
-        --dev-mode)
-            START_FLAGS="$START_FLAGS --dev-mode"
-            ;;
-    esac
-done
+echo "=================================================="
+echo "  Restarting All CECBS Services"
+echo "=================================================="
 
+# Step 1: Kill all processes and free ports
 echo ""
-echo -e "\033[36m🔄 Restarting CECBS System...\033[0m"
+echo "Step 1: Killing existing processes..."
+bash kill-ports.sh
+
+# Step 2: Wait for ports to be fully released
 echo ""
+echo "Step 2: Waiting for ports to be released..."
+sleep 3
 
-# Stop everything
-if [ -n "$KEEP_DATA_FLAG" ]; then
-    ./stop-all.sh --keep-data
-else
-    ./stop-all.sh
-fi
-
+# Step 3: Restart API
 echo ""
-echo -e "\033[33mWaiting 5 seconds before restart...\033[0m"
-sleep 5
+echo "Step 3: Starting API..."
+bash start-api.sh
 
-# Start everything
-./start-all.sh $START_FLAGS
+# Step 4: Restart UI
+echo ""
+echo "Step 4: Starting UI..."
+bash start-ui.sh
+
+# Step 5: Show status
+echo ""
+echo "=================================================="
+echo "  ✅ All Services Restarted"
+echo "=================================================="
+echo ""
+echo "📋 Check logs:"
+echo "   API: bash logs-api.sh"
+echo "   UI:  bash logs-ui.sh"
+echo ""
+echo "🔗 Access URLs:"
+echo "   UI:  http://localhost:3000"
+echo "   API: http://localhost:3001"
+echo ""
+echo "🛑 To stop services:"
+echo "   bash stop-api.sh"
+echo "   bash stop-ui.sh"
+echo ""

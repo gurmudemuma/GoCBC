@@ -578,92 +578,45 @@ show_container_status() {
 start_api() {
     print_header "Starting Backend API"
     
-    # Stop any existing processes
-    print_step "Stopping any existing API processes..."
-    pkill -f "node.*api" 2>/dev/null || true
-    sleep 2
+    cd "$PROJECT_ROOT"
     
-    cd "$API_DIR"
-    
-    # Ensure .env exists
-    if [ ! -f ".env" ]; then
-        print_warning ".env file not found, copying from .env.example"
-        cp .env.example .env
-    fi
-    
-    if [ "$DEV_MODE" = true ]; then
-        print_step "Starting API in development mode (with hot-reload)..."
-        print_info "API will run in this terminal. Press Ctrl+C to stop."
-        sleep 2
-        npm run dev
-    else
-        print_step "Starting API in production mode..."
-        npm start > /tmp/cecbs-api.log 2>&1 &
-        local api_pid=$!
-        echo $api_pid > /tmp/cecbs-api.pid
+    # Use the separate start-api.sh script
+    if [ -f "start-api.sh" ]; then
+        bash start-api.sh
         
-        print_info "API starting (PID: $api_pid)"
-        
-        # Wait for API
-        sleep 5
+        # Wait for API to be ready
+        sleep 3
         if wait_for_port $API_PORT "API" 30; then
             print_success "API server is ready on port $API_PORT"
-            print_info "Logs: tail -f /tmp/cecbs-api.log"
         else
-            print_warning "API not responding yet, but process is running. Check logs if issues persist."
+            print_warning "API not responding yet. Check logs: bash logs-api.sh"
         fi
+    else
+        print_error "start-api.sh not found!"
+        exit 1
     fi
-    
-    cd "$PROJECT_ROOT"
 }
 
 start_ui() {
     print_header "Starting Frontend UI"
     
-    # Stop any existing processes
-    print_step "Stopping any existing UI processes..."
-    pkill -f "node.*next" 2>/dev/null || true
-    sleep 2
+    cd "$PROJECT_ROOT"
     
-    cd "$UI_DIR"
-    
-    # Ensure .env.local exists
-    if [ ! -f ".env.local" ]; then
-        print_warning ".env.local file not found, copying from .env.example"
-        cp .env.example .env.local
-    fi
-    
-    if [ "$DEV_MODE" = true ]; then
-        print_step "Starting UI in development mode (with hot-reload)..."
-        print_info "UI will run in this terminal. Press Ctrl+C to stop."
-        sleep 2
-        npm run dev
-    else
-        print_step "Starting UI in production mode..."
+    # Use the separate start-ui.sh script
+    if [ -f "start-ui.sh" ]; then
+        bash start-ui.sh
         
-        # Build first if not skipping
-        if [ "$SKIP_BUILD" = false ]; then
-            print_step "Building Next.js production bundle..."
-            npm run build
-        fi
-        
-        npm start > /tmp/cecbs-ui.log 2>&1 &
-        local ui_pid=$!
-        echo $ui_pid > /tmp/cecbs-ui.pid
-        
-        print_info "UI starting (PID: $ui_pid)"
-        
-        # Wait for UI
-        sleep 5
+        # Wait for UI to be ready
+        sleep 3
         if wait_for_port $UI_PORT "UI" 30; then
             print_success "UI server is ready on port $UI_PORT"
-            print_info "Logs: tail -f /tmp/cecbs-ui.log"
         else
-            print_warning "UI not responding yet, but process is running. Check logs if issues persist."
+            print_warning "UI not responding yet. Check logs: bash logs-ui.sh"
         fi
+    else
+        print_error "start-ui.sh not found!"
+        exit 1
     fi
-    
-    cd "$PROJECT_ROOT"
 }
 
 # ============================================================================

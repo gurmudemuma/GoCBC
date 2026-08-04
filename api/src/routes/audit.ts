@@ -3,11 +3,57 @@
 
 import express, { Request, Response } from 'express';
 import FabricService from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+
+/**
+ * GET /api/audit/recent-activities
+ * Get recent audit activities across the system
+ */
+router.get('/recent-activities', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 10;
+    const requestingUser = (req as any).user;
+
+    // Get recent activities from PostgreSQL audit_log
+    const activities = await DatabaseService.getInstance().all(
+      `SELECT 
+        id, user_id, action, entity_type, entity_id, changes, ip_address, created_at
+       FROM audit_log 
+       ORDER BY created_at DESC 
+       LIMIT ?`,
+      [limit]
+    );
+
+    // Transform to expected format
+    const formattedActivities = activities.map((activity: any) => ({
+      id: activity.id,
+      userId: activity.user_id,
+      action: activity.action,
+      entityType: activity.entity_type,
+      entityId: activity.entity_id,
+      changes: typeof activity.changes === 'string' ? JSON.parse(activity.changes) : activity.changes,
+      ipAddress: activity.ip_address,
+      timestamp: activity.created_at,
+    }));
+
+    return res.json({
+      success: true,
+      data: formattedActivities,
+      total: formattedActivities.length,
+    });
+  } catch (error) {
+    logger.error('Error fetching recent activities:', error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Internal server error',
+    });
+  }
+});
 
 /**
  * GET /api/audit/log/:logId
