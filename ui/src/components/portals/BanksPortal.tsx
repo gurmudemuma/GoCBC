@@ -82,6 +82,7 @@ import { useNotification } from '@/hooks/useNotification';
 import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
 import { PaymentMethodTab } from './PaymentMethodTab';
 import UserManagement from '@/components/admin/UserManagement';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface SalesContract {
   contractId: string;
@@ -152,6 +153,7 @@ const CBE_COLORS = {
 };
 
 const BanksPortal: React.FC = () => {
+  const { user } = useAuth();
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('LC');
@@ -318,6 +320,28 @@ const BanksPortal: React.FC = () => {
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
+  // Get current user role from auth context (already imported at top)
+  const userRole = user?.role || '';
+
+  // Role-based tab filtering
+  const getRoleBasedTabs = () => {
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    const allTabs = [
+      { index: 0, label: 'Payment Methods', icon: <Payment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      { index: 1, label: 'Forex Allocations', icon: <CurrencyExchange />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
+      { index: 2, label: 'SWIFT Messages', icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
+      { index: 3, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
+      { index: 4, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
+      { index: 5, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
+    ];
+    
+    if (isSuperAdmin) return allTabs;
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
 
   // Payment Method Configuration
   const PAYMENT_METHODS = [
@@ -2123,36 +2147,14 @@ const BanksPortal: React.FC = () => {
               },
             }}
           >
-            <Tab 
-              label="Payment Methods" 
-              icon={<Payment />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              label="Forex Allocations" 
-              icon={<CurrencyExchange />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              label="SWIFT Messages" 
-              icon={<AccountBalance />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              label={`Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`}
-              icon={<Description />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              label={`Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`}
-              icon={<AttachMoney />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              label="User Management"
-              icon={<Person />} 
-              iconPosition="start" 
-            />
+            {visibleTabs.map(tab => (
+              <Tab 
+                key={tab.index}
+                label={tab.label}
+                icon={tab.icon} 
+                iconPosition="start" 
+              />
+            ))}
           </Tabs>
         </Paper>
 

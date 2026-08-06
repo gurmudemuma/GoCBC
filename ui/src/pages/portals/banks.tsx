@@ -8,7 +8,15 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 
 export default function BanksPortalPage() {
   return (
-    <ProtectedRoute allowedRoles={['BANKS', 'ADMIN']}>
+    <ProtectedRoute allowedRoles={[
+      'BANKS', 
+      'ADMIN',
+      'Bank Officer',
+      'Branch Manager',
+      'Trade Finance Officer',
+      'Credit Analyst',
+      'LC Officer'
+    ]}>
       <Head>
         <title>Banks Portal - CECBS</title>
         <meta name="description" content="Commercial Banks Export Permit Portal" />

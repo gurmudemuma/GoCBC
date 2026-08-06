@@ -12,6 +12,7 @@ export default function Document() {
         <meta name="theme-color" content="#2e7d32" />
       </Head>
       <body>
+        <div id="menu-root"></div>
         <Main />
         <NextScript />
       </body>

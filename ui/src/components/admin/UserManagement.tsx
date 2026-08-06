@@ -105,6 +105,63 @@ interface UserFormData {
 const UserManagement: React.FC = () => {
   const { user: currentUser } = useAuth();
   
+  // Memoize role options for FILTER dropdown (table filtering) - based on current user
+  const roleFilterOptions = React.useMemo(() => {
+    if (currentUser?.role === 'ADMIN') {
+      // Super Admin can filter by ALL roles (organizations + specific job titles)
+      return [
+        { value: 'ADMIN', label: 'Super Administrator' },
+        { value: 'ECTA', label: 'ECTA Portal Administrator' },
+        { value: 'ECX', label: 'ECX Portal Administrator' },
+        { value: 'NBE', label: 'NBE Portal Administrator' },
+        { value: 'BANKS', label: 'Banks Portal Administrator' },
+        { value: 'CUSTOMS', label: 'Customs Portal Administrator' },
+        { value: 'SHIPPING', label: 'Shipping Portal Administrator' },
+        { value: 'EXPORTER', label: 'Exporter' },
+        // ECTA roles
+        { value: 'Quality Inspector', label: 'Quality Inspector (ECTA)' },
+        { value: 'Lab Analyst', label: 'Lab Analyst (ECTA)' },
+        { value: 'Phytosanitary Officer', label: 'Phytosanitary Officer (ECTA)' },
+        { value: 'License Officer', label: 'License Officer (ECTA)' },
+        { value: 'Permit Officer', label: 'Permit Officer (ECTA)' },
+        { value: 'ECTA Officer', label: 'ECTA Officer' },
+        // ECX roles
+        { value: 'Grading Officer', label: 'Grading Officer (ECX)' },
+        { value: 'Warehouse Officer', label: 'Warehouse Officer (ECX)' },
+        { value: 'Registration Officer', label: 'Registration Officer (ECX)' },
+        { value: 'Release Officer', label: 'Release Officer (ECX)' },
+        { value: 'ECX Officer', label: 'ECX Officer' },
+        // NBE roles
+        { value: 'NBE Officer', label: 'NBE Officer' },
+        { value: 'Forex Officer', label: 'Forex Officer (NBE)' },
+        { value: 'Screening Officer', label: 'Screening Officer (NBE)' },
+        { value: 'Compliance Officer', label: 'Compliance Officer (NBE)' },
+        { value: 'Exchange Rate Officer', label: 'Exchange Rate Officer (NBE)' },
+        { value: 'Settlement Officer', label: 'Settlement Officer (NBE)' },
+        // Banks roles
+        { value: 'Bank Officer', label: 'Bank Officer' },
+        { value: 'Branch Manager', label: 'Branch Manager (Banks)' },
+        { value: 'Trade Finance Officer', label: 'Trade Finance Officer (Banks)' },
+        { value: 'Credit Analyst', label: 'Credit Analyst (Banks)' },
+        { value: 'LC Officer', label: 'LC Officer (Banks)' },
+        // Customs roles
+        { value: 'Customs Officer', label: 'Customs Officer' },
+        { value: 'Inspection Officer', label: 'Inspection Officer (Customs)' },
+        { value: 'Clearance Officer', label: 'Clearance Officer (Customs)' },
+        { value: 'Risk Analyst', label: 'Risk Analyst (Customs)' },
+        { value: 'ASYCUDA Officer', label: 'ASYCUDA Officer (Customs)' },
+        { value: 'Duty Assessment Officer', label: 'Duty Assessment Officer (Customs)' },
+        // Shipping roles
+        { value: 'Logistics Officer', label: 'Logistics Officer (Shipping)' },
+        { value: 'Documentation Officer', label: 'Documentation Officer (Shipping)' },
+        { value: 'Operations Manager', label: 'Operations Manager (Shipping)' },
+        { value: 'Shipping Coordinator', label: 'Shipping Coordinator (Shipping)' },
+        { value: 'Freight Forwarder', label: 'Freight Forwarder (Shipping)' },
+      ];
+    }
+    return getRolesByOrganization(currentUser?.organization || '');
+  }, [currentUser?.role, currentUser?.organization]);
+  
   // State
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
@@ -135,7 +192,29 @@ const UserManagement: React.FC = () => {
   // Form
   const { control, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<UserFormData>();
   const watchRole = watch('role');
-
+  const watchOrganization = watch('organization');
+  
+  // Dynamic role options for CREATE dialog - based on selected organization in form
+  const createDialogRoleOptions = React.useMemo(() => {
+    // Super admin can see ALL roles from ALL organizations
+    if (currentUser?.role === 'ADMIN') {
+      const allRoles = ADMIN_CONFIG.allRoles;
+      console.log('🔵 Super Admin: Showing all roles from all organizations:', allRoles.length);
+      return allRoles;
+    }
+    
+    // Organization admins can only see roles from their organization
+    const selectedOrg = watchOrganization || currentUser?.organization || '';
+    
+    if (!selectedOrg) {
+      console.log('⚠️ No organization selected, returning empty role options');
+      return [];
+    }
+    
+    const roles = getRolesByOrganization(selectedOrg);
+    console.log('🔵 Role options for organization', selectedOrg, ':', roles);
+    return roles;
+  }, [watchOrganization, currentUser?.organization, currentUser?.role]);
   // Load users
   useEffect(() => {
     loadUsers();
@@ -316,74 +395,96 @@ const UserManagement: React.FC = () => {
       headerClassName: 'professional-header',
       headerAlign: 'center',
       align: 'center',
-      renderCell: (params) => (
-        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
-          <Tooltip title="View Details" arrow>
-            <IconButton 
-              size="small" 
-              onClick={() => handleDetailsClick(params.row)}
-              sx={{
-                bgcolor: 'primary.50',
-                '&:hover': { bgcolor: 'primary.100' },
-              }}
-            >
-              <Visibility fontSize="small" color="primary" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Edit User" arrow>
-            <IconButton 
-              size="small" 
-              onClick={() => handleEditClick(params.row)}
-              sx={{
-                bgcolor: 'info.50',
-                '&:hover': { bgcolor: 'info.100' },
-              }}
-            >
-              <Edit fontSize="small" color="info" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Reset Password" arrow>
-            <IconButton 
-              size="small" 
-              onClick={() => handleResetPasswordClick(params.row)}
-              sx={{
-                bgcolor: 'secondary.50',
-                '&:hover': { bgcolor: 'secondary.100' },
-              }}
-            >
-              <Lock fontSize="small" color="secondary" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={params.row.status === 'active' ? 'Suspend User' : 'Activate User'} arrow>
-            <IconButton 
-              size="small" 
-              onClick={() => handleChangeStatus(params.row.id, params.row.status === 'active' ? 'suspended' : 'active')}
-              sx={{
-                bgcolor: params.row.status === 'active' ? 'warning.50' : 'success.50',
-                '&:hover': { bgcolor: params.row.status === 'active' ? 'warning.100' : 'success.100' },
-              }}
-            >
-              {params.row.status === 'active' ? (
-                <Block fontSize="small" color="warning" />
-              ) : (
-                <CheckCircle fontSize="small" color="success" />
-              )}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Delete User" arrow>
-            <IconButton 
-              size="small" 
-              onClick={() => handleDeleteClick(params.row)}
-              sx={{
-                bgcolor: 'error.50',
-                '&:hover': { bgcolor: 'error.100' },
-              }}
-            >
-              <Delete fontSize="small" color="error" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ),
+      renderCell: (params) => {
+        const isSuperAdmin = currentUser?.role === 'ADMIN';
+        const isPortalAdmin = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(params.row.role);
+        const canModify = isSuperAdmin || !isPortalAdmin; // Only super admin can modify portal admins
+
+        return (
+          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+            <Tooltip title="View Details" arrow>
+              <IconButton 
+                size="small" 
+                onClick={() => handleDetailsClick(params.row)}
+                sx={{
+                  bgcolor: 'primary.50',
+                  '&:hover': { bgcolor: 'primary.100' },
+                }}
+              >
+                <Visibility fontSize="small" color="primary" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={canModify ? "Edit User" : "Only Super Admin can edit portal administrators"} arrow>
+              <span>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleEditClick(params.row)}
+                  disabled={!canModify}
+                  sx={{
+                    bgcolor: canModify ? 'info.50' : 'grey.200',
+                    '&:hover': { bgcolor: canModify ? 'info.100' : 'grey.200' },
+                    cursor: canModify ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  <Edit fontSize="small" color={canModify ? "info" : "disabled"} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={canModify ? "Reset Password" : "Only Super Admin can reset portal admin passwords"} arrow>
+              <span>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleResetPasswordClick(params.row)}
+                  disabled={!canModify}
+                  sx={{
+                    bgcolor: canModify ? 'secondary.50' : 'grey.200',
+                    '&:hover': { bgcolor: canModify ? 'secondary.100' : 'grey.200' },
+                    cursor: canModify ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  <Lock fontSize="small" color={canModify ? "secondary" : "disabled"} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={canModify ? (params.row.status === 'active' ? 'Suspend User' : 'Activate User') : "Only Super Admin can suspend/activate portal administrators"} arrow>
+              <span>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleChangeStatus(params.row.id, params.row.status === 'active' ? 'suspended' : 'active')}
+                  disabled={!canModify}
+                  sx={{
+                    bgcolor: canModify ? (params.row.status === 'active' ? 'warning.50' : 'success.50') : 'grey.200',
+                    '&:hover': { bgcolor: canModify ? (params.row.status === 'active' ? 'warning.100' : 'success.100') : 'grey.200' },
+                    cursor: canModify ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {params.row.status === 'active' ? (
+                    <Block fontSize="small" color={canModify ? "warning" : "disabled"} />
+                  ) : (
+                    <CheckCircle fontSize="small" color={canModify ? "success" : "disabled"} />
+                  )}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={canModify ? "Delete User" : "Only Super Admin can delete portal administrators"} arrow>
+              <span>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleDeleteClick(params.row)}
+                  disabled={!canModify}
+                  sx={{
+                    bgcolor: canModify ? 'error.50' : 'grey.200',
+                    '&:hover': { bgcolor: canModify ? 'error.100' : 'grey.200' },
+                    cursor: canModify ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  <Delete fontSize="small" color={canModify ? "error" : "disabled"} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        );
+      },
     },
   ];
 
@@ -414,6 +515,7 @@ const UserManagement: React.FC = () => {
       userId: currentUser?.id,
     });
     
+    setLoading(true);
     try {
       const payload = {
         username: data.username,
@@ -434,10 +536,10 @@ const UserManagement: React.FC = () => {
       console.log('✅ API Response:', response.data);
       
       if (response.data.success) {
-        showSnackbar('User created successfully', 'success');
+        showSnackbar(`✅ User "${data.username}" created successfully!`, 'success');
         setCreateDialogOpen(false);
         reset();
-        loadUsers();
+        await loadUsers(); // Reload users list
       }
     } catch (error: any) {
       console.error('❌ Error creating user:', error);
@@ -453,23 +555,32 @@ const UserManagement: React.FC = () => {
       }
       
       showSnackbar(`❌ ${errorMessage}`, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
   // Add onError handler for form validation failures
   const handleCreateUserError = (errors: any) => {
     console.log('❌ Form Validation Errors:', errors);
-    const firstError = Object.values(errors)[0] as any;
-    if (firstError?.message) {
-      showSnackbar(`Validation Error: ${firstError.message}`, 'error');
+    
+    // Collect all error messages
+    const errorMessages = Object.entries(errors).map(([field, error]: [string, any]) => {
+      const fieldName = field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      return `${fieldName}: ${error.message}`;
+    });
+    
+    if (errorMessages.length > 0) {
+      showSnackbar(`❌ Validation Errors:\n${errorMessages.join('\n')}`, 'error');
     } else {
-      showSnackbar('Please fill in all required fields', 'error');
+      showSnackbar('❌ Please fill in all required fields correctly', 'error');
     }
   };
 
   const handleUpdateUser = async (data: Partial<UserFormData>) => {
     if (!selectedUser) return;
 
+    setLoading(true);
     try {
       const payload = {
         email: data.email,
@@ -480,33 +591,38 @@ const UserManagement: React.FC = () => {
       const response = await api.put(`/users/${selectedUser.id}`, payload);
       
       if (response.data.success) {
-        showSnackbar('User updated successfully', 'success');
+        showSnackbar(`✅ User "${selectedUser.username}" updated successfully!`, 'success');
         setEditDialogOpen(false);
         setSelectedUser(null);
         reset();
-        loadUsers();
+        await loadUsers();
       }
     } catch (error: any) {
       const errorMessage = error.response?.data?.error?.message || 'Failed to update user';
-      showSnackbar(errorMessage, 'error');
+      showSnackbar(`❌ ${errorMessage}`, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleDeleteUser = async () => {
     if (!selectedUser) return;
 
+    setLoading(true);
     try {
       const response = await api.delete(`/users/${selectedUser.id}`);
       
       if (response.data.success) {
-        showSnackbar('User deleted successfully', 'success');
+        showSnackbar(`✅ User "${selectedUser.username}" deleted successfully!`, 'success');
         setDeleteDialogOpen(false);
         setSelectedUser(null);
-        loadUsers();
+        await loadUsers();
       }
     } catch (error: any) {
       const errorMessage = error.response?.data?.error?.message || 'Failed to delete user';
-      showSnackbar(errorMessage, 'error');
+      showSnackbar(`❌ ${errorMessage}`, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -688,29 +804,21 @@ const UserManagement: React.FC = () => {
                 <Select
                   value={roleFilter}
                   label="Role Filter"
-                  onChange={(e) => setRoleFilter(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    console.log('🔵 Role Filter onChange:', value);
+                    console.log('🔵 Event:', e);
+                    console.log('🔵 Current roleFilter before:', roleFilter);
+                    setRoleFilter(value);
+                    console.log('🔵 Set roleFilter to:', value);
+                  }}
                 >
                   <MenuItem value="all">All Roles</MenuItem>
-                  {currentUser?.role === 'ADMIN' ? (
-                    // Super admin filters by organization type
-                    <>
-                      <MenuItem value="ADMIN">Admin</MenuItem>
-                      <MenuItem value="ECTA">ECTA</MenuItem>
-                      <MenuItem value="ECX">ECX</MenuItem>
-                      <MenuItem value="NBE">NBE</MenuItem>
-                      <MenuItem value="BANKS">Banks</MenuItem>
-                      <MenuItem value="CUSTOMS">Customs</MenuItem>
-                      <MenuItem value="SHIPPING">Shipping</MenuItem>
-                      <MenuItem value="EXPORTER">Exporter</MenuItem>
-                    </>
-                  ) : (
-                    // Organization admins filter by specific job titles
-                    getRolesByOrganization(currentUser?.organization || '').map((role) => (
-                      <MenuItem key={role.value} value={role.value}>
-                        {role.label}
-                      </MenuItem>
-                    ))
-                  )}
+                  {roleFilterOptions.map((role) => (
+                    <MenuItem key={role.value} value={role.value}>
+                      {role.label}
+                    </MenuItem>
+                  ))}
                 </Select>
               </FormControl>
             </Grid>
@@ -733,7 +841,7 @@ const UserManagement: React.FC = () => {
             
             <Grid item xs={12} md={2}>
               <Typography variant="body2" color="text.secondary">
-                Total: <strong>{totalUsers}</strong> users
+                Showing: <strong>{filteredUsers.length}</strong> of <strong>{totalUsers}</strong> users
               </Typography>
             </Grid>
           </Grid>
@@ -834,15 +942,23 @@ const UserManagement: React.FC = () => {
       {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={10000}
+        autoHideDuration={6000}
         onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        sx={{ mt: 8 }}
       >
         <Alert 
           onClose={handleCloseSnackbar} 
           severity={snackbar.severity} 
           variant="filled"
-          sx={{ minWidth: 400, fontSize: '1rem' }}
+          sx={{ 
+            minWidth: 400, 
+            fontSize: '1rem',
+            boxShadow: 6,
+            '& .MuiAlert-icon': {
+              fontSize: '1.5rem'
+            }
+          }}
         >
           {snackbar.message}
         </Alert>
@@ -854,6 +970,9 @@ const UserManagement: React.FC = () => {
         onClose={() => setCreateDialogOpen(false)}
         maxWidth="md"
         fullWidth
+        disableEnforceFocus={true}
+        disableAutoFocus={true}
+        disableRestoreFocus={true}
       >
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -971,43 +1090,53 @@ const UserManagement: React.FC = () => {
                   render={({ field }) => (
                     <FormControl fullWidth error={!!errors.role}>
                       <InputLabel>Role</InputLabel>
-                      <Select {...field} label="Role">
-                        {currentUser?.role === 'ADMIN' ? (
-                          // Super admin sees organization admin roles
-                          <>
-                            <MenuItem value="ADMIN">Super Administrator</MenuItem>
-                            <MenuItem value="ECTA">ECTA Administrator</MenuItem>
-                            <MenuItem value="ECX">ECX Administrator</MenuItem>
-                            <MenuItem value="NBE">NBE Administrator</MenuItem>
-                            <MenuItem value="BANKS">Banks Administrator</MenuItem>
-                            <MenuItem value="CUSTOMS">Customs Administrator</MenuItem>
-                            <MenuItem value="SHIPPING">Shipping Administrator</MenuItem>
-                            <MenuItem value="EXPORTER">Exporter</MenuItem>
-                          </>
+                      <Select 
+                        {...field}
+                        value={field.value || ''}
+                        label="Role"
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          console.log('🟢 Role Select onChange triggered:', value);
+                          field.onChange(value);
+                        }}
+                        MenuProps={{
+                          PaperProps: {
+                            style: {
+                              maxHeight: 400,
+                            },
+                          },
+                        }}
+                      >
+                        {createDialogRoleOptions.length === 0 ? (
+                          <MenuItem disabled>
+                            <em>{currentUser?.role === 'ADMIN' ? 'Loading roles...' : 'Please select an organization first'}</em>
+                          </MenuItem>
                         ) : (
-                          // Organization admins see their specific job title roles from centralized config
-                          getRolesByOrganization(currentUser?.organization || '').map((role) => (
+                          // Simple flat list of all roles (works for both Super Admin and Org Admin)
+                          createDialogRoleOptions.map((role: any) => (
                             <MenuItem key={role.value} value={role.value}>
-                              <Box>
-                                <Typography variant="body2" fontWeight={500}>{role.label}</Typography>
-                                {'description' in role && role.description && (
-                                  <Typography variant="caption" color="text.secondary" display="block">
-                                    {role.description}
-                                  </Typography>
-                                )}
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Typography>{role.label}</Typography>
                               </Box>
                             </MenuItem>
                           ))
                         )}
                       </Select>
                       {errors.role && (
-                        <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
-                          {errors.role.message}
+                        <Alert severity="error" sx={{ mt: 1 }}>
+                          <strong>{errors.role.message}</strong>
+                        </Alert>
+                      )}
+                      {currentUser?.role !== 'ADMIN' && !watchOrganization && (
+                        <Typography variant="caption" color="warning.main" sx={{ mt: 0.5, ml: 1.5, fontWeight: 600 }}>
+                          ⚠️ Please select an organization first
                         </Typography>
                       )}
-                      {currentUser?.role !== 'ADMIN' && (
+                      {createDialogRoleOptions.length > 0 && (
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.5 }}>
-                          Select a job title within {currentUser?.organization}
+                          {currentUser?.role === 'ADMIN' 
+                            ? `All roles from all organizations available` 
+                            : `Select a job title within ${currentUser?.organization}`}
                         </Typography>
                       )}
                     </FormControl>
@@ -1029,9 +1158,12 @@ const UserManagement: React.FC = () => {
                         label="Organization"
                         disabled={currentUser?.role !== 'ADMIN'}
                         onChange={(e) => {
-                          field.onChange(e);
+                          const value = e.target.value;
+                          console.log('🟢 Organization Select onChange triggered:', value);
+                          field.onChange(value);
                           // Reset role when organization changes
-                          setValue('role', '');
+                          setValue('role', '', { shouldValidate: false });
+                          console.log('🔵 Role reset due to organization change');
                         }}
                       >
                         {currentUser?.role === 'ADMIN' ? (
@@ -1073,9 +1205,9 @@ const UserManagement: React.FC = () => {
                         )}
                       </Select>
                       {errors.organization && (
-                        <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
-                          {errors.organization.message}
-                        </Typography>
+                        <Alert severity="error" sx={{ mt: 1 }}>
+                          <strong>{errors.organization.message}</strong>
+                        </Alert>
                       )}
                       {currentUser?.role !== 'ADMIN' && (
                         <>

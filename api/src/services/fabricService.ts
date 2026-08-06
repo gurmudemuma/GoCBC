@@ -4,7 +4,6 @@
 import { Gateway, Network, Contract, Wallet, Wallets } from 'fabric-network';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as sqlite3 from 'sqlite3';
 import { logger } from '../utils/logger';
 
 export interface ChaincodeResponse {
@@ -23,11 +22,9 @@ export class FabricService {
   private wallet: Wallet | null = null;
   private connected: boolean = false;
   private currentMspId: string | null = null; // Track the actual connected MSP ID
-  private db: sqlite3.Database | null = null;
 
   private constructor() {
     // Gateway is created lazily in connect() to ensure env vars are loaded first
-    this.initializeDatabase();
   }
 
   public static getInstance(): FabricService {
@@ -35,76 +32,6 @@ export class FabricService {
       FabricService.instance = new FabricService();
     }
     return FabricService.instance;
-  }
-
-  private initializeDatabase(): void {
-    try {
-      const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', '..', 'cecbs.db');
-      this.db = new sqlite3.Database(dbPath, (err) => {
-        if (err) {
-          logger.error('Failed to connect to SQLite database:', err);
-        } else {
-          logger.info('✅ Connected to SQLite database');
-          this.createTables();
-        }
-      });
-    } catch (error) {
-      logger.error('Failed to initialize database:', error);
-    }
-  }
-
-  private createTables(): void {
-    if (!this.db) return;
-
-    const createTableSQL = `
-      CREATE TABLE IF NOT EXISTS exporter_applications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT UNIQUE NOT NULL,
-        company_name TEXT NOT NULL,
-        tin_number TEXT NOT NULL,
-        business_license_number TEXT NOT NULL,
-        registration_date TEXT,
-        exporter_type TEXT DEFAULT 'private',
-        capital_requirement TEXT NOT NULL,
-        professional_taster TEXT NOT NULL,
-        taster_certificate TEXT NOT NULL,
-        laboratory_facility TEXT DEFAULT '',
-        laboratory_certificate_number TEXT,
-        contact_person TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        address TEXT NOT NULL,
-        city TEXT NOT NULL,
-        region TEXT,
-        bank_name TEXT,
-        bank_account_number TEXT,
-        bank_branch_name TEXT,
-        bank_branch_code TEXT,
-        comments TEXT,
-        status TEXT DEFAULT 'pending',
-        submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        approved_at TEXT,
-        rejected_at TEXT,
-        rejection_reason TEXT,
-        exporter_id TEXT,
-        ecta_license_number TEXT,
-        license_expiry_date TEXT,
-        reviewed_by TEXT
-      );
-    `;
-
-    this.db.run(createTableSQL, (err) => {
-      if (err) {
-        logger.error('Failed to create exporter_applications table:', err);
-      } else {
-        logger.info('✅ Exporter applications table ready');
-        
-        // Create indexes
-        this.db?.run('CREATE INDEX IF NOT EXISTS idx_exporter_applications_status ON exporter_applications(status)');
-        this.db?.run('CREATE INDEX IF NOT EXISTS idx_exporter_applications_email ON exporter_applications(email)');
-        this.db?.run('CREATE INDEX IF NOT EXISTS idx_exporter_applications_submitted ON exporter_applications(submitted_at)');
-      }
-    });
   }
 
   private connectCalled: boolean = false;
@@ -254,16 +181,6 @@ export class FabricService {
       this.connected = false;
       this.currentMspId = null; // Clear the tracked MSP ID
       logger.info('Disconnected from Hyperledger Fabric network');
-    }
-    
-    if (this.db) {
-      this.db.close((err) => {
-        if (err) {
-          logger.error('Error closing database:', err);
-        } else {
-          logger.info('Database connection closed');
-        }
-      });
     }
   }
 

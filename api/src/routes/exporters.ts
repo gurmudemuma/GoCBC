@@ -3,6 +3,7 @@
 
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { EmailService } from '../services/emailService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
@@ -12,6 +13,7 @@ import { body, param, query } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const postgresDb = DatabaseService.getInstance();
 const emailService = EmailService.getInstance();
 
 // ============================================================================
@@ -22,35 +24,20 @@ const emailService = EmailService.getInstance();
 router.get('/exporter-applications', authMiddleware, async (req, res) => {
   try {
     const { status, limit = 50 } = req.query;
-    const db = fabricService['db'];
-    
-    if (!db) {
-      res.json({
-        success: true,
-        data: [],
-        pagination: { total: 0, limit: parseInt(limit as string) },
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
     
     let query = 'SELECT * FROM exporter_applications';
     const params: any[] = [];
+    let paramIndex = 1;
     
     if (status) {
-      query += ' WHERE status = ?';
+      query += ` WHERE status = $${paramIndex++}`;
       params.push(status);
     }
     
-    query += ' ORDER BY submitted_at DESC LIMIT ?';
+    query += ` ORDER BY submitted_at DESC LIMIT $${paramIndex}`;
     params.push(parseInt(limit as string));
     
-    const applications = await new Promise<any[]>((resolve, reject) => {
-      db.all(query, params, (err: any, rows: any[]) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
+    const applications = await postgresDb.all(query, params);
     
     res.json({
       success: true,
@@ -96,7 +83,7 @@ router.post('/exporter-applications',
     body('bankBranchCode').optional().isString().withMessage('Bank branch code must be a string'),
     body('comments').optional().isString().withMessage('Comments must be a string'),
     body('documents').optional().isArray().withMessage('Documents must be an array'),
-    body('documents.*').optional().isString().withMessage('Each document item must be a string'),
+    // Documents are objects with documentId, fileName, ipfsCID, hash, etc.
     body('exporterType').optional().isIn(['private','company','individual']).withMessage('Exporter type must be private, company, or individual'),
     body('laboratoryFacility').optional().isString().withMessage('Laboratory facility flag must be a string'),
     body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
@@ -108,25 +95,9 @@ router.post('/exporter-applications',
       const applicationData = req.body;
       const applicationId = `APP-${Date.now().toString().slice(-8)}`;
       const submittedAt = new Date().toISOString();
-      const db = fabricService['db'];
-      
-      if (!db) {
-        logger.warn('No database connection available');
-        res.status(201).json({
-          success: true,
-          data: { applicationId, status: 'pending', submittedAt },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
 
       // Check if email already exists in users or applications
-      const existingUser = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT id FROM users WHERE email = ?', [applicationData.email], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const existingUser = await postgresDb.get('SELECT id FROM users WHERE email = $1', [applicationData.email]);
 
       if (existingUser) {
         res.status(400).json({
@@ -140,13 +111,10 @@ router.post('/exporter-applications',
         return;
       }
 
-      const existingApplication = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT id FROM exporter_applications WHERE email = ? AND status = "pending"', 
-          [applicationData.email], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const existingApplication = await postgresDb.get(
+        'SELECT id FROM exporter_applications WHERE email = $1 AND status = $2', 
+        [applicationData.email, 'pending']
+      );
 
       if (existingApplication) {
         res.status(400).json({
@@ -178,50 +146,45 @@ router.post('/exporter-applications',
           registration_date, capital_requirement, professional_taster,
           taster_certificate, laboratory_facility, contact_person,
           email, phone, address, city, region, bank_name,
-          bank_account_number, bank_branch_name, bank_branch_code,
+          bank_account_number, bank_branch, bank_branch_code,
           comments, documents, status, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 'pending', $22)
       `;
       
       // Serialize documents array to JSON
       const documentsJSON = JSON.stringify(applicationData.documents || []);
       
-      await new Promise((resolve, reject) => {
-        db.run(appQuery, [
-          applicationId,
-          applicationData.companyName,
-          applicationData.tinNumber,
-          applicationData.businessLicenseNumber,
-          applicationData.registrationDate || null,
-          applicationData.capitalRequirement,
-          applicationData.professionalTaster,
-          applicationData.tasterCertificate,
-          applicationData.laboratoryFacility || 'no',
-          applicationData.contactPerson,
-          applicationData.email,
-          applicationData.phone,
-          applicationData.address,
-          applicationData.city,
-          applicationData.region || '',
-          applicationData.bankName || '',
-          applicationData.bankAccountNumber || '',
-          applicationData.bankBranchName || '',
-          applicationData.bankBranchCode || '',
-          applicationData.comments || '',
-          documentsJSON,
-          submittedAt,
-        ], (err: any) => {
-          if (err) reject(err);
-          else resolve(true);
-        });
-      });
+      await postgresDb.run(appQuery, [
+        applicationId,
+        applicationData.companyName,
+        applicationData.tinNumber,
+        applicationData.businessLicenseNumber,
+        applicationData.registrationDate || null,
+        applicationData.capitalRequirement,
+        applicationData.professionalTaster,
+        applicationData.tasterCertificate,
+        applicationData.laboratoryFacility || 'no',
+        applicationData.contactPerson,
+        applicationData.email,
+        applicationData.phone,
+        applicationData.address,
+        applicationData.city,
+        applicationData.region || '',
+        applicationData.bankName || '',
+        applicationData.bankAccountNumber || '',
+        applicationData.bankBranchName || '',
+        applicationData.bankBranchCode || '',
+        applicationData.comments || '',
+        documentsJSON,
+        submittedAt,
+      ]);
 
       // Step 2: Create INACTIVE user account
       const userQuery = `
         INSERT INTO users (
           username, email, password_hash, full_name, role, organization,
           phone, permissions, status, created_at
-        ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'inactive', datetime('now'))
+        ) VALUES ($1, $2, $3, $4, 'EXPORTER', $5, $6, $7, 'inactive', NOW())
       `;
 
       const defaultPermissions = JSON.stringify([
@@ -231,24 +194,15 @@ router.post('/exporter-applications',
         'document.view', 'report.generate'
       ]);
 
-      await new Promise((resolve, reject) => {
-        db.run(userQuery, [
-          tempUsername,
-          applicationData.email,
-          hashedPassword,
-          applicationData.contactPerson,
-          applicationData.companyName,
-          applicationData.phone,
-          defaultPermissions,
-        ], (err: any) => {
-          if (err) {
-            logger.error('Failed to create user account for application:', err);
-            reject(err);
-          } else {
-            resolve(true);
-          }
-        });
-      });
+      await postgresDb.run(userQuery, [
+        tempUsername,
+        applicationData.email,
+        hashedPassword,
+        applicationData.contactPerson,
+        applicationData.companyName,
+        applicationData.phone,
+        defaultPermissions,
+      ]);
       
       logger.info(`✅ Exporter application submitted: ${applicationId} (User created: ${tempUsername}, Status: inactive)`);
       
@@ -292,19 +246,8 @@ router.post('/exporter-applications/:applicationId/approve',
     try {
       const { applicationId } = req.params;
       const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankAccountNumber, bankBranch, bankBranchCode } = req.body;
-      const db = fabricService['db'];
       
-      if (!db) {
-        res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
-        return;
-      }
-      
-      const application = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT * FROM exporter_applications WHERE application_id = ?', [applicationId], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
       
       if (!application || (application.status !== 'pending' && application.status !== 'approved')) {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or already rejected' }, timestamp: new Date().toISOString() });
@@ -353,46 +296,30 @@ router.post('/exporter-applications/:applicationId/approve',
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       // Step 3: Update or create user account - change username to exporterId, activate, and set new password
-      const existingUser = await new Promise<any>((resolve, reject) => {
-        db.get(
-          `SELECT id FROM users WHERE email = ? AND role = 'EXPORTER'`,
-          [application.email],
-          (err: any, row: any) => {
-            if (err) reject(err);
-            else resolve(row);
-          }
-        );
-      });
+      const existingUser = await postgresDb.get(
+        `SELECT id FROM users WHERE email = $1 AND role = 'EXPORTER'`,
+        [application.email]
+      );
 
       if (existingUser) {
         // Update existing user account with bank information
-        await new Promise((resolve, reject) => {
-          db.run(
-            `UPDATE users 
-             SET username = ?,
-                 status = 'active',
-                 exporter_id = ?,
-                 ecta_license = ?,
-                 password_hash = ?,
-                 organization = ?,
-                 bank_name = ?,
-                 bank_account_number = ?,
-                 bank_branch = ?,
-                 bank_branch_code = ?,
-                 updated_at = datetime('now')
-             WHERE email = ? AND role = 'EXPORTER'`,
-            [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, 
-             bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, application.email],
-            (err: any) => { 
-              if (err) {
-                logger.error('Failed to activate user account:', err);
-                reject(err);
-              } else {
-                resolve(true);
-              }
-            }
-          );
-        });
+        await postgresDb.run(
+          `UPDATE users 
+           SET username = $1,
+               status = 'active',
+               exporter_id = $2,
+               ecta_license = $3,
+               password_hash = $4,
+               organization = $5,
+               bank_name = $6,
+               bank_account_number = $7,
+               bank_branch = $8,
+               bank_branch_code = $9,
+               updated_at = NOW()
+           WHERE email = $10 AND role = 'EXPORTER'`,
+          [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, 
+           bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, application.email]
+        );
       } else {
         // Create new user account if it doesn't exist
         const defaultPermissions = JSON.stringify([
@@ -402,60 +329,47 @@ router.post('/exporter-applications/:applicationId/approve',
           'document.view', 'report.generate'
         ]);
 
-        await new Promise((resolve, reject) => {
-          db.run(
-            `INSERT INTO users (
-              username, email, password_hash, full_name, role, organization,
-              phone, permissions, status, exporter_id, ecta_license, 
-              bank_name, bank_account_number, bank_branch, bank_branch_code, created_at
-            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, datetime('now'))`,
-            [
-              exporterId,
-              application.email,
-              hashedPassword,
-              application.contact_person,
-              application.company_name,
-              application.phone,
-              defaultPermissions,
-              exporterId,
-              ectaLicenseNumber,
-              bankName || null,
-              bankAccountNumber || null,
-              bankBranch || null,
-              bankBranchCode || null
-            ],
-            (err: any) => { 
-              if (err) {
-                logger.error('Failed to create user account:', err);
-                reject(err);
-              } else {
-                logger.info(`✅ Created new user account for ${exporterId}`);
-                resolve(true);
-              }
-            }
-          );
-        });
+        await postgresDb.run(
+          `INSERT INTO users (
+            username, email, password_hash, full_name, role, organization,
+            phone, permissions, status, exporter_id, ecta_license, 
+            bank_name, bank_account_number, bank_branch, bank_branch_code, created_at
+          ) VALUES ($1, $2, $3, $4, 'EXPORTER', $5, $6, $7, 'active', $8, $9, $10, $11, $12, $13, NOW())`,
+          [
+            exporterId,
+            application.email,
+            hashedPassword,
+            application.contact_person,
+            application.company_name,
+            application.phone,
+            defaultPermissions,
+            exporterId,
+            ectaLicenseNumber,
+            bankName || null,
+            bankAccountNumber || null,
+            bankBranch || null,
+            bankBranchCode || null
+          ]
+        );
+        logger.info(`✅ Created new user account for ${exporterId}`);
       }
       
       // Step 4: Update application status with bank information
-      await new Promise((resolve, reject) => {
-        db.run(
-          `UPDATE exporter_applications 
-           SET status = ?, 
-               approved_at = ?, 
-               exporter_id = ?,
-               ecta_license_number = ?,
-               license_expiry_date = ?,
-               bank_name = ?,
-               bank_account_number = ?,
-               bank_branch_name = ?,
-               bank_branch_code = ?
-           WHERE application_id = ?`,
-          ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate,
-           bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, applicationId],
-          (err: any) => { if (err) reject(err); else resolve(true); }
-        );
-      });
+      await postgresDb.run(
+        `UPDATE exporter_applications 
+         SET status = $1, 
+             approved_at = $2, 
+             exporter_id = $3,
+             ecta_license_number = $4,
+             license_expiry_date = $5,
+             bank_name = $6,
+             bank_account_number = $7,
+             bank_branch = $8,
+             bank_branch_code = $9
+         WHERE application_id = $10`,
+        ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate,
+         bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, applicationId]
+      );
       
       logger.info(`✅ Application approved: ${applicationId} -> ${exporterId} (User activated: ${exporterId}, Bank: ${bankName}, Branch: ${bankBranch})`);
       
@@ -514,19 +428,8 @@ router.post('/exporter-applications/:applicationId/reject',
     try {
       const { applicationId } = req.params;
       const { reason } = req.body;
-      const db = fabricService['db'];
       
-      if (!db) {
-        res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
-        return;
-      }
-      
-      const application = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT * FROM exporter_applications WHERE application_id = ?', [applicationId], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
       
       if (!application || application.status !== 'pending') {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND' }, timestamp: new Date().toISOString() });
@@ -535,36 +438,19 @@ router.post('/exporter-applications/:applicationId/reject',
 
       // Step 1: Keep the inactive user account but mark it as rejected
       // This allows the applicant to login and see rejection reason
-      await new Promise((resolve, reject) => {
-        db.run(
-          `UPDATE users SET status = 'rejected' WHERE email = ? AND role = 'EXPORTER' AND status = 'inactive'`,
-          [application.email],
-          (err: any) => {
-            if (err) {
-              logger.error('Failed to update user account status:', err);
-              reject(err);
-            } else {
-              resolve(true);
-            }
-          }
-        );
-      });
+      await postgresDb.run(
+        `UPDATE users SET status = 'rejected' WHERE email = $1 AND role = 'EXPORTER' AND status = 'inactive'`,
+        [application.email]
+      );
 
       // Step 2: Update application status to rejected
-      await new Promise((resolve, reject) => {
-        db.run('UPDATE exporter_applications SET status = ?, rejected_at = ?, rejection_reason = ? WHERE application_id = ?',
-          ['rejected', new Date().toISOString(), reason, applicationId],
-          (err: any) => { if (err) reject(err); else resolve(true); }
-        );
-      });
+      await postgresDb.run(
+        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE application_id = $4',
+        ['rejected', new Date().toISOString(), reason, applicationId]
+      );
       
       // Get the user's temporary credentials
-      const user = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT username, password_hash FROM users WHERE email = ? AND role = \'EXPORTER\'', [application.email], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const user = await postgresDb.get('SELECT username, password_hash FROM users WHERE email = $1 AND role = $2', [application.email, 'EXPORTER']);
       
       // Generate a new temporary password for resubmission
       const bcrypt = require('bcrypt');
@@ -572,12 +458,7 @@ router.post('/exporter-applications/:applicationId/reject',
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
       
       // Update user password
-      await new Promise((resolve, reject) => {
-        db.run('UPDATE users SET password_hash = ? WHERE email = ? AND role = \'EXPORTER\'', [hashedPassword, application.email], (err: any) => {
-          if (err) reject(err);
-          else resolve(true);
-        });
-      });
+      await postgresDb.run('UPDATE users SET password_hash = $1 WHERE email = $2 AND role = $3', [hashedPassword, application.email, 'EXPORTER']);
       
       logger.info(`❌ Application rejected: ${applicationId} (User ${application.email} can now login to see rejection and resubmit)`);
       
@@ -615,23 +496,12 @@ router.post('/exporter-applications/:applicationId/reject',
 router.get('/exporter-applications/check/:email', async (req, res) => {
   try {
     const { email } = req.params;
-    const db = fabricService['db'];
     
-    if (!db) {
-      res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
-      return;
-    }
-    
-    const application = await new Promise<any>((resolve, reject) => {
-      db.get(
-        'SELECT * FROM exporter_applications WHERE email = ? ORDER BY submitted_at DESC LIMIT 1',
-        [email],
-        (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        }
-      );
-    });
+    const application = await postgresDb.get(
+      'SELECT * FROM exporter_applications WHERE email = $1 ORDER BY submitted_at DESC LIMIT 1',
+      [email]
+    );
+
     if (application?.documents && typeof application.documents === 'string') {
       try {
         application.documents = JSON.parse(application.documents);
@@ -694,20 +564,9 @@ router.post('/exporter-applications/:applicationId/resubmit',
     try {
       const { applicationId } = req.params;
       const updateData = req.body;
-      const db = fabricService['db'];
-      
-      if (!db) {
-        res.status(500).json({ success: false, error: { code: 'NO_DATABASE' }, timestamp: new Date().toISOString() });
-        return;
-      }
       
       // Verify the application exists and is rejected
-      const application = await new Promise<any>((resolve, reject) => {
-        db.get('SELECT * FROM exporter_applications WHERE application_id = ? AND status = "rejected"', [applicationId], (err: any, row: any) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1 AND status = $2', [applicationId, 'rejected']);
       
       if (!application) {
         res.status(404).json({ 
@@ -731,97 +590,98 @@ router.post('/exporter-applications/:applicationId/resubmit',
       // Build update query for fields that were provided
       const fieldsToUpdate: string[] = [];
       const values: any[] = [];
+      let paramIndex = 1;
       
       if (updateData.companyName) {
-        fieldsToUpdate.push('company_name = ?');
+        fieldsToUpdate.push(`company_name = $${paramIndex++}`);
         values.push(updateData.companyName);
       }
       if (updateData.tinNumber) {
-        fieldsToUpdate.push('tin_number = ?');
+        fieldsToUpdate.push(`tin_number = $${paramIndex++}`);
         values.push(updateData.tinNumber);
       }
       if (updateData.businessLicenseNumber) {
-        fieldsToUpdate.push('business_license_number = ?');
+        fieldsToUpdate.push(`business_license_number = $${paramIndex++}`);
         values.push(updateData.businessLicenseNumber);
       }
       if (updateData.registrationDate) {
-        fieldsToUpdate.push('registration_date = ?');
+        fieldsToUpdate.push(`registration_date = $${paramIndex++}`);
         values.push(updateData.registrationDate);
       }
       if (updateData.capitalRequirement) {
-        fieldsToUpdate.push('capital_requirement = ?');
+        fieldsToUpdate.push(`capital_requirement = $${paramIndex++}`);
         values.push(parseFloat(updateData.capitalRequirement));
       }
       if (updateData.professionalTaster !== undefined) {
-        fieldsToUpdate.push('professional_taster = ?');
-        values.push(updateData.professionalTaster ? 1 : 0);
+        fieldsToUpdate.push(`professional_taster = $${paramIndex++}`);
+        values.push(updateData.professionalTaster);
       }
       if (updateData.tasterCertificate) {
-        fieldsToUpdate.push('taster_certificate = ?');
+        fieldsToUpdate.push(`taster_certificate = $${paramIndex++}`);
         values.push(updateData.tasterCertificate);
       }
       if (updateData.laboratoryFacility) {
-        fieldsToUpdate.push('laboratory_facility = ?');
+        fieldsToUpdate.push(`laboratory_facility = $${paramIndex++}`);
         values.push(updateData.laboratoryFacility);
       }
       if (updateData.laboratoryCertificateNumber) {
-        fieldsToUpdate.push('laboratory_certificate_number = ?');
+        fieldsToUpdate.push(`laboratory_certificate_number = $${paramIndex++}`);
         values.push(updateData.laboratoryCertificateNumber);
       }
       if (updateData.contactPerson) {
-        fieldsToUpdate.push('contact_person = ?');
+        fieldsToUpdate.push(`contact_person = $${paramIndex++}`);
         values.push(updateData.contactPerson);
       }
       if (updateData.phone) {
-        fieldsToUpdate.push('phone = ?');
+        fieldsToUpdate.push(`phone = $${paramIndex++}`);
         values.push(updateData.phone);
       }
       if (updateData.address) {
-        fieldsToUpdate.push('address = ?');
+        fieldsToUpdate.push(`address = $${paramIndex++}`);
         values.push(updateData.address);
       }
       if (updateData.city) {
-        fieldsToUpdate.push('city = ?');
+        fieldsToUpdate.push(`city = $${paramIndex++}`);
         values.push(updateData.city);
       }
       if (updateData.region) {
-        fieldsToUpdate.push('region = ?');
+        fieldsToUpdate.push(`region = $${paramIndex++}`);
         values.push(updateData.region);
       }
       if (updateData.bankName) {
-        fieldsToUpdate.push('bank_name = ?');
+        fieldsToUpdate.push(`bank_name = $${paramIndex++}`);
         values.push(updateData.bankName);
       }
       if (updateData.bankAccountNumber) {
-        fieldsToUpdate.push('bank_account_number = ?');
+        fieldsToUpdate.push(`bank_account_number = $${paramIndex++}`);
         values.push(updateData.bankAccountNumber);
       }
       if (updateData.bankBranchName) {
-        fieldsToUpdate.push('bank_branch_name = ?');
+        fieldsToUpdate.push(`bank_branch = $${paramIndex++}`);
         values.push(updateData.bankBranchName);
       }
       if (updateData.bankBranchCode) {
-        fieldsToUpdate.push('bank_branch_code = ?');
+        fieldsToUpdate.push(`bank_branch_code = $${paramIndex++}`);
         values.push(updateData.bankBranchCode);
       }
       if (updateData.comments) {
-        fieldsToUpdate.push('comments = ?');
+        fieldsToUpdate.push(`comments = $${paramIndex++}`);
         values.push(updateData.comments);
       }
       if (updateData.documents) {
-        fieldsToUpdate.push('documents = ?');
+        fieldsToUpdate.push(`documents = $${paramIndex++}`);
         values.push(JSON.stringify(updateData.documents));
       }
       if (updateData.exporterType) {
-        fieldsToUpdate.push('exporter_type = ?');
+        fieldsToUpdate.push(`exporter_type = $${paramIndex++}`);
         values.push(updateData.exporterType);
       }
       
       // Always update status to pending and clear rejection data
-      fieldsToUpdate.push('status = ?');
-      fieldsToUpdate.push('rejected_at = ?');
-      fieldsToUpdate.push('rejection_reason = ?');
-      fieldsToUpdate.push('submitted_at = ?');
+      fieldsToUpdate.push(`status = $${paramIndex++}`);
+      fieldsToUpdate.push(`rejected_at = $${paramIndex++}`);
+      fieldsToUpdate.push(`rejection_reason = $${paramIndex++}`);
+      fieldsToUpdate.push(`submitted_at = $${paramIndex++}`);
       values.push('pending', null, null, new Date().toISOString());
       
       // Add application ID at the end for WHERE clause
@@ -830,31 +690,16 @@ router.post('/exporter-applications/:applicationId/resubmit',
       const updateQuery = `
         UPDATE exporter_applications 
         SET ${fieldsToUpdate.join(', ')}
-        WHERE application_id = ?
+        WHERE application_id = $${paramIndex}
       `;
       
-      await new Promise((resolve, reject) => {
-        db.run(updateQuery, values, (err: any) => {
-          if (err) reject(err);
-          else resolve(true);
-        });
-      });
+      await postgresDb.run(updateQuery, values);
       
       // Update user status from rejected back to inactive
-      await new Promise((resolve, reject) => {
-        db.run(
-          `UPDATE users SET status = 'inactive' WHERE email = ? AND role = 'EXPORTER' AND status = 'rejected'`,
-          [updateData.email],
-          (err: any) => {
-            if (err) {
-              logger.error('Failed to update user status:', err);
-              reject(err);
-            } else {
-              resolve(true);
-            }
-          }
-        );
-      });
+      await postgresDb.run(
+        `UPDATE users SET status = 'inactive' WHERE email = $1 AND role = 'EXPORTER' AND status = 'rejected'`,
+        [updateData.email]
+      );
       
       logger.info(`✅ Application resubmitted: ${applicationId} by ${updateData.email}`);
       
@@ -1125,19 +970,12 @@ router.get('/me/profile', authMiddleware, async (req, res) => {
     const result = await fabricService.getExporter(exporterId);
     
     // Enrich with bank information from database
-    const db = fabricService['db'];
-    if (db && result.success && result.data) {
+    if (result.success && result.data) {
       try {
-        const userBankInfo = await new Promise<any>((resolve, reject) => {
-          db.get(
-            'SELECT bank_name, bank_branch, bank_branch_code FROM users WHERE exporter_id = ? OR username = ?',
-            [exporterId, exporterId],
-            (err: any, row: any) => {
-              if (err) reject(err);
-              else resolve(row);
-            }
-          );
-        });
+        const userBankInfo = await postgresDb.get(
+          'SELECT bank_name, bank_branch, bank_branch_code FROM users WHERE exporter_id = $1 OR username = $2',
+          [exporterId, exporterId]
+        );
 
         if (userBankInfo) {
           result.data.bankName = userBankInfo.bank_name;
@@ -1556,6 +1394,8 @@ router.put('/:exporterID/status',
   }
 );
 
+// DUPLICATE ROUTES COMMENTED OUT - Using the routes defined earlier in the file
+/*
 /**
  * @swagger
  * /api/v1/exporters/applications:
@@ -1563,67 +1403,7 @@ router.put('/:exporterID/status',
  *     summary: Submit new exporter application (public endpoint)
  *     tags: [Exporters]
  *     security: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - companyName
- *               - tinNumber
- *               - businessLicenseNumber
- *               - capitalRequirement
- *               - professionalTaster
- *               - tasterCertificate
- *               - contactPerson
- *               - email
- *               - phone
- *               - address
- *               - city
- *             properties:
- *               companyName:
- *                 type: string
- *               tinNumber:
- *                 type: string
- *               businessLicenseNumber:
- *                 type: string
- *               registrationDate:
- *                 type: string
- *               capitalRequirement:
- *                 type: string
- *               professionalTaster:
- *                 type: string
- *               tasterCertificate:
- *                 type: string
- *               laboratoryFacility:
- *                 type: string
- *               contactPerson:
- *                 type: string
- *               email:
- *                 type: string
- *               phone:
- *                 type: string
- *               address:
- *                 type: string
- *               city:
- *                 type: string
- *               region:
- *                 type: string
- *               bankName:
- *                 type: string
- *               bankAccountNumber:
- *                 type: string
- *               comments:
- *                 type: string
- *     responses:
- *       201:
- *         description: Application submitted successfully
- *       400:
- *         description: Invalid input data
- *       500:
- *         description: Internal server error
- */
+ *//*
 router.post('/exporter-applications',
   [
     body('companyName').notEmpty().withMessage('Company name is required'),
@@ -1640,176 +1420,14 @@ router.post('/exporter-applications',
   ],
   validateRequest,
   async (req, res) => {
-    try {
-      const applicationData = req.body;
-      
-      // Generate application ID
-      const applicationId = `APP-${Date.now().toString().slice(-8)}`;
-      const submittedAt = new Date().toISOString();
-      
-      // Store application in database (using fabricService's database connection)
-      const db = fabricService['db']; // Access private db property
-      
-      if (!db) {
-        // If no database, store in memory (temporary solution)
-        logger.warn('No database connection available, application stored in memory');
-        
-        res.status(201).json({
-          success: true,
-          data: {
-            applicationId,
-            status: 'pending',
-            submittedAt,
-            message: 'Application submitted successfully. ECTA will review your application within 2-3 business days.',
-          },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // Insert application into database
-      const query = `
-        INSERT INTO exporter_applications (
-          application_id, company_name, tin_number, business_license_number,
-            exporter_type, registration_date, capital_requirement, professional_taster,
-            taster_certificate, laboratory_facility, laboratory_certificate_number, contact_person,
-            email, phone, address, city, region, bank_name,
-            bank_account_number, bank_branch_name, bank_branch_code,
-            comments, documents, status, submitted_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-      `;
-      
-      await new Promise((resolve, reject) => {
-        db.run(query, [
-          applicationId,
-          applicationData.companyName,
-          applicationData.tinNumber,
-          applicationData.businessLicenseNumber,
-          applicationData.registrationDate || null,
-          applicationData.capitalRequirement,
-          applicationData.professionalTaster,
-          applicationData.tasterCertificate,
-          applicationData.laboratoryFacility || 'no',
-          applicationData.contactPerson,
-          applicationData.email,
-          applicationData.phone,
-          applicationData.address,
-          applicationData.city,
-          applicationData.region || '',
-          applicationData.bankName || '',
-          applicationData.bankAccountNumber || '',
-          applicationData.comments || '',
-          submittedAt,
-        ], (err: any) => {
-          if (err) reject(err);
-          else resolve(true);
-        });
-      });
-      
-      res.status(201).json({
-        data: {
-          applicationId,
-          status: 'pending',
-          submittedAt,
-          message: 'Application submitted successfully. ECTA will review your application within 2-3 business days.',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      logger.error('Error submitting exporter application:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'SUBMISSION_FAILED',
-          message: 'Failed to submit application',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
+    // DUPLICATE - SEE LINE 66
   }
 );
 
-/**
- * @swagger
- * /api/v1/exporters/applications:
- *   get:
- *     summary: Get all exporter applications (ECTA admin only)
- *     tags: [Exporters]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [pending, approved, rejected]
- *         description: Filter by application status
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 50
- *         description: Number of results to return
- *     responses:
- *       200:
- *         description: List of applications retrieved successfully
- *       500:
- *         description: Internal server error
- */
 router.get('/exporter-applications', authMiddleware, async (req, res) => {
-  try {
-    const { status, limit = 50 } = req.query;
-    const db = fabricService['db'];
-    
-    if (!db) {
-      res.json({
-        success: true,
-        data: [],
-        pagination: { total: 0, limit: parseInt(limit as string) },
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
-    
-    let query = 'SELECT * FROM exporter_applications';
-    const params: any[] = [];
-    
-    if (status) {
-      query += ' WHERE status = ?';
-      params.push(status);
-    }
-    
-    query += ' ORDER BY submitted_at DESC LIMIT ?';
-    params.push(parseInt(limit as string));
-    
-    const applications = await new Promise<any[]>((resolve, reject) => {
-      db.all(query, params, (err: any, rows: any[]) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
-    
-    res.json({
-      success: true,
-      data: applications,
-      pagination: {
-        total: applications.length,
-        limit: parseInt(limit as string),
-      },
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    logger.error('Error retrieving exporter applications:', error);
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'QUERY_FAILED',
-        message: 'Failed to retrieve applications',
-      },
-      timestamp: new Date().toISOString(),
-    });
-  }
+    // DUPLICATE - SEE LINE 24
 });
+*/
 
 /**
  * @swagger

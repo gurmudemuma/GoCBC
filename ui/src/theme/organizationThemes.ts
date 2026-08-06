@@ -72,6 +72,16 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
   const colors = organizationColors[organization] || organizationColors.DEFAULT;
 
   const themeOptions: ThemeOptions = {
+    zIndex: {
+      mobileStepper: 1000,
+      fab: 1050,
+      speedDial: 1050,
+      appBar: 1100,
+      drawer: 1200,
+      modal: 1300,
+      snackbar: 1400,
+      tooltip: 1500,
+    },
     palette: {
       mode: 'light',
       primary: {
@@ -234,6 +244,51 @@ export const createOrganizationTheme = (organization: keyof typeof organizationC
       borderRadius: 8,
     },
     components: {
+      MuiDialog: {
+        defaultProps: {
+          disableEnforceFocus: true,
+          disableAutoFocus: true,
+        },
+      },
+      MuiSelect: {
+        defaultProps: {
+          MenuProps: {
+            disablePortal: true,
+            disableScrollLock: true,
+            anchorOrigin: {
+              vertical: 'bottom',
+              horizontal: 'left',
+            },
+            transformOrigin: {
+              vertical: 'top',
+              horizontal: 'left',
+            },
+            PaperProps: {
+              style: {
+                maxHeight: 400,
+              },
+            },
+            slotProps: {
+              root: {
+                style: {
+                  zIndex: 1400,
+                },
+              },
+            },
+          },
+        },
+      },
+      MuiPopover: {
+        defaultProps: {
+          disablePortal: true,
+          disableScrollLock: true,
+        },
+      },
+      MuiPopper: {
+        defaultProps: {
+          disablePortal: true,
+        },
+      },
       MuiButton: {
         styleOverrides: {
           root: {

@@ -9,6 +9,7 @@ import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { dedupeById, isValidInspection } from '../utils/dataFilters';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -330,6 +331,32 @@ router.post('/inspections/:inspectionID/approve',
       const userOrg = (req as any).user?.org || 'ECTAMSP';
       await fabricService.connect(userOrg);
 
+      // Get current inspection status for validation
+      const inspectionData = await fabricService.getInspection(inspectionID);
+      if (!inspectionData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = inspectionData.data?.status || inspectionData.data?.Status || 'PENDING';
+      
+      // Validate status transition (NOTE: Using SHIPMENT transitions for quality flow)
+      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, 'QUALITY_APPROVED');
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot approve inspection: Invalid status transition from ${currentStatus} to QUALITY_APPROVED`,
+            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       const result = await fabricService.approveInspection(
         inspectionID,
         approvedBy,
@@ -337,7 +364,13 @@ router.post('/inspections/:inspectionID/approve',
       );
 
       if (result.success) {
-        logger.info(`Quality inspection approved: ${inspectionID}`);
+        // Update status with cascading effects to shipment
+        const shipmentId = inspectionData.data?.shipmentId || inspectionData.data?.ShipmentID;
+        if (shipmentId) {
+          await statusManager.updateEntityStatus('SHIPMENT', shipmentId, 'QUALITY_INSPECTION', 'QUALITY_APPROVED');
+        }
+        
+        logger.info(`Quality inspection approved: ${inspectionID} (${currentStatus} → QUALITY_APPROVED)`);
         res.json({
           success: true,
           data: result.data,

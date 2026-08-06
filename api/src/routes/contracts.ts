@@ -8,6 +8,7 @@ import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { dedupeById, isValidContract } from '../utils/dataFilters';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -595,10 +596,39 @@ router.post('/:contractID/approve',
         role: user?.role,
       });
       
+      // Get current contract status for validation
+      const contractData = await fabricService.getSalesContract(contractID);
+      if (!contractData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Contract not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
+      
+      // Validate status transition
+      const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'APPROVED');
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot approve contract: Invalid status transition from ${currentStatus} to APPROVED`,
+            allowedStatuses: statusManager.getNextStatuses('CONTRACT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
       await fabricService.connectAsOrg('ECTAMSP');
       const result = await fabricService.approveSalesContract(contractID);
 
       if (result.success) {
+        // Update status with cascading effects
+        await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'APPROVED');
+        
         logger.info(`[${user?.org}] ✅ Sales contract approved by ECTA for export compliance: ${contractID}`);
         res.json({
           success: true,
@@ -706,6 +736,32 @@ router.post('/:contractID/reject',
         reason,
       });
       
+      // Get current contract status for validation
+      const contractData = await fabricService.getSalesContract(contractID);
+      if (!contractData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Contract not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
+      
+      // Validate status transition
+      const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'REJECTED');
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot reject contract: Invalid status transition from ${currentStatus} to REJECTED`,
+            allowedStatuses: statusManager.getNextStatuses('CONTRACT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
       await fabricService.connectAsOrg('ECTAMSP');
       
       // Call RejectSalesContract chaincode function
@@ -716,6 +772,9 @@ router.post('/:contractID/reject',
       ]);
 
       if (result.success) {
+        // Update status with cascading effects
+        await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'REJECTED');
+        
         logger.info(`[${user?.org}] ✅ Sales contract rejected by ECTA: ${contractID}, Reason: ${reason}`);
         res.json({
           success: true,

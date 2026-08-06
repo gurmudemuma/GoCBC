@@ -6,7 +6,55 @@ import { useRouter } from 'next/router';
 import api from '@/utils/api';
 import LoadingScreen from '@/components/LoadingScreen';
 
-export type UserRole = 'ECTA' | 'ECX' | 'NBE' | 'BANKS' | 'CUSTOMS' | 'SHIPPING' | 'EXPORTER' | 'ADMIN';
+export type UserRole = 
+  // Primary organization roles
+  | 'ECTA' 
+  | 'ECX' 
+  | 'NBE' 
+  | 'BANKS' 
+  | 'CUSTOMS' 
+  | 'SHIPPING' 
+  | 'EXPORTER' 
+  | 'ADMIN'
+  // ECTA specific roles
+  | 'Quality Inspector'
+  | 'Lab Analyst'
+  | 'Phytosanitary Officer'
+  | 'License Officer'
+  | 'Permit Officer'
+  | 'ECTA Officer'
+  // ECX specific roles
+  | 'Grading Officer'
+  | 'Warehouse Officer'
+  | 'Registration Officer'
+  | 'Release Officer'
+  | 'ECX Officer'
+  // NBE specific roles
+  | 'NBE Officer'
+  | 'Forex Officer'
+  | 'Screening Officer'
+  | 'Compliance Officer'
+  | 'Exchange Rate Officer'
+  | 'Settlement Officer'
+  // Banks specific roles
+  | 'Bank Officer'
+  | 'Branch Manager'
+  | 'Trade Finance Officer'
+  | 'Credit Analyst'
+  | 'LC Officer'
+  // Customs specific roles
+  | 'Customs Officer'
+  | 'Inspection Officer'
+  | 'Clearance Officer'
+  | 'Risk Analyst'
+  | 'ASYCUDA Officer'
+  | 'Duty Assessment Officer'
+  // Shipping specific roles
+  | 'Logistics Officer'
+  | 'Documentation Officer'
+  | 'Operations Manager'
+  | 'Shipping Coordinator'
+  | 'Freight Forwarder';
 
 export interface User {
   id: string;
@@ -153,20 +201,47 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       // Redirect directly to appropriate portal based on role
-      const portalRoutes: Record<UserRole, string> = {
-        ECTA: '/portals/ecta',
-        ECX: '/portals/ecx',
-        NBE: '/portals/nbe',
-        BANKS: '/portals/banks',
-        CUSTOMS: '/portals/customs',
-        SHIPPING: '/portals/shipping',
-        EXPORTER: '/portals/exporter',  // Route exporters to their own portal
-        ADMIN: '/admin', // Super Admin Portal
+      // Map organization-level roles to their portals
+      const getPortalRoute = (role: string): string => {
+        // ECTA roles
+        if (['ECTA', 'Quality Inspector', 'Lab Analyst', 'Phytosanitary Officer', 'License Officer', 'Permit Officer', 'ECTA Officer'].includes(role)) {
+          return '/portals/ecta';
+        }
+        // ECX roles
+        if (['ECX', 'Grading Officer', 'Warehouse Officer', 'Registration Officer', 'Release Officer', 'ECX Officer'].includes(role)) {
+          return '/portals/ecx';
+        }
+        // NBE roles
+        if (['NBE', 'NBE Officer', 'Forex Officer', 'Screening Officer', 'Compliance Officer', 'Exchange Rate Officer', 'Settlement Officer'].includes(role)) {
+          return '/portals/nbe';
+        }
+        // Banks roles
+        if (['BANKS', 'Bank Officer', 'Branch Manager', 'Trade Finance Officer', 'Credit Analyst', 'LC Officer', 'Forex Officer'].includes(role)) {
+          return '/portals/banks';
+        }
+        // Customs roles
+        if (['CUSTOMS', 'Customs Officer', 'Inspection Officer', 'Clearance Officer', 'Risk Analyst', 'ASYCUDA Officer', 'Duty Assessment Officer'].includes(role)) {
+          return '/portals/customs';
+        }
+        // Shipping roles
+        if (['SHIPPING', 'Logistics Officer', 'Documentation Officer', 'Operations Manager', 'Shipping Coordinator', 'Freight Forwarder'].includes(role)) {
+          return '/portals/shipping';
+        }
+        // Exporter
+        if (role === 'EXPORTER') {
+          return '/portals/exporter';
+        }
+        // Admin
+        if (role === 'ADMIN') {
+          return '/admin';
+        }
+        // Default fallback
+        return '/portals/ecta';
       };
 
       // Always redirect to specific portal, never to home
-      const roleRoute = portalRoutes[userData.role as keyof typeof portalRoutes];
-      router.push(roleRoute || '/portals/ecta');
+      const roleRoute = getPortalRoute(userData.role);
+      router.push(roleRoute);
     } catch (error: any) {
       throw new Error(error.response?.data?.message || 'Login failed');
     }

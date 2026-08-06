@@ -52,6 +52,7 @@ import { apiFetch } from '@/config/api.config';
 import SWIFTMonitoringWrapper from '@/components/nbe/SWIFTMonitoringWrapper';
 import AuditTrailViewer from './AuditTrailViewer';
 import UserManagement from '@/components/admin/UserManagement';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
@@ -122,6 +123,8 @@ const StatusChip: React.FC<{ status: string }> = ({ status }) => (
 );
 
 const NBEPortal: React.FC = () => {
+  const { user } = useAuth();
+  
   // NBE Brand Colors
   const BRAND_COLOR = '#8B6F47';  // Bronze
   const SECONDARY_COLOR = '#C4A574';  // Light Bronze
@@ -560,6 +563,26 @@ const NBEPortal: React.FC = () => {
   };
 
   const stats = getContractStats();
+
+  // Define role-based tab access for NBE
+  const getRoleBasedTabs = () => {
+    const userRole = user?.role || '';
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    const allTabs = [
+      { index: 0, label: `Forex Monitoring`, icon: <CurrencyExchange sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer'] },
+      { index: 1, label: `Exchange Rates`, icon: <TrendingUp sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Exchange Rate Officer'] },
+      { index: 2, label: 'SWIFT Monitoring', icon: <FlightTakeoff sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Settlement Officer'] },
+      { index: 3, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
+      { index: 4, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
+      { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
+    ];
+    
+    if (isSuperAdmin) return allTabs;
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
 
   const contractColumns: GridColDef[] = [
     { field: 'contractId', headerName: 'Contract ID', width: 150 },
@@ -1264,12 +1287,18 @@ const NBEPortal: React.FC = () => {
               }
             }}
           >
-            <Tab label={`Forex Monitoring (${forexAllocations.length})`} icon={<CurrencyExchange sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`Exchange Rates (${exchangeRates.length})`} icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="SWIFT Monitoring" icon={<FlightTakeoff sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="Policy & Compliance" icon={<Gavel sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="Analytics" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="User Management" icon={<Person sx={{ fontSize: 20 }} />} iconPosition="start" />
+            {visibleTabs.map((tab) => (
+              <Tab 
+                key={tab.index}
+                label={
+                  tab.index === 0 ? `${tab.label} (${forexAllocations.length})` :
+                  tab.index === 1 ? `${tab.label} (${exchangeRates.length})` :
+                  tab.label
+                } 
+                icon={tab.icon} 
+                iconPosition="start" 
+              />
+            ))}
           </Tabs>
         </Box>
 

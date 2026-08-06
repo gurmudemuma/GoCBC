@@ -634,7 +634,23 @@ function Start-API {
     # Aggressively kill any existing processes
     Write-Step "Stopping any existing API processes..."
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*api*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    
+    # Kill any process holding port 3001
+    Write-Step "Clearing port 3001..."
+    try {
+        $port3001Process = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        if ($port3001Process) {
+            foreach ($pid in $port3001Process) {
+                Write-Host "  Killing process $pid on port 3001..." -NoNewline
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Write-Host " done" -ForegroundColor Green
+            }
+        }
+    } catch {
+        Write-Warning "Could not check port 3001: $($_.Exception.Message)"
+    }
+    
+    Start-Sleep -Seconds 3
     
     Push-Location $API_DIR
     try {
@@ -693,7 +709,30 @@ function Start-UI {
     # Aggressively kill any existing processes
     Write-Step "Stopping any existing UI processes..."
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*ui*" -or $_.Path -like "*next*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    
+    # Kill any process holding port 3000
+    Write-Step "Clearing port 3000..."
+    try {
+        $port3000Process = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        if ($port3000Process) {
+            foreach ($pid in $port3000Process) {
+                Write-Host "  Killing process $pid on port 3000..." -NoNewline
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Write-Host " done" -ForegroundColor Green
+            }
+        }
+    } catch {
+        Write-Warning "Could not check port 3000: $($_.Exception.Message)"
+    }
+    
+    Start-Sleep -Seconds 3
+    
+    # Clean Next.js cache if it exists
+    $nextCache = Join-Path $UI_DIR ".next"
+    if (Test-Path $nextCache) {
+        Write-Step "Cleaning Next.js cache..."
+        Remove-Item $nextCache -Recurse -Force -ErrorAction SilentlyContinue
+    }
     
     Push-Location $UI_DIR
     try {

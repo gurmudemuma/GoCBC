@@ -14,7 +14,7 @@ export interface EnvironmentConfig {
   documentEncryptionKey: string;
   
   // Database
-  databasePath: string;
+  databaseUrl: string;
   
   // Fabric
   fabricEnabled: boolean;
@@ -78,10 +78,11 @@ const ENV_RULES: EnvValidationRule[] = [
   },
   
   // Database
+  // Database configuration
   {
-    name: 'DATABASE_PATH',
+    name: 'DATABASE_URL',
     required: false,
-    default: './cecbs.db',
+    default: 'postgresql://cecbs:cecbs123@localhost:5432/cecbs',
   },
   
   // Fabric
@@ -281,7 +282,7 @@ export class EnvironmentValidator {
       documentEncryptionKey: process.env.DOCUMENT_ENCRYPTION_KEY!,
       
       // Database
-      databasePath: process.env.DATABASE_PATH || './cecbs.db',
+      databaseUrl: process.env.DATABASE_URL || 'postgresql://cecbs:cecbs123@localhost:5432/cecbs',
       
       // Fabric
       fabricEnabled: process.env.FABRIC_ENABLED === 'true',
@@ -308,7 +309,7 @@ export class EnvironmentValidator {
     logger.info('📋 Environment Configuration:');
     logger.info(`  Node Environment: ${config.nodeEnv}`);
     logger.info(`  Port: ${config.port}`);
-    logger.info(`  Database: ${config.databasePath}`);
+    logger.info(`  Database: ${config.databaseUrl}`);
     logger.info(`  Fabric Enabled: ${config.fabricEnabled}`);
     if (config.fabricEnabled) {
       logger.info(`  Fabric MSP: ${config.fabricMspId}`);

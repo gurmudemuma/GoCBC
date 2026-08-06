@@ -36,7 +36,7 @@ router.post('/login', async (req: Request, res: Response) => {
     const user = await db.get(
       `SELECT id, username, email, password_hash, full_name, role, organization,
        exporter_id, ecta_license, phone, permissions, status
-       FROM users WHERE username = ?`,
+       FROM users WHERE username = $1`,
       [username]
     );
 
@@ -207,20 +207,20 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Update last login
     await db.run(
-      'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
+      'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
       [user.id]
     );
 
-    // Log audit
-    await db.logAudit(
-      user.id,
-      'LOGIN',
-      'user',
-      user.id.toString(),
-      { username: user.username },
-      req.ip,
-      req.headers['user-agent']
-    );
+    // Log audit trail
+    try {
+      await db.run(
+        `INSERT INTO audit_log (user_id, action, entity_type, entity_id, details, ip_address, user_agent, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)`,
+        [user.id, 'LOGIN', 'user', user.id.toString(), JSON.stringify({ username: user.username }), req.ip || 'unknown', req.headers['user-agent'] || 'unknown']
+      );
+    } catch (auditError) {
+      logger.warn('Failed to log audit trail:', auditError);
+    }
 
     // Remove sensitive data from response
     const { password_hash, ...userWithoutPassword } = user;
@@ -289,7 +289,7 @@ router.get('/me', async (req: Request, res: Response) => {
     const user = await db.get(
       `SELECT id, username, email, full_name, role, organization,
        exporter_id, ecta_license, phone, permissions, status, last_login
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [userId]
     );
 

@@ -8,7 +8,16 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 
 export default function CustomsPortalPage() {
   return (
-    <ProtectedRoute allowedRoles={['CUSTOMS', 'ADMIN']}>
+    <ProtectedRoute allowedRoles={[
+      'CUSTOMS', 
+      'ADMIN',
+      'Customs Officer',
+      'Inspection Officer',
+      'Clearance Officer',
+      'Risk Analyst',
+      'ASYCUDA Officer',
+      'Duty Assessment Officer'
+    ]}>
       <Head>
         <title>Customs Portal - CECBS</title>
         <meta name="description" content="Ethiopian Customs Commission Portal" />

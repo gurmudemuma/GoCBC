@@ -32,6 +32,51 @@ export default function Home() {
           SHIPPING: '/portals/shipping',
           EXPORTER: '/portals/exporter',
           ADMIN: '/admin', // Super Admin Portal
+          
+          // ECTA sub-roles
+          'Quality Inspector': '/portals/ecta',
+          'Lab Analyst': '/portals/ecta',
+          'Phytosanitary Officer': '/portals/ecta',
+          'License Officer': '/portals/ecta',
+          'Permit Officer': '/portals/ecta',
+          'ECTA Officer': '/portals/ecta',
+          
+          // ECX sub-roles
+          'Grading Officer': '/portals/ecx',
+          'Warehouse Officer': '/portals/ecx',
+          'Registration Officer': '/portals/ecx',
+          'Release Officer': '/portals/ecx',
+          'ECX Officer': '/portals/ecx',
+          
+          // NBE sub-roles
+          'NBE Officer': '/portals/nbe',
+          'Forex Officer': '/portals/nbe',
+          'Screening Officer': '/portals/nbe',
+          'Compliance Officer': '/portals/nbe',
+          'Exchange Rate Officer': '/portals/nbe',
+          'Settlement Officer': '/portals/nbe',
+          
+          // BANKS sub-roles
+          'Bank Officer': '/portals/banks',
+          'Branch Manager': '/portals/banks',
+          'Trade Finance Officer': '/portals/banks',
+          'Credit Analyst': '/portals/banks',
+          'LC Officer': '/portals/banks',
+          
+          // CUSTOMS sub-roles
+          'Customs Officer': '/portals/customs',
+          'Inspection Officer': '/portals/customs',
+          'Clearance Officer': '/portals/customs',
+          'Risk Analyst': '/portals/customs',
+          'ASYCUDA Officer': '/portals/customs',
+          'Duty Assessment Officer': '/portals/customs',
+          
+          // SHIPPING sub-roles
+          'Logistics Officer': '/portals/shipping',
+          'Documentation Officer': '/portals/shipping',
+          'Operations Manager': '/portals/shipping',
+          'Shipping Coordinator': '/portals/shipping',
+          'Freight Forwarder': '/portals/shipping',
         };
         
         const targetPortal = portalRoutes[user.role] || '/portals/ecta';

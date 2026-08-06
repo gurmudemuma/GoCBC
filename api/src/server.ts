@@ -65,6 +65,9 @@ import landTransportRoutes from './routes/land-transport';
 import retentionRoutes from './routes/retention';
 import lcAmendmentsRoutes from './routes/lc-amendments';
 import swiftRoutes from './routes/swift';
+import eudrRoutes from './routes/eudr';
+import courierRoutes from './routes/courier';
+import statusRoutes from './routes/status';
 
 // Load environment variables
 dotenv.config();
@@ -203,15 +206,24 @@ class CECBSServer {
     apiV1.use('/payments', authMiddleware, paymentsRoutes);
 
     // V2.3 Document Storage (Off-chain with IPFS)
-    apiV1.use('/documents', authMiddleware, documentsRoutes);
+    // Note: authMiddleware NOT applied here - individual routes handle auth
+    // /upload-registration is public for exporter registration
+    apiV1.use('/documents', documentsRoutes);
 
     // V2.4 Real-World Workflow Alignment
-    apiV1.use('/shipments', authMiddleware, landTransportRoutes); // Land transport tracking
+    apiV1.use('/land-transport', authMiddleware, landTransportRoutes); // Land transport tracking
     apiV1.use('/retention', authMiddleware, retentionRoutes); // NBE retention policy (FIXED: was /forex, conflicted with main forex routes)
     apiV1.use('/lc', authMiddleware, lcAmendmentsRoutes); // LC amendments & discrepancies
 
     // V2.5 SWIFT Message Management
     apiV1.use('/swift', authMiddleware, swiftRoutes); // SWIFT message operations
+
+    // V2.6 Workflow Completion - EUDR & Courier Tracking
+    apiV1.use('/eudr', authMiddleware, eudrRoutes); // EUDR compliance tracking
+    apiV1.use('/courier', authMiddleware, courierRoutes); // Document courier tracking
+
+    // V2.7 Status Management System
+    apiV1.use('/status', authMiddleware, statusRoutes); // Unified status management
 
     this.app.use('/api/v1', apiV1);
 
@@ -338,7 +350,7 @@ class CECBSServer {
     }
 
     await this.fabricService.disconnect();
-    await this.databaseService.disconnect();
+    await this.databaseService.close();
     
     logger.info('Server shutdown complete');
     process.exit(0);

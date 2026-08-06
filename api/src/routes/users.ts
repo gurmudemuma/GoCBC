@@ -38,7 +38,7 @@ async function logUserActivity(
       `INSERT INTO user_activity_log (
         user_id, username, action, target_user_id, target_username,
         details, ip_address, user_agent, performed_by, performed_by_role, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)`,
       [
         userId,
         username,
@@ -133,24 +133,25 @@ router.get('/',
 
       let query = 'SELECT id, username, email, full_name, role, organization, status, created_at, last_login FROM users WHERE 1=1';
       const params: any[] = [];
+      let paramIndex = 1;
 
       // Organization-scoped access: non-ADMIN users can only see their organization
       if (!isAdmin) {
-        query += ' AND organization = ?';
+        query += ` AND organization = $${paramIndex++}`;
         params.push(userOrganization);
       }
 
       if (role) {
-        query += ' AND role = ?';
+        query += ` AND role = $${paramIndex++}`;
         params.push(role);
       }
 
       if (status) {
-        query += ' AND status = ?';
+        query += ` AND status = $${paramIndex++}`;
         params.push(status);
       }
 
-      query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+      query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
       params.push(parseInt(limit as string), parseInt(offset as string));
 
       const users = await db.all(query, params);
@@ -158,19 +159,20 @@ router.get('/',
       // Get total count
       let countQuery = 'SELECT COUNT(*) as total FROM users WHERE 1=1';
       const countParams: any[] = [];
+      let countParamIndex = 1;
 
       if (!isAdmin) {
-        countQuery += ' AND organization = ?';
+        countQuery += ` AND organization = $${countParamIndex++}`;
         countParams.push(userOrganization);
       }
 
       if (role) {
-        countQuery += ' AND role = ?';
+        countQuery += ` AND role = $${countParamIndex++}`;
         countParams.push(role);
       }
 
       if (status) {
-        countQuery += ' AND status = ?';
+        countQuery += ` AND status = $${countParamIndex++}`;
         countParams.push(status);
       }
 
@@ -347,7 +349,7 @@ router.post('/',
 
       // Check if username or email already exists
       const existingUser = await db.get(
-        'SELECT id FROM users WHERE username = ? OR email = ?',
+        'SELECT id FROM users WHERE username = $1 OR email = $2',
         [username, email]
       );
 
@@ -370,7 +372,7 @@ router.post('/',
         `INSERT INTO users (
           username, email, password_hash, full_name, role, organization,
           exporter_id, ecta_license, phone, permissions, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', CURRENT_TIMESTAMP) RETURNING id`,
         [
           username,
           email,
@@ -385,6 +387,8 @@ router.post('/',
         ]
       );
 
+      const newUserId = result.rows[0]?.id || 'unknown';
+
       logger.info(`User created: ${username} (${role}) by ${requestingUser.username} (${userRole})`);
 
       // Log to audit trail
@@ -392,7 +396,7 @@ router.post('/',
         requestingUser.userId,
         requestingUser.username,
         'CREATE_USER',
-        result.lastID.toString(),
+        newUserId.toString(),
         username,
         { role, organization, email },
         requestingUser.username,
@@ -403,7 +407,7 @@ router.post('/',
       res.status(201).json({
         success: true,
         data: {
-          id: result.lastID,
+          id: newUserId,
           username,
           email,
           fullName,
@@ -463,7 +467,7 @@ router.get('/:userId',
       const requestingUser = (req as any).user;
       const isAdmin = requestingUser.role === 'ADMIN';
       const isSameOrg = async (targetUserId: string) => {
-        const targetUser = await db.get('SELECT organization FROM users WHERE id = ?', [targetUserId]);
+        const targetUser = await db.get('SELECT organization FROM users WHERE id = $1', [targetUserId]);
         return targetUser && targetUser.organization === requestingUser.organization;
       };
 
@@ -500,7 +504,7 @@ router.get('/:userId',
       const user = await db.get(
         `SELECT id, username, email, full_name, role, organization, 
          exporter_id, ecta_license, phone, permissions, status, created_at, last_login
-         FROM users WHERE id = ?`,
+         FROM users WHERE id = $1`,
         [userId]
       );
 
@@ -594,8 +598,8 @@ router.put('/:userId',
       const isOwnProfile = requestingUser.userId === userId;
       const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
 
-      // Get target user to check organization
-      const targetUser = await db.get('SELECT organization FROM users WHERE id = ?', [userId]);
+      // Get target user to check organization and role
+      const targetUser = await db.get('SELECT organization, role, username FROM users WHERE id = $1', [userId]);
       if (!targetUser) {
         return res.status(404).json({
           success: false,
@@ -605,6 +609,19 @@ router.put('/:userId',
       }
 
       const isSameOrg = targetUser.organization === requestingUser.organization;
+      const targetIsPortalAdmin = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(targetUser.role);
+
+      // CRITICAL: Only super admin (ADMIN role) can modify portal admins
+      if (targetIsPortalAdmin && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only super administrators can modify portal administrators',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Check permissions
       if (!isOwnProfile && !canManageUsers) {
@@ -666,10 +683,10 @@ router.put('/:userId',
         });
       }
 
-      updates.push('updated_at = datetime("now")');
+      updates.push('updated_at = CURRENT_TIMESTAMP');
       params.push(userId);
 
-      const query = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+      const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $1`;
       await db.run(query, params);
 
       logger.info(`User updated: ${userId} by ${requestingUser.username}`);
@@ -678,7 +695,7 @@ router.put('/:userId',
       const updatedUser = await db.get(
         `SELECT id, username, email, full_name, role, organization, 
          exporter_id, ecta_license, phone, permissions, status
-         FROM users WHERE id = ?`,
+         FROM users WHERE id = $1`,
         [userId]
       );
 
@@ -771,7 +788,7 @@ router.put('/:userId/password',
 
       // Get current password hash
       const user = await db.get(
-        'SELECT password_hash FROM users WHERE id = ?',
+        'SELECT password_hash FROM users WHERE id = $1',
         [userId]
       );
 
@@ -805,7 +822,7 @@ router.put('/:userId/password',
 
       // Update password
       await db.run(
-        'UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE id = ?',
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [hashedPassword, userId]
       );
 
@@ -897,8 +914,8 @@ router.put('/:userId/status',
         });
       }
 
-      // Get target user to check organization
-      const targetUser = await db.get('SELECT username, organization FROM users WHERE id = ?', [userId]);
+      // Get target user to check organization and role
+      const targetUser = await db.get('SELECT username, organization, role FROM users WHERE id = $1', [userId]);
       if (!targetUser) {
         return res.status(404).json({
           success: false,
@@ -908,6 +925,19 @@ router.put('/:userId/status',
       }
 
       const isSameOrg = targetUser.organization === requestingUser.organization;
+      const targetIsPortalAdmin = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(targetUser.role);
+
+      // CRITICAL: Only super admin (ADMIN role) can suspend/activate portal admins
+      if (targetIsPortalAdmin && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only super administrators can change status of portal administrators',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Non-admin users can only change status of users in their organization
       if (!isAdmin && !isSameOrg) {
@@ -923,7 +953,7 @@ router.put('/:userId/status',
 
       // Update status
       await db.run(
-        'UPDATE users SET status = ?, updated_at = datetime("now") WHERE id = ?',
+        'UPDATE users SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [status, userId]
       );
 
@@ -1014,7 +1044,7 @@ router.post('/:userId/reset-password',
 
       // Get user details
       const user = await db.get(
-        'SELECT id, username, email, full_name FROM users WHERE id = ?',
+        'SELECT id, username, email, full_name FROM users WHERE id = $1',
         [userId]
       );
 
@@ -1026,7 +1056,7 @@ router.post('/:userId/reset-password',
         const exporterApp = await db.get(
           `SELECT * FROM exporter_applications 
            WHERE status = 'approved' 
-           AND id = ?
+           AND id = $1
            LIMIT 1`,
           [userId]
         );
@@ -1049,7 +1079,7 @@ router.post('/:userId/reset-password',
             `INSERT INTO users (
               username, email, password_hash, full_name, role, organization,
               phone, permissions, status, exporter_id, ecta_license, created_at
-            ) VALUES (?, ?, ?, ?, 'EXPORTER', ?, ?, ?, 'active', ?, ?, datetime('now'))`,
+            ) VALUES ($1, $2, $3, $4, 'EXPORTER', $5, $6, $7, 'active', $8, $9, CURRENT_TIMESTAMP)`,
             [
               exporterApp.exporter_id,
               exporterApp.email,
@@ -1096,7 +1126,7 @@ router.post('/:userId/reset-password',
 
       // Update password
       await db.run(
-        'UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE id = ?',
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [hashedPassword, userId]
       );
 
@@ -1208,13 +1238,14 @@ router.post('/bulk-reset-passwords',
 
       // Get all users
       const users = await db.all(
-        'SELECT id, username, email FROM users WHERE status = "active"'
+        'SELECT id, username, email FROM users WHERE status = $1',
+        ['active']
       );
 
       // Update all passwords
       await db.run(
-        'UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE status = "active"',
-        [hashedPassword]
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE status = $2',
+        [hashedPassword, 'active']
       );
 
       logger.warn(`⚠️ BULK PASSWORD RESET performed by admin: ${requestingUser.username} - ${users.length} users affected`);
@@ -1306,8 +1337,8 @@ router.delete('/:userId',
         });
       }
 
-      // Get target user to check organization
-      const targetUser = await db.get('SELECT username, organization FROM users WHERE id = ?', [userId]);
+      // Get target user to check organization and role
+      const targetUser = await db.get('SELECT username, organization, role FROM users WHERE id = $1', [userId]);
       
       if (!targetUser) {
         return res.status(404).json({
@@ -1321,6 +1352,19 @@ router.delete('/:userId',
       }
 
       const isSameOrg = targetUser.organization === requestingUser.organization;
+      const targetIsPortalAdmin = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(targetUser.role);
+
+      // CRITICAL: Only super admin (ADMIN role) can delete portal admins
+      if (targetIsPortalAdmin && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only super administrators can delete portal administrators',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Non-admin users can only delete users in their organization
       if (!isAdmin && !isSameOrg) {
@@ -1336,7 +1380,7 @@ router.delete('/:userId',
 
       // Soft delete: set status to inactive
       await db.run(
-        'UPDATE users SET status = "inactive", updated_at = datetime("now") WHERE id = ?',
+        'UPDATE users SET status = "inactive", updated_at = CURRENT_TIMESTAMP WHERE id = $1',
         [userId]
       );
 
@@ -1451,7 +1495,7 @@ router.put('/:userId/permissions',
 
       // Get current user
       const user = await db.get(
-        'SELECT id, username, permissions FROM users WHERE id = ?',
+        'SELECT id, username, permissions FROM users WHERE id = $1',
         [userId]
       );
 
@@ -1489,7 +1533,7 @@ router.put('/:userId/permissions',
 
       // Update permissions
       await db.run(
-        'UPDATE users SET permissions = ?, updated_at = datetime("now") WHERE id = ?',
+        'UPDATE users SET permissions = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [JSON.stringify(newPermissions), userId]
       );
 

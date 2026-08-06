@@ -64,7 +64,11 @@ import {
   Block,
   DataUsage,
   History as HistoryIcon,
+  OpenInNew,
+  Visibility,
+  Apps,
 } from '@mui/icons-material';
+import { useRouter } from 'next/router';
 import {
   LineChart,
   Line,
@@ -149,6 +153,7 @@ interface CertificateExpiry {
 
 const AdminPortal: React.FC = () => {
   const { user } = useAuth();
+  const router = useRouter();
   const [tabValue, setTabValue] = useState(0);
   const [stats, setStats] = useState<SystemStats>({
     totalUsers: 0,
@@ -611,6 +616,11 @@ const AdminPortal: React.FC = () => {
           <Tab 
             label="Settings" 
             icon={<Settings sx={{ fontSize: 20 }} />} 
+            iconPosition="start" 
+          />
+          <Tab 
+            label="Portal Access" 
+            icon={<Apps sx={{ fontSize: 20 }} />} 
             iconPosition="start" 
           />
         </Tabs>
@@ -1326,6 +1336,387 @@ const AdminPortal: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </TabPanel>
+
+      <TabPanel value={tabValue} index={4}>
+        {/* Portal Access Tab - Super Admin Quick Navigation */}
+        <Grid container spacing={3}>
+          <Grid item xs={12}>
+            <Alert severity="info" icon={<Security />}>
+              <Typography variant="body2">
+                <strong>Super Admin Portal Access:</strong> As a Super Administrator, you can access ALL portals in the system. 
+                Click any portal below to view and manage operations across the entire consortium.
+              </Typography>
+            </Alert>
+          </Grid>
+
+          {/* ECTA Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#e3f2fd', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#bbdefb'
+                } 
+              }}
+              onClick={() => router.push('/portals/ecta')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <Coffee sx={{ fontSize: 48, color: '#1976d2' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#1976d2">
+                      ECTA Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Ethiopian Coffee & Tea Authority
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Quality inspection, lab analysis, phytosanitary certificates, licenses & permits
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Quality Inspector" size="small" variant="outlined" />
+                  <Chip label="Lab Analyst" size="small" variant="outlined" />
+                  <Chip label="Phyto Officer" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#1976d2', '&:hover': { bgcolor: '#1565c0' } }}
+                >
+                  Access ECTA Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* ECX Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#e8f5e9', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#c8e6c9'
+                } 
+              }}
+              onClick={() => router.push('/portals/ecx')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <TrendingUp sx={{ fontSize: 48, color: '#388e3c' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#388e3c">
+                      ECX Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Ethiopian Commodity Exchange
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Coffee grading, warehouse management, contract registration, commodity release
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Grading Officer" size="small" variant="outlined" />
+                  <Chip label="Warehouse Officer" size="small" variant="outlined" />
+                  <Chip label="ECX Officer" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#388e3c', '&:hover': { bgcolor: '#2e7d32' } }}
+                >
+                  Access ECX Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* NBE Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#ffebee', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#ffcdd2'
+                } 
+              }}
+              onClick={() => router.push('/portals/nbe')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <AccountBalance sx={{ fontSize: 48, color: '#d32f2f' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#d32f2f">
+                      NBE Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      National Bank of Ethiopia
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Foreign exchange allocation, forex screening, compliance, exchange rates
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Forex Officer" size="small" variant="outlined" />
+                  <Chip label="Compliance Officer" size="small" variant="outlined" />
+                  <Chip label="NBE Officer" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#d32f2f', '&:hover': { bgcolor: '#c62828' } }}
+                >
+                  Access NBE Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Banks Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#fff3e0', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#ffe0b2'
+                } 
+              }}
+              onClick={() => router.push('/portals/banks')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <AccountBalance sx={{ fontSize: 48, color: '#f57c00' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#f57c00">
+                      Banks Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Commercial Banks
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Letter of Credit (LC) issuance, trade finance, credit analysis, amendments
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="LC Officer" size="small" variant="outlined" />
+                  <Chip label="Trade Finance" size="small" variant="outlined" />
+                  <Chip label="Bank Officer" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#f57c00', '&:hover': { bgcolor: '#ef6c00' } }}
+                >
+                  Access Banks Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Customs Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#f3e5f5', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#e1bee7'
+                } 
+              }}
+              onClick={() => router.push('/portals/customs')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <Gavel sx={{ fontSize: 48, color: '#7b1fa2' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#7b1fa2">
+                      Customs Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Ethiopian Customs Commission
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Customs clearance, inspection, risk analysis, ASYCUDA system integration
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Customs Officer" size="small" variant="outlined" />
+                  <Chip label="Clearance Officer" size="small" variant="outlined" />
+                  <Chip label="Risk Analyst" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#7b1fa2', '&:hover': { bgcolor: '#6a1b9a' } }}
+                >
+                  Access Customs Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Shipping Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#e0f7fa', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#b2ebf2'
+                } 
+              }}
+              onClick={() => router.push('/portals/shipping')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <LocalShipping sx={{ fontSize: 48, color: '#0097a7' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#0097a7">
+                      Shipping Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Maritime Logistics
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Container tracking, bill of lading, freight forwarding, documentation
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Logistics Officer" size="small" variant="outlined" />
+                  <Chip label="Freight Forwarder" size="small" variant="outlined" />
+                  <Chip label="Doc Officer" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#0097a7', '&:hover': { bgcolor: '#00838f' } }}
+                >
+                  Access Shipping Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Exporter Portal */}
+          <Grid item xs={12} md={6} lg={4}>
+            <Card 
+              sx={{ 
+                bgcolor: '#f1f8e9', 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': { 
+                  transform: 'translateY(-8px)', 
+                  boxShadow: 6,
+                  bgcolor: '#dcedc8'
+                } 
+              }}
+              onClick={() => router.push('/portals/exporter')}
+            >
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <Business sx={{ fontSize: 48, color: '#689f38' }} />
+                  <Box>
+                    <Typography variant="h6" fontWeight="bold" color="#689f38">
+                      Exporter Portal
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Coffee Exporters Dashboard
+                    </Typography>
+                  </Box>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Contract management, shipment tracking, document submission, payment processing
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="Export Operations" size="small" variant="outlined" />
+                  <Chip label="Contract Mgmt" size="small" variant="outlined" />
+                  <Chip label="Documentation" size="small" variant="outlined" />
+                </Box>
+                <Button 
+                  variant="contained" 
+                  fullWidth 
+                  endIcon={<OpenInNew />}
+                  sx={{ bgcolor: '#689f38', '&:hover': { bgcolor: '#558b2f' } }}
+                >
+                  Access Exporter Portal
+                </Button>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Quick Stats */}
+          <Grid item xs={12}>
+            <Card sx={{ bgcolor: '#fafafa' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Visibility color="primary" />
+                  Portal Access Summary
+                </Typography>
+                <Grid container spacing={2} sx={{ mt: 1 }}>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                      <Typography variant="h4" fontWeight="bold" color="primary">7</Typography>
+                      <Typography variant="body2" color="text.secondary">Total Portals</Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                      <Typography variant="h4" fontWeight="bold" color="success.main">{stats.totalOrganizations}</Typography>
+                      <Typography variant="body2" color="text.secondary">Organizations</Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                      <Typography variant="h4" fontWeight="bold" color="warning.main">{stats.totalUsers}</Typography>
+                      <Typography variant="body2" color="text.secondary">Total Users</Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                      <Typography variant="h4" fontWeight="bold" color="error.main">FULL</Typography>
+                      <Typography variant="body2" color="text.secondary">Admin Access</Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
               </CardContent>
             </Card>
           </Grid>

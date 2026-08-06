@@ -7,6 +7,7 @@ import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { body, param, query } from 'express-validator';
 import { dedupeById, isValidShipment } from '../utils/dataFilters';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -722,10 +723,39 @@ router.put('/:shipmentID/status',
       const { shipmentID } = req.params;
       const { status } = req.body;
 
+      // Get current shipment status for validation
+      const shipmentData = await fabricService.getShipment(shipmentID);
+      if (!shipmentData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
+      
+      // Validate status transition
+      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
+            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       const result = await fabricService.updateShipmentStatus(shipmentID, status);
 
       if (result.success) {
-        logger.info(`Shipment status updated successfully: ${shipmentID} - ${status}`);
+        // Update status with cascading effects
+        await statusManager.updateEntityStatus('SHIPMENT', shipmentID, currentStatus, status);
+        
+        logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
         res.json({
           success: true,
           data: result.data,

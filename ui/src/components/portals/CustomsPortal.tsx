@@ -126,6 +126,29 @@ const CustomsPortal: React.FC = () => {
   const [newDeclarationDialogOpen, setNewDeclarationDialogOpen] = useState(false);
   const [customsDocUploadOpen, setCustomsDocUploadOpen] = useState(false);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
+
+  // Get current user role from local storage (matching other portals)
+  const userRole = JSON.parse(localStorage.getItem('user') || '{}')?.role || '';
+
+  // Role-based tab filtering
+  const getRoleBasedTabs = () => {
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    const allTabs = [
+      { index: 0, label: 'Permit Ready', icon: <Assignment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer'] },
+      { index: 1, label: 'Submitted', icon: <LocalShipping />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
+      { index: 2, label: 'Inspecting', icon: <Security />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer'] },
+      { index: 3, label: 'Under Review', icon: <Warning />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
+      { index: 4, label: 'Cleared', icon: <CheckCircle />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
+      { index: 5, label: 'Rejected', icon: <Cancel />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
+      { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
+    ];
+    
+    if (isSuperAdmin) return allTabs;
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
   
   // Workflow filter state
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -1796,13 +1819,14 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
             }
           }}
         >
-          <Tab label="Permit Ready" icon={<Assignment />} iconPosition="start" />
-          <Tab label="Submitted" icon={<LocalShipping />} iconPosition="start" />
-          <Tab label="Inspecting" icon={<Security />} iconPosition="start" />
-          <Tab label="Under Review" icon={<Warning />} iconPosition="start" />
-          <Tab label="Cleared" icon={<CheckCircle />} iconPosition="start" />
-          <Tab label="Rejected" icon={<Cancel />} iconPosition="start" />
-          <Tab label="User Management" icon={<Person />} iconPosition="start" />
+          {visibleTabs.map(tab => (
+            <Tab 
+              key={tab.index}
+              label={tab.label} 
+              icon={tab.icon} 
+              iconPosition="start" 
+            />
+          ))}
         </Tabs>
       </Paper>
 

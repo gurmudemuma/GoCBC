@@ -24,6 +24,7 @@ import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
 import UserManagement from '@/components/admin/UserManagement';
+import { useAuth } from '@/contexts/AuthContext';
 
 
 interface CoffeeLot {
@@ -59,6 +60,7 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
 
 
 const ECXPortal: React.FC = () => {
+  const { user } = useAuth();
   const BRAND_COLOR = '#0F47AF';
   const SECONDARY_COLOR = '#FCDD09';
   const { notification, showSuccess, showError, closeNotification } = useNotification();
@@ -271,6 +273,24 @@ const ECXPortal: React.FC = () => {
     return map[s] || 'default';
   };
 
+  // Define role-based tab access for ECX
+  const getRoleBasedTabs = () => {
+    const userRole = user?.role || '';
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    const allTabs = [
+      { index: 0, label: `Coffee Lots`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECX', 'ADMIN', 'ECX Officer', 'Grading Officer', 'Warehouse Officer', 'Registration Officer', 'Release Officer'] },
+      { index: 1, label: 'Market Prices', icon: <TrendingUp sx={{ fontSize: 20 }} />, roles: ['ECX', 'ADMIN', 'ECX Officer'] },
+      { index: 2, label: 'Grading Standards', icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECX', 'ADMIN', 'ECX Officer', 'Grading Officer'] },
+      { index: 3, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECX', 'ECX Portal Administrator'] },
+    ];
+    
+    if (isSuperAdmin) return allTabs;
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
+
   const stats = {
     warehoused: lots.filter(l => l.status === 'WAREHOUSED').length,
     graded: lots.filter(l => l.status === 'GRADED').length,
@@ -411,10 +431,14 @@ const ECXPortal: React.FC = () => {
               }
             }}
           >
-            <Tab label={`Coffee Lots (${allLots.length})`} icon={<Coffee sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="Market Prices" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="Grading Standards" icon={<Science sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="User Management" icon={<Person sx={{ fontSize: 20 }} />} iconPosition="start" />
+            {visibleTabs.map((tab) => (
+              <Tab 
+                key={tab.index}
+                label={tab.index === 0 ? `${tab.label} (${allLots.length})` : tab.label} 
+                icon={tab.icon} 
+                iconPosition="start" 
+              />
+            ))}
           </Tabs>
         </Box>
 

@@ -352,7 +352,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                         // Remove /api/v1/ prefix if present to avoid duplication
                                         docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
                                       } else if (doc.id) {
-                                        docUrl = `${apiUrl}/documents/${doc.id}`;
+                                        docUrl = `${apiUrl}/documents/${doc.id}/download`;
                                       } else {
                                         throw new Error('Document ID is missing');
                                       }
@@ -420,7 +420,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                         // Remove /api/v1/ prefix if present to avoid duplication
                                         docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
                                       } else if (doc.id) {
-                                        docUrl = `${apiUrl}/documents/${doc.id}`;
+                                        docUrl = `${apiUrl}/documents/${doc.id}/download`;
                                       } else {
                                         throw new Error('Document ID is missing');
                                       }

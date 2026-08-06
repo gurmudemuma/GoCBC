@@ -5,6 +5,7 @@ import { authMiddleware } from '../middleware/auth';
 import DatabaseService from '../services/databaseService';
 import RiskService from '../services/riskService';
 import { dedupeById, isValidDeclaration } from '../utils/dataFilters';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -247,10 +248,18 @@ router.post('/declaration/:declarationId/clear', async (req, res) => {
     if (!declarationResult.success) {
       return res.status(404).json({ success: false, error: declarationResult.error });
     }
-    if (currentStatus !== 'UNDER_REVIEW') {
+    
+    // Validate status transition
+    const isValid = statusManager.validateTransition('CUSTOMS', currentStatus, 'CLEARED');
+    if (!isValid) {
       return res.status(400).json({
         success: false,
-        error: { message: `Declaration cannot be cleared, current status: ${currentStatus}. It must be UNDER_REVIEW before customs clearance.` }
+        error: {
+          code: 'INVALID_TRANSITION',
+          message: `Declaration cannot be cleared: Invalid status transition from ${currentStatus} to CLEARED`,
+          currentStatus,
+          allowedStatuses: statusManager.getNextStatuses('CUSTOMS', currentStatus),
+        }
       });
     }
 
@@ -320,10 +329,16 @@ router.post('/declaration/:declarationId/clear', async (req, res) => {
     );
     
     if (result.success) {
-      logger.info(`✅ [CUSTOMS] Declaration ${declarationId} cleared (shipment status automatically updated by chaincode)`);
-      
       // Extract shipmentID from declarationID (format: CD-SHIPMENTID)
       const shipmentID = declarationId.replace('CD-', '');
+      
+      // Update status with cascading effects to shipment
+      await statusManager.updateEntityStatus('CUSTOMS', declarationId, currentStatus, 'CLEARED');
+      if (shipmentID) {
+        await statusManager.updateEntityStatus('SHIPMENT', shipmentID, 'CUSTOMS_DECLARED', 'CUSTOMS_CLEARED');
+      }
+      
+      logger.info(`✅ [CUSTOMS] Declaration ${declarationId} cleared (${currentStatus} → CLEARED)`);
       
       // ✅ AUTO-TRIGGER: Initiate next workflow steps
       const nextSteps: Array<{action: string, description: string, priority: string}> = [];
@@ -669,14 +684,14 @@ router.post('/declaration/:shipmentId/start', authMiddleware, async (req, res) =
 
     await db.run(
       `INSERT OR IGNORE INTO declarations (declaration_id, shipment_id, exporter_id, status, hs_code, quantity, value, currency, destination, port_of_exit, created_at)
-       VALUES (?, ?, ?, 'DECLARATION_STARTED', ?, ?, ?, ?, ?, ?, datetime('now'))`,
+       VALUES (?, ?, ?, 'DECLARATION_STARTED', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [declarationId, shipmentId, exporterId || null, hsCode || null, quantity || null, value || null, currency || null, destination || null, portOfExit || null]
     );
 
     // Record audit
     await db.run(
       `INSERT INTO declaration_audit (declaration_id, action, performed_by, details, timestamp)
-       VALUES (?, 'START_DECLARATION', ?, ?, datetime('now'))`,
+       VALUES (?, 'START_DECLARATION', ?, ?, CURRENT_TIMESTAMP)`,
       [declarationId, (req as any).user?.username || null, JSON.stringify({ shipmentId, exporterId })]
     );
 
@@ -914,7 +929,7 @@ router.post('/declaration/:declarationId/risk-assess', authMiddleware, async (re
 
     await db.run(
       `INSERT INTO declaration_risk (declaration_id, shipment_id, risk_level, reason, assessed_by, assessed_at, rule_hash)
-       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
       [declarationId, shipmentId || null, assessment.risk, assessment.reason, assessedBy || null, ruleHash]
     );
 
@@ -942,7 +957,7 @@ router.post('/declaration/:declarationId/override-risk', authMiddleware, async (
 
     await db.run(
       `INSERT INTO declaration_risk (declaration_id, shipment_id, risk_level, reason, assessed_by, assessed_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [declarationId, shipmentId || null, riskLevel, reason, overriddenBy || null]
     );
 

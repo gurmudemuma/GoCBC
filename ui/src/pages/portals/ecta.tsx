@@ -8,7 +8,16 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 
 export default function ECTAPortalPage() {
   return (
-    <ProtectedRoute allowedRoles={['ECTA', 'ADMIN']}>
+    <ProtectedRoute allowedRoles={[
+      'ECTA', 
+      'ADMIN',
+      'Quality Inspector',
+      'Lab Analyst',
+      'Phytosanitary Officer',
+      'License Officer',
+      'Permit Officer',
+      'ECTA Officer'
+    ]}>
       <Head>
         <title>ECTA Portal - CECBS</title>
         <meta name="description" content="Ethiopian Coffee & Tea Authority Portal" />

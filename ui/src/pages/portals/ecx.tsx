@@ -8,7 +8,15 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 
 export default function ECXPortalPage() {
   return (
-    <ProtectedRoute allowedRoles={['ECX', 'ADMIN']}>
+    <ProtectedRoute allowedRoles={[
+      'ECX', 
+      'ADMIN',
+      'Grading Officer',
+      'Warehouse Officer',
+      'Registration Officer',
+      'Release Officer',
+      'ECX Officer'
+    ]}>
       <Head>
         <title>ECX Portal - CECBS</title>
         <meta name="description" content="Ethiopian Commodity Exchange Portal" />

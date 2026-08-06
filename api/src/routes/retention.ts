@@ -1,6 +1,7 @@
 // NBE Retention Policy API Routes
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
@@ -36,20 +37,15 @@ router.post('/:forexId/retention',
       const forex = forexResult.data;
       const retentionAmount = (forex.allocatedAmount * retentionPercentage) / 100;
 
-      // Update forex with retention info (store in database for now, chaincode update can be added later)
-      const db = fabricService['db'];
-      if (db) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            `UPDATE forex_allocations 
-             SET retention_percentage = ?, retention_amount_usd = ?, fcy_account_number = ?, 
-                 retention_status = 'COMPLIED', retention_date = datetime('now')
-             WHERE forex_id = ?`,
-            [retentionPercentage, retentionAmount, fcyAccountNumber, forexId],
-            (err: any) => (err ? reject(err) : resolve(true))
-          );
-        });
-      }
+      // Update forex with retention info in PostgreSQL
+      const db = DatabaseService.getInstance();
+      await db.run(
+        `UPDATE forex_allocations 
+         SET retention_percentage = $1, retention_amount_usd = $2, fcy_account_number = $3, 
+             retention_status = 'COMPLIED', retention_date = CURRENT_TIMESTAMP
+         WHERE forex_id = $4`,
+        [retentionPercentage, retentionAmount, fcyAccountNumber, forexId]
+      );
 
       logger.info(`Retention enforced: ${forexId}, ${retentionPercentage}%, ${retentionAmount} USD`);
 

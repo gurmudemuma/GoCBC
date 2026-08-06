@@ -7,6 +7,7 @@
  */
 export const ECTA_CONFIG = {
   roles: [
+    { value: 'ECTA', label: 'ECTA Portal Administrator', description: 'Full access to ECTA portal and user management' },
     { value: 'Quality Inspector', label: 'Quality Inspector', description: 'Conducts coffee quality inspections' },
     { value: 'Lab Analyst', label: 'Lab Analyst', description: 'Laboratory testing and analysis' },
     { value: 'Phytosanitary Officer', label: 'Phytosanitary Officer', description: 'Issues phytosanitary certificates' },
@@ -66,6 +67,7 @@ export const ECTA_CONFIG = {
  */
 export const ECX_CONFIG = {
   roles: [
+    { value: 'ECX', label: 'ECX Portal Administrator', description: 'Full access to ECX portal and user management' },
     { value: 'Grading Officer', label: 'Grading Officer', description: 'Grades coffee lots' },
     { value: 'Warehouse Officer', label: 'Warehouse Officer', description: 'Warehouse management' },
     { value: 'Registration Officer', label: 'Registration Officer', description: 'Contract registration' },
@@ -102,6 +104,7 @@ export const ECX_CONFIG = {
  */
 export const NBE_CONFIG = {
   roles: [
+    { value: 'NBE', label: 'NBE Portal Administrator', description: 'Full access to NBE portal and user management' },
     { value: 'NBE Officer', label: 'NBE Officer', description: 'General NBE operations' },
     { value: 'Forex Officer', label: 'Forex Officer', description: 'Foreign exchange allocation' },
     { value: 'Screening Officer', label: 'Screening Officer', description: 'Franco Valuta screening' },
@@ -147,6 +150,7 @@ export const NBE_CONFIG = {
  */
 export const BANKS_CONFIG = {
   roles: [
+    { value: 'BANKS', label: 'Banks Portal Administrator', description: 'Full access to Banks portal and user management' },
     { value: 'Bank Officer', label: 'Bank Officer', description: 'General banking operations' },
     { value: 'Branch Manager', label: 'Branch Manager', description: 'Branch management' },
     { value: 'Trade Finance Officer', label: 'Trade Finance Officer', description: 'Trade finance specialist' },
@@ -201,6 +205,7 @@ export const BANKS_CONFIG = {
  */
 export const CUSTOMS_CONFIG = {
   roles: [
+    { value: 'CUSTOMS', label: 'Customs Portal Administrator', description: 'Full access to Customs portal and user management' },
     { value: 'Customs Officer', label: 'Customs Officer', description: 'General customs operations' },
     { value: 'Inspection Officer', label: 'Inspection Officer', description: 'Physical inspections' },
     { value: 'Clearance Officer', label: 'Clearance Officer', description: 'Clearance processing' },
@@ -252,6 +257,7 @@ export const CUSTOMS_CONFIG = {
  */
 export const SHIPPING_CONFIG = {
   roles: [
+    { value: 'SHIPPING', label: 'Shipping Portal Administrator', description: 'Full access to Shipping portal and user management' },
     { value: 'Logistics Officer', label: 'Logistics Officer', description: 'Logistics coordination' },
     { value: 'Documentation Officer', label: 'Documentation Officer', description: 'Shipping documentation' },
     { value: 'Operations Manager', label: 'Operations Manager', description: 'Operations management' },

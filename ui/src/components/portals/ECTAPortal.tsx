@@ -59,6 +59,7 @@ import {
   TrendingUp,
   HourglassTop,
   Person,
+  Block,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 
@@ -75,6 +76,7 @@ import BankSelect from '@/components/common/BankSelect';
 import BankBranchSelect from '@/components/common/BankBranchSelect';
 import { BankBranch } from '@/utils/bankBranches';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Modern Components - 2026 Design
 import {
@@ -154,6 +156,9 @@ interface ExporterApplication {
 }
 
 const ECTAPortal: React.FC = () => {
+  // Get user context for role-based access
+  const { user } = useAuth();
+  
   // ECTA Brand Colors
   const BRAND_COLOR = '#078930';  // ECTA Green
   const SECONDARY_COLOR = '#6d4c41';  // Coffee Brown
@@ -294,22 +299,51 @@ const ECTAPortal: React.FC = () => {
     }
   };
 
+  // Define role-based tab access
+  // Super Admin sees everything, specific roles see only their tabs
+  const getRoleBasedTabs = () => {
+    const userRole = user?.role || '';
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    // Define all available tabs
+    const allTabs = [
+      { index: 0, label: `Pending Applications`, icon: <Assignment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
+      { index: 1, label: `Approved Exporters`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
+      { index: 2, label: `Sales Contracts`, icon: <Description sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'Permit Officer'] },
+      { index: 3, label: `Exporters Management`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
+      { index: 4, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
+      { index: 5, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
+      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
+    ];
+    
+    // Super Admin sees all tabs
+    if (isSuperAdmin) {
+      return allTabs;
+    }
+    
+    // Filter tabs based on user role
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
+
   const loadData = async () => {
     setLoading(true);
     try {
       // Load blockchain exporters (may be empty if blockchain not connected)
       const exportersPromise = api.getExporters().catch(err => {
-        console.warn('Blockchain query failed, using database records:', err.message);
+        // Silently handle blockchain timeout - not critical for UI
         return { success: false, data: [] };
       });
       
       const shipmentsPromise = api.getShipments({ limit: 100 }).catch(err => {
-        console.warn('Shipments query failed:', err.message);
+        // Silently handle shipments timeout - not critical for UI
         return { success: false, data: [] };
       });
       
       // Load database applications
       const applicationsPromise = api.get('/exporters/exporter-applications?status=pending').catch(err => {
+        // Database calls should not fail - log if they do
         console.error('Failed to load applications:', err);
         return { data: { success: false, data: [] } };
       });
@@ -320,7 +354,7 @@ const ECTAPortal: React.FC = () => {
       });
 
       const inspectionsPromise = api.get('/quality/inspections?limit=500').catch(err => {
-        console.error('Failed to load quality inspections:', err);
+        // Quality inspections may timeout - handle gracefully
         return { data: { success: false, data: [] } };
       });
 
@@ -582,13 +616,15 @@ Contact system administrator if the issue persists.`,
         const key = `${id}-${doc.name || doc.filename || doc.fileName || ''}`;
 
         if (!seen.has(key)) {
+          const documentId = doc.id || doc.documentId;
           seen.set(key, {
-            id: doc.id || doc.documentId,
+            id: documentId,
             name: doc.name || doc.filename || doc.fileName,
             type: doc.type || (doc.mimeType || 'application/pdf').split('/')[1]?.toUpperCase() || 'PDF',
             status: 'AVAILABLE',
+            url: documentId ? `/api/v1/documents/${documentId}/download` : undefined,
             uploadedDate: doc.uploadedDate || doc.uploadedAt ? new Date(doc.uploadedDate || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+            size: doc.size && !isNaN(doc.size) ? `${(doc.size / 1024).toFixed(0)} KB` : (doc.file_size && !isNaN(doc.file_size) ? `${(doc.file_size / 1024).toFixed(0)} KB` : 'N/A'),
             category: doc.category || 'APPLICATION_DOCUMENT',
           });
         }
@@ -610,12 +646,13 @@ Contact system administrator if the issue persists.`,
         const result = await response.json();
         if (result.success && result.data) {
           applicationDocuments = dedupeDocuments(result.data.map((doc: any) => ({
-            id: doc.documentId || doc.id,
-            name: doc.filename || doc.name,
-            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+            id: doc.documentId || doc.id || doc.document_id,
+            name: doc.filename || doc.name || doc.file_name,
+            type: (doc.mimeType || doc.mime_type || 'application/pdf').split('/')[1].toUpperCase(),
             status: 'AVAILABLE',
-            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+            url: doc.documentId || doc.id || doc.document_id ? `/api/v1/documents/${doc.documentId || doc.id || doc.document_id}/download` : undefined,
+            uploadedDate: doc.uploadedAt || doc.uploaded_at ? new Date(doc.uploadedAt || doc.uploaded_at).toLocaleDateString() : new Date().toLocaleDateString(),
+            size: doc.size || doc.file_size,
             category: doc.category || 'APPLICATION_DOCUMENT',
           })));
         }
@@ -632,15 +669,22 @@ Contact system administrator if the issue persists.`,
           : application.documents;
         
         if (Array.isArray(parsedDocs) && parsedDocs.length > 0) {
-          applicationDocuments = dedupeDocuments(parsedDocs.map((doc: any) => ({
-            id: doc.id || doc.documentId,
-            name: doc.name || doc.filename,
-            type: doc.type || 'PDF',
-            status: 'AVAILABLE',
-            uploadedDate: doc.uploadedDate || new Date().toLocaleDateString(),
-            size: doc.size || 'N/A',
-            category: doc.category || 'APPLICATION_DOCUMENT',
-          })));
+          applicationDocuments = dedupeDocuments(parsedDocs.map((doc: any) => {
+            // Handle both string IDs and document objects
+            const isString = typeof doc === 'string';
+            const docId = isString ? doc : (doc.id || doc.documentId);
+            
+            return {
+              id: docId,
+              name: isString ? 'Document' : (doc.name || doc.filename || doc.fileName),
+              type: isString ? 'PDF' : (doc.type || 'PDF'),
+              status: 'AVAILABLE',
+              url: docId ? `/api/v1/documents/${docId}/download` : undefined,
+              uploadedDate: isString ? new Date().toLocaleDateString() : (doc.uploadedDate || new Date().toLocaleDateString()),
+              size: isString ? 'N/A' : (doc.size || 'N/A'),
+              category: isString ? 'APPLICATION_DOCUMENT' : (doc.category || 'APPLICATION_DOCUMENT'),
+            };
+          }));
         }
       } catch (error) {
         console.error('Error parsing application documents:', error);
@@ -1506,47 +1550,28 @@ The exporter can reapply once all requirements are met.`,
             }
           }}
         >
-          <Tab 
-            icon={<Assignment sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`Pending Applications (${allApplications.filter(a => a.status === 'pending').length})`}
-          />
-          <Tab 
-            icon={<Coffee sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`Approved Exporters (${approvedApplications.length})`}
-          />
-          <Tab 
-            icon={<Description sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`Sales Contracts (${allContracts.length})`}
-          />
-          <Tab 
-            icon={<Coffee sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`Exporters Management (${allExporters.length})`}
-          />
-          <Tab 
-            icon={<Science sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`Quality Control (${allInspectionRecords.length})`}
-          />
-          <Tab 
-            icon={<Warning sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label={`License Renewals (${approvedApplications.filter(a => {
-              if (!a.license_expiry_date) return false;
-              const expiryDate = new Date(a.license_expiry_date);
-              const threeMonthsFromNow = new Date();
-              threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
-              return expiryDate <= threeMonthsFromNow;
-            }).length})`}
-          />
-          <Tab 
-            icon={<Person sx={{ fontSize: 20 }} />}
-            iconPosition="start"
-            label="User Management"
-          />
+          {visibleTabs.map((tab) => (
+            <Tab 
+              key={tab.index}
+              icon={tab.icon}
+              iconPosition="start"
+              label={
+                tab.index === 0 ? `${tab.label} (${allApplications.filter(a => a.status === 'pending').length})` :
+                tab.index === 1 ? `${tab.label} (${approvedApplications.length})` :
+                tab.index === 2 ? `${tab.label} (${allContracts.length})` :
+                tab.index === 3 ? `${tab.label} (${allExporters.length})` :
+                tab.index === 4 ? `${tab.label} (${allInspectionRecords.length})` :
+                tab.index === 5 ? `${tab.label} (${approvedApplications.filter(a => {
+                  if (!a.license_expiry_date) return false;
+                  const expiryDate = new Date(a.license_expiry_date);
+                  const threeMonthsFromNow = new Date();
+                  threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+                  return expiryDate <= threeMonthsFromNow;
+                }).length})` :
+                tab.label
+              }
+            />
+          ))}
         </Tabs>
       </Paper>
 
@@ -1638,14 +1663,15 @@ The exporter can reapply once all requirements are met.`,
                 <TableHead>
                   <TableRow>
                     <TableCell width="10%">Exporter ID</TableCell>
-                    <TableCell width="18%">Company Name</TableCell>
-                    <TableCell width="15%">License Number</TableCell>
-                    <TableCell width="11%">Exporter Type</TableCell>
-                    <TableCell width="12%">Capital (ETB)</TableCell>
-                    <TableCell width="10%">Lab Certified</TableCell>
-                    <TableCell width="10%">Approved Date</TableCell>
+                    <TableCell width="16%">Company Name</TableCell>
+                    <TableCell width="13%">License Number</TableCell>
+                    <TableCell width="10%">Exporter Type</TableCell>
+                    <TableCell width="10%">Capital (ETB)</TableCell>
+                    <TableCell width="9%">Lab Certified</TableCell>
+                    <TableCell width="9%">Approved Date</TableCell>
                     <TableCell width="8%">Expires</TableCell>
-                    <TableCell width="6%">Status</TableCell>
+                    <TableCell width="7%">Status</TableCell>
+                    <TableCell width="8%">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1706,6 +1732,68 @@ The exporter can reapply once all requirements are met.`,
                           label="ACTIVE"
                           brandColor={BRAND_COLOR}
                         />
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          <Tooltip title="View Details">
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              onClick={() => {
+                                setSelectedApplication(application);
+                              }}
+                            >
+                              <Visibility fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Suspend License">
+                            <IconButton
+                              size="small"
+                              color="warning"
+                              onClick={async () => {
+                                const reason = prompt(`Enter reason for suspending ${application.company_name}:`);
+                                if (reason) {
+                                  try {
+                                    const response = await api.post(`/exporters/${application.exporter_id}/suspend`, { reason });
+                                    if (response.data?.success) {
+                                      showSuccess('License Suspended', `${application.company_name} license has been suspended. They cannot access the system until reactivated.`);
+                                      loadData();
+                                    }
+                                  } catch (error: any) {
+                                    showError('Suspension Failed', error?.response?.data?.error?.message || 'Failed to suspend license');
+                                  }
+                                }
+                              }}
+                            >
+                              <Block fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Revoke License">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={async () => {
+                                const confirmed = confirm(`⚠️ PERMANENT ACTION\n\nRevoke license for ${application.company_name}?\n\nThis will:\n- Permanently disable their account\n- Prevent all system access\n- Cannot be undone\n\nAre you absolutely sure?`);
+                                if (confirmed) {
+                                  const reason = prompt(`Enter reason for revoking ${application.company_name} license:`);
+                                  if (reason) {
+                                    try {
+                                      const response = await api.post(`/exporters/${application.exporter_id}/revoke`, { reason });
+                                      if (response.data?.success) {
+                                        showError('License Revoked', `${application.company_name} license has been permanently revoked. Account is disabled.`);
+                                        loadData();
+                                      }
+                                    } catch (error: any) {
+                                      showError('Revocation Failed', error?.response?.data?.error?.message || 'Failed to revoke license');
+                                    }
+                                  }
+                                }
+                              }}
+                            >
+                              <Cancel fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ))}

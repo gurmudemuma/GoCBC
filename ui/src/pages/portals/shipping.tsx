@@ -8,7 +8,15 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 
 export default function ShippingPortalPage() {
   return (
-    <ProtectedRoute allowedRoles={['SHIPPING', 'ADMIN']}>
+    <ProtectedRoute allowedRoles={[
+      'SHIPPING', 
+      'ADMIN',
+      'Logistics Officer',
+      'Documentation Officer',
+      'Operations Manager',
+      'Shipping Coordinator',
+      'Freight Forwarder'
+    ]}>
       <Head>
         <title>Shipping Portal - CECBS</title>
         <meta name="description" content="Maritime Logistics & Container Tracking Portal" />

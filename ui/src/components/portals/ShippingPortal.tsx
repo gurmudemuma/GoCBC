@@ -121,6 +121,32 @@ const ShippingPortal: React.FC = () => {
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [billOfLadingDialogOpen, setBillOfLadingDialogOpen] = useState(false);
 
+  // Get current user role from local storage
+  const userRole = JSON.parse(localStorage.getItem('user') || '{}')?.role || '';
+
+  // Role-based tab filtering
+  const getRoleBasedTabs = () => {
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    const allTabs = [
+      { index: 0, label: '🛃 Customs Cleared', icon: <CheckCircle />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer'] },
+      { index: 1, label: '🚚 Land Transport', icon: <LocalShipping />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer', 'Logistics Officer'] },
+      { index: 2, label: '⚓ Port Arrived', icon: <Anchor />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer', 'Port Officer'] },
+      { index: 3, label: '📦 Container Stuffed', icon: <Inventory />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer', 'Port Officer'] },
+      { index: 4, label: '🚢 Vessel Loaded', icon: <DirectionsBoat />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer'] },
+      { index: 5, label: '⛵ Departed', icon: <DirectionsBoat />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer'] },
+      { index: 6, label: '🌊 In Transit', icon: <DirectionsBoat />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer'] },
+      { index: 7, label: '🏁 Destination Port', icon: <LocationOn />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer', 'Port Officer'] },
+      { index: 8, label: '✅ Delivered', icon: <CheckCircle />, roles: ['SHIPPING', 'ADMIN', 'SHIPPING Portal Administrator', 'Shipping Officer'] },
+      { index: 9, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'SHIPPING', 'SHIPPING Portal Administrator'] },
+    ];
+    
+    if (isSuperAdmin) return allTabs;
+    return allTabs.filter(tab => tab.roles.includes(userRole));
+  };
+  
+  const visibleTabs = getRoleBasedTabs();
+
   // Audit Trail State
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'SHIPMENT' | 'BOOKING' | 'CONTAINER'>('SHIPMENT');
@@ -1704,16 +1730,14 @@ const ShippingPortal: React.FC = () => {
               }
             }}
           >
-            <Tab label="🛃 Customs Cleared" icon={<CheckCircle />} iconPosition="start" />
-            <Tab label="🚚 Land Transport" icon={<LocalShipping />} iconPosition="start" />
-            <Tab label="⚓ Port Arrived" icon={<Anchor />} iconPosition="start" />
-            <Tab label="📦 Container Stuffed" icon={<Inventory />} iconPosition="start" />
-            <Tab label="🚢 Vessel Loaded" icon={<DirectionsBoat />} iconPosition="start" />
-            <Tab label="⛵ Departed" icon={<DirectionsBoat />} iconPosition="start" />
-            <Tab label="🌊 In Transit" icon={<DirectionsBoat />} iconPosition="start" />
-            <Tab label="🏁 Destination Port" icon={<LocationOn />} iconPosition="start" />
-            <Tab label="✅ Delivered" icon={<CheckCircle />} iconPosition="start" />
-            <Tab label="User Management" icon={<Person />} iconPosition="start" />
+            {visibleTabs.map(tab => (
+              <Tab 
+                key={tab.index}
+                label={tab.label} 
+                icon={tab.icon} 
+                iconPosition="start" 
+              />
+            ))}
           </Tabs>
         </Box>
 

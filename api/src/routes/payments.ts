@@ -6,6 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { body, param } from 'express-validator';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -766,6 +767,32 @@ router.post('/:paymentID/settle',
 
       logger.info(`[PAYMENT] Settling payment: ${paymentID}`);
 
+      // Get current payment status for validation
+      const paymentData = await fabricService.queryChaincode('ReadPayment', [paymentID]);
+      if (!paymentData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Payment not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = paymentData.data?.status || paymentData.data?.Status || 'PENDING';
+      
+      // Validate status transition
+      const isValid = statusManager.validateTransition('PAYMENT', currentStatus, 'SETTLED');
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot settle payment: Invalid status transition from ${currentStatus} to SETTLED`,
+            allowedStatuses: statusManager.getNextStatuses('PAYMENT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       await fabricService.connectAsOrg('NBEMSP');
 
       const result = await fabricService.invokeChaincode('SettlePayment', [
@@ -779,7 +806,10 @@ router.post('/:paymentID/settle',
       ]);
 
       if (result.success) {
-        logger.info(`✅ [PAYMENT] Payment settled: ${paymentID}`);
+        // Update status with cascading effects (LC, Forex, Contract statuses)
+        await statusManager.updateEntityStatus('PAYMENT', paymentID, currentStatus, 'SETTLED');
+        
+        logger.info(`✅ [PAYMENT] Payment settled: ${paymentID} (${currentStatus} → SETTLED)`);
         res.json({
           success: true,
           message: 'Payment settled successfully',

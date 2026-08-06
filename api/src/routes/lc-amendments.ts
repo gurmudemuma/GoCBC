@@ -1,6 +1,7 @@
 // LC Amendment API Routes
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
@@ -69,18 +70,13 @@ router.post('/:lcId/discrepancies',
       const { lcId } = req.params;
       const { document, issue } = req.body;
 
-      // Store discrepancy (implement chaincode function or use database)
-      const db = fabricService['db'];
-      if (db) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            `INSERT INTO lc_discrepancies (lc_id, document, issue, status, reported_date)
-             VALUES (?, ?, ?, 'OPEN', datetime('now'))`,
-            [lcId, document, issue],
-            (err: any) => (err ? reject(err) : resolve(true))
-          );
-        });
-      }
+      // Store discrepancy in PostgreSQL
+      const db = DatabaseService.getInstance();
+      await db.run(
+        `INSERT INTO lc_discrepancies (lc_id, document, issue, status, reported_date)
+         VALUES ($1, $2, $3, 'OPEN', CURRENT_TIMESTAMP)`,
+        [lcId, document, issue]
+      );
 
       res.json({
         success: true,
