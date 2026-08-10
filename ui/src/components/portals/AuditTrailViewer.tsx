@@ -582,60 +582,84 @@ Ethiopian Customs Commission (ECC)
               {/* Transaction Signature */}
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
-                  Transaction Signature
+                  {log.signature.source?.includes('Database') ? 'Record Information' : 'Transaction Signature'}
                 </Typography>
                 <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
                   <Typography variant="caption" component="div">
                     <strong>Transaction ID:</strong> {log.signature.transactionId}
                   </Typography>
                   <Typography variant="caption" component="div">
-                    <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
+                    <strong>Source:</strong> {log.signature.source || 'Blockchain'}
                   </Typography>
-                  <Typography variant="caption" component="div">
-                    <strong>Previous State Hash:</strong> {log.signature.previousStateHash || 'N/A'}
-                  </Typography>
-                  <Typography variant="caption" component="div">
-                    <strong>New State Hash:</strong> {log.signature.newStateHash}
-                  </Typography>
+                  {log.signature.recordType !== 'DATABASE' && (
+                    <>
+                      <Typography variant="caption" component="div">
+                        <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
+                      </Typography>
+                      <Typography variant="caption" component="div">
+                        <strong>Previous State Hash:</strong> {log.signature.previousStateHash || 'N/A'}
+                      </Typography>
+                      <Typography variant="caption" component="div">
+                        <strong>New State Hash:</strong> {log.signature.newStateHash || 'N/A'}
+                      </Typography>
+                    </>
+                  )}
+                  {log.signature.recordType === 'DATABASE' && (
+                    <Typography variant="caption" component="div">
+                      <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
+                    </Typography>
+                  )}
                 </Paper>
               </Box>
 
               {/* Identity */}
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
-                  Cryptographic Identity
+                  {log.signature.recordType === 'DATABASE' ? 'Actor Information' : 'Cryptographic Identity'}
                 </Typography>
                 <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
                   <Typography variant="caption" component="div">
-                    <strong>MSP ID:</strong> {log.signature.caller.mspId}
-                  </Typography>
-                  <Typography variant="caption" component="div">
-                    <strong>Common Name:</strong> {log.signature.caller.commonName}
+                    <strong>User:</strong> {log.signature.caller.username}
                   </Typography>
                   <Typography variant="caption" component="div">
                     <strong>Role:</strong> {log.signature.caller.role}
                   </Typography>
                   <Typography variant="caption" component="div">
-                    <strong>Certificate Hash:</strong> {log.signature.caller.certificateHash}
+                    <strong>Organization:</strong> {log.signature.caller.organization}
                   </Typography>
-                  <Typography variant="caption" component="div">
-                    <strong>Organization Unit:</strong> {log.signature.caller.organizationUnit}
-                  </Typography>
+                  {log.signature.recordType !== 'DATABASE' && log.signature.caller.mspId && (
+                    <>
+                      <Typography variant="caption" component="div">
+                        <strong>MSP ID:</strong> {log.signature.caller.mspId}
+                      </Typography>
+                      <Typography variant="caption" component="div">
+                        <strong>Common Name:</strong> {log.signature.caller.commonName}
+                      </Typography>
+                      <Typography variant="caption" component="div">
+                        <strong>Certificate Hash:</strong> {log.signature.caller.certificateHash}
+                      </Typography>
+                      <Typography variant="caption" component="div">
+                        <strong>Organization Unit:</strong> {log.signature.caller.organizationUnit}
+                      </Typography>
+                    </>
+                  )}
                 </Paper>
               </Box>
 
-              {/* Endorsement */}
-              <Box>
-                <Typography variant="subtitle2" gutterBottom>
-                  Endorsement
-                </Typography>
-                <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
-                  <Typography variant="caption" component="div">
-                    <strong>Endorsing Peers:</strong>{' '}
-                    {log.signature.endorsingPeers?.join(', ') || 'N/A'}
+              {/* Endorsement - only for blockchain records */}
+              {log.signature.recordType !== 'DATABASE' && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Endorsement
                   </Typography>
-                </Paper>
-              </Box>
+                  <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
+                    <Typography variant="caption" component="div">
+                      <strong>Endorsing Peers:</strong>{' '}
+                      {log.signature.endorsingPeers?.join(', ') || 'N/A'}
+                    </Typography>
+                  </Paper>
+                </Box>
+              )}
 
               {/* Compliance */}
               <Box>

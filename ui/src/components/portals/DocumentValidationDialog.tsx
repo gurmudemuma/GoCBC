@@ -333,8 +333,8 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                               </Grid>
                             </Grid>
 
-                            {/* Document Preview/Actions - Only show if doc has valid ID starting with DOC_ */}
-                            {doc.id && doc.id.startsWith('DOC_') ? (
+                            {/* Document Preview/Actions - Only show if doc has valid ID starting with DOC- */}
+                            {doc.id && doc.id.startsWith('DOC-') ? (
                               <Box sx={{ display: 'flex', gap: 1 }}>
                                 <Button
                                   size="small"
@@ -344,15 +344,14 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                     try {
                                       const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
                                       
-                                      // Construct document URL - only use doc.url if it's a full URL, otherwise use doc.id
+                                      // Construct document URL with inline parameter
                                       let docUrl: string;
                                       if (doc.url && doc.url.startsWith('http')) {
-                                        docUrl = doc.url;
+                                        docUrl = `${doc.url}?inline=true`;
                                       } else if (doc.url && doc.url.startsWith('/api/v1/')) {
-                                        // Remove /api/v1/ prefix if present to avoid duplication
-                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
+                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}?inline=true`;
                                       } else if (doc.id) {
-                                        docUrl = `${apiUrl}/documents/${doc.id}/download`;
+                                        docUrl = `${apiUrl}/documents/${doc.id}/download?inline=true`;
                                       } else {
                                         throw new Error('Document ID is missing');
                                       }
@@ -388,10 +387,21 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                         throw new Error(`Failed to fetch document: ${response.status} ${response.statusText}`);
                                       }
                                       
+                                      // Get content type
+                                      const contentType = response.headers.get('content-type') || '';
+                                      console.log('[DOCUMENT] Content-Type:', contentType);
+                                      
                                       // Create blob URL and open in new tab
                                       const blob = await response.blob();
                                       const blobUrl = URL.createObjectURL(blob);
-                                      window.open(blobUrl, '_blank');
+                                      
+                                      // For PDFs and images, open directly. For others, show info
+                                      if (contentType.includes('pdf') || contentType.includes('image')) {
+                                        window.open(blobUrl, '_blank');
+                                      } else {
+                                        // For non-PDF/image files (like test text files), show alert
+                                        alert(`Document type: ${contentType}\nThis is not a viewable PDF file. Use Download instead.`);
+                                      }
                                       
                                       // Clean up blob URL after a delay
                                       setTimeout(() => URL.revokeObjectURL(blobUrl), 100);

@@ -168,7 +168,6 @@ const ECTAPortal: React.FC = () => {
   
   // Sub-tab state for KPI filtering
   const [subTabValue, setSubTabValue] = useState(0);
-  const [activeKPIFilter, setActiveKPIFilter] = useState<string | null>(null);
   
   // Inspection filter state (for Quality Control tab) - 5-stage workflow
   const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'SCHEDULED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED'>('PENDING');
@@ -259,46 +258,6 @@ const ECTAPortal: React.FC = () => {
     }
   }, [inspectionQuery, queryHandled, shipments]);
 
-  // Handle KPI filter for sub-tabs
-  const handleKPIFilter = (filterKey: string, kpiTitle: string) => {
-    setActiveKPIFilter(filterKey);
-    
-    // Apply filter based on active tab and filter key
-    switch (tabValue) {
-      case 0: // Exporter Registration
-        if (filterKey === 'ALL_APPS') setApplications(allApplications);
-        else if (filterKey === 'PENDING_APPS') setApplications(allApplications.filter(a => a.status === 'pending'));
-        else if (filterKey === 'APPROVED_APPS') setApplications(allApplications.filter(a => a.status === 'approved'));
-        else setApplications(allApplications);
-        break;
-        
-      case 1: // Active Exporters
-        if (filterKey === 'ALL_EXPORTERS') setExporters(allExporters);
-        else setExporters(allExporters);
-        break;
-        
-      case 2: // Sales Contracts
-        if (filterKey === 'ALL_CONTRACTS') setContracts(allContracts);
-        else if (filterKey === 'PENDING_CONTRACTS') setContracts(allContracts.filter(c => c.contractStatus === 'REGISTERED'));
-        else if (filterKey === 'APPROVED_CONTRACTS') setContracts(allContracts.filter(c => c.contractStatus === 'APPROVED'));
-        else if (filterKey === 'REJECTED_CONTRACTS') setContracts(allContracts.filter(c => c.contractStatus === 'REJECTED'));
-        else setContracts(allContracts);
-        break;
-        
-      case 4: // Quality Inspection - filtering handled by table's computed function
-        // No need to update state arrays - activeKPIFilter triggers table re-render
-        // Table reads from allShipments and allInspectionRecords directly
-        break;
-        
-      default:
-        setApplications(allApplications);
-        setExporters(allExporters);
-        setContracts(allContracts);
-        setShipments(allShipments);
-        setInspectionRecords(allInspectionRecords);
-    }
-  };
-
   // Define role-based tab access
   // Super Admin sees everything, specific roles see only their tabs
   const getRoleBasedTabs = () => {
@@ -310,10 +269,9 @@ const ECTAPortal: React.FC = () => {
       { index: 0, label: `Pending Applications`, icon: <Assignment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
       { index: 1, label: `Approved Exporters`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
       { index: 2, label: `Sales Contracts`, icon: <Description sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'Permit Officer'] },
-      { index: 3, label: `Exporters Management`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
-      { index: 4, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
-      { index: 5, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
-      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
+      { index: 3, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
+      { index: 4, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
+      { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
     ];
     
     // Super Admin sees all tabs
@@ -410,11 +368,16 @@ const ECTAPortal: React.FC = () => {
       }
       
       // Set database applications
+      console.log('[ECTA] Applications API response:', applicationsRes);
       const appsData = applicationsRes.data?.data;
+      console.log('[ECTA] Applications data:', appsData);
+      
       if (appsData && Array.isArray(appsData)) {
+        console.log(`[ECTA] ✅ Loaded ${appsData.length} pending applications`);
         setApplications(appsData);
         setAllApplications(appsData);
       } else {
+        console.warn('[ECTA] ⚠️ No applications data or invalid format');
         setApplications([]);
         setAllApplications([]);
       }
@@ -422,6 +385,7 @@ const ECTAPortal: React.FC = () => {
       // Set approved applications (source of truth for exporter count)
       const approvedAppsData = approvedApplicationsRes.data?.data;
       if (approvedAppsData && Array.isArray(approvedAppsData)) {
+        console.log(`[ECTA] ✅ Loaded ${approvedAppsData.length} approved applications`);
         setApprovedApplications(approvedAppsData);
       } else {
         setApprovedApplications([]);
@@ -510,6 +474,7 @@ ${action === 'suspend' ?
     if (!selectedApplication) return;
     
     try {
+      // ✅ Blockchain operations need more time - increase timeout to 120 seconds
       const response = await api.post(
         `/exporters/exporter-applications/${selectedApplication.application_id}/approve`,
         {
@@ -518,6 +483,9 @@ ${action === 'suspend' ?
           bankAccountNumber: approvalData.bankAccountNumber,
           bankBranch: approvalData.bankBranch,
           bankBranchCode: approvalData.bankBranchCode,
+        },
+        {
+          timeout: 120000, // 120 seconds for blockchain registration
         }
       );
       
@@ -646,14 +614,19 @@ Contact system administrator if the issue persists.`,
         const result = await response.json();
         if (result.success && result.data) {
           applicationDocuments = dedupeDocuments(result.data.map((doc: any) => ({
-            id: doc.documentId || doc.id || doc.document_id,
-            name: doc.filename || doc.name || doc.file_name,
-            type: (doc.mimeType || doc.mime_type || 'application/pdf').split('/')[1].toUpperCase(),
+            id: doc.document_id || doc.documentId || doc.id,
+            name: doc.file_name || doc.filename || doc.name || 'Document',
+            type: (doc.mime_type || doc.mimeType || 'application/pdf').split('/')[1]?.toUpperCase() || 'PDF',
             status: 'AVAILABLE',
-            url: doc.documentId || doc.id || doc.document_id ? `/api/v1/documents/${doc.documentId || doc.id || doc.document_id}/download` : undefined,
-            uploadedDate: doc.uploadedAt || doc.uploaded_at ? new Date(doc.uploadedAt || doc.uploaded_at).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: doc.size || doc.file_size,
-            category: doc.category || 'APPLICATION_DOCUMENT',
+            url: (doc.document_id || doc.documentId || doc.id) ? `/api/v1/documents/${doc.document_id || doc.documentId || doc.id}/download` : undefined,
+            uploadedDate: doc.uploaded_at || doc.uploadedAt ? new Date(doc.uploaded_at || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+            size: (() => {
+              const bytes = doc.file_size || doc.size;
+              if (!bytes || isNaN(bytes)) return 'N/A';
+              if (bytes < 1024) return `${bytes} bytes`;
+              return `${(bytes / 1024).toFixed(2)} KB`;
+            })(),
+            category: doc.document_type || doc.category || 'APPLICATION_DOCUMENT',
           })));
         }
       } catch (error) {
@@ -691,8 +664,8 @@ Contact system administrator if the issue persists.`,
       }
     }
     
-    // If no documents found, show required documents list
-    if (applicationDocuments.length === 0) {
+    // If no documents found AND application is still pending, show required documents list
+    if (applicationDocuments.length === 0 && application.status === 'pending') {
       applicationDocuments = [
         { id: '1', name: 'Business License', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
         { id: '2', name: 'TIN Certificate', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
@@ -1239,273 +1212,101 @@ The exporter can reapply once all requirements are met.`,
     >
       {/* Professional KPI Cards - At the very top */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        {(() => {
-          const kpis = tabValue === 0 ? [
-            { 
-              icon: <Assignment />, 
-              label: 'All Applications', 
-              value: allApplications.length, 
-              color: '#2196f3',
-              clickable: true,
-              filterKey: 'ALL_APPS',
-              selected: activeKPIFilter === 'ALL_APPS'
-            },
-            { 
-              icon: <Warning />, 
-              label: 'Pending Applications', 
-              value: allApplications.filter(a => a.status === 'pending').length, 
-              color: '#ff9800',
-              clickable: true,
-              filterKey: 'PENDING_APPS',
-              selected: activeKPIFilter === 'PENDING_APPS'
-            },
-            { 
-              icon: <CheckCircle />, 
-              label: 'Approved This Month', 
-              value: allApplications.filter(a => a.status === 'approved' && new Date(a.approved_at || '').getMonth() === new Date().getMonth()).length, 
-              color: '#4caf50',
-              clickable: true,
-              filterKey: 'APPROVED_APPS',
-              selected: activeKPIFilter === 'APPROVED_APPS'
-            },
-            { 
-              icon: <TrendingUp />, 
-              label: 'Avg Processing Days', 
-              value: allApplications.filter(a => a.approved_at).length > 0 ? Math.round(allApplications.filter(a => a.approved_at).reduce((sum, a) => sum + (new Date(a.approved_at!).getTime() - new Date(a.submitted_at).getTime()) / (1000 * 60 * 60 * 24), 0) / allApplications.filter(a => a.approved_at).length) : 0, 
-              color: '#9c27b0',
-              clickable: false
-            },
-          ] : tabValue === 1 ? [
-            { 
-              icon: <Coffee />, 
-              label: 'Total Licensed', 
-              value: approvedApplications.length, 
-              color: BRAND_COLOR,
-              clickable: true,
-              filterKey: 'ALL_EXPORTERS',
-              selected: activeKPIFilter === 'ALL_EXPORTERS'
-            },
-            { 
-              icon: <Science />, 
-              label: 'Lab Certified', 
-              value: approvedApplications.filter(a => a.laboratory_facility === 'yes' || a.laboratory_facility === 'contracted').length, 
-              color: '#4caf50',
-              clickable: false
-            },
-            { 
-              icon: <CheckCircle />, 
-              label: 'Active Licenses', 
-              value: approvedApplications.filter(a => a.license_expiry_date && new Date(a.license_expiry_date) > new Date()).length, 
-              color: '#2196f3',
-              clickable: false
-            },
-            { 
-              icon: <AccountBalance />, 
-              label: 'Total Capital (M ETB)', 
-              value: Math.round(approvedApplications.reduce((sum, a) => sum + parseFloat(a.capital_requirement || '0'), 0) / 1000000), 
-              color: '#9c27b0',
-              clickable: false
-            },
-          ] : tabValue === 2 ? [
-            { 
-              icon: <Description />, 
-              label: 'Total Contracts', 
-              value: allContracts.length, 
-              color: '#2196f3',
-              clickable: true,
-              filterKey: 'ALL_CONTRACTS',
-              selected: activeKPIFilter === 'ALL_CONTRACTS'
-            },
-            { 
-              icon: <Warning />, 
-              label: 'Pending Approval', 
-              value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, 
-              color: '#ff9800',
-              clickable: true,
-              filterKey: 'PENDING_CONTRACTS',
-              selected: activeKPIFilter === 'PENDING_CONTRACTS'
-            },
-            { 
-              icon: <CheckCircle />, 
-              label: 'Approved', 
-              value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, 
-              color: '#4caf50',
-              clickable: true,
-              filterKey: 'APPROVED_CONTRACTS',
-              selected: activeKPIFilter === 'APPROVED_CONTRACTS'
-            },
-            { 
-              icon: <Cancel />, 
-              label: 'Rejected', 
-              value: allContracts.filter(c => c.contractStatus === 'REJECTED').length, 
-              color: '#f44336',
-              clickable: true,
-              filterKey: 'REJECTED_CONTRACTS',
-              selected: activeKPIFilter === 'REJECTED_CONTRACTS'
-            },
-          ] : tabValue === 4 ? [
-            { 
-              icon: <Science />, 
-              label: 'Total Inspections', 
-              value: (() => {
-                // Count: pending shipments + all inspection records
-                const pendingShipments = allShipments.filter(s => {
-                  const status = (s.status || (s as any).Status || '').toUpperCase();
-                  return (status === 'CREATED' || status === 'REGISTERED') && 
-                         !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-                });
-                return pendingShipments.length + allInspectionRecords.length;
-              })(), 
-              color: '#2196f3',
-              clickable: true,
-              filterKey: 'ALL_SHIPMENTS',
-              selected: activeKPIFilter === 'ALL_SHIPMENTS'
-            },
-            { 
-              icon: <HourglassTop />, 
-              label: 'Pending', 
-              value: (() => {
-                // Count: pending shipments (not yet scheduled for inspection)
-                const pendingShipments = allShipments.filter(s => {
-                  const status = (s.status || (s as any).Status || '').toUpperCase();
-                  return (status === 'CREATED' || status === 'REGISTERED') && 
-                         !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-                });
-                return pendingShipments.length;
-              })(), 
-              color: '#ff9800',
-              clickable: true,
-              filterKey: 'PENDING_INSPECTION',
-              selected: activeKPIFilter === 'PENDING_INSPECTION'
-            },
-            { 
-              icon: <Assignment />, 
-              label: 'Inspected', 
-              value: allInspectionRecords.filter(i => i.status === 'INSPECTED' || i.Status === 'INSPECTED').length, 
-              color: '#4caf50',
-              clickable: true,
-              filterKey: 'INSPECTED',
-              selected: activeKPIFilter === 'INSPECTED'
-            },
-            { 
-              icon: <CheckCircle />, 
-              label: 'Approved', 
-              value: allInspectionRecords.filter(i => i.status === 'APPROVED' || i.Status === 'APPROVED').length, 
-              color: BRAND_COLOR,
-              clickable: true,
-              filterKey: 'APPROVED_INSPECTION',
-              selected: activeKPIFilter === 'APPROVED_INSPECTION'
-            },
-          ] : [
-            { 
-              icon: <Coffee />, 
-              label: 'Licensed Exporters', 
-              value: approvedApplications.length, 
-              color: BRAND_COLOR,
-              clickable: false
-            },
-            { 
-              icon: <Assignment />, 
-              label: 'Pending Applications', 
-              value: allApplications.filter(a => a.status === 'pending').length, 
-              color: '#ff9800',
-              clickable: false
-            },
-            { 
-              icon: <Science />, 
-              label: 'Lab Certified', 
-              value: approvedApplications.filter(a => a.laboratory_facility === 'yes').length, 
-              color: '#4caf50',
-              clickable: false
-            },
-            { 
-              icon: <Warning />, 
-              label: 'Expiring Soon', 
-              value: approvedApplications.filter(a => {
-                if (!a.license_expiry_date) return false;
-                const expiryDate = new Date(a.license_expiry_date);
-                const threeMonthsFromNow = new Date();
-                threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
-                return expiryDate <= threeMonthsFromNow;
-              }).length, 
-              color: '#f44336',
-              clickable: false
-            },
-          ];
+        <Grid item xs={12} sm={6} md={3}>
+          <Card 
+            sx={{ 
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: `2px solid ${tabValue === 0 ? '#ff9800' : 'transparent'}`,
+              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+            }}
+            onClick={() => setTabValue(0)}
+          >
+            <CardContent sx={{ textAlign: 'center', py: 3 }}>
+              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
+              </Box>
+              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                Pending Applications
+              </Typography>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                {allApplications.filter(a => a.status === 'pending').length}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
 
-          return kpis.map((kpi, index) => (
-            <Grid item xs={12} sm={6} md={3} key={index}>
-              <Card sx={{ 
-                cursor: kpi.clickable ? 'pointer' : 'default',
-                height: 140,
-                border: kpi.clickable && kpi.selected ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
-                bgcolor: kpi.clickable && kpi.selected ? `${kpi.color}08` : 'white',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                borderRadius: 2,
-                boxShadow: kpi.clickable && kpi.selected 
-                  ? `0 4px 12px ${kpi.color}40` 
-                  : '0 1px 3px rgba(0,0,0,0.05)',
-                '&:hover': kpi.clickable ? {
-                  boxShadow: `0 8px 24px ${kpi.color}40`,
-                  transform: 'translateY(-4px)',
-                  borderColor: kpi.color,
-                } : {},
-              }}
-              onClick={kpi.clickable ? () => handleKPIFilter(kpi.filterKey!, kpi.label) : undefined}
-              >
-                <CardContent sx={{ 
-                  textAlign: 'center', 
-                  py: 2.5, 
-                  px: 2,
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}>
-                  <Box sx={{ 
-                    width: 48, 
-                    height: 48, 
-                    borderRadius: '50%', 
-                    bgcolor: `${kpi.color}15`, 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    mb: 1.5
-                  }}>
-                    {React.cloneElement(kpi.icon, { 
-                      sx: { fontSize: 28, color: kpi.color } 
-                    })}
-                  </Box>
-                  <Typography 
-                    variant="caption" 
-                    sx={{ 
-                      color: '#666', 
-                      textTransform: 'uppercase', 
-                      fontWeight: 600, 
-                      fontSize: '0.7rem',
-                      letterSpacing: 0.5,
-                      mb: 0.5
-                    }}
-                  >
-                    {kpi.label}
-                  </Typography>
-                  <Typography 
-                    variant="h4" 
-                    sx={{ 
-                      fontWeight: 700, 
-                      color: kpi.color,
-                      lineHeight: 1,
-                      mb: 0.5
-                    }}
-                  >
-                    {kpi.value}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          ));
-        })()}
+        <Grid item xs={12} sm={6} md={3}>
+          <Card 
+            sx={{ 
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: `2px solid ${tabValue === 1 ? BRAND_COLOR : 'transparent'}`,
+              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+            }}
+            onClick={() => setTabValue(1)}
+          >
+            <CardContent sx={{ textAlign: 'center', py: 3 }}>
+              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${BRAND_COLOR}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                <Coffee sx={{ fontSize: 28, color: BRAND_COLOR }} />
+              </Box>
+              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                Approved Exporters
+              </Typography>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: BRAND_COLOR, lineHeight: 1 }}>
+                {approvedApplications.length}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card 
+            sx={{ 
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: `2px solid ${tabValue === 2 ? '#2196f3' : 'transparent'}`,
+              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+            }}
+            onClick={() => setTabValue(2)}
+          >
+            <CardContent sx={{ textAlign: 'center', py: 3 }}>
+              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                <Description sx={{ fontSize: 28, color: '#2196f3' }} />
+              </Box>
+              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                Pending Contracts
+              </Typography>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
+                {allContracts.filter(c => c.contractStatus === 'REGISTERED').length}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card 
+            sx={{ 
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: `2px solid ${tabValue === 3 ? '#4caf50' : 'transparent'}`,
+              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+            }}
+            onClick={() => setTabValue(3)}
+          >
+            <CardContent sx={{ textAlign: 'center', py: 3 }}>
+              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                <Science sx={{ fontSize: 28, color: '#4caf50' }} />
+              </Box>
+              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                Quality Inspections
+              </Typography>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                {allInspectionRecords.length}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
       {/* Main Tabs - Enhanced with full-width, rounded corners */}
@@ -1739,11 +1540,116 @@ The exporter can reapply once all requirements are met.`,
                             <IconButton
                               size="small"
                               color="primary"
-                              onClick={() => {
-                                setSelectedApplication(application);
+                              onClick={async () => {
+                                // For approved exporters, show simplified read-only view
+                                try {
+                                  // Fetch documents for this exporter
+                                  const docsResponse = await api.get(`/documents/entity/EXPORTER_APPLICATION/${application.application_id}`);
+                                  const docsData = docsResponse.data?.data || [];
+                                  
+                                  const applicationDocuments = docsData.map((doc: any) => ({
+                                    id: doc.document_id,
+                                    name: doc.file_name,
+                                    type: doc.mime_type?.split('/')[1]?.toUpperCase() || 'PDF',
+                                    status: 'AVAILABLE',
+                                    uploadedDate: doc.uploaded_at ? formatDate(doc.uploaded_at) : 'N/A',
+                                    size: doc.file_size ? `${Math.round(doc.file_size / 1024)} KB` : 'N/A'
+                                  }));
+                                  
+                                  // Set simplified validation data for approved exporters (read-only)
+                                  setValidationData({
+                                    entityId: application.application_id,
+                                    entityType: 'APPROVED EXPORTER',
+                                    title: `Approved Exporter - ${application.company_name}`,
+                                    summary: [
+                                      { label: 'Exporter ID', value: application.exporter_id || 'Not Set' },
+                                      { label: 'Company Name', value: application.company_name },
+                                      { label: 'License Number', value: application.ecta_license_number || 'Not Generated' },
+                                      { label: 'Email', value: application.email },
+                                      { label: 'Phone', value: application.phone },
+                                      { label: 'Contact Person', value: application.contact_person },
+                                      { label: 'Address', value: `${application.address}, ${application.city}` },
+                                      { label: 'Capital', value: `${parseFloat(application.capital_requirement).toLocaleString()} ETB` },
+                                      { label: 'Approved Date', value: application.approved_at ? formatDate(application.approved_at) : 'N/A' },
+                                      { label: 'License Expires', value: application.license_expiry_date ? formatDate(application.license_expiry_date) : 'Not Set' },
+                                      { label: 'Status', value: 'ACTIVE' },
+                                    ],
+                                    prerequisites: [],
+                                    documents: applicationDocuments,
+                                    complianceChecks: [],
+                                    additionalInfo: 'This exporter has been approved and is actively licensed for coffee export operations.'
+                                  });
+                                  setValidationDialogOpen(true);
+                                } catch (error) {
+                                  console.error('Error fetching exporter details:', error);
+                                  showError('Error', 'Failed to load exporter details');
+                                }
                               }}
                             >
                               <Visibility fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Reset Password">
+                            <IconButton
+                              size="small"
+                              color="secondary"
+                              onClick={async () => {
+                                const confirmed = confirm(
+                                  `🔐 RESET PASSWORD\n\n` +
+                                  `Company: ${application.company_name}\n` +
+                                  `Email: ${application.email}\n` +
+                                  `Exporter ID: ${application.exporter_id || 'Not Set'}\n\n` +
+                                  `────────────────────────────\n\n` +
+                                  `The password will be reset to: password123\n\n` +
+                                  `⚠️ IMPORTANT:\n` +
+                                  `The user must change this temporary password immediately after logging in.\n\n` +
+                                  `Continue with password reset?`
+                                );
+                                if (confirmed) {
+                                  try {
+                                    const exporterId = application.exporter_id;
+                                    
+                                    if (!exporterId) {
+                                      showError('Cannot Reset Password', 'This application does not have an exporter ID assigned yet.');
+                                      return;
+                                    }
+                                    
+                                    console.log('[PASSWORD RESET] Using direct endpoint with exporterId:', exporterId);
+                                    
+                                    // Use the new direct endpoint that doesn't require fetching all users
+                                    const response = await api.post('/users/reset-password-by-identifier', {
+                                      exporterId: exporterId,
+                                      email: application.email
+                                    });
+                                    
+                                    console.log('[PASSWORD RESET] Response:', response.data);
+                                    
+                                    if (response.data?.success) {
+                                      const userData = response.data.data;
+                                      showSuccess(
+                                        'Password Reset Successful', 
+                                        `Password has been reset for ${application.company_name}.\n\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `📧 Email: ${userData.email}\n` +
+                                        `👤 Username: ${userData.username}\n` +
+                                        `🔑 New Password: password123\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                        `⚠️ NEXT STEPS:\n` +
+                                        `1. Inform the user about the password reset\n` +
+                                        `2. User logs in with username "${userData.username}"\n` +
+                                        `3. User must change password immediately\n\n` +
+                                        `✅ Password reset completed successfully.`
+                                      );
+                                    }
+                                  } catch (error: any) {
+                                    console.error('[PASSWORD RESET] Error:', error);
+                                    const errorMsg = error?.response?.data?.error?.message || error?.message || 'Failed to reset password';
+                                    showError('Password Reset Failed', errorMsg);
+                                  }
+                                }
+                              }}
+                            >
+                              <Person fontSize="small" />
                             </IconButton>
                           </Tooltip>
                           <Tooltip title="Suspend License">
@@ -1895,127 +1801,21 @@ The exporter can reapply once all requirements are met.`,
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
-          {/* Exporters Management Tab */}
-          <Typography variant="h6" gutterBottom>
-            Exporters Management
-          </Typography>
-          {exporters.length === 0 ? (
-            <Alert severity="info">No exporters found in blockchain.</Alert>
-          ) : (
-            <TableContainer component={Paper}>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell width="12%">Exporter ID</TableCell>
-                    <TableCell width="20%">Company Name</TableCell>
-                    <TableCell width="15%">License Number</TableCell>
-                    <TableCell width="10%">Status</TableCell>
-                    <TableCell width="12%">Capital (ETB)</TableCell>
-                    <TableCell width="10%">Lab Certified</TableCell>
-                    <TableCell width="10%">Expires</TableCell>
-                    <TableCell width="11%" align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {exporters.map((exporter) => (
-                    <TableRow key={exporter.exporterId}>
-                      <TableCell>
-                        <Typography variant="body2" fontWeight="bold" color="primary">
-                          {exporter.exporterId}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>{exporter.companyName}</TableCell>
-                      <TableCell>{exporter.ectaLicenseNumber || 'N/A'}</TableCell>
-                      <TableCell>
-                        <StatusChip
-                          status={exporter.licenseStatus === 'ACTIVE' ? 'approved' : exporter.licenseStatus === 'SUSPENDED' ? 'rejected' : 'pending'}
-                          label={exporter.licenseStatus}
-                          brandColor={BRAND_COLOR}
-                        />
-                      </TableCell>
-                      <TableCell>{formatCurrency(exporter.capitalRequirement, 'ETB')}</TableCell>
-                      <TableCell>
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              checked={exporter.laboratoryCertified}
-                              onChange={(e) => handleUpdateLaboratory(exporter.exporterId, e.target.checked)}
-                              size="small"
-                            />
-                          }
-                          label=""
-                        />
-                      </TableCell>
-                      <TableCell>{formatDate(exporter.licenseExpiryDate)}</TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="View Details">
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              setSelectedExporter(exporter);
-                              setDialogOpen(true);
-                            }}
-                          >
-                            <Visibility />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title={exporter.licenseStatus === 'SUSPENDED' ? 'Activate License' : 'Suspend License'}>
-                          <IconButton
-                            size="small"
-                            color={exporter.licenseStatus === 'SUSPENDED' ? 'success' : 'warning'}
-                            onClick={() => handleSuspendLicense(exporter.exporterId, exporter.licenseStatus)}
-                          >
-                            {exporter.licenseStatus === 'SUSPENDED' ? <CheckCircle /> : <Warning />}
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={4}>
           {/* Quality Control Tab - Clean Table View */}
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Science /> Quality Inspection Records
           </Typography>
-          
-          <Alert severity="info" sx={{ mb: 3 }}>
-            Click the KPI cards above to filter by inspection status: Pending, Scheduled, Under Review, Inspected, or Approved.
-          </Alert>
 
           {/* Unified Table for All Inspection Data */}
           {(() => {
-            // Determine which data to show based on activeKPIFilter
+            // Show all inspection data: pending shipments + all inspection records
             const getPendingShipments = () => allShipments.filter(s => {
               const status = (s.status || (s as any).Status || '').toUpperCase();
               return (status === 'CREATED' || status === 'REGISTERED') && 
                      !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
             });
 
-            const getFilteredInspections = () => {
-              if (activeKPIFilter === 'PENDING_INSPECTION') {
-                // Show only pending shipments (not yet scheduled)
-                return getPendingShipments();
-              } else if (activeKPIFilter === 'INSPECTED') {
-                // Show only inspections with INSPECTED status
-                return allInspectionRecords.filter(i => (i.status || i.Status) === 'INSPECTED');
-              } else if (activeKPIFilter === 'APPROVED_INSPECTION') {
-                // Show only inspections with APPROVED status
-                return allInspectionRecords.filter(i => (i.status || i.Status) === 'APPROVED');
-              } else if (activeKPIFilter === 'ALL_SHIPMENTS' || !activeKPIFilter) {
-                // Show all: pending shipments + all inspection records
-                return [...getPendingShipments(), ...allInspectionRecords];
-              } else {
-                // Default: show all
-                return [...getPendingShipments(), ...allInspectionRecords];
-              }
-            };
-
-            const dataToShow = getFilteredInspections();
+            const dataToShow = [...getPendingShipments(), ...allInspectionRecords];
             const isPendingShipment = (item: any) => item.shipmentId && !item.inspectionID && !item.InspectionID;
 
             return dataToShow.length === 0 ? (
@@ -2147,7 +1947,7 @@ The exporter can reapply once all requirements are met.`,
           })()}
         </TabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <TabPanel value={tabValue} index={4}>
           {/* License Renewals Tab */}
           <Typography variant="h6" gutterBottom>
             License Renewals
@@ -2238,7 +2038,7 @@ The exporter can reapply once all requirements are met.`,
           </TableContainer>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={5}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
@@ -2524,11 +2324,11 @@ The exporter can reapply once all requirements are met.`,
                             <ListItemText
                               primary={doc.fileName || `Document ${index + 1}`}
                               secondary={
-                                <>
-                                  {doc.category && <Chip label={doc.category} size="small" sx={{ mr: 1 }} />}
-                                  {doc.hash && <Typography variant="caption">Hash: {doc.hash.slice(0, 16)}...</Typography>}
-                                  {doc.ipfsCID && <Typography variant="caption" sx={{ ml: 1 }}>IPFS: {doc.ipfsCID.slice(0, 12)}...</Typography>}
-                                </>
+                                <Box component="span" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+                                  {doc.category && <Chip label={doc.category} size="small" />}
+                                  {doc.hash && <Typography component="span" variant="caption">Hash: {doc.hash.slice(0, 16)}...</Typography>}
+                                  {doc.ipfsCID && <Typography component="span" variant="caption">IPFS: {doc.ipfsCID.slice(0, 12)}...</Typography>}
+                                </Box>
                               }
                             />
                             <Button
@@ -3019,7 +2819,7 @@ The exporter can reapply once all requirements are met.`,
         approveLabel="Approve Application"
         rejectLabel="Reject Application"
         showRejectOption={true}
-        readOnly={false}
+        readOnly={validationData?.entityType === 'APPROVED EXPORTER'}
       />
 
       {/* Audit Trail Viewer */}

@@ -1911,6 +1911,51 @@ func (c *CoffeeContract) GetCompleteTraceability(ctx contractapi.TransactionCont
 	return traceability, nil
 }
 
+// GetHistory - Get complete history of changes for any entity
+// Returns all historical states with transaction metadata
+func (c *CoffeeContract) GetHistory(ctx contractapi.TransactionContextInterface, key string) ([]map[string]interface{}, error) {
+	log.Printf("=== GetHistory called for key: %s ===", key)
+	
+	resultsIterator, err := ctx.GetStub().GetHistoryForKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get history for key %s: %v", key, err)
+	}
+	defer resultsIterator.Close()
+
+	var history []map[string]interface{}
+	
+	for resultsIterator.HasNext() {
+		response, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("error iterating history: %v", err)
+		}
+
+		// Parse the value as JSON
+		var record map[string]interface{}
+		if len(response.Value) > 0 {
+			if err := json.Unmarshal(response.Value, &record); err != nil {
+				log.Printf("Warning: Could not unmarshal history value: %v", err)
+				record = map[string]interface{}{
+					"_raw": string(response.Value),
+				}
+			}
+		}
+
+		// Build history entry
+		entry := map[string]interface{}{
+			"TxId":      response.TxId,
+			"Value":     record,
+			"Timestamp": response.Timestamp.AsTime().Format(time.RFC3339),
+			"IsDelete":  response.IsDelete,
+		}
+		
+		history = append(history, entry)
+	}
+	
+	log.Printf("=== GetHistory completed: Found %d entries for key %s ===", len(history), key)
+	return history, nil
+}
+
 func main() {
 	// Chaincode as a Service (CaaS) configuration
 	ccid := os.Getenv("CORE_CHAINCODE_ID_NAME")

@@ -47,8 +47,8 @@ print_success "All Node.js processes stopped and ports freed"
 # Stop Docker containers
 print_step "Stopping Docker containers..."
 cd "$PROJECT_ROOT"
-docker-compose -f "$DOCKER_COMPOSE_FILE" down -v 2>/dev/null || true
-print_success "All containers stopped and removed"
+docker-compose -f "$DOCKER_COMPOSE_FILE" down 2>/dev/null || true
+print_success "All containers stopped (data volumes preserved)"
 
 # Clean up logs
 print_step "Cleaning up log files..."

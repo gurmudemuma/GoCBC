@@ -24,9 +24,11 @@ import {
   ListItemText,
   MenuItem,
   alpha,
-  useTheme,
-  ThemeProvider,
-  createTheme,
+  Fade,
+  Zoom,
+  Stack,
+  Chip,
+  LinearProgress,
 } from '@mui/material';
 import {
   Business,
@@ -50,12 +52,9 @@ import { useRouter } from 'next/router';
 import api from '@/utils/api';
 import { ETHIOPIAN_BANKS } from '@/utils/banks';
 import BankSelect from '@/components/common/BankSelect';
-import { createOrganizationTheme } from '@/theme/organizationThemes';import BankBranchSelect from '@/components/common/BankBranchSelect';
-import { DocumentUploadDialog } from '@/components/portals/DocumentUploadDialog';
+import BankBranchSelect from '@/components/common/BankBranchSelect';
 
 const steps = ['Company Information', 'Requirements', 'Documents', 'Contact Details', 'Review & Submit'];
-
-// Ethiopian Regions
 const ETHIOPIAN_REGIONS = [
   'Addis Ababa',
   'Afar',
@@ -156,11 +155,7 @@ const CITIES_BY_REGION: Record<string, string[]> = {
   ],
 };
 
-// Apply EXPORTER theme (purple and golden colors)
-const exporterTheme = createOrganizationTheme('EXPORTER');
-
 const RegisterExporterPage = () => {
-  const theme = useTheme();
   const router = useRouter();
   const [activeStep, setActiveStep] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -168,6 +163,12 @@ const RegisterExporterPage = () => {
   const [success, setSuccess] = useState(false);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [uploadedDocuments, setUploadedDocuments] = useState<any[]>([]);
+  const [mounted, setMounted] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Form data
   const [formData, setFormData] = useState({
@@ -220,41 +221,157 @@ const RegisterExporterPage = () => {
     return CITIES_BY_REGION[formData.region] || [];
   };
 
+  const validateStep = (step: number): string | null => {
+    switch (step) {
+      case 0: // Company Information
+        if (!formData.companyName.trim()) return 'Company name is required';
+        if (!formData.tinNumber.trim()) return 'TIN number is required';
+        if (!formData.businessLicenseNumber.trim()) return 'Business license is required';
+        if (!formData.registrationDate) return 'Registration date is required';
+        break;
+      
+      case 1: // Requirements
+        if (!formData.exporterType) return 'Please select exporter type';
+        if (!formData.capitalRequirement || Number(formData.capitalRequirement) <= 0) {
+          return 'Valid capital amount is required';
+        }
+        const minCapital = formData.exporterType === 'private' ? 15000000 :
+                          formData.exporterType === 'company' ? 20000000 :
+                          formData.exporterType === 'individual' ? 10000000 : 0;
+        if (Number(formData.capitalRequirement) < minCapital) {
+          return `Minimum capital: ${minCapital.toLocaleString()} ETB`;
+        }
+        if (!formData.professionalTaster.trim()) return 'Professional taster name is required';
+        if (!formData.tasterCertificate.trim()) return 'Taster certificate is required';
+        if (!formData.laboratoryFacility) return 'Laboratory facility status is required';
+        break;
+      
+      case 2: // Documents (optional, just warning)
+        // No validation - documents are optional but recommended
+        break;
+      
+      case 3: // Contact Details
+        if (!formData.contactPerson.trim()) return 'Contact person is required';
+        if (!formData.email.trim()) return 'Email is required';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) return 'Valid email required';
+        if (!formData.phone.trim()) return 'Phone number is required';
+        if (!formData.address.trim()) return 'Address is required';
+        if (!formData.region) return 'Region is required';
+        if (!formData.city) return 'City is required';
+        break;
+    }
+    return null;
+  };
+
   const handleNext = () => {
+    const error = validateStep(activeStep);
+    if (error) {
+      setError(error);
+      return;
+    }
+    setError('');
     setActiveStep((prevStep) => prevStep + 1);
   };
 
   const handleBack = () => {
+    setError('');
     setActiveStep((prevStep) => prevStep - 1);
   };
 
+  const validateForm = (): string | null => {
+    // Step 0: Company Information
+    if (!formData.companyName.trim()) return 'Company name is required';
+    if (!formData.tinNumber.trim()) return 'TIN number is required';
+    if (!formData.businessLicenseNumber.trim()) return 'Business license number is required';
+    if (!formData.registrationDate) return 'Registration date is required';
+
+    // Step 1: Requirements
+    if (!formData.exporterType) return 'Exporter type is required';
+    if (!formData.capitalRequirement || Number(formData.capitalRequirement) <= 0) {
+      return 'Valid capital requirement is required';
+    }
+    
+    // Validate capital meets minimum based on type
+    const minCapital = formData.exporterType === 'private' ? 15000000 :
+                       formData.exporterType === 'company' ? 20000000 :
+                       formData.exporterType === 'individual' ? 10000000 : 0;
+    if (Number(formData.capitalRequirement) < minCapital) {
+      return `Capital must be at least ${minCapital.toLocaleString()} ETB for ${formData.exporterType} exporter`;
+    }
+
+    if (!formData.professionalTaster.trim()) return 'Professional taster name is required';
+    if (!formData.tasterCertificate.trim()) return 'Taster certificate number is required';
+    if (!formData.laboratoryFacility) return 'Laboratory facility status is required';
+
+    // Step 3: Contact Details
+    if (!formData.contactPerson.trim()) return 'Contact person is required';
+    if (!formData.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      return 'Valid email address is required';
+    }
+    if (!formData.phone.trim()) return 'Phone number is required';
+    if (!formData.address.trim()) return 'Physical address is required';
+    if (!formData.region) return 'Region is required';
+    if (!formData.city) return 'City is required';
+
+    return null;
+  };
+
   const handleSubmit = async () => {
+    // Client-side validation before submission
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setLoading(true);
     setError('');
     setSuccess(false);
 
     try {
-      // Prepare documents data for submission
-      const documentsData = uploadedDocuments.map(doc => ({
-        documentId: doc.documentId,
-        fileName: doc.file.name,
-        category: doc.category,
-        hash: doc.hash,
-        ipfsCID: doc.ipfsCID,
-        description: doc.description,
-        encrypted: doc.encrypt,
-      }));
-
-      // Submit application to API with documents
+      // Step 1: Submit application WITHOUT documents first
       const response = await api.post('/exporters/exporter-applications', {
         ...formData,
-        documents: documentsData,
+        documents: [], // Empty for now
       });
+      
+      if (!response.data.success) {
+        throw new Error(response.data.error?.message || 'Application submission failed');
+      }
+
+      const applicationId = response.data.data.applicationId;
+
+      // Step 2: Upload documents with the application ID
+      if (uploadedDocuments.length > 0) {
+        const uploadPromises = uploadedDocuments.map(async (doc) => {
+          try {
+            const formData = new FormData();
+            formData.append('file', doc.file);
+            formData.append('fileName', doc.file.name);
+            formData.append('documentType', doc.category || 'OTHER');
+            formData.append('encrypt', doc.encrypt.toString());
+            formData.append('entityType', 'EXPORTER_APPLICATION');
+            formData.append('entityId', applicationId);
+
+            const uploadResponse = await fetch('http://localhost:3001/api/v1/documents/upload-registration', {
+              method: 'POST',
+              body: formData,
+            });
+
+            const result = await uploadResponse.json();
+            return result.success;
+          } catch (error) {
+            console.error('Document upload error:', error);
+            return false;
+          }
+        });
+
+        await Promise.all(uploadPromises);
+      }
       
       setSuccess(true);
       setLoading(false);
-      
-      // Scroll to top to show success message
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
       const errorMessage = err.response?.data?.error?.message 
@@ -264,8 +381,6 @@ const RegisterExporterPage = () => {
       
       setError(errorMessage);
       setLoading(false);
-      
-      // Scroll to top to show error message
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
@@ -273,6 +388,34 @@ const RegisterExporterPage = () => {
   const handleDocumentUploadComplete = (documents: any[]) => {
     setUploadedDocuments(prevDocs => [...prevDocs, ...documents]);
     setUploadDialogOpen(false);
+  };
+
+  // Direct file upload handler - just store files locally, upload after application created
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const newDocs: any[] = [];
+
+    Array.from(files).forEach((file) => {
+      newDocs.push({
+        file,
+        category: 'OTHER',
+        encrypt: true,
+        status: 'pending',
+      });
+    });
+
+    setUploadedDocuments(prev => [...prev, ...newDocs]);
+
+    // Reset input
+    if (event.target) {
+      event.target.value = '';
+    }
+  };
+
+  const triggerFileUpload = () => {
+    fileInputRef.current?.click();
   };
 
   const renderStepContent = (step: number) => {
@@ -544,6 +687,14 @@ const RegisterExporterPage = () => {
             </Grid>
 
             <Grid item xs={12}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                style={{ display: 'none' }}
+                onChange={handleFileSelect}
+              />
               <Paper
                 variant="outlined"
                 sx={{
@@ -561,15 +712,15 @@ const RegisterExporterPage = () => {
                       No documents uploaded yet
                     </Typography>
                     <Typography variant="body2" color="text.secondary" paragraph>
-                      Click the button below to upload your supporting documents
+                      Click the button below to browse and upload your supporting documents
                     </Typography>
                     <Button
                       variant="contained"
                       startIcon={<CloudUpload />}
-                      onClick={() => setUploadDialogOpen(true)}
+                      onClick={triggerFileUpload}
                       size="large"
                     >
-                      Upload Documents
+                      Browse & Upload Documents
                     </Button>
                   </>
                 ) : (
@@ -595,7 +746,7 @@ const RegisterExporterPage = () => {
                       <Button
                         variant="outlined"
                         startIcon={<CloudUpload />}
-                        onClick={() => setUploadDialogOpen(true)}
+                        onClick={triggerFileUpload}
                       >
                         Upload More Documents
                       </Button>
@@ -974,382 +1125,501 @@ const RegisterExporterPage = () => {
 
   if (success) {
     return (
-      <ThemeProvider theme={exporterTheme}>
       <Box
         sx={{
           minHeight: '100vh',
           display: 'flex',
           alignItems: 'center',
-          background: '#9b30b7',
+          background: 'linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%)',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
-        <Container maxWidth="md">
-          <Card 
-            elevation={24}
-            sx={{
-              borderRadius: 4,
-              overflow: 'hidden',
-              bgcolor: '#FFFFFF',
-            }}
-          >
-            <Box 
-              sx={{ 
-                height: 4, 
-                bgcolor: '#FFD700',
-              }} 
-            />
-            <CardContent sx={{ p: 5, textAlign: 'center' }}>
-              <Box 
-                sx={{ 
-                  display: 'inline-flex',
-                  p: 2,
-                  borderRadius: '50%',
-                  bgcolor: 'rgba(255, 215, 0, 0.15)',
-                  mb: 2,
-                }}
-              >
-                <CheckCircle sx={{ fontSize: 80, color: '#FFD700' }} />
-              </Box>
-              <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Application Submitted Successfully!
-              </Typography>
-              <Typography variant="body1" color="text.secondary" paragraph>
-                Thank you for applying to become a coffee exporter. Your application has been submitted to ECTA for review.
-              </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
-                Application Reference: <strong>APP-{Date.now().toString().slice(-8)}</strong>
-              </Typography>
-              <Divider sx={{ my: 3 }} />
-              <Typography variant="h6" gutterBottom>
-                What's Next?
-              </Typography>
-              <List>
-                <ListItem>
-                  <ListItemIcon>
-                    <CheckCircle sx={{ color: '#FFD700' }} />
-                  </ListItemIcon>
-                  <ListItemText 
-                    primary="Document Verification"
-                    secondary="ECTA will verify your submitted documents (2-3 business days)"
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemIcon>
-                    <CheckCircle sx={{ color: '#FFD700' }} />
-                  </ListItemIcon>
-                  <ListItemText 
-                    primary="Site Inspection"
-                    secondary="ECTA may schedule a site visit to verify facilities"
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemIcon>
-                    <CheckCircle sx={{ color: '#FFD700' }} />
-                  </ListItemIcon>
-                  <ListItemText 
-                    primary="License Issuance"
-                    secondary="Upon approval, you'll receive your ECTA export license"
-                  />
-                </ListItem>
-              </List>
-              <Box sx={{ mt: 4, display: 'flex', gap: 2, justifyContent: 'center' }}>
-                <Button
-                  variant="contained"
-                  size="large"
-                  onClick={() => router.push('/')}
+        {/* Background decorations */}
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            opacity: 0.03,
+            backgroundImage: `repeating-linear-gradient(45deg, #000 0, #000 1px, transparent 0, transparent 50%)`,
+            backgroundSize: '10px 10px',
+          }}
+        />
+        <Box
+          sx={{
+            position: 'absolute',
+            top: '-10%',
+            right: '-5%',
+            width: '400px',
+            height: '400px',
+            borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(155, 48, 183, 0.15) 0%, transparent 70%)',
+            filter: 'blur(60px)',
+          }}
+        />
+
+        <Container maxWidth="md" sx={{ position: 'relative', zIndex: 1 }}>
+          <Zoom in={true} timeout={800}>
+            <Paper
+              elevation={0}
+              sx={{
+                borderRadius: 3,
+                overflow: 'hidden',
+                background: 'white',
+                boxShadow: '0 20px 60px rgba(0, 0, 0, 0.1)',
+              }}
+            >
+              <Box sx={{ height: 4, bgcolor: '#FFD700' }} />
+              <Box sx={{ p: { xs: 4, md: 6 }, textAlign: 'center' }}>
+                <Box
                   sx={{
-                    px: 4,
-                    py: 1.5,
-                    borderRadius: 2,
-                    textTransform: 'none',
-                    fontSize: '1rem',
-                    fontWeight: 600,
-                    bgcolor: '#9b30b7',
-                    '&:hover': {
-                      bgcolor: '#7b1fa2',
-                    },
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #FFD700 0%, #FFC700 100%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto',
+                    mb: 3,
+                    boxShadow: '0 8px 24px rgba(255, 215, 0, 0.3)',
                   }}
                 >
-                  Go to Home
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="large"
-                  onClick={() => window.location.reload()}
+                  <CheckCircle sx={{ fontSize: 48, color: '#9b30b7' }} />
+                </Box>
+
+                <Typography
+                  variant="h4"
+                  fontWeight="700"
+                  gutterBottom
+                  sx={{ color: '#1a1a1a', letterSpacing: '-0.5px' }}
+                >
+                  Application Submitted Successfully!
+                </Typography>
+                <Typography
+                  variant="body1"
+                  sx={{ color: '#616161', mb: 2, maxWidth: 500, mx: 'auto' }}
+                >
+                  Thank you for applying to become a coffee exporter. Your application has been submitted to ECTA for review.
+                </Typography>
+
+                <Chip
+                  label={`Application ID: APP-${Date.now().toString().slice(-8)}`}
                   sx={{
-                    px: 4,
-                    py: 1.5,
-                    borderRadius: 2,
-                    textTransform: 'none',
-                    fontSize: '1rem',
+                    mb: 4,
                     fontWeight: 600,
-                    borderColor: '#9b30b7',
+                    bgcolor: alpha('#9b30b7', 0.1),
                     color: '#9b30b7',
-                    '&:hover': {
-                      borderColor: '#7b1fa2',
-                      bgcolor: 'rgba(155, 48, 183, 0.05)',
-                    },
+                    fontSize: '0.875rem',
+                    px: 2,
+                    py: 2.5,
                   }}
-                >
-                  Submit Another Application
-                </Button>
+                />
+
+                <Divider sx={{ my: 4 }} />
+
+                <Typography variant="h6" fontWeight="600" gutterBottom sx={{ color: '#1a1a1a' }}>
+                  What Happens Next?
+                </Typography>
+                
+                <Grid container spacing={2} sx={{ mt: 2, mb: 4 }}>
+                  {[
+                    { title: 'Document Verification', desc: 'ECTA will verify your submitted documents', time: '2-3 business days' },
+                    { title: 'Site Inspection', desc: 'ECTA may schedule a site visit to verify facilities', time: 'If required' },
+                    { title: 'License Issuance', desc: 'Upon approval, you\'ll receive your ECTA export license', time: 'Final step' },
+                  ].map((step, idx) => (
+                    <Grid item xs={12} md={4} key={idx}>
+                      <Paper
+                        elevation={0}
+                        sx={{
+                          p: 2.5,
+                          height: '100%',
+                          background: 'rgba(155, 48, 183, 0.04)',
+                          border: '1px solid',
+                          borderColor: alpha('#9b30b7', 0.15),
+                          borderRadius: 2,
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: '50%',
+                            bgcolor: '#9b30b7',
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 700,
+                            mb: 1.5,
+                          }}
+                        >
+                          {idx + 1}
+                        </Box>
+                        <Typography variant="body2" fontWeight="600" gutterBottom sx={{ color: '#1a1a1a' }}>
+                          {step.title}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#616161', display: 'block', mb: 1 }}>
+                          {step.desc}
+                        </Typography>
+                        <Chip
+                          label={step.time}
+                          size="small"
+                          sx={{
+                            bgcolor: alpha('#FFD700', 0.2),
+                            color: '#9b30b7',
+                            fontWeight: 600,
+                            fontSize: '0.7rem',
+                          }}
+                        />
+                      </Paper>
+                    </Grid>
+                  ))}
+                </Grid>
+
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+                  <Button
+                    variant="contained"
+                    size="large"
+                    onClick={() => router.push('/')}
+                    sx={{
+                      px: 4,
+                      py: 1.5,
+                      borderRadius: 2,
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                      boxShadow: '0 4px 12px rgba(155, 48, 183, 0.3)',
+                      '&:hover': {
+                        background: 'linear-gradient(135deg, #7a2596 0%, #6d1f8a 100%)',
+                        boxShadow: '0 6px 16px rgba(155, 48, 183, 0.4)',
+                      },
+                    }}
+                  >
+                    Go to Home
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="large"
+                    onClick={() => window.location.reload()}
+                    sx={{
+                      px: 4,
+                      py: 1.5,
+                      borderRadius: 2,
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      borderColor: '#FFD700',
+                      color: '#9b30b7',
+                      borderWidth: 2,
+                      '&:hover': {
+                        borderWidth: 2,
+                        borderColor: '#FFD700',
+                        bgcolor: alpha('#FFD700', 0.08),
+                      },
+                    }}
+                  >
+                    Submit Another Application
+                  </Button>
+                </Stack>
               </Box>
-            </CardContent>
-          </Card>
+            </Paper>
+          </Zoom>
         </Container>
       </Box>
-      </ThemeProvider>
     );
   }
 
   return (
-    <ThemeProvider theme={exporterTheme}>
     <>
       <Head>
         <title>Register as Coffee Exporter - CECBS</title>
-        <meta name="description" content="Apply for coffee export license" />
+        <meta name="description" content="Apply for coffee export license - ECTA 2026" />
       </Head>
 
       <Box
         sx={{
           minHeight: '100vh',
-          maxHeight: '100vh',
-          overflow: 'hidden',
-          py: 3,
-          background: '#9b30b7',
           display: 'flex',
-          flexDirection: 'column',
+          background: 'linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%)',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
-        <Container maxWidth="lg" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Header */}
-          <Box sx={{ textAlign: 'center', mb: 2, color: 'white' }}>
-            <Box 
-              sx={{ 
-                display: 'inline-flex',
-                p: 1.5,
-                borderRadius: '50%',
-                bgcolor: 'rgba(255, 255, 255, 0.15)',
-                mb: 1,
-              }}
-            >
-              <Coffee sx={{ fontSize: 36, color: '#FFD700' }} />
-            </Box>
-            <Typography 
-              variant="h4" 
-              fontWeight="bold" 
-              sx={{
-                color: '#FFFFFF',
-                letterSpacing: '-0.5px',
-                mb: 0.5,
-              }}
-            >
-              Coffee Exporter Registration
-            </Typography>
-            <Typography 
-              variant="body2" 
-              sx={{ 
-                color: 'rgba(255, 255, 255, 0.9)',
-              }}
-            >
-              Ethiopian Coffee & Tea Authority (ECTA)
-            </Typography>
-          </Box>
-
-          {/* Main Card */}
-          <Card 
-            elevation={24} 
-            sx={{ 
-              borderRadius: 3,
-              overflow: 'hidden',
-              bgcolor: '#FFFFFF',
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <Box 
-              sx={{ 
-                height: 3, 
-                bgcolor: '#FFD700',
-              }} 
-            />
-            <CardContent sx={{ p: 3, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {/* Stepper */}
-              <Stepper 
-                activeStep={activeStep} 
-                sx={{ 
-                  mb: 2,
-                  '& .MuiStepLabel-root .Mui-completed': {
-                    color: '#FFD700',
-                  },
-                  '& .MuiStepLabel-root .Mui-active': {
-                    color: '#9b30b7',
-                  },
-                  '& .MuiStepIcon-root': {
-                    color: 'rgba(0, 0, 0, 0.3)',
-                  },
-                  '& .MuiStepIcon-root.Mui-active': {
-                    color: '#9b30b7',
-                  },
-                  '& .MuiStepIcon-root.Mui-completed': {
-                    color: '#FFD700',
-                  },
-                  '& .MuiStepConnector-line': {
-                    borderColor: 'rgba(0, 0, 0, 0.2)',
-                  },
-                  '& .Mui-completed .MuiStepConnector-line': {
-                    borderColor: '#FFD700',
-                  },
-                  '& .MuiStepLabel-label': {
-                    fontSize: '0.875rem',
-                    color: '#000000',
-                  },
-                  '& .MuiStepLabel-label.Mui-active': {
-                    fontWeight: 600,
-                    color: '#9b30b7',
-                  },
-                  '& .MuiStepLabel-label.Mui-completed': {
-                    color: '#000000',
-                  },
-                }}
-              >
-                {steps.map((label) => (
-                  <Step key={label}>
-                    <StepLabel>{label}</StepLabel>
-                  </Step>
-                ))}
-              </Stepper>
-
-              {error && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {error}
-                </Alert>
-              )}
-
-              {success && (
-                <Alert 
-                  severity="success" 
-                  sx={{ 
-                    mb: 2,
-                    '& .MuiAlert-icon': {
-                      color: '#FFD700',
-                    },
-                  }}
-                >
-                  <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                    ✅ Application Submitted Successfully!
-                  </Typography>
-                  <Typography variant="caption" display="block">
-                    Your exporter registration application has been submitted and is pending ECTA approval.
-                  </Typography>
-                  <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
-                    You will receive an email notification once your application is reviewed.
-                  </Typography>
-                </Alert>
-              )}
-
-              {/* Step Content */}
-              <Box sx={{ flex: 1, overflow: 'auto', pr: 1 }}>
-                {renderStepContent(activeStep)}
-              </Box>
-
-              {/* Navigation Buttons */}
-              <Box 
-                sx={{ 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  mt: 2,
-                  pt: 2,
-                  borderTop: '1px solid rgba(0, 0, 0, 0.1)',
-                }}
-              >
-                <Button
-                  disabled={activeStep === 0}
-                  onClick={handleBack}
-                  startIcon={<ArrowBack />}
-                  size="medium"
-                  sx={{
-                    textTransform: 'none',
-                    px: 3,
-                  }}
-                >
-                  Back
-                </Button>
-
-                {activeStep === steps.length - 1 ? (
-                  <Button
-                    variant="contained"
-                    onClick={handleSubmit}
-                    disabled={loading}
-                    endIcon={<Send />}
-                    size="medium"
-                    sx={{
-                      textTransform: 'none',
-                      px: 4,
-                      bgcolor: '#9b30b7',
-                      '&:hover': {
-                        bgcolor: '#7b1fa2',
-                      },
-                    }}
-                  >
-                    {loading ? 'Submitting...' : 'Submit Application'}
-                  </Button>
-                ) : (
-                  <Button
-                    variant="contained"
-                    onClick={handleNext}
-                    endIcon={<ArrowForward />}
-                    size="medium"
-                    sx={{
-                      textTransform: 'none',
-                      px: 4,
-                      bgcolor: '#9b30b7',
-                      '&:hover': {
-                        bgcolor: '#7b1fa2',
-                      },
-                    }}
-                  >
-                    Next
-                  </Button>
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-
-          {/* Footer */}
-          <Box 
-            sx={{ 
-              textAlign: 'center', 
-              mt: 1.5, 
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 1,
-              fontSize: '0.75rem',
-            }}
-          >
-            <Typography variant="caption">
-              © 2026 Ethiopian Coffee & Tea Authority
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.7 }}>•</Typography>
-            <Typography variant="caption">
-              All rights reserved
-            </Typography>
-          </Box>
-        </Container>
-
-        {/* Document Upload Dialog */}
-        <DocumentUploadDialog
-          open={uploadDialogOpen}
-          entityType="EXPORTER_APPLICATION"
-          onClose={() => setUploadDialogOpen(false)}
-          onUploadComplete={handleDocumentUploadComplete}
+        {/* Background decorations */}
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            opacity: 0.03,
+            backgroundImage: `repeating-linear-gradient(45deg, #000 0, #000 1px, transparent 0, transparent 50%)`,
+            backgroundSize: '10px 10px',
+          }}
         />
+        <Box
+          sx={{
+            position: 'absolute',
+            top: '-20%',
+            right: '-10%',
+            width: '600px',
+            height: '600px',
+            borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(155, 48, 183, 0.15) 0%, transparent 70%)',
+            filter: 'blur(60px)',
+          }}
+        />
+        <Box
+          sx={{
+            position: 'absolute',
+            bottom: '-20%',
+            left: '-10%',
+            width: '500px',
+            height: '500px',
+            borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(255, 215, 0, 0.15) 0%, transparent 70%)',
+            filter: 'blur(60px)',
+          }}
+        />
+
+        <Container maxWidth="xl" sx={{ position: 'relative', zIndex: 1, py: 2 }}>
+          <Grid container spacing={0} alignItems="center" sx={{ minHeight: '100vh' }}>
+            
+            {/* Left Column - Features */}
+            <Grid item xs={12} lg={5} sx={{ display: { xs: 'none', lg: 'flex' }, alignItems: 'center', py: 3 }}>
+              <Fade in={mounted} timeout={1000}>
+                <Box sx={{ width: '100%', px: 4 }}>
+                  
+                  <Stack direction="row" alignItems="center" spacing={2} mb={3}>
+                    <Box
+                      sx={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: '0 8px 24px rgba(155, 48, 183, 0.3)',
+                      }}
+                    >
+                      <Coffee sx={{ fontSize: 32, color: '#FFD700' }} />
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" fontWeight="700" sx={{ color: '#1a1a1a', lineHeight: 1.2 }}>
+                        Coffee Exporter
+                      </Typography>
+                      <Typography variant="h6" fontWeight="700" sx={{ color: '#9b30b7' }}>
+                        Registration
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  <Typography variant="h4" fontWeight="700" sx={{ mb: 2, color: '#1a1a1a', letterSpacing: '-1px' }}>
+                    Join Ethiopia's Leading
+                    <br />
+                    <span style={{ color: '#9b30b7' }}>Coffee Export Platform</span>
+                  </Typography>
+
+                  <Typography variant="body1" sx={{ mb: 3, color: '#616161', lineHeight: 1.6 }}>
+                    Become part of the blockchain-powered coffee export ecosystem. 
+                    Get your ECTA license and access to regulated, transparent trade operations.
+                  </Typography>
+
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 3,
+                      mb: 3,
+                      background: 'rgba(255, 255, 255, 0.9)',
+                      backdropFilter: 'blur(10px)',
+                      border: '1px solid',
+                      borderColor: alpha('#9b30b7', 0.2),
+                      borderRadius: 2,
+                    }}
+                  >
+                    <Typography variant="body2" fontWeight="600" gutterBottom sx={{ color: '#1a1a1a' }}>
+                      📋 ECTA Requirements (2026)
+                    </Typography>
+                    <List dense sx={{ '& .MuiListItem-root': { py: 0.5 } }}>
+                      <ListItem>
+                        <ListItemText 
+                          primary="Minimum Capital: 10M-20M ETB"
+                          primaryTypographyProps={{ variant: 'caption', color: '#616161' }}
+                        />
+                      </ListItem>
+                      <ListItem>
+                        <ListItemText 
+                          primary="Professional Taster (Certified)"
+                          primaryTypographyProps={{ variant: 'caption', color: '#616161' }}
+                        />
+                      </ListItem>
+                      <ListItem>
+                        <ListItemText 
+                          primary="ECTA-Certified Laboratory"
+                          primaryTypographyProps={{ variant: 'caption', color: '#616161' }}
+                        />
+                      </ListItem>
+                    </List>
+                  </Paper>
+
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 3,
+                      background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                      borderRadius: 2,
+                      color: 'white',
+                    }}
+                  >
+                    <Typography variant="body2" fontWeight="600" gutterBottom>
+                      ⚡ Fast Processing
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', mb: 2 }}>
+                      Get your application reviewed within 2-3 business days
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip label="2-3 Days" size="small" sx={{ bgcolor: '#FFD700', color: '#9b30b7', fontWeight: 700 }} />
+                      <Chip label="EUDR Ready" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: 'white', fontWeight: 600 }} />
+                    </Box>
+                  </Paper>
+
+                </Box>
+              </Fade>
+            </Grid>
+
+            {/* Right Column - Form */}
+            <Grid item xs={12} lg={7} sx={{ display: 'flex', alignItems: 'center', background: 'white', py: 3 }}>
+              <Zoom in={mounted} timeout={1000}>
+                <Box sx={{ width: '100%', px: { xs: 3, md: 5 }, maxHeight: '100vh', overflow: 'auto' }}>
+                  
+                  {/* Progress */}
+                  <Box mb={3}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                      <Typography variant="body2" fontWeight="600" sx={{ color: '#1a1a1a' }}>
+                        Step {activeStep + 1} of {steps.length}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#616161' }}>
+                        {steps[activeStep]}
+                      </Typography>
+                    </Box>
+                    <LinearProgress
+                      variant="determinate"
+                      value={((activeStep + 1) / steps.length) * 100}
+                      sx={{
+                        height: 6,
+                        borderRadius: 3,
+                        bgcolor: alpha('#9b30b7', 0.1),
+                        '& .MuiLinearProgress-bar': {
+                          bgcolor: '#9b30b7',
+                          borderRadius: 3,
+                        },
+                      }}
+                    />
+                  </Box>
+
+                  {error && (
+                    <Fade in={!!error}>
+                      <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+                        {error}
+                      </Alert>
+                    </Fade>
+                  )}
+
+                  {/* Form Content */}
+                  <Box mb={3}>
+                    {renderStepContent(activeStep)}
+                  </Box>
+
+                  {/* Navigation */}
+                  <Stack direction="row" spacing={2} justifyContent="space-between">
+                    <Button
+                      disabled={activeStep === 0}
+                      onClick={handleBack}
+                      startIcon={<ArrowBack />}
+                      variant="outlined"
+                      sx={{
+                        textTransform: 'none',
+                        px: 3,
+                        py: 1.5,
+                        borderRadius: 2,
+                        borderColor: alpha('#9b30b7', 0.3),
+                        color: '#9b30b7',
+                        fontWeight: 600,
+                        '&:hover': {
+                          borderColor: '#9b30b7',
+                          bgcolor: alpha('#9b30b7', 0.05),
+                        },
+                      }}
+                    >
+                      Back
+                    </Button>
+
+                    {activeStep === steps.length - 1 ? (
+                      <Button
+                        variant="contained"
+                        onClick={handleSubmit}
+                        disabled={loading}
+                        endIcon={loading ? null : <Send />}
+                        sx={{
+                          textTransform: 'none',
+                          px: 4,
+                          py: 1.5,
+                          borderRadius: 2,
+                          fontWeight: 600,
+                          background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                          boxShadow: '0 4px 12px rgba(155, 48, 183, 0.3)',
+                          '&:hover': {
+                            background: 'linear-gradient(135deg, #7a2596 0%, #6d1f8a 100%)',
+                            boxShadow: '0 6px 16px rgba(155, 48, 183, 0.4)',
+                          },
+                          '&:disabled': {
+                            opacity: 0.6,
+                          },
+                        }}
+                      >
+                        {loading ? 'Submitting...' : 'Submit Application'}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="contained"
+                        onClick={handleNext}
+                        endIcon={<ArrowForward />}
+                        sx={{
+                          textTransform: 'none',
+                          px: 4,
+                          py: 1.5,
+                          borderRadius: 2,
+                          fontWeight: 600,
+                          background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                          boxShadow: '0 4px 12px rgba(155, 48, 183, 0.3)',
+                          '&:hover': {
+                            background: 'linear-gradient(135deg, #7a2596 0%, #6d1f8a 100%)',
+                            boxShadow: '0 6px 16px rgba(155, 48, 183, 0.4)',
+                          },
+                        }}
+                      >
+                        Next
+                      </Button>
+                    )}
+                  </Stack>
+
+                  <Typography variant="caption" display="block" textAlign="center" sx={{ color: '#9e9e9e', mt: 3 }}>
+                    © 2026 Ethiopian Coffee & Tea Authority (ECTA)
+                  </Typography>
+
+                </Box>
+              </Zoom>
+            </Grid>
+
+          </Grid>
+        </Container>
       </Box>
     </>
-    </ThemeProvider>
   );
 };
 

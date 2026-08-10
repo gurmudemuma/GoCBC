@@ -1,0 +1,46 @@
+{
+  "name": "cecbs-network-ecta",
+  "version": "1.0.0",
+  "client": {
+    "organization": "ECTA",
+    "connection": {
+      "timeout": {
+        "peer": {
+          "endorser": "300"
+        },
+        "orderer": "300"
+      }
+    }
+  },
+  "organizations": {
+    "ECTA": {
+      "mspid": "ECTAMSP",
+      "peers": ["peer0.ecta.cecbs.et"],
+      "certificateAuthorities": ["ca.ecta.cecbs.et"]
+    }
+  },
+  "peers": {
+    "peer0.ecta.cecbs.et": {
+      "url": "grpcs://localhost:7051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.ecta.cecbs.et",
+        "hostnameOverride": "peer0.ecta.cecbs.et"
+      }
+    }
+  },
+  "orderers": {
+    "orderer.cecbs.et": {
+      "url": "grpcs://localhost:7050",
+      "tlsCACerts": {
+        "path": "organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "orderer.cecbs.et",
+        "hostnameOverride": "orderer.cecbs.et"
+      }
+    }
+  }
+}

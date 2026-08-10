@@ -289,49 +289,46 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
   const uploadFiles = async () => {
     setUploading(true);
     
-    // Use public endpoint for registration, authenticated endpoint for others
+    // Use public endpoint for registration (no auth), authenticated endpoint for others
     const uploadEndpoint = entityType === 'EXPORTER_APPLICATION' 
       ? '/documents/upload-registration'
       : '/documents/upload';
     
     const isRegistration = entityType === 'EXPORTER_APPLICATION';
 
-    for (let i = 0; i < files.length; i++) {
-      const fileData = files[i];
-      if (fileData.status === 'success') continue;
+    // Upload all files in parallel instead of sequentially
+    const uploadPromises = files.map(async (fileData, index) => {
+      if (fileData.status === 'success') return;
 
-      updateFile(i, { status: 'uploading', progress: 0 });
+      updateFile(index, { status: 'uploading', progress: 0 });
 
       try {
         const formData = new FormData();
-        formData.append('file', fileData.file); // Backend expects 'file' not 'document'
-        formData.append('documentType', fileData.category); // Backend expects 'documentType' not 'category'
+        formData.append('file', fileData.file);
+        formData.append('fileName', fileData.file.name);
+        formData.append('documentType', fileData.category);
         formData.append('encrypt', fileData.encrypt.toString());
         if (fileData.description) {
           formData.append('description', fileData.description);
         }
-        // Only include entityId/entityType for authenticated uploads
-        if (!isRegistration) {
-          if (entityId) {
-            formData.append('entityId', entityId);
-          }
-          if (entityType) {
-            formData.append('entityType', entityType);
-          }
+        if (entityId) {
+          formData.append('entityId', entityId);
+        }
+        if (entityType) {
+          formData.append('entityType', entityType);
         }
 
-        // Use publicApiFetch for registration (no auth), apiFetch for authenticated uploads
         const fetchFunction = isRegistration ? publicApiFetch : apiFetch;
         const response = await fetchFunction(uploadEndpoint, {
           method: 'POST',
-          headers: {},  // Empty headers - apiFetch will add auth if needed, publicApiFetch won't
+          headers: {},
           body: formData,
         });
 
         const result = await response.json();
 
         if (result.success) {
-          updateFile(i, {
+          updateFile(index, {
             status: 'success',
             progress: 100,
             documentId: result.data.documentId,
@@ -339,20 +336,23 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
             ipfsCID: result.data.ipfsCID,
           });
         } else {
-          updateFile(i, {
+          updateFile(index, {
             status: 'error',
             progress: 0,
             error: result.error?.message || 'Upload failed',
           });
         }
       } catch (error: any) {
-        updateFile(i, {
+        updateFile(index, {
           status: 'error',
           progress: 0,
           error: error.message || 'Network error',
         });
       }
-    }
+    });
+
+    // Wait for all uploads to complete in parallel
+    await Promise.all(uploadPromises);
 
     setUploading(false);
 

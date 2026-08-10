@@ -319,18 +319,23 @@ build_typescript() {
 start_fabric_network() {
     print_header "Starting Hyperledger Fabric Network"
     
-    # Clean up existing containers
-    print_step "Cleaning up existing containers..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" down -v 2>/dev/null || true
-    print_success "Cleanup complete"
+    # Check if network is already running
+    print_step "Checking existing containers..."
+    local running_containers=$(docker-compose -f "$DOCKER_COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
     
-    # Start the network
-    print_step "Starting Fabric network containers..."
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d; then
-        print_success "Fabric network containers started"
+    if [ "$running_containers" -gt 0 ]; then
+        print_info "Network containers already running. Restarting gracefully..."
+        docker-compose -f "$DOCKER_COMPOSE_FILE" restart 2>/dev/null || true
+        print_success "Network containers restarted (data preserved)"
     else
-        print_error "Failed to start Fabric network"
-        exit 1
+        print_step "Starting fresh network containers..."
+        # Start WITHOUT down to preserve all data
+        if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d; then
+            print_success "Fabric network containers started (data preserved)"
+        else
+            print_error "Failed to start Fabric network"
+            exit 1
+        fi
     fi
     
     # Wait for services
@@ -373,195 +378,23 @@ create_channel() {
 deploy_chaincode() {
     print_header "Deploying Coffee Chaincode"
     
-    local CHANNEL="coffeechannel"
-    local CC_NAME="coffee"
-    local CC_VERSION="1.11"
-    local CC_SEQUENCE=1
-    local CC_LABEL="${CC_NAME}_${CC_VERSION}"
-    local ORDERER_CA="/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem"
+    # Use the working deployment script
+    local deploy_script="$PROJECT_ROOT/scripts/deploy-chaincode-complete.sh"
     
-    # Define organizations
-    declare -A orgs
-    orgs=(
-        ["ecta"]="peer0.ecta.cecbs.et:7051:ECTAMSP"
-        ["ecx"]="peer0.ecx.cecbs.et:8051:ECXMSP"
-        ["banks"]="peer0.banks.cecbs.et:9051:BanksMSP"
-        ["nbe"]="peer0.nbe.cecbs.et:10051:NBEMSP"
-        ["customs"]="peer0.customs.cecbs.et:11051:CustomsMSP"
-        ["shipping"]="peer0.shipping.cecbs.et:12051:ShippingMSP"
-    )
-    
-    # Step 1: Distribute orderer TLS cert
-    print_step "[1/6] Distributing orderer TLS cert to peers..."
-    local orderer_ca_crt="$PROJECT_ROOT/blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
-    
-    if [ ! -f "$orderer_ca_crt" ]; then
-        print_error "Orderer TLS cert not found at: $orderer_ca_crt"
-        print_warning "Chaincode deployment skipped. Run network setup first."
+    if [ ! -f "$deploy_script" ]; then
+        print_error "Deployment script not found: $deploy_script"
+        print_warning "Chaincode deployment skipped"
         return 1
     fi
     
-    for org in "${!orgs[@]}"; do
-        IFS=':' read -r peer port msp <<< "${orgs[$org]}"
-        docker exec "$peer" sh -c "mkdir -p /var/hyperledger/orderer-tls" 2>/dev/null || true
-        docker cp "$orderer_ca_crt" "$peer:/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem" 2>/dev/null
-    done
+    print_step "Running proven deployment script: deploy-chaincode-complete.sh"
     
-    # Also distribute all peer TLS certs to all peers for cross-peer communication
-    print_step "Distributing peer TLS certs for cross-peer communication..."
-    for source_org in "${!orgs[@]}"; do
-        local peer_tls_cert="$PROJECT_ROOT/blockchain/organizations/peerOrganizations/${source_org}.cecbs.et/peers/peer0.${source_org}.cecbs.et/tls/ca.crt"
-        if [ -f "$peer_tls_cert" ]; then
-            for target_org in "${!orgs[@]}"; do
-                IFS=':' read -r target_peer port msp <<< "${orgs[$target_org]}"
-                docker exec "$target_peer" sh -c "mkdir -p /var/hyperledger/peer-tls" 2>/dev/null || true
-                docker cp "$peer_tls_cert" "$target_peer:/var/hyperledger/peer-tls/tlsca.${source_org}.cecbs.et-cert.pem" 2>/dev/null
-            done
-        fi
-    done
-    
-    print_success "All TLS certs distributed"
-    
-    # Step 2: Build chaincode package
-    print_step "[2/6] Building chaincode package..."
-    local tmp_dir=$(mktemp -d)
-    
-    cat > "$tmp_dir/metadata.json" << EOF
-{"type":"ccaas","label":"${CC_LABEL}"}
-EOF
-    
-    cat > "$tmp_dir/connection.json" << EOF
-{"address":"coffee-chaincode:9999","dial_timeout":"10s","tls_required":false}
-EOF
-    
-    cd "$tmp_dir"
-    tar czf code.tar.gz connection.json 2>/dev/null
-    tar czf "${CC_LABEL}.tar.gz" metadata.json code.tar.gz 2>/dev/null
-    cd "$PROJECT_ROOT"
-    
-    print_success "Chaincode package built"
-    
-    # Step 3: Copy package to peers
-    print_step "[3/6] Copying package to all peers..."
-    for org in "${!orgs[@]}"; do
-        IFS=':' read -r peer port msp <<< "${orgs[$org]}"
-        docker cp "$tmp_dir/${CC_LABEL}.tar.gz" "$peer:/tmp/${CC_LABEL}.tar.gz" 2>/dev/null
-    done
-    rm -rf "$tmp_dir"
-    print_success "Package copied to all peers"
-    
-    # Step 4: Install chaincode on each peer
-    print_step "[4/6] Installing chaincode on all peers..."
-    for org in "${!orgs[@]}"; do
-        IFS=':' read -r peer port msp <<< "${orgs[$org]}"
-        echo -n "  Installing on $peer... "
-        
-        local msp_path="/etc/hyperledger/fabric/users/Admin@${org}.cecbs.et/msp"
-        MSYS_NO_PATHCONV=1 docker exec \
-            -e CORE_PEER_MSPCONFIGPATH="$msp_path" \
-            -e FABRIC_CFG_PATH=/etc/hyperledger/fabric \
-            "$peer" \
-            peer lifecycle chaincode install "/tmp/${CC_LABEL}.tar.gz" 2>&1 | grep -q "installed" && echo -e "${GREEN}installed${RESET}" || echo -e "${YELLOW}done${RESET}"
-    done
-    
-    # Get package ID
-    echo -n "  Getting package ID... "
-    local query_result=$(MSYS_NO_PATHCONV=1 docker exec \
-        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" \
-        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric \
-        peer0.ecta.cecbs.et \
-        peer lifecycle chaincode queryinstalled --output json 2>&1)
-    
-    local package_id=$(echo "$query_result" | grep -o '"package_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
-    
-    if [ -z "$package_id" ]; then
-        echo ""
-        print_error "Could not find package ID"
-        print_info "Query output: $query_result"
-        print_warning "Chaincode deployment had issues, but channel and peers are ready"
-        return 1
-    fi
-    echo -e "${GREEN}$package_id${RESET}"
-    print_success "Chaincode installed on all peers"
-    
-    # Step 5: Approve for each org
-    print_step "[5/6] Approving for all organizations..."
-    for org in "${!orgs[@]}"; do
-        IFS=':' read -r peer port msp <<< "${orgs[$org]}"
-        echo -n "  Approving $msp... "
-        
-        local msp_path="/etc/hyperledger/fabric/users/Admin@${org}.cecbs.et/msp"
-        local tls="/etc/hyperledger/fabric/tls/ca.crt"
-        
-        MSYS_NO_PATHCONV=1 docker exec \
-            -e CORE_PEER_MSPCONFIGPATH="$msp_path" \
-            -e FABRIC_CFG_PATH=/etc/hyperledger/fabric \
-            -e CORE_PEER_TLS_ENABLED=true \
-            -e CORE_PEER_TLS_ROOTCERT_FILE="$tls" \
-            -e CORE_PEER_LOCALMSPID="$msp" \
-            -e CORE_PEER_ADDRESS="peer0.${org}.cecbs.et:${port}" \
-            "$peer" \
-            peer lifecycle chaincode approveformyorg \
-                -o orderer.cecbs.et:7050 \
-                --ordererTLSHostnameOverride orderer.cecbs.et \
-                --tls --cafile "$ORDERER_CA" \
-                --channelID "$CHANNEL" \
-                --name "$CC_NAME" \
-                --version "$CC_VERSION" \
-                --package-id "$package_id" \
-                --sequence "$CC_SEQUENCE" 2>&1 | grep -q "Error" && echo -e "${RED}error${RESET}" || echo -e "${GREEN}approved${RESET}"
-    done
-    print_success "All organizations approved"
-    
-    # Step 6: Commit chaincode definition
-    print_step "[6/6] Committing chaincode definition..."
-    
-    # Build peer addresses arguments using distributed TLS certs
-    local peer_args=""
-    for org in "${!orgs[@]}"; do
-        IFS=':' read -r peer port msp <<< "${orgs[$org]}"
-        peer_args="$peer_args --peerAddresses peer0.${org}.cecbs.et:${port} --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.${org}.cecbs.et-cert.pem"
-    done
-    
-    MSYS_NO_PATHCONV=1 docker exec \
-        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" \
-        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric \
-        -e CORE_PEER_TLS_ENABLED=true \
-        -e CORE_PEER_TLS_ROOTCERT_FILE="/etc/hyperledger/fabric/tls/ca.crt" \
-        -e CORE_PEER_LOCALMSPID=ECTAMSP \
-        -e CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7051 \
-        peer0.ecta.cecbs.et \
-        peer lifecycle chaincode commit \
-            -o orderer.cecbs.et:7050 \
-            --ordererTLSHostnameOverride orderer.cecbs.et \
-            --tls --cafile "$ORDERER_CA" \
-            --channelID "$CHANNEL" \
-            --name "$CC_NAME" \
-            --version "$CC_VERSION" \
-            --sequence "$CC_SEQUENCE" \
-            $peer_args 2>&1 | grep -q "Error" && {
-                print_error "Failed to commit chaincode"
-                return 1
-            }
-    
-    print_success "Chaincode committed!"
-    
-    # Verify deployment
-    print_step "Verifying deployment..."
-    sleep 3
-    
-    local verify_result=$(MSYS_NO_PATHCONV=1 docker exec \
-        -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp" \
-        -e FABRIC_CFG_PATH=/etc/hyperledger/fabric \
-        peer0.ecta.cecbs.et \
-        peer lifecycle chaincode querycommitted --channelID "$CHANNEL" --name "$CC_NAME" --output json 2>&1)
-    
-    if echo "$verify_result" | grep -q "\"version\":\"${CC_VERSION}\""; then
-        print_success "Chaincode deployed successfully: $CC_NAME v$CC_VERSION on $CHANNEL"
+    if bash "$deploy_script"; then
+        print_success "Chaincode deployed successfully using complete deployment script"
         return 0
     else
-        print_warning "Chaincode deployment verification inconclusive"
-        return 0  # Still return success as it likely succeeded
+        print_warning "Chaincode deployment had issues (see output above)"
+        return 1
     fi
 }
 

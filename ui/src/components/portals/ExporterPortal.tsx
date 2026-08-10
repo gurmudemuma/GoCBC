@@ -196,10 +196,6 @@ const ExporterPortal: React.FC = () => {
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [tabValue, setTabValue] = useState(0);
   
-  // Sub-tab state for KPI filtering
-  const [subTabValue, setSubTabValue] = useState(0);
-  const [activeKPIFilter, setActiveKPIFilter] = useState<string | null>(null);
-  
   // State Management
   const [profile, setProfile] = useState<ExporterProfile | null>(null);
   const [contracts, setContracts] = useState<ExportContract[]>([]);
@@ -931,14 +927,6 @@ const ExporterPortal: React.FC = () => {
   
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
-    setSubTabValue(0); // Reset to first sub-tab
-    setActiveKPIFilter(null);
-    // Reset all data to show unfiltered
-    setContracts(allContracts);
-    setForexStatuses(allForexStatuses);
-    setLCStatuses(allLCStatuses);
-    setShipments(allShipments);
-    setPayments(allPayments);
   };
   
   const handleContractView = (contract: ExportContract) => {
@@ -1893,57 +1881,6 @@ const ExporterPortal: React.FC = () => {
     },
   ];
 
-  // Handle KPI filter for sub-tabs
-  const handleKPIFilter = (filterKey: string, kpiTitle: string) => {
-    setActiveKPIFilter(filterKey);
-    
-    // Apply filter based on tab and filter key
-    switch (tabValue) {
-      case 0: // Dashboard
-      case 1: // My Contracts
-        if (filterKey === 'ALL') setContracts(allContracts);
-        else if (filterKey === 'NBE_APPROVED') setContracts(allContracts.filter(c => c.status === 'NBE_APPROVED' || c.status === 'APPROVED'));
-        else if (filterKey === 'PENDING') setContracts(allContracts.filter(c => c.status === 'REGISTERED' || c.status === 'DRAFT'));
-        else setContracts(allContracts);
-        break;
-        
-      case 2: // Forex & Banking
-        if (filterKey === 'ALL_LCS') setLCStatuses(allLCStatuses);
-        else if (filterKey === 'FOREX_ALLOCATED') setForexStatuses(allForexStatuses.filter(f => f.status === 'ALLOCATED'));
-        else if (filterKey === 'FOREX_PENDING') setForexStatuses(allForexStatuses.filter(f => f.status === 'REQUESTED'));
-        else {
-          setLCStatuses(allLCStatuses);
-          setForexStatuses(allForexStatuses);
-        }
-        break;
-        
-      case 3: // Shipments
-        if (filterKey === 'ALL') setShipments(allShipments);
-        else if (filterKey === 'IN_TRANSIT') setShipments(allShipments.filter(s => s.status === 'IN_TRANSIT' || s.status === 'DEPARTED'));
-        else if (filterKey === 'DELIVERED') setShipments(allShipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED'));
-        else setShipments(allShipments);
-        break;
-        
-      case 4: // LC & Payments
-        if (filterKey === 'ALL_LCS') setLCStatuses(allLCStatuses);
-        else if (filterKey === 'PAYMENTS_SETTLED') setPayments(allPayments.filter(p => p.status === 'SETTLED'));
-        else {
-          setLCStatuses(allLCStatuses);
-          setPayments(allPayments);
-        }
-        break;
-        
-      default:
-        setContracts(allContracts);
-        setForexStatuses(allForexStatuses);
-        setLCStatuses(allLCStatuses);
-        setShipments(allShipments);
-        setPayments(allPayments);
-    }
-    
-    showInfo(`Filtered View`, `Showing data for "${kpiTitle}"`);
-  };
-
   // Create EXPORTER theme with purple and golden colors
   const exporterTheme = createOrganizationTheme('EXPORTER');
 
@@ -2012,93 +1949,147 @@ const ExporterPortal: React.FC = () => {
               </Typography>
             </Grid>
             <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
-              {profile && (
-                <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    ECTA License
-                  </Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <StatusChip status={profile.licenseStatus} />
-                    <Typography variant="body2" fontWeight="bold">
-                      {profile.ectaLicenseNumber}
-                    </Typography>
-                  </Box>
-                  <Typography variant="caption" color="text.secondary">
-                    Expires: {new Date(profile.licenseExpiryDate).toLocaleDateString()}
-                  </Typography>
-                </Card>
-              )}
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'flex-start', md: 'flex-end' }, alignItems: 'center', flexWrap: 'wrap' }}>
+                {profile && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Assignment />}
+                      onClick={() => {
+                        setAuditEntityType('EXPORTER');
+                        setAuditEntityId(profile.exporterId);
+                        setShowAuditTrail(true);
+                      }}
+                      sx={{ 
+                        textTransform: 'none',
+                        borderColor: brandPrimary,
+                        color: brandPrimary,
+                        '&:hover': {
+                          borderColor: brandPrimary,
+                          bgcolor: `${brandPrimary}10`,
+                        }
+                      }}
+                    >
+                      Audit Trail
+                    </Button>
+                    <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        ECTA License
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <StatusChip status={profile.licenseStatus} brandColor={brandPrimary} />
+                        <Typography variant="body2" fontWeight="bold">
+                          {profile.ectaLicenseNumber}
+                        </Typography>
+                      </Box>
+                      <Typography variant="caption" color="text.secondary">
+                        Expires: {new Date(profile.licenseExpiryDate).toLocaleDateString()}
+                      </Typography>
+                    </Card>
+                  </>
+                )}
+              </Box>
             </Grid>
           </Grid>
         </Box>
 
-        {/* Professional KPI Cards - At the very top */}
+        {/* Professional KPI Cards - Static at the very top */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
-          {(() => {
-            const kpis = tabValue === 0 ? [
-              { icon: <CheckCircle />, label: 'Active Contracts', value: activeContracts, color: '#4CAF50' },
-              { icon: <Warning />, label: 'Pending Approvals', value: pendingApprovals, color: '#FF9800' },
-              { icon: <LocalShipping />, label: 'In Transit', value: inTransitShipments, color: '#2196F3' },
-              { icon: <TrendingUp />, label: 'Export Value (M USD)', value: `${(totalExportValue / 1000000).toFixed(1)}`, color: brandPrimary },
-            ] : tabValue === 1 ? [
-              { icon: <Description />, label: 'Total Contracts', value: contracts.length, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'NBE Approved', value: contracts.filter(c => c.status === 'NBE_APPROVED' || c.status === 'APPROVED').length, color: '#4CAF50' },
-              { icon: <Warning />, label: 'Pending Review', value: contracts.filter(c => c.status === 'REGISTERED' || c.status === 'DRAFT').length, color: '#FF9800' },
-              { icon: <TrendingUp />, label: 'Value (M USD)', value: `${(contracts.reduce((sum, c) => sum + c.totalValue, 0) / 1000000).toFixed(1)}`, color: '#FFD700' },
-            ] : tabValue === 2 ? [
-              { icon: <AccountBalance />, label: 'Active LCs', value: lcStatuses.length, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'Forex Allocated', value: forexStatuses.filter(f => f.status === 'ALLOCATED').length, color: '#4CAF50' },
-              { icon: <Warning />, label: 'Forex Pending', value: forexStatuses.filter(f => f.status === 'REQUESTED').length, color: '#FF9800' },
-              { icon: <TrendingUp />, label: 'Total Forex (M USD)', value: `${(forexStatuses.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000000).toFixed(1)}`, color: '#FFD700' },
-            ] : tabValue === 3 ? [
-              { icon: <LocalShipping />, label: 'Total Shipments', value: shipments.length, color: brandPrimary },
-              { icon: <DirectionsBoat />, label: 'In Transit', value: shipments.filter(s => s.status === 'IN_TRANSIT' || s.status === 'DEPARTED').length, color: '#2196F3' },
-              { icon: <CheckCircle />, label: 'Delivered', value: shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length, color: '#4CAF50' },
-              { icon: <Science />, label: 'Quantity (K kg)', value: `${(shipments.reduce((sum, s) => sum + s.quantity, 0) / 1000).toFixed(0)}`, color: '#FFD700' },
-            ] : tabValue === 4 ? [
-              { icon: <AccountBalance />, label: 'Active LCs', value: lcStatuses.length, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'Payments Settled', value: payments.filter(p => p.status === 'SETTLED').length, color: '#4CAF50' },
-              { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: lcStatuses.reduce((sum, lc) => sum + (lc.messages?.length || 0), 0), color: '#2196F3' },
-              { icon: <TrendingUp />, label: 'LC Value (M USD)', value: `${(lcStatuses.reduce((sum, lc) => sum + (lc.amount || 0), 0) / 1000000).toFixed(1)}`, color: '#FFD700' },
-            ] : [
-              { icon: <Assessment />, label: 'Total Reports', value: 0, color: brandPrimary },
-              { icon: <TrendingUp />, label: 'Export Performance', value: `${((activeContracts / Math.max(contracts.length, 1)) * 100).toFixed(0)}%`, color: '#4CAF50' },
-              { icon: <AttachMoney />, label: 'Revenue (M USD)', value: `${(totalExportValue / 1000000).toFixed(1)}`, color: '#FFD700' },
-              { icon: <LocalShipping />, label: 'Shipments', value: shipments.length, color: '#2196F3' },
-            ];
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              sx={{ 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                border: `2px solid ${tabValue === 1 ? brandPrimary : 'transparent'}`,
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+              }}
+              onClick={() => setTabValue(1)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${brandPrimary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                  <Description sx={{ fontSize: 28, color: brandPrimary }} />
+                </Box>
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                  My Contracts
+                </Typography>
+                <Typography variant="h4" sx={{ fontWeight: 700, color: brandPrimary, lineHeight: 1 }}>
+                  {contracts.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
 
-            return kpis.map((kpi, index) => (
-              <Grid item xs={12} sm={6} md={3} key={index}>
-                <Card sx={{ 
-                  bgcolor: '#fff', 
-                  border: `2px solid ${kpi.color}`,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                  transition: 'all 0.3s ease',
-                  '&:hover': {
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-                    transform: 'translateY(-4px)',
-                  }
-                }}>
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
-                    <Typography variant="caption" sx={{ 
-                      color: '#666', 
-                      textTransform: 'uppercase', 
-                      fontWeight: 700, 
-                      display: 'block',
-                      letterSpacing: '0.8px',
-                      mb: 1
-                    }}>
-                      {kpi.label}
-                    </Typography>
-                    <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color }}>
-                      {kpi.value}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            ));
-          })()}
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              sx={{ 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                border: `2px solid ${tabValue === 3 ? '#2196F3' : 'transparent'}`,
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+              }}
+              onClick={() => setTabValue(3)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196F315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                  <LocalShipping sx={{ fontSize: 28, color: '#2196F3' }} />
+                </Box>
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                  Shipments
+                </Typography>
+                <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196F3', lineHeight: 1 }}>
+                  {shipments.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              sx={{ 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                border: `2px solid ${tabValue === 2 ? '#FFD700' : 'transparent'}`,
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+              }}
+              onClick={() => setTabValue(2)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#FFD70015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                  <AccountBalance sx={{ fontSize: 28, color: '#FFD700' }} />
+                </Box>
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                  Forex & Banking
+                </Typography>
+                <Typography variant="h4" sx={{ fontWeight: 700, color: '#FFD700', lineHeight: 1 }}>
+                  {forexStatuses.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              sx={{ 
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                border: `2px solid ${tabValue === 4 ? '#4CAF50' : 'transparent'}`,
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+              }}
+              onClick={() => setTabValue(4)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4CAF5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                  <AttachMoney sx={{ fontSize: 28, color: '#4CAF50' }} />
+                </Box>
+                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                  LC & Payments
+                </Typography>
+                <Typography variant="h4" sx={{ fontWeight: 700, color: '#4CAF50', lineHeight: 1 }}>
+                  {lcStatuses.length}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
         </Grid>
 
         {/* Tabs */}
@@ -2141,252 +2132,13 @@ const ExporterPortal: React.FC = () => {
           </Tabs>
         </Box>
 
-        {/* KPI Sub-Tabs - Dynamic based on active main tab */}
-        <Box sx={{ mb: 3 }}>
-          <Tabs 
-            value={subTabValue} 
-            onChange={(e, newValue) => {
-              setSubTabValue(newValue);
-              const kpis = tabValue === 0 ? [
-                { key: 'ALL', title: 'Active Contracts', value: activeContracts, color: '#FFD700' },
-                { key: 'PENDING', title: 'Pending Approvals', value: pendingApprovals, color: '#FF9800' },
-                { key: 'IN_TRANSIT', title: 'In Transit', value: inTransitShipments, color: '#2196F3' },
-                { key: 'TOTAL_VALUE', title: 'Total Export Value', value: `${(totalExportValue / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-              ] : tabValue === 1 ? [
-                { key: 'ALL', title: 'Total Contracts', value: contracts.length, color: '#FFD700' },
-                { key: 'NBE_APPROVED', title: 'NBE Approved', value: contracts.filter(c => c.status === 'NBE_APPROVED' || c.status === 'APPROVED').length, color: '#4CAF50' },
-                { key: 'PENDING', title: 'Pending Review', value: contracts.filter(c => c.status === 'REGISTERED' || c.status === 'DRAFT').length, color: '#FF9800' },
-                { key: 'TOTAL_VALUE', title: 'Contract Value', value: `${(contracts.reduce((sum, c) => sum + c.totalValue, 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-              ] : tabValue === 2 ? [
-                { key: 'ALL_LCS', title: 'Active LCs', value: lcStatuses.length, color: '#FFD700' },
-                { key: 'FOREX_ALLOCATED', title: 'Forex Allocated', value: forexStatuses.filter(f => f.status === 'ALLOCATED').length, color: '#4CAF50' },
-                { key: 'FOREX_PENDING', title: 'Forex Pending', value: forexStatuses.filter(f => f.status === 'REQUESTED').length, color: '#FF9800' },
-                { key: 'TOTAL_FOREX', title: 'Total Forex', value: `${(forexStatuses.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-              ] : tabValue === 3 ? [
-                { key: 'ALL', title: 'Total Shipments', value: shipments.length, color: '#FFD700' },
-                { key: 'IN_TRANSIT', title: 'In Transit', value: shipments.filter(s => s.status === 'IN_TRANSIT' || s.status === 'DEPARTED').length, color: '#2196F3' },
-                { key: 'DELIVERED', title: 'Delivered', value: shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length, color: '#4CAF50' },
-                { key: 'TOTAL_QTY', title: 'Total Quantity (kg)', value: `${(shipments.reduce((sum, s) => sum + s.quantity, 0) / 1000).toFixed(0)}K`, color: '#9b30b7' },
-              ] : tabValue === 4 ? [
-                { key: 'ALL_LCS', title: 'Active LCs', value: lcStatuses.length, color: '#FFD700' },
-                { key: 'PAYMENTS_SETTLED', title: 'Payments Settled', value: payments.filter(p => p.status === 'SETTLED').length, color: '#4CAF50' },
-                { key: 'SWIFT_MSGS', title: 'SWIFT Messages', value: lcStatuses.reduce((sum, lc) => sum + (lc.messages?.length || 0), 0), color: '#2196F3' },
-                { key: 'TOTAL_LC_VALUE', title: 'Total LC Value', value: `${(lcStatuses.reduce((sum, lc) => sum + (lc.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-              ] : [
-                { key: 'ALL', title: 'Active Contracts', value: activeContracts, color: '#FFD700' },
-                { key: 'PENDING', title: 'Pending Approvals', value: pendingApprovals, color: '#FF9800' },
-                { key: 'IN_TRANSIT', title: 'In Transit', value: inTransitShipments, color: '#2196F3' },
-                { key: 'TOTAL_VALUE', title: 'Total Export Value', value: `${(totalExportValue / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-              ];
-              handleKPIFilter(kpis[newValue].key, kpis[newValue].title);
-            }}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{ 
-              borderBottom: 1, 
-              borderColor: 'divider',
-              bgcolor: 'rgba(0,0,0,0.02)',
-              '& .MuiTab-root': {
-                minHeight: 70,
-                flexDirection: 'column',
-                gap: 0.5,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: brandPrimary,
-                  bgcolor: 'rgba(155, 48, 183, 0.08)',
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(0,0,0,0.04)',
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 4,
-                backgroundColor: brandPrimary,
-                borderRadius: '4px 4px 0 0',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              }
-            }}
-          >
-            {(tabValue === 0 ? [
-              { icon: <CheckCircle />, label: 'Active Contracts', value: activeContracts, color: '#FFD700' },
-              { icon: <Warning />, label: 'Pending Approvals', value: pendingApprovals, color: '#FF9800' },
-              { icon: <LocalShipping />, label: 'In Transit', value: inTransitShipments, color: '#2196F3' },
-              { icon: <AttachMoney />, label: 'Total Export Value', value: `${(totalExportValue / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-            ] : tabValue === 1 ? [
-              { icon: <Description />, label: 'Total Contracts', value: contracts.length, color: '#FFD700' },
-              { icon: <CheckCircle />, label: 'NBE Approved', value: contracts.filter(c => c.status === 'NBE_APPROVED' || c.status === 'APPROVED').length, color: '#4CAF50' },
-              { icon: <Warning />, label: 'Pending Review', value: contracts.filter(c => c.status === 'REGISTERED' || c.status === 'DRAFT').length, color: '#FF9800' },
-              { icon: <AttachMoney />, label: 'Contract Value', value: `${(contracts.reduce((sum, c) => sum + c.totalValue, 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-            ] : tabValue === 2 ? [
-              { icon: <AccountBalance />, label: 'Active LCs', value: lcStatuses.length, color: '#FFD700' },
-              { icon: <CheckCircle />, label: 'Forex Allocated', value: forexStatuses.filter(f => f.status === 'ALLOCATED').length, color: '#4CAF50' },
-              { icon: <Warning />, label: 'Forex Pending', value: forexStatuses.filter(f => f.status === 'REQUESTED').length, color: '#FF9800' },
-              { icon: <AttachMoney />, label: 'Total Forex', value: `${(forexStatuses.reduce((sum, f) => sum + f.allocatedAmount, 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-            ] : tabValue === 3 ? [
-              { icon: <LocalShipping />, label: 'Total Shipments', value: shipments.length, color: '#FFD700' },
-              { icon: <DirectionsBoat />, label: 'In Transit', value: shipments.filter(s => s.status === 'IN_TRANSIT' || s.status === 'DEPARTED').length, color: '#2196F3' },
-              { icon: <CheckCircle />, label: 'Delivered', value: shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length, color: '#4CAF50' },
-              { icon: <Science />, label: 'Total Quantity', value: `${(shipments.reduce((sum, s) => sum + s.quantity, 0) / 1000).toFixed(0)}K kg`, color: '#9b30b7' },
-            ] : tabValue === 4 ? [
-              { icon: <AccountBalance />, label: 'Active LCs', value: lcStatuses.length, color: '#FFD700' },
-              { icon: <CheckCircle />, label: 'Payments Settled', value: payments.filter(p => p.status === 'SETTLED').length, color: '#4CAF50' },
-              { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: lcStatuses.reduce((sum, lc) => sum + (lc.messages?.length || 0), 0), color: '#2196F3' },
-              { icon: <AttachMoney />, label: 'Total LC Value', value: `${(lcStatuses.reduce((sum, lc) => sum + (lc.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-            ] : [
-              { icon: <CheckCircle />, label: 'Active Contracts', value: activeContracts, color: '#FFD700' },
-              { icon: <Warning />, label: 'Pending Approvals', value: pendingApprovals, color: '#FF9800' },
-              { icon: <LocalShipping />, label: 'In Transit', value: inTransitShipments, color: '#2196F3' },
-              { icon: <AttachMoney />, label: 'Total Export Value', value: `${(totalExportValue / 1000000).toFixed(1)}M`, color: '#9b30b7' },
-            ]).map((kpi, index) => (
-              <Tab key={index} label={
-                <Box sx={{ textAlign: 'center' }}>
-                  <Box sx={{ color: kpi.color, mb: 0.5 }}>{kpi.icon}</Box>
-                  <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, fontSize: '0.7rem' }}>
-                    {kpi.label}
-                  </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 700, color: kpi.color }}>
-                    {kpi.value}
-                  </Typography>
-                </Box>
-              } />
-            ))}
-          </Tabs>
-        </Box>
-
         {/* Tab Content */}
         <TabPanel value={tabValue} index={0}>
           {/* Dashboard Tab */}
           <Grid container spacing={3}>
 
-            {/* Exporter Profile & License Information */}
-            {profile && (
-              <Grid item xs={12}>
-                <ModernCard>
-                  <CardContent>
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2 }}>
-                      <Box>
-                        <Typography variant="h6" fontWeight={700} gutterBottom>
-                          🏢 Exporter Profile & License Information
-                        </Typography>
-                        <Typography variant="caption" color="textSecondary">
-                          Your company and licensing details
-                        </Typography>
-                      </Box>
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        startIcon={<Assignment />}
-                        onClick={() => {
-                          setAuditEntityType('EXPORTER');
-                          setAuditEntityId(profile.exporterId);
-                          setShowAuditTrail(true);
-                        }}
-                        sx={{ textTransform: 'none' }}
-                      >
-                        Audit Trail
-                      </Button>
-                      <StatusChip
-                        status={profile.licenseStatus === 'ACTIVE' ? 'approved' : 'rejected'}
-                        label={profile.licenseStatus}
-                        brandColor={brandPrimary}
-                      />
-                    </Box>
-                  </Box>
-
-                  <Grid container spacing={3} sx={{ mt: 1 }}>
-                    {/* Company Information */}
-                    <Grid item xs={12} md={6}>
-                      <Box sx={{ p: 2, bgcolor: 'rgba(0,0,0,0.02)', borderRadius: 2 }}>
-                        <Typography variant="subtitle2" color="textSecondary" gutterBottom>
-                          Company Information
-                        </Typography>
-                        <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">Company Name</Typography>
-                            <Typography variant="body1" fontWeight={600}>{profile.companyName}</Typography>
-                          </Box>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">Exporter ID</Typography>
-                            <Typography variant="body1" fontWeight={600} color="primary">{profile.exporterId}</Typography>
-                          </Box>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">Capital Requirement</Typography>
-                            <Typography variant="body1" fontWeight={600}>
-                              {new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB' }).format(profile.capitalRequirement)}
-                            </Typography>
-                          </Box>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">Laboratory Status</Typography>
-                            <Box sx={{ mt: 0.5 }}>
-                              <Chip
-                                label={profile.laboratoryCertified ? '✓ Certified' : '✗ Not Certified'}
-                                size="small"
-                                color={profile.laboratoryCertified ? 'success' : 'default'}
-                              />
-                            </Box>
-                          </Box>
-                        </Box>
-                      </Box>
-                    </Grid>
-
-                    {/* License & Banking Information */}
-                    <Grid item xs={12} md={6}>
-                      <Box sx={{ p: 2, bgcolor: 'rgba(0,0,0,0.02)', borderRadius: 2 }}>
-                        <Typography variant="subtitle2" color="textSecondary" gutterBottom>
-                          License & Banking Information
-                        </Typography>
-                        <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">ECTA License Number</Typography>
-                            <Typography variant="body1" fontWeight={600}>{profile.ectaLicenseNumber}</Typography>
-                          </Box>
-                          <Box>
-                            <Typography variant="caption" color="textSecondary">License Expiry Date</Typography>
-                            <Typography variant="body1" fontWeight={600}>
-                              {new Date(profile.licenseExpiryDate).toLocaleDateString('en-US', { 
-                                year: 'numeric', month: 'long', day: 'numeric' 
-                              })}
-                            </Typography>
-                          </Box>
-                          {profile.bankName && (
-                            <>
-                              <Box>
-                                <Typography variant="caption" color="textSecondary">LC Processing Bank</Typography>
-                                <Typography variant="body1" fontWeight={600}>{profile.bankName}</Typography>
-                              </Box>
-                              <Box>
-                                <Typography variant="caption" color="textSecondary">LC Processing Branch</Typography>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  <Typography variant="body1" fontWeight={600}>
-                                    {profile.bankBranch}
-                                  </Typography>
-                                  {profile.bankBranchCode && (
-                                    <Chip 
-                                      label={profile.bankBranchCode} 
-                                      size="small" 
-                                      sx={{ height: 20, fontSize: '0.7rem' }}
-                                    />
-                                  )}
-                                </Box>
-                                <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
-                                  ✓ All Letter of Credit requests will be processed through this branch
-                                </Typography>
-                              </Box>
-                            </>
-                          )}
-                        </Box>
-                      </Box>
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </ModernCard>
-            </Grid>
-          )}
-
-          {/* Export Activity Trends Chart */}
-          <Grid item xs={12} md={8}>
+            {/* Export Activity Trends Chart */}
+            <Grid item xs={12} md={8}>
             <ModernCard>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>

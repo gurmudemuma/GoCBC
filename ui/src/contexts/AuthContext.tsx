@@ -122,18 +122,36 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [user, loading, router.pathname]);
 
-  const checkAuth = () => {
+  const checkAuth = async () => {
     try {
       const token = localStorage.getItem('authToken');
       const storedUser = localStorage.getItem('user');
       
-      // If we have both token and user data, restore session immediately
+      // If we have both token and user data, validate token first
       if (token && storedUser) {
-        const userData = JSON.parse(storedUser);
-        setUser(userData);
-        
-        // Check if token is about to expire and refresh it
-        checkTokenExpiry(token);
+        // Validate token by making a test API call
+        try {
+          await api.get('/auth/validate', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          
+          // Token is valid, restore session
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+          
+          // Check if token is about to expire and refresh it
+          checkTokenExpiry(token);
+        } catch (error: any) {
+          // Token is invalid (401) - clear it and force re-login
+          console.warn('Stored token is invalid, clearing session');
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('user');
+          
+          // Only redirect to login if not already there
+          if (router.pathname !== '/login' && router.pathname !== '/') {
+            router.push('/login?error=session_expired');
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to restore session:', error);
