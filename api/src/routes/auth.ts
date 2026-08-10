@@ -353,6 +353,49 @@ router.post('/logout', async (req: Request, res: Response) => {
 });
 
 /**
+ * @route   GET /api/v1/auth/validate
+ * @desc    Validate JWT token (lightweight check for session restoration)
+ * @access  Private
+ */
+router.get('/validate', async (req: Request, res: Response) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'NO_TOKEN',
+          message: 'No authentication token provided',
+        },
+      });
+    }
+
+    // Verify token
+    const decoded: any = jwt.verify(token, JWT_SECRET);
+
+    res.json({
+      success: true,
+      data: {
+        valid: true,
+        userId: decoded.userId || decoded.sub,
+        username: decoded.username,
+        role: decoded.role,
+      },
+    });
+  } catch (error) {
+    logger.error('Token validation error:', error);
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'INVALID_TOKEN',
+        message: 'Invalid or expired token',
+      },
+    });
+  }
+});
+
+/**
  * @route   POST /api/v1/auth/refresh
  * @desc    Refresh JWT token
  * @access  Private

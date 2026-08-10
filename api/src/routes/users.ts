@@ -131,7 +131,7 @@ router.get('/',
 
       const { role, status, limit = 50, offset = 0 } = req.query;
 
-      let query = 'SELECT id, username, email, full_name, role, organization, status, created_at, last_login FROM users WHERE 1=1';
+      let query = 'SELECT id, username, email, full_name, role, organization, exporter_id, status, created_at, last_login FROM users WHERE 1=1';
       const params: any[] = [];
       let paramIndex = 1;
 
@@ -989,6 +989,143 @@ router.put('/:userId/status',
         error: {
           code: 'INTERNAL_ERROR',
           message: 'Failed to update user status',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/users/reset-password-by-identifier:
+ *   post:
+ *     summary: Reset user password by email or exporter ID (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               exporterId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *       403:
+ *         description: Forbidden - Admin only
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/reset-password-by-identifier',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { email, exporterId } = req.body;
+      const requestingUser = (req as any).user;
+
+      // Only admins can reset passwords
+      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only administrators can reset user passwords',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (!email && !exporterId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_IDENTIFIER',
+            message: 'Either email or exporterId is required',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Find user by email or exporter_id
+      let user;
+      if (exporterId) {
+        user = await db.get(
+          'SELECT id, username, email, full_name, exporter_id FROM users WHERE exporter_id = $1 OR username = $1',
+          [exporterId]
+        );
+      } else if (email) {
+        user = await db.get(
+          'SELECT id, username, email, full_name, exporter_id FROM users WHERE email = $1',
+          [email]
+        );
+      }
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'USER_NOT_FOUND',
+            message: `No user account found for ${exporterId ? 'exporter ID: ' + exporterId : 'email: ' + email}`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Reset password to default
+      const defaultPassword = 'password123';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+      await db.run(
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [hashedPassword, user.id]
+      );
+
+      // Log the password reset
+      await logUserActivity(
+        requestingUser.userId || requestingUser.id,
+        requestingUser.username,
+        'RESET_PASSWORD',
+        user.id,
+        user.username,
+        {
+          resetBy: requestingUser.username,
+          resetMethod: exporterId ? 'exporterId' : 'email',
+          identifier: exporterId || email,
+        },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      logger.info(`✅ Password reset for user: ${user.username} (${user.email}) by ${requestingUser.username}`);
+
+      res.json({
+        success: true,
+        data: {
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          message: 'Password has been reset to "password123"',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error resetting password by identifier:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to reset password',
         },
         timestamp: new Date().toISOString(),
       });

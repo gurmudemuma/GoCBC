@@ -3,13 +3,16 @@
 
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { body, param } from 'express-validator';
 import { statusManager } from '../utils/statusManager';
+import { authMiddleware } from '../middleware/auth';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const postgresDb = DatabaseService.getInstance();
 
 /**
  * @swagger
@@ -1059,6 +1062,7 @@ router.get('/', async (req: Request, res: Response) => {
  *         description: Internal server error
  */
 router.get('/:paymentID',
+  authMiddleware,
   [param('paymentID').notEmpty().withMessage('Payment ID is required')],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -1067,12 +1071,33 @@ router.get('/:paymentID',
 
       logger.info(`[PAYMENT] Fetching payment details: ${paymentID}`);
 
+      // Try database first (PostgreSQL)
+      try {
+        const payment = await postgresDb.get(
+          'SELECT * FROM payments WHERE payment_id = $1',
+          [paymentID]
+        );
+
+        if (payment) {
+          return res.json({
+            success: true,
+            data: payment,
+            source: 'database',
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (dbError) {
+        logger.warn(`[PAYMENT] Database query failed, trying blockchain: ${dbError}`);
+      }
+
+      // Fallback to blockchain
       const result = await fabricService.queryChaincode('ReadPayment', [paymentID]);
 
       if (result.success) {
         res.json({
           success: true,
           data: result.data,
+          source: 'blockchain',
           timestamp: new Date().toISOString(),
         });
       } else {
@@ -1392,6 +1417,71 @@ router.post('/:paymentID/status',
           message: 'Internal server error',
         },
         timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// POST /payments - Record payment
+router.post('/',
+  authMiddleware,
+  [
+    body('paymentID').notEmpty(),
+    body('amount').isNumeric(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID, lcNumber, contractID, exporterID, amount, currency, paymentMethod, paymentDate } = req.body;
+
+      await postgresDb.run(
+        `INSERT INTO payments (
+          payment_id, lc_number, contract_id, exporter_id, amount, currency, payment_method, payment_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [paymentID, lcNumber || null, contractID, exporterID, amount, currency, paymentMethod, paymentDate]
+      );
+
+      res.json({
+        success: true,
+        data: { paymentID, amount, currency },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Payment creation error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// Duplicate route removed - consolidated into single GET /:paymentID above
+
+// GET /payments - List payments with filtering
+router.get('/',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { exporterID } = req.query;
+      let query = 'SELECT * FROM payments WHERE 1=1';
+      const params: any[] = [];
+
+      if (exporterID) {
+        query += ' AND exporter_id = $1';
+        params.push(exporterID);
+      }
+
+      query += ' ORDER BY payment_date DESC';
+      const payments = await postgresDb.all(query, params);
+
+      res.json({ success: true, data: { payments }, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
       });
     }
   }

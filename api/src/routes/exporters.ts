@@ -1,7 +1,7 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Exporters API Routes
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { EmailService } from '../services/emailService';
@@ -60,6 +60,39 @@ router.get('/exporter-applications', authMiddleware, async (req, res) => {
     });
   }
 });
+
+// GET /exporter-applications - List applications with filtering
+router.get('/exporter-applications',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status } = req.query;
+      let query = 'SELECT * FROM exporter_applications WHERE 1=1';
+      const params: any[] = [];
+
+      if (status) {
+        query += ' AND status = $1';
+        params.push(status);
+      }
+
+      query += ' ORDER BY submitted_at DESC';
+      const applications = await postgresDb.all(query, params);
+
+      res.json({
+        success: true,
+        data: { applications, count: applications.length },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('List applications error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 // POST /exporter-applications - Submit new application (PUBLIC - no auth)
 // This endpoint now creates BOTH the application AND an inactive user account
@@ -147,8 +180,8 @@ router.post('/exporter-applications',
           taster_certificate, laboratory_facility, contact_person,
           email, phone, address, city, region, bank_name,
           bank_account_number, bank_branch, bank_branch_code,
-          comments, documents, status, submitted_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 'pending', $22)
+          comments, documents, exporter_type, status, submitted_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, 'pending', $23)
       `;
       
       // Serialize documents array to JSON
@@ -176,6 +209,7 @@ router.post('/exporter-applications',
         applicationData.bankBranchCode || '',
         applicationData.comments || '',
         documentsJSON,
+        applicationData.exporterType || 'company',
         submittedAt,
       ]);
 

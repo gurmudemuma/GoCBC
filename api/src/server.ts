@@ -48,19 +48,19 @@ import analyticsRoutes from './routes/analytics';
 import blockchainRoutes from './routes/blockchain';
 import fileRoutes from './routes/files';
 import bankingRoutes from './routes/banking';
-import forexRoutes from './routes/forex';
-import customsRoutes from './routes/customs';
-import ecxRoutes from './routes/ecx';
 import qualityRoutes from './routes/quality';
+import customsRoutes from './routes/customs';
+import documentsRoutes from './routes/documents';
+import paymentsRoutes from './routes/payments';
+import auditRoutes from './routes/audit';
+import forexRoutes from './routes/forex';
+import ecxRoutes from './routes/ecx';
 import permitsRoutes from './routes/permits';
 import collectionsRoutes from './routes/collections';
 import advanceRoutes from './routes/advance';
 import consignmentRoutes from './routes/consignment';
-import auditRoutes from './routes/audit';
 import phytosanitaryRoutes from './routes/phytosanitary';
 import insuranceRoutes from './routes/insurance';
-import paymentsRoutes from './routes/payments';
-import documentsRoutes from './routes/documents';
 import landTransportRoutes from './routes/land-transport';
 import retentionRoutes from './routes/retention';
 import lcAmendmentsRoutes from './routes/lc-amendments';
@@ -133,10 +133,11 @@ class CECBSServer {
     this.app.use(compression());
     this.app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
     
-    // JSON and URL-encoded parsers - skip for file upload routes
+    // JSON and URL-encoded parsers - skip for multipart file upload routes only
     this.app.use((req, res, next) => {
-      if (req.path.startsWith('/api/v1/files/upload') || req.path.startsWith('/api/v1/documents/upload')) {
-        return next(); // Skip JSON parsing for file uploads
+      // Only skip for actual multipart file uploads, not JSON document endpoints
+      if (req.path === '/api/v1/files/upload' && req.headers['content-type']?.includes('multipart')) {
+        return next(); // Skip JSON parsing for multipart file uploads
       }
       express.json({ limit: '10mb' })(req, res, next);
     });
@@ -309,6 +310,15 @@ class CECBSServer {
 
   public async start(): Promise<void> {
     try {
+      // Run database migrations first
+      try {
+        const { runMigrations } = await import('./utils/runMigrations');
+        await runMigrations();
+      } catch (error) {
+        logger.error('Migration error:', error);
+        logger.warn('Continuing server startup despite migration errors');
+      }
+
       // Initialize services
       try {
         await this.fabricService.connect();

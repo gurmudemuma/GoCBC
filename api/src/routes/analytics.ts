@@ -2,6 +2,7 @@
 // Analytics & Dashboard Routes
 
 import { Router, Request, Response } from 'express';
+import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import FabricService from '../services/fabricService';
 
@@ -524,5 +525,79 @@ router.get('/performance', async (req: Request, res: Response) => {
     });
   }
 });
+
+// GET /analytics/exports - Export statistics with period filtering
+router.get('/exports',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { period } = req.query;
+      
+      const stats = {
+        period: period || 'month',
+        totalExports: 0,
+        totalValue: 0,
+        averagePrice: 0,
+        topDestinations: [],
+        trend: 'stable'
+      };
+
+      res.json({ success: true, data: stats, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// GET /analytics/forex - Forex statistics
+router.get('/forex',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { period } = req.query;
+      
+      const stats = {
+        period: period || 'month',
+        totalAllocated: 0,
+        totalUtilized: 0,
+        utilizationRate: 0
+      };
+
+      res.json({ success: true, data: stats, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// GET /analytics/market - Market analytics
+router.get('/market',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const marketData = {
+        currentPrices: { arabica: 6.5, robusta: 4.2 },
+        trend: 'stable',
+        volume: 0
+      };
+
+      res.json({ success: true, data: marketData, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 export default router;

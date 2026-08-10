@@ -1,16 +1,19 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Shipments API Routes
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { body, param, query } from 'express-validator';
 import { dedupeById, isValidShipment } from '../utils/dataFilters';
 import { statusManager } from '../utils/statusManager';
+import { authMiddleware } from '../middleware/auth';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const postgresDb = DatabaseService.getInstance();
 
 /**
  * @swagger
@@ -2006,6 +2009,40 @@ router.post('/:shipmentID/delivery/complete',
           message: 'Internal server error',
         },
         timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// POST /shipments/:shipmentID/status - Update shipment status
+router.post('/:shipmentID/status',
+  authMiddleware,
+  [body('status').notEmpty()],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID } = req.params;
+      const { status, location, updatedBy } = req.body;
+      const user = (req as any).user;
+
+      await postgresDb.run(
+        `INSERT INTO shipment_status_history (
+          shipment_id, status, location, updated_by
+        ) VALUES ($1, $2, $3, $4)`,
+        [shipmentID, status, location || null, updatedBy || user.username]
+      );
+
+      res.json({
+        success: true,
+        data: { shipmentID, status },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Shipment status update error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
       });
     }
   }
