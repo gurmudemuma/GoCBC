@@ -53,11 +53,13 @@ import {
   DirectionsBoat,
   FlightTakeoff,
   Person,
+  Assessment,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
+import AuditTrailTable from './AuditTrailTable';
 import AuditTrailViewer from './AuditTrailViewer';
 
 // Modern Components - 2026 Design
@@ -142,6 +144,7 @@ const CustomsPortal: React.FC = () => {
       { index: 4, label: 'Cleared', icon: <CheckCircle />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
       { index: 5, label: 'Rejected', icon: <Cancel />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
       { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
+      { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer', 'Clearance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -631,6 +634,12 @@ ${solution}`);
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'DECLARATION' | 'SHIPMENT' | 'INSPECTION'>('DECLARATION');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
+  const [auditStats, setAuditStats] = useState({
+    totalActivities: 0,
+    todaysActions: 0,
+    blockchainVerified: 0,
+    organizationsInvolved: 0,
+  });
   const [rejectionDetailsDialogOpen, setRejectionDetailsDialogOpen] = useState(false);
   
   // Snackbar state for professional success/error messages
@@ -768,6 +777,12 @@ ${solution}`);
     loadData();
     loadPermitReadyShipments();
   }, []);
+
+  useEffect(() => {
+    if (tabValue === 7) {
+      loadAuditStats();
+    }
+  }, [tabValue]);
 
   const loadPermitReadyShipments = async () => {
     const token = localStorage.getItem('authToken');
@@ -918,6 +933,43 @@ ${solution}`);
       setDeclarations([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAuditStats = async () => {
+    try {
+      const response = await apiFetch('/audit/portal/recent?limit=1000', {
+        headers: getAuthHeaders()
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        const logs = data.data.logs || [];
+        
+        const totalActivities = logs.length;
+        const todaysActions = logs.filter((log: any) => {
+          const logDate = new Date(log.created_at);
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+          return logDate >= oneDayAgo;
+        }).length;
+        const blockchainVerified = logs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        const organizationsInvolved = new Set(
+          logs.map((log: any) => log.performed_by_org).filter(Boolean)
+        ).size;
+        
+        setAuditStats({
+          totalActivities,
+          todaysActions,
+          blockchainVerified,
+          organizationsInvolved,
+        });
+      }
+    } catch (error) {
+      console.error('[CUSTOMS] Failed to load audit stats:', error);
     }
   };
 
@@ -2034,6 +2086,17 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         <TabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={7}>
+          {/* Audit Trail Tab */}
+          <AuditTrailTable
+            title="Customs Portal - Complete Transaction History"
+            autoRefresh={true}
+            refreshInterval={60000}
+            showStats={false}
+            maxHeight={700}
+          />
         </TabPanel>
       </Box>
 

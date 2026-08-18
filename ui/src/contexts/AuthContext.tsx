@@ -120,6 +120,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         router.replace('/resubmit-application');
       }
     }
+
+    // Block inactive applicants from accessing portals
+    if (!loading && user && user.status === 'inactive' && user.role === 'EXPORTER') {
+      const allowedPaths = ['/application-status', '/login'];
+      if (!allowedPaths.includes(router.pathname)) {
+        console.warn(`Inactive applicant blocked from accessing ${router.pathname} - redirecting to application status page`);
+        router.replace('/application-status');
+      }
+    }
   }, [user, loading, router.pathname]);
 
   const checkAuth = async () => {
@@ -131,29 +140,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (token && storedUser) {
         // Validate token by making a test API call
         try {
-          await api.get('/auth/validate', {
+          const response = await api.get('/auth/validate', {
             headers: { Authorization: `Bearer ${token}` }
           });
           
           // Token is valid, restore session
-          const userData = JSON.parse(storedUser);
-          setUser(userData);
-          
-          // Check if token is about to expire and refresh it
-          checkTokenExpiry(token);
+          if (response.data.success) {
+            const userData = JSON.parse(storedUser);
+            setUser(userData);
+            
+            // Check if token is about to expire and refresh it
+            checkTokenExpiry(token);
+          } else {
+            // Token validation failed, clear session
+            console.warn('Token validation failed, clearing session');
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+          }
         } catch (error: any) {
-          // Token is invalid (401) - clear it and force re-login
-          console.warn('Stored token is invalid, clearing session');
+          // Token is invalid (401) - clear it silently
+          console.warn('Stored token is invalid or expired, clearing session');
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
           
-          // Only redirect to login if not already there
-          if (router.pathname !== '/login' && router.pathname !== '/') {
+          // Don't redirect if user is on login page or landing page - let them login naturally
+          // Only redirect if they're trying to access a protected page with an invalid token
+          const publicPaths = ['/login', '/', '/register-exporter'];
+          if (!publicPaths.includes(router.pathname)) {
             router.push('/login?error=session_expired');
           }
         }
       }
     } catch (error) {
+      // Silent failure - just clear invalid data
       console.error('Failed to restore session:', error);
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
@@ -204,8 +223,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (username: string, password: string) => {
     try {
+      console.log('Attempting login for user:', username);
       const response = await api.post('/auth/login', { username, password });
+      
+      if (!response.data || !response.data.success) {
+        throw new Error(response.data?.error?.message || 'Login failed - invalid response from server');
+      }
+      
       const { token, user: userData } = response.data.data;
+      
+      if (!token || !userData) {
+        throw new Error('Login failed - missing token or user data');
+      }
+      
+      console.log('Login successful for user:', userData.username, 'Role:', userData.role);
       
       // Store token and user data
       localStorage.setItem('authToken', token);
@@ -214,7 +245,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Check if user has rejected status - redirect to resubmission page
       if (userData.status === 'rejected') {
+        console.log('User has rejected status, redirecting to resubmission page');
         router.push('/resubmit-application');
+        return;
+      }
+
+      // Check if user is an applicant (EXPORTER with inactive status) - redirect to application status page
+      if (userData.role === 'EXPORTER' && userData.status === 'inactive') {
+        console.log('User is an applicant with pending application, redirecting to application status page');
+        router.push('/application-status');
         return;
       }
 
@@ -259,9 +298,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Always redirect to specific portal, never to home
       const roleRoute = getPortalRoute(userData.role);
+      console.log('Redirecting to portal:', roleRoute);
       router.push(roleRoute);
     } catch (error: any) {
-      throw new Error(error.response?.data?.message || 'Login failed');
+      console.error('Login error:', error);
+      
+      // Better error message extraction
+      let errorMessage = 'Login failed';
+      
+      if (error.response?.data?.error?.message) {
+        errorMessage = error.response.data.error.message;
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      } else if (error.response?.status === 401) {
+        errorMessage = 'Invalid username or password';
+      } else if (error.response?.status === 500) {
+        errorMessage = 'Server error - please try again later';
+      } else if (!error.response) {
+        errorMessage = 'Cannot connect to server - please check your connection';
+      }
+      
+      throw new Error(errorMessage);
     }
   };
 

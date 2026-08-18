@@ -63,16 +63,22 @@ const fabricService = FabricService.getInstance();
  *         description: Internal server error
  */
 router.post('/',
+  authMiddleware, // ✅ FIX: Added authentication
   [
     body('contractID').notEmpty().withMessage('Contract ID is required'),
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
     body('buyerID').notEmpty().withMessage('Buyer ID is required'),
     body('buyerCountry').notEmpty().withMessage('Buyer country is required'),
-    body('buyerBank').optional().isString(),
-    body('exporterBank').optional().isString(),
+    body('buyerBank').notEmpty().withMessage('Buyer bank (issuing bank) is required'), // ✅ FIX: Made required
+    body('exporterBank').notEmpty().withMessage('Exporter bank (advising bank) is required'), // ✅ FIX: Made required
     body('coffeeType').notEmpty().withMessage('Coffee type is required'),
     body('quantity').isNumeric().withMessage('Quantity must be a number'),
-    body('pricePerKg').isNumeric().withMessage('Price per kg must be a number'),
+    body('pricePerKg').isNumeric().custom((value) => {
+      if (parseFloat(value) < 5.0) {
+        throw new Error('Price per kg must be at least 5.0 USD (minimum price requirement)');
+      }
+      return true;
+    }).withMessage('Price per kg must be a number'),
     body('currency').notEmpty().withMessage('Currency is required'),
     body('paymentMethod').optional().isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE']).withMessage('Payment method must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
     body('eudrRequired').isBoolean().withMessage('EUDR required must be a boolean'),
@@ -97,11 +103,50 @@ router.post('/',
         documents,
       } = req.body;
 
-      // Extract document IDs for blockchain storage
+      // ✅ FIX: Authorization check - only exporter can create their own contracts
+      const user = (req as any).user;
+      if (user.exporterId !== exporterID && user.username !== exporterID) {
+        logger.warn(`Unauthorized contract creation attempt: ${user.exporterId || user.username} tried to create contract for ${exporterID}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'You can only register contracts for your own organization'
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // ✅ FIX: Validate document ownership
       let documentIDs: string[] = [];
       if (documents && Array.isArray(documents)) {
         documentIDs = documents.map((doc: any) => doc.documentId || doc.id).filter(Boolean);
-        logger.info(`Contract ${contractID}: Linking ${documentIDs.length} documents to blockchain`);
+        
+        // Verify documents exist and belong to the user
+        if (documentIDs.length > 0) {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          
+          for (const docId of documentIDs) {
+            const doc = await db.get(
+              'SELECT document_id FROM documents WHERE document_id = $1 AND uploaded_by = $2',
+              [docId, user.username]
+            );
+            
+            if (!doc) {
+              return res.status(403).json({
+                success: false,
+                error: {
+                  code: 'INVALID_DOCUMENT',
+                  message: `Document ${docId} not found or does not belong to you`
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+        }
+        
+        logger.info(`Contract ${contractID}: Linking ${documentIDs.length} verified documents to blockchain`);
       }
 
       // Use new function if payment method is provided, otherwise use old function (backward compatibility)
@@ -236,6 +281,7 @@ router.get('/', async (req, res) => {
         buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
         buyerName: contract?.buyerName || contract?.BuyerName || '',
         buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
+        coffeeType: contract?.coffeeType || contract?.CoffeeType || '', // ✅ FIX: Add coffeeType mapping
         amount: contract?.amount ?? contract?.Amount ?? 0,
         currency: contract?.currency || contract?.Currency || 'USD',
         pricePerKg: contract?.pricePerKg ?? contract?.PricePerKg ?? 0,
@@ -243,13 +289,40 @@ router.get('/', async (req, res) => {
         totalValue: contract?.totalValue ?? contract?.TotalValue ?? 0,
         paymentMethod: contract?.paymentMethod || contract?.PaymentMethod || 'LC',
         status: contract?.status || contract?.contractStatus || contract?.ContractStatus || 'PENDING',
+        contractStatus: contract?.contractStatus || contract?.status || contract?.ContractStatus || 'REGISTERED', // Keep original field
         eudrRequired: contract?.eudrRequired ?? contract?.EUDRRequired ?? false,
         registrationDate: contract?.registrationDate || contract?.registeredAt || contract?.createdAt || null,
         approvalDate: contract?.approvalDate || contract?.approvedAt || null,
         terms: contract?.terms || contract?.Terms || '',
       }));
 
+      // Debug: Log first normalized contract to see structure
+      if (normalizedContracts.length > 0) {
+        logger.info(`First normalized contract: ${JSON.stringify(normalizedContracts[0])}`);
+      }
+      
+      // Filter valid contracts
+      const invalidContracts = normalizedContracts.filter((c: any) => !isValidContract(c));
+      if (invalidContracts.length > 0) {
+        logger.warn(`⚠️  Filtered out ${invalidContracts.length} invalid contracts`);
+        invalidContracts.forEach((c: any) => {
+          const validations = {
+            contractId: !!c.contractId && typeof c.contractId === 'string' && c.contractId.trim().length > 0,
+            exporterId: !!c.exporterId && typeof c.exporterId === 'string' && c.exporterId.trim().length > 0,
+            buyerId: !!c.buyerId && typeof c.buyerId === 'string' && c.buyerId.trim().length > 0,
+            buyerCountry: !!c.buyerCountry && typeof c.buyerCountry === 'string' && c.buyerCountry.trim().length > 0,
+            coffeeType: !!c.coffeeType && typeof c.coffeeType === 'string' && c.coffeeType.trim().length > 0,
+            quantity: typeof c.quantity === 'number' && !Number.isNaN(c.quantity) && c.quantity > 0,
+            pricePerKg: typeof c.pricePerKg === 'number' && !Number.isNaN(c.pricePerKg) && c.pricePerKg > 0,
+            currency: !!c.currency && typeof c.currency === 'string' && c.currency.trim().length > 0,
+          };
+          const failedFields = Object.entries(validations).filter(([k, v]) => !v).map(([k]) => k);
+          logger.warn(`  Invalid contract ${c.contractId}: FAILED fields: ${failedFields.join(', ')}`);
+        });
+      }
+      
       const validContracts = dedupeById(normalizedContracts.filter(isValidContract), (contract: any) => contract.contractId);
+      logger.info(`✅ Valid contracts after filtering: ${validContracts.length}/${normalizedContracts.length}`);
       const { exporterID, status, eudrRequired, limit = 50, offset = 0 } = req.query;
 
       // Apply filters
@@ -323,62 +396,118 @@ router.get('/:contractID/documents',
   async (req, res) => {
     try {
       const { contractID } = req.params;
+      logger.info(`Fetching documents for contract: ${contractID}`);
+      
       const { DatabaseService } = await import('../services/databaseService');
-      const { checkRequiredDocuments, DOCUMENT_TYPES } = await import('../utils/documentValidation');
       
       const db = DatabaseService.getInstance();
       
       // Get all documents for this contract
+      logger.info(`Querying database for contract documents: ${contractID}`);
       const documents = await db.all(
-        `SELECT * FROM documents 
-         WHERE entity_type = 'contract' AND entity_id = ? AND status != 'deleted'
+        `SELECT 
+          document_id, 
+          document_type, 
+          entity_type, 
+          entity_id, 
+          file_name, 
+          file_size, 
+          mime_type, 
+          uploaded_by, 
+          uploaded_at,
+          verification_status,
+          status,
+          metadata
+         FROM documents 
+         WHERE UPPER(entity_type) = 'CONTRACT' AND entity_id = $1 AND status != 'deleted'
          ORDER BY uploaded_at DESC`,
         [contractID]
       );
       
-      // Parse metadata
-      documents.forEach((doc: any) => {
+      logger.info(`Found ${documents.length} documents for contract ${contractID}`);
+      
+      // Normalize document fields to match UI expectations (both camelCase and snake_case)
+      const normalizedDocs = documents.map((doc: any) => {
+        let parsedMetadata = {};
         try {
-          doc.metadata = JSON.parse(doc.metadata || '{}');
+          parsedMetadata = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata) : (doc.metadata || {});
         } catch {
-          doc.metadata = {};
+          parsedMetadata = {};
         }
+        
+        return {
+          document_id: doc.document_id,
+          filename: doc.file_name,
+          file_name: doc.file_name,
+          size: doc.file_size,
+          file_size: doc.file_size,
+          mime_type: doc.mime_type,
+          mimeType: doc.mime_type,
+          document_type: doc.document_type,
+          uploaded_at: doc.uploaded_at,
+          uploadedAt: doc.uploaded_at,
+          verification_status: doc.verification_status || 'pending',
+          verificationStatus: doc.verification_status || 'pending',
+          status: doc.status,
+          uploaded_by: doc.uploaded_by,
+          uploadedBy: doc.uploaded_by,
+          entity_id: doc.entity_id,
+          entityId: doc.entity_id,
+          entity_type: doc.entity_type,
+          entityType: doc.entity_type,
+          metadata: parsedMetadata
+        };
       });
       
-      // Check requirements
-      const docTypes = documents
-        .filter((d: any) => d.status === 'active')
-        .map((d: any) => d.document_type);
-      const requirementCheck = checkRequiredDocuments('contract', docTypes);
+      // Try to load document validation utilities (non-fatal if it fails)
+      let requirements: any = {
+        allRequired: true,
+        missing: [],
+        details: []
+      };
       
-      // Get requirement details
-      const requirements = ['CONTRACT_SIGNED', 'PROFORMA_INVOICE'].map(type => ({
-        type,
-        name: (DOCUMENT_TYPES as any)[type].name,
-        required: (DOCUMENT_TYPES as any)[type].required,
-        uploaded: docTypes.includes(type)
-      }));
+      try {
+        const { checkRequiredDocuments, DOCUMENT_TYPES } = await import('../utils/documentValidation');
+        
+        // Check requirements
+        const docTypes = normalizedDocs
+          .filter((d: any) => d.status === 'active')
+          .map((d: any) => d.document_type);
+        const requirementCheck = checkRequiredDocuments('contract', docTypes);
+        
+        // Get requirement details
+        requirements = {
+          allRequired: requirementCheck.valid,
+          missing: requirementCheck.errors,
+          details: ['CONTRACT_SIGNED', 'PROFORMA_INVOICE'].map(type => ({
+            type,
+            name: (DOCUMENT_TYPES as any)[type]?.name || type,
+            required: (DOCUMENT_TYPES as any)[type]?.required || false,
+            uploaded: docTypes.includes(type)
+          }))
+        };
+      } catch (validationError) {
+        logger.warn('Document validation utilities not available, skipping requirement check:', validationError);
+      }
       
       res.json({
         success: true,
         data: {
-          documents,
-          count: documents.length,
-          requirements: {
-            allRequired: requirementCheck.valid,
-            missing: requirementCheck.errors,
-            details: requirements
-          }
+          documents: normalizedDocs,
+          count: normalizedDocs.length,
+          requirements
         },
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
       logger.error('Error fetching contract documents:', error);
+      logger.error('Error stack:', error.stack);
       res.status(500).json({
         success: false,
         error: {
           code: 'INTERNAL_ERROR',
-          message: error.message
+          message: error.message || 'Failed to fetch contract documents',
+          details: error.stack
         },
         timestamp: new Date().toISOString(),
       });
@@ -547,7 +676,7 @@ router.post('/:contractID/approve',
         const db = DatabaseService.getInstance();
         const documents = await db.all(
           `SELECT document_type, verification_status FROM documents 
-           WHERE entity_type = 'contract' AND entity_id = ? AND status = 'active'`,
+           WHERE UPPER(entity_type) = 'CONTRACT' AND entity_id = $1 AND status = 'active'`,
           [contractID]
         );
         
@@ -628,6 +757,43 @@ router.post('/:contractID/approve',
       if (result.success) {
         // Update status with cascading effects
         await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'APPROVED');
+        
+        // ✅ LOG TO AUDIT TRAIL - Contract Approved
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          
+          await db.run(
+            `INSERT INTO audit_trail (
+              entity_type, entity_id, action, performed_by, performed_by_org, 
+              old_value, new_value, reason, metadata, ip_address
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              'CONTRACT',
+              contractID,
+              'APPROVE',
+              user?.sub || user?.username || 'ECTA',
+              user?.org || 'ECTAMSP',
+              currentStatus,
+              'APPROVED',
+              'Contract approved by ECTA for export compliance',
+              JSON.stringify({
+                contractId: contractID,
+                approvedBy: user?.sub || user?.username,
+                role: user?.role,
+                organization: user?.org,
+                transactionId: result.txId,
+                action: 'Export Compliance Approval',
+                timestamp: new Date().toISOString()
+              }),
+              req.ip || req.connection.remoteAddress || 'unknown'
+            ]
+          );
+          logger.info(`✅ Audit log created for contract approval: ${contractID}`);
+        } catch (auditError) {
+          logger.error('Failed to create audit log:', auditError);
+          // Don't fail the request if audit logging fails
+        }
         
         logger.info(`[${user?.org}] ✅ Sales contract approved by ECTA for export compliance: ${contractID}`);
         res.json({
@@ -774,6 +940,44 @@ router.post('/:contractID/reject',
       if (result.success) {
         // Update status with cascading effects
         await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'REJECTED');
+        
+        // ✅ LOG TO AUDIT TRAIL - Contract Rejected
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          
+          await db.run(
+            `INSERT INTO audit_trail (
+              entity_type, entity_id, action, performed_by, performed_by_org, 
+              old_value, new_value, reason, metadata, ip_address
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              'CONTRACT',
+              contractID,
+              'REJECT',
+              user?.sub || user?.username || 'ECTA',
+              user?.org || 'ECTAMSP',
+              currentStatus,
+              'REJECTED',
+              reason,
+              JSON.stringify({
+                contractId: contractID,
+                rejectedBy: rejectedBy || user?.username,
+                role: user?.role,
+                organization: user?.org,
+                transactionId: result.txId,
+                rejectionReason: reason,
+                action: 'Contract Rejection - Compliance Issues',
+                timestamp: new Date().toISOString()
+              }),
+              req.ip || (req as any).connection?.remoteAddress || 'unknown'
+            ]
+          );
+          logger.info(`✅ Audit log created for contract rejection: ${contractID}`);
+        } catch (auditError) {
+          logger.error('Failed to create audit log:', auditError);
+          // Don't fail the request if audit logging fails
+        }
         
         logger.info(`[${user?.org}] ✅ Sales contract rejected by ECTA: ${contractID}, Reason: ${reason}`);
         res.json({

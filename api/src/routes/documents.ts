@@ -194,6 +194,100 @@ router.get('/entity/:entityType/:entityId',
   }
 );
 
+// ✅ FIX: Add general upload endpoint with authentication
+router.post('/upload',
+  authMiddleware,
+  upload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      const file = req.file;
+      const user = (req as any).user;
+      
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'NO_FILE', message: 'No file uploaded' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const { fileName, entityType, entityId, documentType, encrypt, description } = req.body;
+      
+      // Calculate file hash
+      const fileBuffer = fs.readFileSync(file.path);
+      const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      
+      const documentID = `DOC-${Date.now()}${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
+      const finalEntityType = entityType || 'CONTRACT';
+      const finalEntityId = entityId || documentID;
+      const finalDocType = documentType || 'OTHER';
+      const finalFileName = fileName || file.originalname;
+
+      logger.info('Uploading authenticated document:', { 
+        documentID, 
+        finalEntityType, 
+        finalEntityId, 
+        finalFileName,
+        fileSize: file.size,
+        uploadedBy: user.username
+      });
+
+      // Store document in database with file path
+      await postgresDb.run(
+        `INSERT INTO documents (
+          document_id, entity_type, entity_id, document_type, file_name,
+          file_hash, mime_type, file_size, file_path, uploaded_by, status, description
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          documentID, 
+          finalEntityType, 
+          finalEntityId, 
+          finalDocType, 
+          finalFileName,
+          fileHash,
+          file.mimetype,
+          file.size,
+          file.path,
+          user.username,
+          'active',
+          description || null
+        ]
+      );
+
+      logger.info('Authenticated document uploaded successfully:', documentID);
+
+      res.json({
+        success: true,
+        data: { 
+          documentId: documentID,
+          fileName: finalFileName,
+          hash: fileHash,
+          ipfsCID: null, // Not using IPFS for now
+          status: 'uploaded'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Upload authenticated document error:', error);
+      
+      // Clean up uploaded file on error
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          logger.error('Failed to delete uploaded file:', unlinkError);
+        }
+      }
+      
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 // Upload registration document (for exporter applications - NO AUTH REQUIRED)
 router.post('/upload-registration',
   upload.single('file'),
@@ -293,6 +387,8 @@ router.get('/:documentId/download',
       const { documentId } = req.params;
       const { inline } = req.query; // Support ?inline=true for viewing
       
+      logger.info(`Document download/view requested: ${documentId}, inline: ${inline}`);
+      
       // Get document info from database
       const doc = await postgresDb.get(
         'SELECT * FROM documents WHERE document_id = $1',
@@ -300,6 +396,7 @@ router.get('/:documentId/download',
       );
       
       if (!doc) {
+        logger.warn(`Document not found in database: ${documentId}`);
         return res.status(404).json({
           success: false,
           error: { code: 'NOT_FOUND', message: 'Document not found' },
@@ -307,8 +404,11 @@ router.get('/:documentId/download',
         });
       }
       
+      logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
+      
       // Check if file exists
       if (!doc.file_path || !fs.existsSync(doc.file_path)) {
+        logger.error(`File not found on disk: ${doc.file_path}`);
         return res.status(404).json({
           success: false,
           error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
@@ -326,9 +426,51 @@ router.get('/:documentId/download',
         res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`);
       }
       
+      logger.info(`Streaming file: ${doc.file_name}`);
+      
       // Send file
       const fileStream = fs.createReadStream(doc.file_path);
       fileStream.pipe(res);
+      
+      // ✅ LOG TO AUDIT TRAIL - Document Viewed
+      try {
+        const user = (req as any).user;
+        await postgresDb.run(
+          `INSERT INTO audit_trail (
+            entity_type, entity_id, action, performed_by, performed_by_org, 
+            old_value, new_value, reason, metadata, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            'DOCUMENT',
+            documentId,
+            'VIEW',
+            user?.sub || user?.username || 'USER',
+            user?.org || 'UNKNOWN',
+            'N/A',
+            'VIEWED',
+            `Document ${inline === 'true' ? 'viewed' : 'downloaded'}: ${doc.file_name}`,
+            JSON.stringify({
+              documentId,
+              fileName: doc.file_name,
+              entityType: doc.entity_type,
+              entityId: doc.entity_id,
+              documentType: doc.document_type,
+              fileSize: doc.file_size,
+              mimeType: doc.mime_type,
+              inline: inline === 'true',
+              viewedBy: user?.username,
+              role: user?.role,
+              organization: user?.org,
+              timestamp: new Date().toISOString()
+            }),
+            req.ip || (req as any).connection?.remoteAddress || 'unknown'
+          ]
+        );
+        logger.info(`✅ Audit log created for document view: ${documentId} by ${user?.username}`);
+      } catch (auditError) {
+        logger.error('Failed to create document view audit log:', auditError);
+        // Don't fail the request if audit logging fails
+      }
       
       fileStream.on('error', (err) => {
         logger.error('Error streaming file:', err);
@@ -349,6 +491,90 @@ router.get('/:documentId/download',
           timestamp: new Date().toISOString()
         });
       }
+    }
+  }
+);
+
+// Add alias for /view endpoint (same as /download with inline=true)
+router.get('/:documentId/view',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    // Redirect to download with inline=true
+    req.query.inline = 'true';
+    return router.handle(req, res, () => {});
+  }
+);
+
+// Add alias without /download suffix
+router.get('/:documentId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      
+      // Get document info only (metadata)
+      const doc = await postgresDb.get(
+        'SELECT document_id, entity_type, entity_id, document_type, file_name, file_hash, mime_type, file_size, uploaded_by, status, uploaded_at FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+      
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      res.json({
+        success: true,
+        data: doc,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Get document metadata error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// GET documents by entity (for viewing application documents in ECTA portal)
+router.get('/entity/:entityType/:entityId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { entityType, entityId } = req.params;
+      
+      logger.info(`Fetching documents for ${entityType}/${entityId}`);
+      
+      const documents = await postgresDb.all(
+        `SELECT 
+          document_id, entity_type, entity_id, document_type, file_name,
+          file_hash, mime_type, file_size, uploaded_by, status, uploaded_at
+        FROM documents 
+        WHERE entity_type = $1 AND entity_id = $2
+        ORDER BY uploaded_at DESC`,
+        [entityType, entityId]
+      );
+      
+      logger.info(`Found ${documents.length} documents for ${entityType}/${entityId}`);
+      
+      res.json({
+        success: true,
+        data: documents,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Error fetching documents by entity:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
     }
   }
 );

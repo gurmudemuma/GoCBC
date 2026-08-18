@@ -155,12 +155,14 @@ const BankBranchSelect: React.FC<BankBranchSelectProps> = ({
           </Typography>
           
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            <Typography variant="body2">
-              <strong>Branch:</strong> {selectedBranch.branchName}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography variant="body2">
+                <strong>Branch:</strong> {selectedBranch.branchName}
+              </Typography>
               {selectedBranch.isMainBranch && (
                 <Chip label="Main Branch" size="small" color="primary" sx={{ ml: 1, height: 18 }} />
               )}
-            </Typography>
+            </Box>
             
             <Typography variant="body2">
               <strong>Code:</strong> {selectedBranch.branchCode}

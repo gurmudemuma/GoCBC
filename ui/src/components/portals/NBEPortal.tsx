@@ -43,6 +43,9 @@ import {
   Assessment,
   Gavel,
   Person,
+  Timeline,
+  VerifiedUser,
+  AccountTree,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
@@ -51,8 +54,10 @@ import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
 import SWIFTMonitoringWrapper from '@/components/nbe/SWIFTMonitoringWrapper';
 import AuditTrailViewer from './AuditTrailViewer';
+import AuditTrailTable from './AuditTrailTable';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
+import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
@@ -159,6 +164,12 @@ const NBEPortal: React.FC = () => {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'CONTRACT' | 'FOREX' | 'LC'>('CONTRACT');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
+  const [auditStats, setAuditStats] = useState({
+    totalActivities: 0,
+    todaysActions: 0,
+    blockchainVerified: 0,
+    organizationsInvolved: 0,
+  });
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
@@ -182,9 +193,19 @@ const NBEPortal: React.FC = () => {
     expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
   });
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (tabValue === 6) {
+      loadAuditStats();
+    }
+  }, [tabValue]);
 
   const loadData = async () => {
     setLoading(true);
@@ -280,6 +301,66 @@ const NBEPortal: React.FC = () => {
       console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Pagination Helper Functions
+  const getPaginatedData = (data: any[]) => {
+    const startIndex = currentPage * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return data.slice(startIndex, endIndex);
+  };
+
+  const handleChangePage = (newPage: number) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleChangeRowsPerPage = (newRowsPerPage: number) => {
+    setRowsPerPage(newRowsPerPage);
+    setCurrentPage(0);
+  };
+
+  const loadAuditStats = async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await apiFetch('/audit/portal/recent?limit=1000', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        const logs = data.data.logs || [];
+        
+        const totalActivities = logs.length;
+        
+        const todaysActions = logs.filter((log: any) => {
+          const logDate = new Date(log.created_at);
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+          return logDate >= oneDayAgo;
+        }).length;
+        
+        const blockchainVerified = logs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        
+        const organizationsInvolved = new Set(
+          logs.map((log: any) => log.performed_by_org).filter(Boolean)
+        ).size;
+        
+        setAuditStats({
+          totalActivities,
+          todaysActions,
+          blockchainVerified,
+          organizationsInvolved,
+        });
+      }
+    } catch (error) {
+      console.error('[NBE] Failed to load audit stats:', error);
     }
   };
 
@@ -507,7 +588,7 @@ const NBEPortal: React.FC = () => {
         setApprovalNotification({
           open: true,
           success: false,
-          message: 'No Letter of Credit found for this contract. Please ensure an LC is issued first.'
+          message: 'No Letter of Credit found for this contract. Banks must issue LC and allocate forex before monitoring.'
         });
         setLoading(false);
         return;
@@ -576,6 +657,7 @@ const NBEPortal: React.FC = () => {
       { index: 3, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
       { index: 4, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
       { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
+      { index: 6, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -839,6 +921,13 @@ const NBEPortal: React.FC = () => {
             { icon: <CheckCircle />, label: 'Compliant', value: forexAllocations.length, color: '#4caf50' },
             { icon: <Warning />, label: 'Review Required', value: 0, color: '#ff9800' },
             { icon: <Assessment />, label: 'Audits', value: 3, color: '#2196f3' },
+          ] : tabValue === 4 ? [
+            { icon: <Assessment />, label: 'Analytics', value: '—', color: '#1976d2' },
+          ] : tabValue === 6 ? [
+            { icon: <Timeline />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
+            { icon: <Assessment />, label: 'Today\'s Actions', value: auditStats.todaysActions, color: '#4caf50' },
+            { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
+            { icon: <AccountTree />, label: 'Organizations', value: auditStats.organizationsInvolved, color: '#ff9800' },
           ] : [
             { icon: <Assessment />, label: 'Total Forex (M)', value: Math.round(stats.totalValue / 1000000), color: BRAND_COLOR },
             { icon: <TrendingUp />, label: 'Allocations', value: forexAllocations.length, color: '#4caf50' },
@@ -1580,9 +1669,25 @@ const NBEPortal: React.FC = () => {
           </Grid>
         </TabPanel>
 
+        <TabPanel value={tabValue} index={4}>
+          {/* Analytics Tab */}
+          <AnalyticsDashboard />
+        </TabPanel>
+
         <TabPanel value={tabValue} index={5}>
           {/* User Management Tab */}
           <UserManagement />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={6}>
+          {/* Audit Trail Tab */}
+          <AuditTrailTable
+            title="NBE Portal - Complete Transaction History"
+            autoRefresh={true}
+            refreshInterval={60000}
+            showStats={false}
+            maxHeight={700}
+          />
         </TabPanel>
       </Card>
 

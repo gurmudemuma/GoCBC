@@ -23,7 +23,7 @@
     "peer0.ecta.cecbs.et": {
       "url": "grpcs://localhost:7051",
       "tlsCACerts": {
-        "path": "organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt"
+        "path": "C:/goCBC/blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt"
       },
       "grpcOptions": {
         "ssl-target-name-override": "peer0.ecta.cecbs.et",
@@ -35,7 +35,7 @@
     "orderer.cecbs.et": {
       "url": "grpcs://localhost:7050",
       "tlsCACerts": {
-        "path": "organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
+        "path": "C:/goCBC/blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
       },
       "grpcOptions": {
         "ssl-target-name-override": "orderer.cecbs.et",

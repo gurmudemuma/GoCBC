@@ -201,6 +201,19 @@ func (c *CoffeeContract) RegisterExporter(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("RegisterExporter: invalid exporter type: %s. Must be private, company, or individual", exporterType)
 	}
 
+	// VALIDATION: Capital requirement based on exporter type (ECTA Directive 1106/2025)
+	minCapital := map[string]float64{
+		"private":    15000000.0, // Private Exporters: 15M ETB
+		"company":    20000000.0, // Trade Associations/Companies: 20M ETB
+		"individual": 10000000.0, // Individual Exporters (Competency Certification): 10M ETB
+	}
+	if requiredCapital, exists := minCapital[exporterType]; exists {
+		if capitalRequirement < requiredCapital {
+			return fmt.Errorf("RegisterExporter: capital requirement %.2f ETB is below minimum %.2f ETB for %s exporter type (ECTA Directive 1106/2025)", 
+				capitalRequirement, requiredCapital, exporterType)
+		}
+	}
+
 	// VALIDATION: License expiry date
 	if licenseExpiryDate != "" {
 		if err := ValidateDate(licenseExpiryDate); err != nil {
@@ -396,6 +409,15 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		documents = []string{} // Ensure non-nil empty array
 	}
 
+	// ✅ FIX: Verify exporter exists before creating contract (RegisterSalesContract)
+	exporterExists, err := c.ExporterExists(ctx, exporterID)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContract: failed to check exporter existence: %w", err)
+	}
+	if !exporterExists {
+		return fmt.Errorf("RegisterSalesContract: exporter %s is not registered in the system", exporterID)
+	}
+
 	// Check if contract already exists
 	exists, err := c.SalesContractExists(ctx, contractID)
 	if err != nil {
@@ -555,6 +577,15 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 		documents = []string{} // Ensure non-nil empty array
 	}
 
+	// ✅ FIX: Verify exporter exists before creating contract
+	exporterExists, err := c.ExporterExists(ctx, exporterID)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: failed to check exporter existence: %w", err)
+	}
+	if !exporterExists {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: exporter %s is not registered in the system", exporterID)
+	}
+
 	// Check if contract already exists
 	exists, err := c.SalesContractExists(ctx, contractID)
 	if err != nil {
@@ -686,9 +717,15 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
+	// ✅ GENERATE ECTA REFERENCE NUMBER (format: ECTA-YYYY-NNNN)
+	// Use contract ID suffix and timestamp to create unique reference
+	ectaRef := fmt.Sprintf("ECTA-%s-%s", timestamp.Format("2006"), contractID[len(contractID)-6:])
+	log.Printf("Generated ECTA reference for contract %s: %s", contractID, ectaRef)
+
 	contract.ContractStatus = "APPROVED"
 	contract.ApprovalDate = timestamp.Format(time.RFC3339)
 	contract.ApprovedBy = approverID // ✅ RECORD WHO APPROVED
+	contract.NBEReferenceNumber = ectaRef // ✅ SET ECTA REFERENCE NUMBER
 	contract.UpdatedAt = timestamp
 
 	contractJSON, err := json.Marshal(contract)
@@ -706,6 +743,7 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	changes := []FieldChange{
 		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: "APPROVED", DataType: "string"},
 		{FieldName: "approvalDate", OldValue: "", NewValue: timestamp.Format(time.RFC3339), DataType: "date"},
+		{FieldName: "nbeReferenceNumber", OldValue: "", NewValue: ectaRef, DataType: "string"},
 	}
 
 	compliance := ComplianceMetadata{

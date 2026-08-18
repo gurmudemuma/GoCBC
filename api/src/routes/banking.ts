@@ -714,6 +714,78 @@ router.get('/lc', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/v1/banking/lcs:
+ *   get:
+ *     summary: Get all Letters of Credit (alias for /lc)
+ *     tags: [Banking]
+ */
+router.get('/lcs', async (req, res) => {
+  // Alias for /lc endpoint
+  try {
+    const result = await fabricService.queryAllLCs();
+    
+    if (result.success) {
+      const lcs = dedupeById(result.data || [], 'LCID', 'lcId');
+      res.json({
+        success: true,
+        data: lcs.filter(isValidLC),
+        count: lcs.length,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error querying all LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'LC_QUERY_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/banking/payments:
+ *   get:
+ *     summary: Get all payments
+ *     tags: [Banking]
+ */
+router.get('/payments', async (req, res) => {
+  try {
+    const result = await fabricService.queryAllPayments();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data || [],
+        count: result.data?.length || 0,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error querying payments:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'PAYMENT_QUERY_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 router.get('/lc/:lcID', authMiddleware, async (req, res) => {
   try {
     const { lcID } = req.params;

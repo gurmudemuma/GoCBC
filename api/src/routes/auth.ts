@@ -51,8 +51,8 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Check if user account is active or rejected (rejected users can login to view rejection reason)
-    if (user.status !== 'active' && user.status !== 'rejected') {
+    // Check if user account is active, inactive (for applicants), or rejected (rejected users can login to view rejection reason)
+    if (user.status !== 'active' && user.status !== 'rejected' && user.status !== 'inactive') {
       logger.warn(`Login attempt for ${user.status} account: ${username}`);
       return res.status(401).json({
         success: false,
@@ -447,6 +447,169 @@ router.post('/refresh', async (req: Request, res: Response) => {
         code: 'INVALID_TOKEN',
         message: 'Invalid or expired token',
       },
+    });
+  }
+});
+
+/**
+ * @route   POST /api/v1/auth/applicant/login
+ * @desc    Authenticate applicant using temporary credentials
+ * @access  Public
+ */
+router.post('/applicant/login', async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Username and password are required',
+        },
+      });
+    }
+
+    // Verify applicant credentials
+    const applicantCredentialsService = require('../services/applicantCredentialsService').default;
+    const verification = await applicantCredentialsService.verifyCredentials(username, password);
+
+    if (!verification.valid) {
+      logger.warn(`Failed applicant login attempt for username: ${username}`);
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Invalid username or password',
+        },
+      });
+    }
+
+    // Get application details
+    const application = await db.get(
+      `SELECT id, company_name, email, status, submitted_at, rejection_reason
+       FROM exporter_applications WHERE id = $1`,
+      [verification.applicationId]
+    );
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'APPLICATION_NOT_FOUND',
+          message: 'Application not found',
+        },
+      });
+    }
+
+    // Update last login
+    await db.run(
+      'UPDATE exporter_applications SET last_login = NOW() WHERE id = $1',
+      [verification.applicationId]
+    );
+
+    // Generate JWT token with APPLICANT role
+    const token = jwt.sign(
+      {
+        sub: verification.applicationId,
+        applicationId: verification.applicationId,
+        username,
+        role: 'APPLICANT',
+        status: application.status,
+        permissions: ['application:view', 'application:resubmit'],
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    ) as string;
+
+    logger.info(`✅ Applicant login successful: ${username} (Application: ${verification.applicationId})`);
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        user: {
+          applicationId: verification.applicationId,
+          username,
+          companyName: application.company_name,
+          email: application.email,
+          role: 'APPLICANT',
+          status: application.status,
+          submittedAt: application.submitted_at,
+          rejectionReason: application.rejection_reason || null,
+        },
+      },
+    });
+  } catch (error: any) {
+    logger.error('Applicant login error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'LOGIN_FAILED',
+        message: error.message || 'Login failed',
+      },
+    });
+  }
+});
+
+/**
+ * @route   GET /api/v1/auth/applicant/status
+ * @desc    Get current application status for logged-in applicant
+ * @access  Applicant (requires valid applicant token)
+ */
+router.get('/applicant/status', async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'No token provided' },
+      });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+
+    if (decoded.role !== 'APPLICANT') {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Not an applicant token' },
+      });
+    }
+
+    const application = await db.get(
+      `SELECT id, company_name, email, status, submitted_at, 
+              rejection_reason, approved_at, license_number, exporter_id
+       FROM exporter_applications WHERE id = $1`,
+      [decoded.applicationId]
+    );
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Application not found' },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        applicationId: application.id,
+        companyName: application.company_name,
+        email: application.email,
+        status: application.status,
+        submittedAt: application.submitted_at,
+        rejectionReason: application.rejection_reason || null,
+        approvedAt: application.approved_at || null,
+        licenseNumber: application.license_number || null,
+        exporterId: application.exporter_id || null,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Get applicant status error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: error.message },
     });
   }
 });

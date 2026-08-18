@@ -53,6 +53,7 @@ import customsRoutes from './routes/customs';
 import documentsRoutes from './routes/documents';
 import paymentsRoutes from './routes/payments';
 import auditRoutes from './routes/audit';
+import traceabilityRoutes from './routes/traceability';
 import forexRoutes from './routes/forex';
 import ecxRoutes from './routes/ecx';
 import permitsRoutes from './routes/permits';
@@ -68,6 +69,7 @@ import swiftRoutes from './routes/swift';
 import eudrRoutes from './routes/eudr';
 import courierRoutes from './routes/courier';
 import statusRoutes from './routes/status';
+import notificationsRoutes from './routes/notifications';
 
 // Load environment variables
 dotenv.config();
@@ -196,8 +198,9 @@ class CECBSServer {
     apiV1.use('/advance', authMiddleware, advanceRoutes);
     apiV1.use('/consignment', authMiddleware, consignmentRoutes);
 
-    // V2.0 Cryptographic Audit Trail
+    // V2.0 Cryptographic Audit Trail & Complete Traceability
     apiV1.use('/audit', authMiddleware, auditRoutes);
+    apiV1.use('/traceability', authMiddleware, traceabilityRoutes);
 
     // V2.1 Gap Closures - Phytosanitary & Insurance Certificates
     apiV1.use('/phytosanitary', authMiddleware, phytosanitaryRoutes);
@@ -225,6 +228,9 @@ class CECBSServer {
 
     // V2.7 Status Management System
     apiV1.use('/status', authMiddleware, statusRoutes); // Unified status management
+
+    // V3.0 Notifications & Multi-channel Communication
+    apiV1.use('/notifications', authMiddleware, notificationsRoutes); // Notifications, SMS, Webhooks
 
     this.app.use('/api/v1', apiV1);
 

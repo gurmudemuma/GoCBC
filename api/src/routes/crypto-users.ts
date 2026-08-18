@@ -150,12 +150,11 @@ router.get('/:userId/identity',
       const identity = await cryptoService.getBlockchainIdentity(parseInt(userId));
 
       if (!identity) {
-        return res.status(404).json({
-          success: false,
-          error: {
-            code: 'NOT_FOUND',
-            message: 'Blockchain identity not found',
-          },
+        // Return success with null data instead of 404 if identity not found
+        return res.json({
+          success: true,
+          data: null,
+          message: 'No blockchain identity found for this user',
           timestamp: new Date().toISOString(),
         });
       }
@@ -179,12 +178,11 @@ router.get('/:userId/identity',
 
     } catch (error) {
       logger.error('Error retrieving blockchain identity:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: 'Failed to retrieve blockchain identity',
-        },
+      // Return success with null instead of 500 error
+      res.json({
+        success: true,
+        data: null,
+        message: 'Blockchain network unavailable or identity not found',
         timestamp: new Date().toISOString(),
       });
     }

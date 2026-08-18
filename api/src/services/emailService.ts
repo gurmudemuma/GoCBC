@@ -69,6 +69,11 @@ export class EmailService {
           user: process.env.SMTP_USER || '',
           pass: process.env.SMTP_PASSWORD || '',
         },
+        tls: {
+          rejectUnauthorized: false, // Allow self-signed certificates for development
+        },
+        connectionTimeout: 10000, // 10 seconds timeout
+        greetingTimeout: 10000,
       };
 
       // Check if email is configured
@@ -80,11 +85,19 @@ export class EmailService {
 
       this.transporter = nodemailer.createTransport(emailConfig);
 
-      // Verify connection
+      // Verify connection (with timeout)
+      const verifyTimeout = setTimeout(() => {
+        logger.warn('⚠️  Email service verification taking too long, continuing anyway...');
+        this.isConfigured = true;
+      }, 8000);
+
       this.transporter.verify((error, success) => {
+        clearTimeout(verifyTimeout);
         if (error) {
-          logger.error('❌ Email service verification failed:', error);
-          this.isConfigured = false;
+          logger.error('❌ Email service verification failed:', error.message || error);
+          // Set to true anyway for graceful degradation
+          this.isConfigured = true;
+          logger.info('📧 Email service will attempt to send despite verification failure');
         } else {
           logger.info('✅ Email service initialized and ready');
           this.isConfigured = true;
@@ -92,13 +105,47 @@ export class EmailService {
       });
     } catch (error) {
       logger.error('Failed to initialize email service:', error);
-      this.isConfigured = false;
+      // Set to true for graceful degradation
+      this.isConfigured = true;
+      logger.info('📧 Email service will attempt to send despite initialization failure');
     }
   }
 
   private async sendEmail(options: EmailOptions): Promise<boolean> {
+    // Log email content for development/debugging
+    if (process.env.NODE_ENV === 'development') {
+      logger.info(`📧 EMAIL WOULD BE SENT:
+        To: ${options.to}
+        Subject: ${options.subject}
+        Content length: ${options.html?.length || 0} characters
+      `);
+    }
+
     if (!this.isConfigured || !this.transporter) {
-      logger.warn('Email not sent - service not configured:', options.subject);
+      logger.warn(`📧 Email logged (service not fully configured): ${options.subject} to ${options.to}`);
+      // In development, log the email content to a file
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const emailLogDir = path.join(__dirname, '../../logs');
+          const emailLogFile = path.join(emailLogDir, 'emails.log');
+          
+          const emailLog = `
+============================================
+Time: ${new Date().toISOString()}
+To: ${options.to}
+Subject: ${options.subject}
+Content: 
+${options.text || options.html}
+============================================
+`;
+          fs.appendFileSync(emailLogFile, emailLog);
+          logger.info(`✅ Email content saved to logs/emails.log`);
+        } catch (err) {
+          logger.error('Failed to log email:', err);
+        }
+      }
       return false;
     }
 
@@ -506,6 +553,147 @@ CECBS System
     `;
 
     return this.sendEmail({ to: ectaEmail, subject, html, text });
+  }
+
+  public async sendApplicationSubmissionEmail(data: { 
+    companyName: string; 
+    email: string; 
+    username: string; 
+    password: string;
+    applicationId: number;
+  }): Promise<boolean> {
+    const subject = `Application Submitted - Track Your Status`;
+    const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #078930 0%, #056622 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+    .success-badge { background: #4caf50; color: white; padding: 10px 20px; border-radius: 5px; display: inline-block; margin: 10px 0; }
+    .credentials-box { background: #e3f2fd; border-left: 4px solid #2196f3; padding: 20px; margin: 20px 0; border-radius: 5px; }
+    .info-item { margin: 10px 0; }
+    .info-label { font-weight: bold; color: #2196f3; }
+    .button { display: inline-block; background: #2196f3; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+    .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 5px; }
+    .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>☕ Ethiopian Coffee Export Consortium</h1>
+      <h2>Application Submitted Successfully!</h2>
+    </div>
+    
+    <div class="content">
+      <div class="success-badge">✅ Received</div>
+      
+      <p>Dear <strong>${data.companyName}</strong>,</p>
+      
+      <p>Thank you for submitting your exporter application. Your application has been received and is now under review by the Ethiopian Coffee & Tea Authority (ECTA).</p>
+      
+      <h3>🔐 Your Login Credentials:</h3>
+      <div class="credentials-box">
+        <p>We have created a temporary account for you to track your application status:</p>
+        <div class="info-item">
+          <span class="info-label">Application ID:</span> <strong>${data.applicationId}</strong>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Username:</span> <strong>${data.username}</strong>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Password:</span> <strong>${data.password}</strong>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Track Status:</span> <a href="${loginUrl}/applicant/login">${loginUrl}/applicant/login</a>
+        </div>
+      </div>
+      
+      <a href="${loginUrl}/applicant/login" class="button">📊 Track Application Status</a>
+      
+      <h3>📝 What Happens Next:</h3>
+      <ol>
+        <li><strong>Review Process:</strong> ECTA will review your application and supporting documents</li>
+        <li><strong>Verification:</strong> Your business credentials and certificates will be verified</li>
+        <li><strong>Decision:</strong> You will receive email notification of approval or any corrections needed</li>
+        <li><strong>Track Status:</strong> Login anytime to check your application status</li>
+      </ol>
+      
+      <div class="warning">
+        ⏱️ <strong>Processing Time:</strong> Most applications are reviewed within 5-7 business days.
+      </div>
+      
+      <h3>✅ If Approved:</h3>
+      <ul>
+        <li>You will receive an official ECTA Export License (PDF)</li>
+        <li>Your account will be upgraded to full exporter status</li>
+        <li>You can immediately start creating export contracts</li>
+        <li>Access to full blockchain-secured export management system</li>
+      </ul>
+      
+      <h3>📞 Need Help?</h3>
+      <p>If you have questions about your application:</p>
+      <ul>
+        <li><strong>ECTA Applications:</strong> applications@ecta.gov.et</li>
+        <li><strong>Technical Support:</strong> support@cecbs.et</li>
+        <li><strong>Phone:</strong> +251-11-XXX-XXXX</li>
+      </ul>
+      
+      <p>Thank you for choosing the Ethiopian Coffee Export Consortium!</p>
+      
+      <p>Best regards,<br>
+      <strong>Ethiopian Coffee & Tea Authority (ECTA)</strong></p>
+    </div>
+    
+    <div class="footer">
+      <p>This is an automated message from the Ethiopian Coffee Export Consortium Blockchain System (CECBS)</p>
+      <p>Please do not reply to this email. For support, contact applications@ecta.gov.et</p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const text = `
+Ethiopian Coffee Export Consortium - Application Submitted
+
+Dear ${data.companyName},
+
+Your exporter application has been successfully submitted and is now under review.
+
+Login Credentials (Track Your Status):
+Application ID: ${data.applicationId}
+Username: ${data.username}
+Password: ${data.password}
+Track Status: ${loginUrl}/applicant/login
+
+What Happens Next:
+1. ECTA reviews your application
+2. Verification of credentials
+3. Email notification of decision
+4. Login anytime to check status
+
+Processing Time: 5-7 business days
+
+If Approved:
+- Official ECTA Export License (PDF)
+- Full exporter account access
+- Start creating export contracts
+- Blockchain-secured export management
+
+For assistance: applications@ecta.gov.et
+
+Best regards,
+Ethiopian Coffee & Tea Authority (ECTA)
+    `;
+
+    return this.sendEmail({ to: data.email, subject, html, text });
   }
 }
 

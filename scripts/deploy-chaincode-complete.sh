@@ -5,16 +5,42 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
 CC_NAME="coffee"
-CC_VERSION="1.11"
-CC_SEQUENCE=1
 CHANNEL="coffeechannel"
-CC_LABEL="${CC_NAME}_${CC_VERSION}"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}✓${NC} $*"; }
 info() { echo -e "${CYAN}▶${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 err()  { echo -e "${RED}✗${NC} $*"; }
+
+# Auto-detect current version and sequence from committed chaincode
+info "Detecting current chaincode version..."
+CURRENT_INFO=$(docker exec peer0.ecx.cecbs.et bash -c "
+export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp
+peer lifecycle chaincode querycommitted --channelID $CHANNEL --name $CC_NAME 2>/dev/null
+" || echo "")
+
+if [ -z "$CURRENT_INFO" ]; then
+    warn "No chaincode deployed yet. Starting fresh deployment."
+    CC_VERSION="1.0"
+    CC_SEQUENCE=1
+    info "New deployment: Version $CC_VERSION, Sequence $CC_SEQUENCE"
+else
+    # Parse version and sequence from output like "Version: 1.58, Sequence: 4, Endorsement Plugin..."
+    CURRENT_VERSION=$(echo "$CURRENT_INFO" | grep -oP 'Version: \K[0-9.]+')
+    CURRENT_SEQUENCE=$(echo "$CURRENT_INFO" | grep -oP 'Sequence: \K[0-9]+')
+    
+    info "Current deployed: Version $CURRENT_VERSION, Sequence $CURRENT_SEQUENCE"
+    
+    # Increment version (minor version bump) and sequence
+    CC_VERSION=$(echo "$CURRENT_VERSION" | awk -F. '{printf "%d.%d", $1, $2+1}')
+    CC_SEQUENCE=$((CURRENT_SEQUENCE + 1))
+    
+    info "Deploying update: Version $CC_VERSION, Sequence $CC_SEQUENCE"
+fi
+
+CC_LABEL="${CC_NAME}_${CC_VERSION}"
 
 declare -A ORG_MSP=( [ecta]=ECTAMSP [ecx]=ECXMSP [banks]=BanksMSP [nbe]=NBEMSP [customs]=CustomsMSP [shipping]=ShippingMSP )
 declare -A ORG_PORT=( [ecta]=7051 [ecx]=8051 [banks]=9051 [nbe]=10051 [customs]=11051 [shipping]=12051 )

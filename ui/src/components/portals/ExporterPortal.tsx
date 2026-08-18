@@ -39,7 +39,7 @@ import {
 } from '@mui/material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
 import BankSelect from '@/components/common/BankSelect';
-import { DocumentUploadDialog } from '@/components/portals/DocumentUploadDialog';
+// DocumentUploadDialog removed - using simple file input instead
 // Commented out until @mui/lab is installed
 // import {
 //   Timeline,
@@ -70,12 +70,21 @@ import {
   DirectionsBoat,
   FlightTakeoff,
   Payment,
+  Delete,
+  Timeline,
+  Category,
+  History,
+  VerifiedUser,
+  Business,
+  Refresh,
 } from '@mui/icons-material';
+
 import { alpha } from '@mui/material/styles';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
+import AuditTrailTable from './AuditTrailTable';
 
 // Modern Components - 2026 Design
 import {
@@ -201,6 +210,19 @@ const ExporterPortal: React.FC = () => {
   const [contracts, setContracts] = useState<ExportContract[]>([]);
   const [allContracts, setAllContracts] = useState<ExportContract[]>([]);
   const [forexStatuses, setForexStatuses] = useState<ForexStatus[]>([]);
+  
+  // Audit Trail Stats
+  const [auditStats, setAuditStats] = useState({
+    totalActivities: 0,
+    uniqueEntities: 0,
+    recentActions: 0,
+    blockchainVerified: 0,
+    organizationsInvolved: 0,
+    journeyStages: 0,
+    statusChanges: 0,
+    actionCounts: {} as Record<string, number>,
+    entityCounts: {} as Record<string, number>
+  });
   const [allForexStatuses, setAllForexStatuses] = useState<ForexStatus[]>([]);
   const [lcStatuses, setLCStatuses] = useState<LCStatus[]>([]);
   const [allLCStatuses, setAllLCStatuses] = useState<LCStatus[]>([]);
@@ -252,10 +274,8 @@ const ExporterPortal: React.FC = () => {
   const [isCreatingShipment, setIsCreatingShipment] = useState(false);
   const [shipmentJustCreated, setShipmentJustCreated] = useState(false); // Flag to hide workflow alert during reload
   
-  // Document upload states
-  const [contractDocUploadOpen, setContractDocUploadOpen] = useState(false);
+  // Document upload states - removed DocumentUploadDialog, using simple file input
   const [contractDocuments, setContractDocuments] = useState<any[]>([]);
-  const [shipmentDocUploadOpen, setShipmentDocUploadOpen] = useState(false);
   const [shipmentDocuments, setShipmentDocuments] = useState<any[]>([]);
   
   const [newContract, setNewContract] = useState({
@@ -357,6 +377,137 @@ const ExporterPortal: React.FC = () => {
   useEffect(() => {
     loadExporterData();
   }, []);
+
+  // Load audit trail stats when Audit Trail tab is active
+  useEffect(() => {
+    console.log('[Exporter Portal] Tab changed to:', tabValue);
+    if (tabValue === 6) {
+      console.log('[Exporter Portal] Loading audit stats for Audit Trail tab');
+      loadAuditStats();
+    }
+  }, [tabValue]);
+
+  const loadAuditStats = async () => {
+    try {
+      console.log('[Exporter Portal] === LOADING AUDIT STATS ===');
+      console.log('[Exporter Portal] Calling audit API...');
+      
+      const response = await apiFetch('/audit/portal/recent?limit=1000', {
+        headers: getAuthHeaders()
+      });
+      
+      console.log('[Exporter Portal] Response status:', response.status);
+      console.log('[Exporter Portal] Response ok?:', response.ok);
+      
+      if (!response.ok) {
+        console.error('[Exporter Portal] API request failed with status:', response.status);
+        const errorText = await response.text();
+        console.error('[Exporter Portal] Error response:', errorText);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('[Exporter Portal] === AUDIT STATS RAW RESPONSE ===');
+      console.log('[Exporter Portal] Full response:', JSON.stringify(data, null, 2));
+      console.log('[Exporter Portal] data.success:', data.success);
+      console.log('[Exporter Portal] data.data exists?:', !!data.data);
+      
+      if (data.success && data.data) {
+        const logs = data.data.logs || [];
+        console.log('[Exporter Portal] === AUDIT LOGS ===');
+        console.log('[Exporter Portal] Logs array length:', logs.length);
+        console.log('[Exporter Portal] First log:', logs[0]);
+        console.log('[Exporter Portal] All logs:', logs);
+        
+        // Calculate comprehensive stats
+        const totalActivities = logs.length;
+        
+        // Count unique entities (contracts, shipments, LCs, etc.)
+        const uniqueEntities = new Set(logs.map((log: any) => `${log.entity_type}-${log.entity_id}`)).size;
+        
+        // Count activities in last 7 days
+        const recentActions = logs.filter((log: any) => {
+          const logDate = new Date(log.created_at);
+          const weekAgo = new Date();
+          weekAgo.setDate(weekAgo.getDate() - 7);
+          return logDate >= weekAgo;
+        }).length;
+        
+        // Count blockchain verified activities
+        const blockchainVerified = logs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        
+        // Count unique organizations involved (tracking the journey path)
+        const organizationsInvolved = new Set(
+          logs.map((log: any) => log.performed_by_org).filter(Boolean)
+        ).size;
+        
+        // Count by action types to show journey stages
+        const actionCounts = logs.reduce((acc: any, log: any) => {
+          acc[log.action] = (acc[log.action] || 0) + 1;
+          return acc;
+        }, {});
+        
+        // Count by entity types to show what's being tracked
+        const entityCounts = logs.reduce((acc: any, log: any) => {
+          acc[log.entity_type] = (acc[log.entity_type] || 0) + 1;
+          return acc;
+        }, {});
+        
+        // Journey stages completed (different actions represent different stages)
+        const journeyStages = Object.keys(actionCounts).length;
+        
+        // Status changes (tracks progress through the system)
+        const statusChanges = logs.filter((log: any) => 
+          log.action.includes('APPROVE') || 
+          log.action.includes('REGISTER') || 
+          log.action.includes('VERIFY') ||
+          log.action.includes('ISSUE') ||
+          log.action.includes('RELEASE')
+        ).length;
+        
+        const statsData = {
+          totalActivities,
+          uniqueEntities,
+          recentActions,
+          blockchainVerified,
+          organizationsInvolved,
+          journeyStages,
+          statusChanges,
+          actionCounts,
+          entityCounts
+        };
+        
+        console.log('[Exporter Portal] === CALCULATED STATS ===');
+        console.log('[Exporter Portal] Calculated audit stats:', statsData);
+        console.log('[Exporter Portal] Setting audit stats state...');
+        setAuditStats(statsData);
+        console.log('[Exporter Portal] ✅ Audit stats state updated successfully!');
+        
+        // Show success message
+        if (totalActivities > 0) {
+          showInfo('Audit Trail Loaded', `Loaded ${totalActivities} audit trail activities`);
+        } else {
+          showWarning('No Activities', 'No audit trail activities found for this account yet. Activities will appear here as you perform actions.');
+        }
+      } else {
+        console.error('[Exporter Portal] ❌ Audit stats API returned error or no data');
+        console.error('[Exporter Portal] data.success:', data.success);
+        console.error('[Exporter Portal] data.data:', data.data);
+        console.error('[Exporter Portal] Full data object:', data);
+        showError('Load Failed', 'Failed to load audit trail statistics');
+      }
+    } catch (error) {
+      console.error('[Exporter Portal] ❌ Failed to load audit stats - EXCEPTION:', error);
+      console.error('[Exporter Portal] Error details:', {
+        name: (error as Error).name,
+        message: (error as Error).message,
+        stack: (error as Error).stack
+      });
+      showError('Error Loading Audit Trail', `Error loading audit trail: ${(error as Error).message}`);
+    }
+  };
   
   const loadExporterData = async () => {
     // Get user info from token
@@ -958,10 +1109,54 @@ const ExporterPortal: React.FC = () => {
         showWarning('Invalid Input', 'Please enter valid numbers for quantity and price', 'Quantity and price must be numeric values');
         return;
       }
+
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again to continue');
+        return;
+      }
       
-      // Prepare documents metadata - extract only IDs for blockchain
-      const documentIDs = contractDocuments.map(doc => doc.documentId);
-      
+      // ✅ FIX: Upload documents first (if any) before creating contract
+      const uploadedDocuments = [];
+      if (contractDocuments.length > 0) {
+        for (const doc of contractDocuments) {
+          try {
+            const formData = new FormData();
+            formData.append('file', doc.file);
+            formData.append('fileName', doc.file.name);
+            formData.append('documentType', doc.category);
+            formData.append('encrypt', doc.encrypt.toString());
+            formData.append('entityType', 'CONTRACT');
+            formData.append('entityId', contractId);
+            
+            const uploadResponse = await apiFetch('/documents/upload', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`
+              },
+              body: formData
+            });
+            
+            const uploadResult = await uploadResponse.json();
+            if (uploadResult.success) {
+              uploadedDocuments.push({
+                documentId: uploadResult.data.documentId,
+                fileName: doc.file.name,
+                category: doc.category,
+                hash: uploadResult.data.hash,
+                ipfsCID: uploadResult.data.ipfsCID,
+                encrypted: doc.encrypt
+              });
+            } else {
+              console.warn(`Failed to upload document ${doc.file.name}:`, uploadResult.error);
+            }
+          } catch (uploadError) {
+            console.error(`Error uploading document ${doc.file.name}:`, uploadError);
+          }
+        }
+        console.log(`Successfully uploaded ${uploadedDocuments.length} documents for contract ${contractId}`);
+      }
+
       const contractData = {
         contractID: contractId,
         exporterID: profile.exporterId,
@@ -975,25 +1170,11 @@ const ExporterPortal: React.FC = () => {
         currency: newContract.currency,
         paymentMethod: newContract.paymentMethod,   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
         eudrRequired: newContract.eudrRequired,
-        documents: contractDocuments.map(doc => ({
-          documentId: doc.documentId,
-          fileName: doc.file.name,
-          category: doc.category,
-          hash: doc.hash,
-          ipfsCID: doc.ipfsCID,
-          description: doc.description,
-          encrypted: doc.encrypt,
-        }))
+        documents: uploadedDocuments // Use uploaded document IDs
       };
 
       console.log('Sending contract data:', contractData);
-      console.log(`Contract will link ${documentIDs.length} documents to blockchain:`, documentIDs);
-
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        showError('Authentication Required', 'You are not authenticated', 'Please login again to continue');
-        return;
-      }
+      console.log(`Contract will link ${uploadedDocuments.length} documents to blockchain`);
 
       // Call API to register contract on blockchain
       const response = await apiFetch('/contracts', {
@@ -1952,26 +2133,6 @@ const ExporterPortal: React.FC = () => {
               <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'flex-start', md: 'flex-end' }, alignItems: 'center', flexWrap: 'wrap' }}>
                 {profile && (
                   <>
-                    <Button
-                      variant="outlined"
-                      startIcon={<Assignment />}
-                      onClick={() => {
-                        setAuditEntityType('EXPORTER');
-                        setAuditEntityId(profile.exporterId);
-                        setShowAuditTrail(true);
-                      }}
-                      sx={{ 
-                        textTransform: 'none',
-                        borderColor: brandPrimary,
-                        color: brandPrimary,
-                        '&:hover': {
-                          borderColor: brandPrimary,
-                          bgcolor: `${brandPrimary}10`,
-                        }
-                      }}
-                    >
-                      Audit Trail
-                    </Button>
                     <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
                       <Typography variant="caption" color="text.secondary" display="block">
                         ECTA License
@@ -1993,31 +2154,34 @@ const ExporterPortal: React.FC = () => {
           </Grid>
         </Box>
 
-        {/* Professional KPI Cards - Static at the very top */}
+        {/* Professional KPI Cards - Dynamic based on active tab */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card 
-              sx={{ 
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                border: `2px solid ${tabValue === 1 ? brandPrimary : 'transparent'}`,
-                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-              }}
-              onClick={() => setTabValue(1)}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${brandPrimary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                  <Description sx={{ fontSize: 28, color: brandPrimary }} />
-                </Box>
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                  My Contracts
-                </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700, color: brandPrimary, lineHeight: 1 }}>
-                  {contracts.length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
+          {tabValue !== 6 ? (
+            // KPI Cards for other tabs (Dashboard, Contracts, Forex, Shipments, LC)
+            <>
+              <Grid item xs={12} sm={6} md={3}>
+                <Card 
+                  sx={{ 
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    border: `2px solid ${tabValue === 1 ? brandPrimary : 'transparent'}`,
+                    '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                  }}
+                  onClick={() => setTabValue(1)}
+                >
+                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${brandPrimary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                      <Description sx={{ fontSize: 28, color: brandPrimary }} />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                      My Contracts
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, color: brandPrimary, lineHeight: 1 }}>
+                      {contracts.length}
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
 
           <Grid item xs={12} sm={6} md={3}>
             <Card 
@@ -2090,6 +2254,87 @@ const ExporterPortal: React.FC = () => {
               </CardContent>
             </Card>
           </Grid>
+            </>
+          ) : (
+            // KPI Cards for Audit Trail tab - Journey Tracking
+            <>
+              <Grid item xs={12} sm={6} md={3}>
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#1976d215', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                      <Timeline sx={{ fontSize: 28, color: '#1976d2' }} />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                      Total Activities
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#1976d2', lineHeight: 1 }}>
+                      {auditStats.totalActivities}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                      All tracked actions
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6} md={3}>
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                      <Business sx={{ fontSize: 28, color: '#ff9800' }} />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                      Organizations
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                      {auditStats.organizationsInvolved}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                      Journey participants
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6} md={3}>
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                      <TrendingUp sx={{ fontSize: 28, color: '#4caf50' }} />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                      Status Changes
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                      {auditStats.statusChanges}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                      Progress milestones
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6} md={3}>
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                      <VerifiedUser sx={{ fontSize: 28, color: '#9c27b0' }} />
+                    </Box>
+                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                      Blockchain Verified
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
+                      {auditStats.blockchainVerified}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                      Immutable records
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </>
+          )}
         </Grid>
 
         {/* Tabs */}
@@ -2129,6 +2374,7 @@ const ExporterPortal: React.FC = () => {
             <Tab label={`Shipments (${shipments.length})`} icon={<LocalShipping sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`LC & Payments (${lcStatuses.length})`} icon={<AttachMoney sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -2954,37 +3200,93 @@ const ExporterPortal: React.FC = () => {
                     <>
                       <Upload sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
                       <Typography variant="body2" color="text.secondary" gutterBottom>
-                        No documents uploaded yet
+                        No documents uploaded yet (optional)
                       </Typography>
+                      <input
+                        id="contract-file-input"
+                        type="file"
+                        multiple
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files) return;
+                          
+                          const newDocs = Array.from(files).map((file: File) => ({
+                            file,
+                            category: 'SALES_CONTRACT',
+                            description: '',
+                            encrypt: true,
+                            status: 'pending' as const,
+                            progress: 0,
+                            documentId: undefined,
+                            hash: undefined,
+                            ipfsCID: undefined
+                          }));
+                          
+                          setContractDocuments(prev => [...prev, ...newDocs]);
+                        }}
+                      />
                       <Button 
                         variant="outlined" 
                         startIcon={<Upload />}
-                        onClick={() => setContractDocUploadOpen(true)}
+                        onClick={() => document.getElementById('contract-file-input')?.click()}
                         sx={{ mt: 1 }}
                       >
-                        Upload Documents
+                        Upload Documents (Optional)
                       </Button>
                     </>
                   ) : (
                     <>
                       <CheckCircle sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
                       <Typography variant="body2" gutterBottom>
-                        {contractDocuments.length} document{contractDocuments.length !== 1 ? 's' : ''} uploaded
+                        {contractDocuments.length} document{contractDocuments.length !== 1 ? 's' : ''} selected
                       </Typography>
                       <List dense>
                         {contractDocuments.map((doc, idx) => (
                           <ListItem key={idx}>
                             <ListItemText 
                               primary={doc.file.name}
-                              secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
+                              secondary={`${(doc.file.size / 1024).toFixed(2)} KB`}
                             />
+                            <IconButton 
+                              size="small" 
+                              onClick={() => setContractDocuments(prev => prev.filter((_, i) => i !== idx))}
+                            >
+                              <Delete />
+                            </IconButton>
                           </ListItem>
                         ))}
                       </List>
+                      <input
+                        id="contract-file-input-add"
+                        type="file"
+                        multiple
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files) return;
+                          
+                          const newDocs = Array.from(files).map((file: File) => ({
+                            file,
+                            category: 'SALES_CONTRACT',
+                            description: '',
+                            encrypt: true,
+                            status: 'pending' as const,
+                            progress: 0,
+                            documentId: undefined,
+                            hash: undefined,
+                            ipfsCID: undefined
+                          }));
+                          
+                          setContractDocuments(prev => [...prev, ...newDocs]);
+                        }}
+                      />
                       <Button 
                         variant="outlined" 
                         startIcon={<Upload />}
-                        onClick={() => setContractDocUploadOpen(true)}
+                        onClick={() => document.getElementById('contract-file-input-add')?.click()}
                         size="small"
                       >
                         Add More Documents
@@ -3425,6 +3727,17 @@ const ExporterPortal: React.FC = () => {
           </Grid>
         </Grid>
       </TabPanel>
+
+      <TabPanel value={tabValue} index={6}>
+        {/* Audit Trail Tab */}
+        <AuditTrailTable
+          title="Exporter Portal - Complete Transaction History"
+          autoRefresh={true}
+          refreshInterval={60000}
+          showStats={false}
+          maxHeight={700}
+        />
+      </TabPanel>
     </Box>
 
     {/* Contract Detail Dialog */}
@@ -3492,13 +3805,13 @@ const ExporterPortal: React.FC = () => {
                   />
                   <Typography>→</Typography>
                   <Chip 
-                    label="NBE Approved" 
+                    label="ECTA Approved" 
                     color={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
-                    label="LC Issued" 
+                    label="Bank LC Issued" 
                     color={selectedContract.status === 'ACTIVE' ? 'success' : 'default'} 
                     size="small" 
                   />
@@ -3514,12 +3827,12 @@ const ExporterPortal: React.FC = () => {
 
             {selectedContract.status === 'REGISTERED' && (
               <Alert severity="info" sx={{ mt: 2 }}>
-                Your contract is registered and awaiting ECTA review and NBE approval for forex allocation.
+                Your contract is registered and awaiting ECTA review for export compliance approval.
               </Alert>
             )}
             {selectedContract.status === 'APPROVED' && (
               <Alert severity="success" sx={{ mt: 2 }}>
-                Your contract has been approved by NBE. The bank can now issue a Letter of Credit.
+                Your contract has been approved by ECTA. The bank can now issue a Letter of Credit for payment.
               </Alert>
             )}
           </Box>
@@ -4472,7 +4785,7 @@ This contract is registered with ECTA and approved by NBE.
                   <Button 
                     variant="outlined" 
                     startIcon={<Upload />}
-                    onClick={() => setShipmentDocUploadOpen(true)}
+                    disabled
                     sx={{ mt: 1 }}
                   >
                     Upload Documents
@@ -4497,7 +4810,7 @@ This contract is registered with ECTA and approved by NBE.
                   <Button 
                     variant="outlined" 
                     startIcon={<Upload />}
-                    onClick={() => setShipmentDocUploadOpen(true)}
+                    disabled
                     size="small"
                   >
                     Add More Documents
@@ -4544,27 +4857,6 @@ This contract is registered with ECTA and approved by NBE.
         onClose={() => setShowAuditTrail(false)}
       />
     )}
-
-    {/* Document Upload Dialogs */}
-    <DocumentUploadDialog
-      open={contractDocUploadOpen}
-      entityType="CONTRACT"
-      onClose={() => setContractDocUploadOpen(false)}
-      onUploadComplete={(docs) => {
-        setContractDocuments(prev => [...prev, ...docs]);
-        setContractDocUploadOpen(false);
-      }}
-    />
-
-    <DocumentUploadDialog
-      open={shipmentDocUploadOpen}
-      entityType="SHIPMENT"
-      onClose={() => setShipmentDocUploadOpen(false)}
-      onUploadComplete={(docs) => {
-        setShipmentDocuments(prev => [...prev, ...docs]);
-        setShipmentDocUploadOpen(false);
-      }}
-    />
     </ThemeProvider>
   );
 };

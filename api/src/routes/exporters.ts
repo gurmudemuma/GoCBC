@@ -5,6 +5,7 @@ import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { EmailService } from '../services/emailService';
+import { AuditService } from '../services/auditService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
@@ -15,6 +16,7 @@ const router = express.Router();
 const fabricService = FabricService.getInstance();
 const postgresDb = DatabaseService.getInstance();
 const emailService = EmailService.getInstance();
+const auditService = AuditService.getInstance();
 
 // ============================================================================
 // APPLICATIONS ROUTES (must come BEFORE /:exporterID to avoid route conflicts)
@@ -95,7 +97,10 @@ router.get('/exporter-applications',
 );
 
 // POST /exporter-applications - Submit new application (PUBLIC - no auth)
-// This endpoint now creates BOTH the application AND an inactive user account
+// This endpoint now:
+// 1. Creates application record
+// 2. Generates temporary login credentials
+// 3. Sends immediate email with credentials for status tracking
 router.post('/exporter-applications',
   [
     body('companyName').notEmpty().withMessage('Company name is required'),
@@ -116,7 +121,6 @@ router.post('/exporter-applications',
     body('bankBranchCode').optional().isString().withMessage('Bank branch code must be a string'),
     body('comments').optional().isString().withMessage('Comments must be a string'),
     body('documents').optional().isArray().withMessage('Documents must be an array'),
-    // Documents are objects with documentId, fileName, ipfsCID, hash, etc.
     body('exporterType').optional().isIn(['private','company','individual']).withMessage('Exporter type must be private, company, or individual'),
     body('laboratoryFacility').optional().isString().withMessage('Laboratory facility flag must be a string'),
     body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
@@ -125,20 +129,23 @@ router.post('/exporter-applications',
   validateRequest,
   async (req, res) => {
     try {
+      logger.info('Application submission received:', { 
+        companyName: req.body.companyName, 
+        email: req.body.email,
+        exporterType: req.body.exporterType,
+        capitalRequirement: req.body.capitalRequirement,
+        professionalTaster: req.body.professionalTaster
+      });
+      
       const applicationData = req.body;
-      const applicationId = `APP-${Date.now().toString().slice(-8)}`;
       const submittedAt = new Date().toISOString();
 
-      // Check if email already exists in users or applications
+      // Check if email already exists
       const existingUser = await postgresDb.get('SELECT id FROM users WHERE email = $1', [applicationData.email]);
-
       if (existingUser) {
         res.status(400).json({
           success: false,
-          error: { 
-            code: 'EMAIL_EXISTS', 
-            message: 'An account with this email already exists. Please use a different email or contact support.' 
-          },
+          error: { code: 'EMAIL_EXISTS', message: 'An account with this email already exists.' },
           timestamp: new Date().toISOString(),
         });
         return;
@@ -148,59 +155,47 @@ router.post('/exporter-applications',
         'SELECT id FROM exporter_applications WHERE email = $1 AND status = $2', 
         [applicationData.email, 'pending']
       );
-
       if (existingApplication) {
         res.status(400).json({
           success: false,
-          error: { 
-            code: 'APPLICATION_EXISTS', 
-            message: 'You already have a pending application. Please wait for review or contact ECTA.' 
-          },
+          error: { code: 'APPLICATION_EXISTS', message: 'You already have a pending application.' },
           timestamp: new Date().toISOString(),
         });
         return;
       }
       
-      // Generate temporary username based on company name (will be replaced with exporterID on approval)
-      const tempUsername = applicationData.companyName
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '')
-        .substring(0, 20) + '_' + Date.now().toString().slice(-6);
-
-      // Generate a secure random password
-      const bcrypt = require('bcrypt');
-      const temporaryPassword = `Temp${Math.random().toString(36).slice(-8)}${Date.now().toString().slice(-4)}!`;
-      const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
-
       // Step 1: Insert application
+      // Generate unique application ID
+      const applicationIdValue = `APP-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+      
       const appQuery = `
         INSERT INTO exporter_applications (
-          application_id, company_name, tin_number, business_license_number,
+          application_id, company_name, tin_number, business_license_number, address,
           registration_date, capital_requirement, professional_taster,
           taster_certificate, laboratory_facility, contact_person,
-          email, phone, address, city, region, bank_name,
+          email, phone, city, region, bank_name,
           bank_account_number, bank_branch, bank_branch_code,
           comments, documents, exporter_type, status, submitted_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, 'pending', $23)
+        RETURNING id, application_id
       `;
       
-      // Serialize documents array to JSON
       const documentsJSON = JSON.stringify(applicationData.documents || []);
       
-      await postgresDb.run(appQuery, [
-        applicationId,
+      const appResult = await postgresDb.get(appQuery, [
+        applicationIdValue,
         applicationData.companyName,
         applicationData.tinNumber,
         applicationData.businessLicenseNumber,
+        applicationData.address,
         applicationData.registrationDate || null,
         applicationData.capitalRequirement,
         applicationData.professionalTaster,
-        applicationData.tasterCertificate,
+        applicationData.tasterCertificate || '',
         applicationData.laboratoryFacility || 'no',
         applicationData.contactPerson,
         applicationData.email,
         applicationData.phone,
-        applicationData.address,
         applicationData.city,
         applicationData.region || '',
         applicationData.bankName || '',
@@ -212,33 +207,31 @@ router.post('/exporter-applications',
         applicationData.exporterType || 'company',
         submittedAt,
       ]);
-
-      // Step 2: Create INACTIVE user account
-      const userQuery = `
-        INSERT INTO users (
-          username, email, password_hash, full_name, role, organization,
-          phone, permissions, status, created_at
-        ) VALUES ($1, $2, $3, $4, 'EXPORTER', $5, $6, $7, 'inactive', NOW())
-      `;
-
-      const defaultPermissions = JSON.stringify([
-        'contract.create', 'contract.view', 
-        'shipment.view', 'shipment.create',
-        'payment.view', 'document.upload', 
-        'document.view', 'report.generate'
-      ]);
-
-      await postgresDb.run(userQuery, [
-        tempUsername,
-        applicationData.email,
-        hashedPassword,
-        applicationData.contactPerson,
-        applicationData.companyName,
-        applicationData.phone,
-        defaultPermissions,
-      ]);
       
-      logger.info(`✅ Exporter application submitted: ${applicationId} (User created: ${tempUsername}, Status: inactive)`);
+      const applicationId = appResult.id;
+
+      // Step 2: Generate temporary credentials
+      const applicantCredentialsService = require('../services/applicantCredentialsService').default;
+      const credentials = await applicantCredentialsService.generateCredentials(
+        applicationId,
+        applicationData.email,
+        applicationData.companyName
+      );
+      
+      logger.info(`✅ Application submitted: ID=${applicationId}, Username=${credentials.username}`);
+      
+      // Step 3: Send credentials email immediately (non-blocking - don't fail if email fails)
+      const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      emailService.sendApplicationSubmissionEmail({
+        companyName: applicationData.companyName,
+        email: applicationData.email,
+        username: credentials.username,
+        password: credentials.password,
+        applicationId,
+      }).catch((emailError) => {
+        logger.error(`⚠️ Failed to send application submission email to ${applicationData.email}:`, emailError.message);
+        // Don't fail the application submission if email fails
+      });
       
       res.status(201).json({
         success: true,
@@ -246,15 +239,18 @@ router.post('/exporter-applications',
           applicationId, 
           status: 'pending', 
           submittedAt,
-          message: 'Application submitted successfully. Your account will be activated upon approval by ECTA.'
+          credentials: {
+            username: credentials.username,
+            message: 'Login credentials have been sent to your email. You can track your application status.'
+          }
         },
         timestamp: new Date().toISOString(),
       });
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Error submitting application:', error);
       res.status(500).json({
         success: false,
-        error: { code: 'SUBMISSION_FAILED', message: 'Failed to submit application' },
+        error: { code: 'SUBMISSION_FAILED', message: error.message },
         timestamp: new Date().toISOString(),
       });
     }
@@ -262,7 +258,11 @@ router.post('/exporter-applications',
 );
 
 // POST /exporter-applications/:applicationId/approve - Approve application (ECTA admin)
-// This endpoint now also ACTIVATES the user account and updates credentials
+// This endpoint now:
+// 1. Registers exporter on blockchain
+// 2. Generates cryptographically signed license PDF
+// 3. Creates full user account from temporary credentials
+// 4. Sends professional email with license download link
 router.post('/exporter-applications/:applicationId/approve',
   authMiddleware,
   [
@@ -281,7 +281,7 @@ router.post('/exporter-applications/:applicationId/approve',
       const { applicationId } = req.params;
       const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankAccountNumber, bankBranch, bankBranchCode } = req.body;
       
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1', [applicationId]);
       
       if (!application || (application.status !== 'pending' && application.status !== 'approved')) {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or already rejected' }, timestamp: new Date().toISOString() });
@@ -304,125 +304,125 @@ router.post('/exporter-applications/:applicationId/approve',
       );
       
       if (!result.success) {
-        // If the exporter already exists on-chain, treat it as success (idempotent re-approval)
         const alreadyExists = result.error && result.error.includes('already exists');
         if (alreadyExists) {
-          logger.warn(`⚠️ Exporter ${exporterId} already exists on blockchain — proceeding with DB approval`);
+          logger.warn(`⚠️ Exporter ${exporterId} already exists on blockchain — proceeding with approval`);
         } else {
           logger.error(`❌ Blockchain registration failed for ${exporterId}:`, result.error);
           res.status(400).json({ 
             success: false, 
             error: { 
               code: 'BLOCKCHAIN_ERROR', 
-              message: `Cannot approve exporter: Blockchain registration failed. ${result.error || 'Network may be down or peers not responding.'}\n\nPlease ensure:\n• Fabric network is running\n• All peer nodes are healthy\n• Chaincode is deployed\n\nTry again or contact system administrator.`
+              message: `Blockchain registration failed: ${result.error || 'Network may be down'}`
             }, 
             timestamp: new Date().toISOString() 
           });
           return;
         }
       } else {
-        logger.info(`✅ Exporter ${exporterId} successfully registered on blockchain (TxID: ${result.txId})`);
+        logger.info(`✅ Exporter ${exporterId} registered on blockchain (TxID: ${result.txId})`);
       }
 
-      // Step 2: Generate new password for the user
-      const bcrypt = require('bcrypt');
-      const newPassword = `${exporterId}@${Math.random().toString(36).slice(-6)}`;
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-      // Step 3: Update or create user account - change username to exporterId, activate, and set new password
-      const existingUser = await postgresDb.get(
-        `SELECT id FROM users WHERE email = $1 AND role = 'EXPORTER'`,
-        [application.email]
-      );
-
-      if (existingUser) {
-        // Update existing user account with bank information
-        await postgresDb.run(
-          `UPDATE users 
-           SET username = $1,
-               status = 'active',
-               exporter_id = $2,
-               ecta_license = $3,
-               password_hash = $4,
-               organization = $5,
-               bank_name = $6,
-               bank_account_number = $7,
-               bank_branch = $8,
-               bank_branch_code = $9,
-               updated_at = NOW()
-           WHERE email = $10 AND role = 'EXPORTER'`,
-          [exporterId, exporterId, ectaLicenseNumber, hashedPassword, application.company_name, 
-           bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, application.email]
-        );
-      } else {
-        // Create new user account if it doesn't exist
-        const defaultPermissions = JSON.stringify([
-          'contract.create', 'contract.view', 
-          'shipment.view', 'shipment.create',
-          'payment.view', 'document.upload', 
-          'document.view', 'report.generate'
-        ]);
-
-        await postgresDb.run(
-          `INSERT INTO users (
-            username, email, password_hash, full_name, role, organization,
-            phone, permissions, status, exporter_id, ecta_license, 
-            bank_name, bank_account_number, bank_branch, bank_branch_code, created_at
-          ) VALUES ($1, $2, $3, $4, 'EXPORTER', $5, $6, $7, 'active', $8, $9, $10, $11, $12, $13, NOW())`,
-          [
-            exporterId,
-            application.email,
-            hashedPassword,
-            application.contact_person,
-            application.company_name,
-            application.phone,
-            defaultPermissions,
-            exporterId,
-            ectaLicenseNumber,
-            bankName || null,
-            bankAccountNumber || null,
-            bankBranch || null,
-            bankBranchCode || null
-          ]
-        );
-        logger.info(`✅ Created new user account for ${exporterId}`);
-      }
+      // Step 2: Generate professional license PDF with digital signature
+      const licensePdfService = require('../services/licensePdfService').default;
+      const approvalDate = new Date().toISOString();
+      const expiryDate = new Date(licenseExpiryDate).toISOString();
       
-      // Step 4: Update application status with bank information
+      const licenseData = {
+        licenseNumber: ectaLicenseNumber,
+        companyName: application.company_name,
+        companyAddress: application.address,
+        tinNumber: application.tin_number,
+        contactPerson: application.contact_person,
+        email: application.email,
+        phone: application.phone,
+        approvalDate,
+        expiryDate,
+        approvedBy: (req as any).user?.username || 'ECTA Officer',
+        blockchainTxId: result.txId,
+      };
+      
+      const licenseResult = await licensePdfService.generateLicense(licenseData);
+      logger.info(`✅ License PDF generated: ${licenseResult.pdfPath}`);
+
+      // Step 3: Convert temporary credentials to full account
+      const applicantCredentialsService = require('../services/applicantCredentialsService').default;
+      await applicantCredentialsService.convertToFullAccount(parseInt(applicationId), exporterId);
+      logger.info(`✅ Converted temporary account to full exporter account: ${exporterId}`);
+      
+      // Step 4: Update application with license details
       await postgresDb.run(
         `UPDATE exporter_applications 
          SET status = $1, 
              approved_at = $2, 
              exporter_id = $3,
-             ecta_license_number = $4,
-             license_expiry_date = $5,
-             bank_name = $6,
-             bank_account_number = $7,
-             bank_branch = $8,
-             bank_branch_code = $9
-         WHERE application_id = $10`,
-        ['approved', new Date().toISOString(), exporterId, ectaLicenseNumber, licenseExpiryDate,
+             license_number = $4,
+             license_issued_date = $5,
+             license_expiry_date = $6,
+             digital_signature = $7,
+             verification_code = $8,
+             account_created = true,
+             bank_name = $9,
+             bank_account_number = $10,
+             bank_branch = $11,
+             bank_branch_code = $12
+         WHERE id = $13`,
+        ['approved', approvalDate, exporterId, ectaLicenseNumber, approvalDate, expiryDate,
+         licenseResult.digitalSignature, licenseResult.verificationCode,
          bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, applicationId]
       );
       
-      logger.info(`✅ Application approved: ${applicationId} -> ${exporterId} (User activated: ${exporterId}, Bank: ${bankName}, Branch: ${bankBranch})`);
+      logger.info(`✅ Application approved: ${applicationId} -> ${exporterId}`);
       
-      // Send approval email to exporter
+      // Log audit trail
+      await auditService.log({
+        entityType: 'EXPORTER_APPLICATION',
+        entityId: applicationId,
+        action: 'APPROVE',
+        performedBy: (req as any).user?.username || 'ecta_officer',
+        organization: (req as any).user?.org || 'ECTAMSP',
+        performedByOrg: (req as any).user?.org || 'ECTAMSP',
+        oldValue: 'PENDING',
+        newValue: 'APPROVED',
+        reason: `Application approved - License generated: ${ectaLicenseNumber}`,
+        metadata: {
+          applicationId,
+          exporterId,
+          companyName: application.company_name,
+          ectaLicenseNumber,
+          licenseExpiryDate,
+          verificationCode: licenseResult.verificationCode,
+          approvedBy: (req as any).user?.username
+        },
+        ipAddress: req.ip || req.socket.remoteAddress || 'unknown'
+      });
+      
+      // Step 5: Send approval email with license download link
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      await emailService.sendApprovalEmail({
+      const username = application.temp_username || exporterId;
+      
+      // Get temporary password from application
+      const tempPwdResult = await postgresDb.get(
+        'SELECT temp_password FROM exporter_applications WHERE id = $1',
+        [applicationId]
+      );
+      
+      // Send approval email (non-blocking)
+      emailService.sendApprovalEmail({
         exporterName: application.company_name,
         exporterId,
         licenseNumber: ectaLicenseNumber,
         email: application.email,
-        username: exporterId,
-        temporaryPassword: newPassword,
+        username,
+        temporaryPassword: '(use the password sent earlier)',
         bankName: bankName || undefined,
         bankBranch: bankBranch || undefined,
         bankBranchCode: bankBranchCode || undefined,
         loginUrl: `${loginUrl}/login`,
+      }).catch((emailError) => {
+        logger.error(`⚠️ Failed to send approval email to ${application.email}:`, emailError.message);
       });
       
-      // Return credentials to ECTA admin (to be sent to exporter via email)
       res.json({ 
         success: true, 
         data: { 
@@ -430,21 +430,20 @@ router.post('/exporter-applications/:applicationId/approve',
           exporterId, 
           status: 'approved', 
           txId: result.txId,
-          bankName: bankName || null,
-          bankBranch: bankBranch || null,
-          bankBranchCode: bankBranchCode || null,
-          credentials: {
-            username: exporterId,
-            temporaryPassword: newPassword,
-            email: application.email,
-            message: 'Email notification has been sent to the exporter with login credentials.'
-          }
+          license: {
+            licenseNumber: ectaLicenseNumber,
+            verificationCode: licenseResult.verificationCode,
+            issuedDate: approvalDate,
+            expiryDate,
+            downloadUrl: `/api/v1/exporters/licenses/${ectaLicenseNumber}/download`
+          },
+          message: 'Application approved. License generated and email sent to exporter.'
         }, 
         timestamp: new Date().toISOString() 
       });
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Error approving application:', error);
-      res.status(500).json({ success: false, error: { code: 'APPROVAL_FAILED' }, timestamp: new Date().toISOString() });
+      res.status(500).json({ success: false, error: { code: 'APPROVAL_FAILED', message: error.message }, timestamp: new Date().toISOString() });
     }
   }
 );
@@ -463,7 +462,7 @@ router.post('/exporter-applications/:applicationId/reject',
       const { applicationId } = req.params;
       const { reason } = req.body;
       
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1', [applicationId]);
       
       if (!application || application.status !== 'pending') {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND' }, timestamp: new Date().toISOString() });
@@ -479,7 +478,7 @@ router.post('/exporter-applications/:applicationId/reject',
 
       // Step 2: Update application status to rejected
       await postgresDb.run(
-        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE application_id = $4',
+        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE id = $4',
         ['rejected', new Date().toISOString(), reason, applicationId]
       );
       
@@ -496,9 +495,9 @@ router.post('/exporter-applications/:applicationId/reject',
       
       logger.info(`❌ Application rejected: ${applicationId} (User ${application.email} can now login to see rejection and resubmit)`);
       
-      // Send rejection email to exporter
+      // Send rejection email to exporter (non-blocking)
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      await emailService.sendRejectionEmail({
+      emailService.sendRejectionEmail({
         exporterName: application.company_name,
         applicationId,
         email: application.email,
@@ -506,6 +505,8 @@ router.post('/exporter-applications/:applicationId/reject',
         username: user?.username || application.email,
         temporaryPassword: tempPassword,
         resubmitUrl: `${loginUrl}/login`,
+      }).catch((emailError) => {
+        logger.error(`⚠️ Failed to send rejection email to ${application.email}:`, emailError.message);
       });
       
       res.json({ 
@@ -514,7 +515,7 @@ router.post('/exporter-applications/:applicationId/reject',
           applicationId, 
           status: 'rejected', 
           reason,
-          message: 'Application rejected. Email notification sent to applicant with resubmission instructions.'
+          message: 'Application rejected. Credentials for resubmission have been updated.'
         }, 
         timestamp: new Date().toISOString() 
       });
@@ -600,7 +601,7 @@ router.post('/exporter-applications/:applicationId/resubmit',
       const updateData = req.body;
       
       // Verify the application exists and is rejected
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1 AND status = $2', [applicationId, 'rejected']);
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1 AND status = $2', [applicationId, 'rejected']);
       
       if (!application) {
         res.status(404).json({ 
@@ -724,7 +725,7 @@ router.post('/exporter-applications/:applicationId/resubmit',
       const updateQuery = `
         UPDATE exporter_applications 
         SET ${fieldsToUpdate.join(', ')}
-        WHERE application_id = $${paramIndex}
+        WHERE id = $${paramIndex}
       `;
       
       await postgresDb.run(updateQuery, values);
@@ -1818,6 +1819,8 @@ router.get('/contracts', authMiddleware, async (req, res) => {
         buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
         buyerName: contract?.buyerName || contract?.BuyerName || '',
         buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
+        buyerBank: contract?.buyerBank || contract?.BuyerBank || '',
+        exporterBank: contract?.exporterBank || contract?.ExporterBank || '',
         amount: contract?.amount ?? contract?.Amount ?? 0,
         currency: contract?.currency || contract?.Currency || 'USD',
         pricePerKg: contract?.pricePerKg ?? contract?.PricePerKg ?? 0,
@@ -2173,5 +2176,132 @@ router.get('/analytics/summary', authMiddleware, async (req, res) => {
     });
   }
 });
+
+// ============================================================================
+// LICENSE MANAGEMENT ENDPOINTS
+// ============================================================================
+
+// GET /licenses/:licenseNumber/download - Download license PDF (Authenticated)
+router.get('/licenses/:licenseNumber/download',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { licenseNumber } = req.params;
+      const licensePdfService = require('../services/licensePdfService').default;
+      const fs = require('fs');
+      
+      const pdfPath = licensePdfService.getLicensePath(licenseNumber);
+      
+      if (!fs.existsSync(pdfPath)) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'LICENSE_NOT_FOUND', message: 'License document not found' },
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+      
+      // Log download in audit trail
+      await auditService.log({
+        entityType: 'LICENSE',
+        entityId: licenseNumber,
+        action: 'DOWNLOAD',
+        performedBy: (req as any).user?.username || 'unknown',
+        organization: (req as any).user?.org || 'unknown',
+        performedByOrg: (req as any).user?.org || 'unknown',
+        reason: 'License PDF downloaded',
+        metadata: {
+          licenseNumber,
+          downloadedBy: (req as any).user?.username,
+          timestamp: new Date().toISOString()
+        },
+        ipAddress: req.ip || req.socket.remoteAddress || 'unknown'
+      });
+      
+      res.download(pdfPath, `ECTA-LICENSE-${licenseNumber}.pdf`, (err) => {
+        if (err) {
+          logger.error('Error downloading license:', err);
+        }
+      });
+    } catch (error: any) {
+      logger.error('License download error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'DOWNLOAD_FAILED', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// GET /licenses/:licenseNumber/verify - Verify license authenticity (Public)
+router.get('/licenses/:licenseNumber/verify',
+  async (req: Request, res: Response) => {
+    try {
+      const { licenseNumber } = req.params;
+      const { verificationCode } = req.query;
+      
+      // Get license details from database
+      const license = await postgresDb.get(
+        `SELECT 
+          license_number, 
+          company_name,
+          exporter_id,
+          license_issued_date,
+          license_expiry_date,
+          verification_code,
+          digital_signature,
+          status
+         FROM exporter_applications 
+         WHERE license_number = $1 AND status = 'approved'`,
+        [licenseNumber]
+      );
+      
+      if (!license) {
+        res.json({
+          success: false,
+          verified: false,
+          message: 'License not found or not yet issued',
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+      
+      // Verify code if provided
+      let codeMatch = true;
+      if (verificationCode) {
+        codeMatch = license.verification_code === verificationCode;
+      }
+      
+      // Check expiry
+      const now = new Date();
+      const expiryDate = new Date(license.license_expiry_date);
+      const isExpired = now > expiryDate;
+      
+      res.json({
+        success: true,
+        verified: codeMatch && !isExpired,
+        data: {
+          licenseNumber: license.license_number,
+          companyName: license.company_name,
+          exporterId: license.exporter_id,
+          issuedDate: license.license_issued_date,
+          expiryDate: license.license_expiry_date,
+          status: isExpired ? 'EXPIRED' : 'VALID',
+          verificationCodeMatch: codeMatch
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error: any) {
+      logger.error('License verification error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'VERIFICATION_FAILED', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 export default router;

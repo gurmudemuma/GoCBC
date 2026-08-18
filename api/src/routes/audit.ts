@@ -7,12 +7,297 @@ import crypto from 'crypto';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
+import { AuditService } from '../services/auditService';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 const dbService = DatabaseService.getInstance();
+const auditService = AuditService.getInstance();
+
+// ================================
+// PORTAL AUDIT TRAIL ENDPOINTS
+// ================================
+
+/**
+ * GET /audit/portal/recent
+ * Get recent audit logs for the current user's portal
+ * Automatically filters by user's organization and relevant entity types
+ */
+router.get('/portal/recent', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const user = req.user;
+    const { limit = 100, entityType, action, performedBy } = req.query;
+    
+    logger.info(`[AUDIT] Fetching portal audit logs for ${user.org || user.role}`);
+    
+    // Determine relevant entity types based on user's role/organization
+    const entityTypes: string[] = [];
+    const userOrg = (user.org || '').toUpperCase();
+    const userRole = (user.role || '').toUpperCase();
+    
+    // Map organizations to their relevant entity types
+    if (userRole === 'ADMIN') {
+      // Admin sees EVERYTHING - no entity type filter needed
+      // entityTypes remains empty = no filter applied
+    } else if (userOrg === 'ECTAMSP' || userRole.includes('ECTA')) {
+      entityTypes.push('CONTRACT', 'EXPORTER', 'EXPORTER_APPLICATION', 'QUALITY', 'INSPECTION', 'PERMIT', 'DOCUMENT');
+    } else if (userOrg === 'BANKSMSP' || userRole.includes('BANK')) {
+      entityTypes.push('LC', 'LETTER_OF_CREDIT', 'CONTRACT', 'PAYMENT', 'FOREX', 'DOCUMENT');
+    } else if (userOrg === 'NBEMSP' || userRole.includes('NBE')) {
+      entityTypes.push('FOREX', 'LC', 'PAYMENT', 'CONTRACT');
+    } else if (userOrg === 'CUSTOMSMSP' || userRole.includes('CUSTOMS')) {
+      entityTypes.push('SHIPMENT', 'CUSTOMS_DECLARATION', 'DOCUMENT');
+    } else if (userOrg === 'SHIPPINGMSP' || userRole.includes('SHIPPING')) {
+      entityTypes.push('SHIPMENT', 'BILL_OF_LADING', 'DOCUMENT');
+    } else if (userRole.includes('EXPORTER')) {
+      entityTypes.push('CONTRACT', 'SHIPMENT', 'PAYMENT', 'LC', 'DOCUMENT', 'EXPORTER', 'EXPORTER_APPLICATION');
+    }
+    
+    // Build query
+    let query = `
+      SELECT 
+        id,
+        entity_type,
+        entity_id,
+        action,
+        performed_by,
+        performed_by_org,
+        old_value,
+        new_value,
+        reason,
+        metadata,
+        ip_address,
+        created_at
+      FROM audit_trail
+      WHERE 1=1
+    `;
+    
+    const params: any[] = [];
+    let paramIndex = 1;
+    
+    // For exporters, filter by performed_by (their username) OR entity_id containing their username
+    // This shows activities THEY performed OR activities performed ON their entities
+    if (userRole.includes('EXPORTER') && !performedBy) {
+      query += ` AND (performed_by = $${paramIndex} OR entity_id LIKE $${paramIndex + 1})`;
+      params.push(user.username);
+      params.push(`%${user.username}%`);
+      paramIndex += 2;
+    }
+    
+    // If performedBy is explicitly provided (for filtering), use it
+    if (performedBy) {
+      query += ` AND performed_by = $${paramIndex}`;
+      params.push(performedBy);
+      paramIndex++;
+    }
+    
+    // Filter by entity types
+    if (entityTypes.length > 0 && !entityType) {
+      query += ` AND entity_type = ANY($${paramIndex})`;
+      params.push(entityTypes);
+      paramIndex++;
+    }
+    
+    // Filter by specific entity type if provided
+    if (entityType) {
+      query += ` AND entity_type = $${paramIndex}`;
+      params.push(entityType);
+      paramIndex++;
+    }
+    
+    // Filter by action if provided
+    if (action) {
+      query += ` AND action = $${paramIndex}`;
+      params.push(action);
+      paramIndex++;
+    }
+    
+    // Order and limit
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+    params.push(parseInt(limit as string));
+    
+    const logs = await dbService.all(query, params);
+    
+    // Parse metadata
+    const parsedLogs = logs.map(log => ({
+      ...log,
+      metadata: typeof log.metadata === 'string' ? JSON.parse(log.metadata) : log.metadata
+    }));
+    
+    // Get statistics
+    const stats = {
+      total: parsedLogs.length,
+      byAction: parsedLogs.reduce((acc: any, log: any) => {
+        acc[log.action] = (acc[log.action] || 0) + 1;
+        return acc;
+      }, {}),
+      byEntityType: parsedLogs.reduce((acc: any, log: any) => {
+        acc[log.entity_type] = (acc[log.entity_type] || 0) + 1;
+        return acc;
+      }, {}),
+      byOrganization: parsedLogs.reduce((acc: any, log: any) => {
+        acc[log.performed_by_org] = (acc[log.performed_by_org] || 0) + 1;
+        return acc;
+      }, {}),
+    };
+    
+    res.json({
+      success: true,
+      data: {
+        logs: parsedLogs,
+        statistics: stats,
+        filters: {
+          organization: userRole === 'ADMIN' ? 'ALL' : user.org,
+          role: user.role,
+          entityTypes: entityTypes.length > 0 ? entityTypes : 'ALL',
+          limit: parseInt(limit as string)
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error fetching portal audit logs:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch audit logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /audit/portal/stats
+ * Get audit statistics for the current user's portal
+ */
+router.get('/portal/stats', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const user = req.user;
+    const { startDate, endDate } = req.query;
+    
+    const stats = await auditService.getStatistics({
+      organization: user.org,
+      startDate: startDate as string,
+      endDate: endDate as string
+    });
+    
+    res.json({
+      success: true,
+      data: stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error fetching audit statistics:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch statistics',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /audit/portal/search
+ * Professional search audit logs with advanced filters
+ */
+router.post('/portal/search', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const user = req.user;
+    const filters = req.body;
+    
+    logger.info(`[AUDIT] Searching audit logs with filters for ${user.org || user.role}`);
+    
+    // Add user's organization filter if not admin
+    if (user.role !== 'ADMIN') {
+      filters.organization = user.org;
+    }
+    
+    const result = await auditService.search(filters);
+    
+    res.json({
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error searching audit logs:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to search audit logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /audit/portal/summary
+ * Get audit trail summary for date range
+ */
+router.get('/portal/summary', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate and endDate are required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const summary = await auditService.getSummary(startDate as string, endDate as string);
+    
+    res.json({
+      success: true,
+      data: summary,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error fetching audit summary:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch summary',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /audit/portal/integrity
+ * Verify audit trail integrity (Admin only)
+ */
+router.get('/portal/integrity', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const user = req.user;
+    
+    // Only admins can verify integrity
+    if (user.role !== 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only administrators can verify audit trail integrity',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    logger.info('[AUDIT] Verifying audit trail integrity');
+    
+    const result = await auditService.verifyIntegrity();
+    
+    res.json({
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error verifying integrity:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to verify integrity',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 // ================================
 // HELPER FUNCTIONS
@@ -1412,3 +1697,116 @@ router.get('/compliance-report/:entityType/:entityId', authMiddleware, async (re
 });
 
 export default router;
+
+
+/**
+ * GET /audit/blockchain/:entityType/:entityId
+ * Get TRUE blockchain audit trail directly from Hyperledger Fabric
+ * Returns the complete immutable audit chain with cryptographic signatures
+ */
+router.get('/blockchain/:entityType/:entityId', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { entityType, entityId } = req.params;
+    
+    logger.info(`[AUDIT] Fetching TRUE blockchain audit trail for ${entityType} ${entityId}`);
+    
+    const logs = await auditService.getBlockchainAuditLogs({
+      entityType,
+      entityId
+    });
+    
+    // Get chain verification
+    const verification = await auditService.verifyBlockchainAuditChain(entityType, entityId);
+    
+    res.json({
+      success: true,
+      data: {
+        logs,
+        verification,
+        source: 'HYPERLEDGER_FABRIC',
+        totalLogs: logs.length,
+        chainIntegrity: {
+          verified: verification.verified,
+          message: verification.message,
+          brokenLinks: verification.brokenLinks.length,
+          immutable: true,
+          cryptographicallyVerified: true
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error fetching blockchain audit trail:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch blockchain audit trail',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /audit/verify-chain/:entityType/:entityId
+ * Verify the complete blockchain audit chain for an entity
+ * Checks cryptographic linking: previousStateHash → newStateHash
+ */
+router.post('/verify-chain/:entityType/:entityId', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { entityType, entityId } = req.params;
+    
+    logger.info(`[AUDIT] Verifying blockchain audit chain for ${entityType} ${entityId}`);
+    
+    const verification = await auditService.verifyBlockchainAuditChain(entityType, entityId);
+    
+    res.json({
+      success: true,
+      data: verification,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error verifying blockchain audit chain:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to verify blockchain audit chain',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /audit/verify/:logId
+ * Verify a specific audit log entry against blockchain
+ */
+router.post('/verify/:logId', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const user = req.user;
+    
+    // Only admins and ECTA officers can verify logs
+    if (user.role !== 'ADMIN' && !user.role?.includes('ECTA')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only administrators and ECTA officers can verify audit logs',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const logId = parseInt(req.params.logId);
+    
+    logger.info(`[AUDIT] Verifying log ${logId} against blockchain`);
+    
+    const verification = await auditService.verifyAgainstBlockchain(logId);
+    
+    res.json({
+      success: true,
+      data: verification,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error verifying log:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to verify log against blockchain',
+      timestamp: new Date().toISOString()
+    });
+  }
+});

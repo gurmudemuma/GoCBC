@@ -1,31 +1,38 @@
+require('dotenv').config();
 const { Client } = require('pg');
 
-async function main() {
-  const client = new Client({ 
-    connectionString: 'postgresql://cecbs:cecbs123@localhost:5432/cecbs' 
-  });
-  
+(async () => {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   
-  console.log('\n=== Approved Exporter Applications ===');
-  const apps = await client.query(
-    `SELECT application_id, company_name, email, exporter_id, status 
-     FROM exporter_applications 
-     WHERE status = 'approved' 
-     ORDER BY approved_at DESC`
-  );
-  console.table(apps.rows);
+  console.log('Searching for exporter EXP7191337...\n');
   
-  console.log('\n=== Users Table ===');
-  const users = await client.query(
-    `SELECT id, username, email, role, exporter_id, organization 
-     FROM users 
-     WHERE email LIKE '%ana%' OR exporter_id = 'EXP7191337'
-     ORDER BY created_at DESC`
+  // Search by exporter_id
+  const result1 = await client.query(
+    "SELECT id, username, email, full_name, role, organization, status, exporter_id FROM users WHERE exporter_id = $1",
+    ['EXP7191337']
   );
-  console.table(users.rows);
+  
+  console.log('By exporter_id:', result1.rows.length);
+  result1.rows.forEach(u => console.log(JSON.stringify(u, null, 2)));
+  
+  // Search by username containing the ID
+  const result2 = await client.query(
+    "SELECT id, username, email, full_name, role, organization, status, exporter_id FROM users WHERE username LIKE $1",
+    ['%7191337%']
+  );
+  
+  console.log('\nBy username pattern:', result2.rows.length);
+  result2.rows.forEach(u => console.log(JSON.stringify(u, null, 2)));
+  
+  // Check exporter_applications table
+  const result3 = await client.query(
+    "SELECT application_id, company_name, email, exporter_id, status FROM exporter_applications WHERE exporter_id = $1 OR application_id LIKE $2",
+    ['EXP7191337', '%7191337%']
+  );
+  
+  console.log('\nExporter applications:', result3.rows.length);
+  result3.rows.forEach(a => console.log(JSON.stringify(a, null, 2)));
   
   await client.end();
-}
-
-main().catch(console.error);
+})();

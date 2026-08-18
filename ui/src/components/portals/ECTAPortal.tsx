@@ -37,6 +37,7 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
+  MenuItem,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
@@ -58,10 +59,17 @@ import {
   AccountBalance,
   TrendingUp,
   HourglassTop,
+  HourglassEmpty,
   Person,
   Block,
+  ErrorOutline,
+  Pending,
+  Assessment,
+  People,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
+import AuditTrailTable from './AuditTrailTable';
+import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
@@ -114,7 +122,7 @@ const exporterSchema = yup.object({
   exporterId: yup.string().matches(/^EXP\d{7}$/, 'Invalid exporter ID format').required(),
   companyName: yup.string().min(3).max(100).required(),
   ectaLicenseNumber: yup.string().matches(/^ECTA-LIC-\d{4}-\d{3}$/, 'Invalid license format').required(),
-  capitalRequirement: yup.number().min(50000000).required('Minimum capital: 50M ETB'),
+  capitalRequirement: yup.number().min(10000000).required('Minimum capital: 10M ETB for individual exporters'),
   professionalTaster: yup.string().min(3).max(50).required(),
   tasterCertificate: yup.string().required(),
   licenseExpiryDate: yup.string().required(),
@@ -214,6 +222,12 @@ const ECTAPortal: React.FC = () => {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'EXPORTER' | 'SHIPMENT' | 'QUALITY' | 'PERMIT'>('EXPORTER');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
+  const [auditStats, setAuditStats] = useState({
+    totalActivities: 0,
+    todaysActions: 0,
+    blockchainVerified: 0,
+    organizationsInvolved: 0,
+  });
   
   // Document Validation Dialog state
   const [validationDialogOpen, setValidationDialogOpen] = useState(false);
@@ -221,10 +235,19 @@ const ECTAPortal: React.FC = () => {
   
   // Contract Approval State
   const [contractApprovalDialogOpen, setContractApprovalDialogOpen] = useState(false);
+  const [contractDetailsDialogOpen, setContractDetailsDialogOpen] = useState(false);
   const [contractRejectDialogOpen, setContractRejectDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<any>(null);
   const [contractRejectionReason, setContractRejectionReason] = useState('');
+  const [contractStatusFilter, setContractStatusFilter] = useState<string>(''); // '' = all, 'REGISTERED', 'APPROVED', 'REJECTED'
+  
+  // Contract Documents State
+  const [contractDocs, setContractDocs] = useState<any[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
 
   const { control, handleSubmit, reset, formState: { errors } } = useForm<ExporterFormData>({
     resolver: yupResolver(exporterSchema),
@@ -244,6 +267,12 @@ const ECTAPortal: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (tabValue === 6) {
+      loadAuditStats();
+    }
+  }, [tabValue]);
+
+  useEffect(() => {
     if (!queryHandled && inspectionQuery && shipments.length > 0) {
       setQueryHandled(true);
       setTabValue(4);
@@ -258,6 +287,153 @@ const ECTAPortal: React.FC = () => {
     }
   }, [inspectionQuery, queryHandled, shipments]);
 
+  // Fetch contract documents when details or approval dialog opens
+  useEffect(() => {
+    const fetchContractDocuments = async () => {
+      if ((contractDetailsDialogOpen || contractApprovalDialogOpen) && selectedContract) {
+        setDocsLoading(true);
+        try {
+          const contractId = selectedContract.contractID || selectedContract.contractId;
+          
+          // Fetch documents using the correct endpoint
+          const response = await apiFetch(`/documents/entity/CONTRACT/${contractId}`, {
+            headers: getAuthHeaders()
+          });
+          const result = await response.json();
+          
+          if (result.success && Array.isArray(result.data)) {
+            // Map the documents to the expected format
+            const docs = result.data.map((doc: any) => ({
+              document_id: doc.document_id,
+              documentId: doc.document_id,
+              id: doc.document_id,
+              file_name: doc.file_name,
+              filename: doc.file_name,
+              name: doc.file_name,
+              document_type: doc.document_type,
+              type: doc.document_type,
+              mime_type: doc.mime_type,
+              mimeType: doc.mime_type,
+              file_size: doc.file_size,
+              size: doc.file_size,
+              uploaded_at: doc.uploaded_at,
+              uploadedAt: doc.uploaded_at,
+              uploadedDate: doc.uploaded_at,
+              uploaded_by: doc.uploaded_by,
+              uploadedBy: doc.uploaded_by,
+              status: doc.status || 'active'
+            }));
+            setContractDocs(docs);
+            console.log('[ECTA] Fetched', docs.length, 'documents for contract', contractId);
+          } else {
+            console.error('[ECTA] Failed to fetch documents:', result.error);
+            setContractDocs([]);
+          }
+        } catch (err) {
+          console.error('[ECTA] Error fetching contract documents:', err);
+          setContractDocs([]);
+        } finally {
+          setDocsLoading(false);
+        }
+      } else if (!contractDetailsDialogOpen && !contractApprovalDialogOpen) {
+        setContractDocs([]);
+        setDocsLoading(false);
+      }
+    };
+    
+    fetchContractDocuments();
+  }, [contractDetailsDialogOpen, contractApprovalDialogOpen, selectedContract]);
+
+  // Helper function to view document with proper authentication
+  const handleViewDocument = async (documentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'Please log in to view documents', 'You need to be logged in to access documents');
+      return;
+    }
+
+    try {
+      // First check if document exists
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
+      const checkUrl = `${apiBaseUrl}/documents/${documentId}`;
+      
+      const checkResponse = await fetch(checkUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!checkResponse.ok) {
+        if (checkResponse.status === 404) {
+          showError('Document Not Found', 'This document does not exist or was never uploaded', 'The document may have been deleted or the upload may have failed');
+          return;
+        }
+        throw new Error(`HTTP ${checkResponse.status}: ${checkResponse.statusText}`);
+      }
+
+      const checkData = await checkResponse.json();
+      if (!checkData.success || !checkData.data) {
+        showError('Document Not Found', 'This document does not exist in the system', documentId);
+        return;
+      }
+
+      // Construct proper API URL for download
+      const url = `${apiBaseUrl}/documents/${documentId}/download?inline=true`;
+      
+      // Open in new window with authentication
+      const newWindow = window.open('', '_blank');
+      if (newWindow) {
+        // Create a form to POST the auth token (more secure than query params)
+        // But since our API uses Bearer token, we'll fetch and display
+        fetch(url, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          }
+        })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.blob();
+        })
+        .then(blob => {
+          const blobUrl = URL.createObjectURL(blob);
+          newWindow.location.href = blobUrl;
+          // Clean up blob URL after a delay to allow browser to load it
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+        })
+        .catch(error => {
+          newWindow.close();
+          console.error('[ECTA] Document view error:', error);
+          showError('Document View Failed', `Could not open document: ${error.message}`, 'Please try again or contact support if the issue persists');
+        });
+      } else {
+        showError('Popup Blocked', 'Please allow popups for this site to view documents', 'Check your browser settings');
+      }
+    } catch (error: any) {
+      console.error('Error viewing document:', error);
+      showError('View Failed', 'Failed to view document', error.message);
+    }
+  };
+
+  // Pagination Helper Functions
+  const getPaginatedData = (data: any[]) => {
+    const startIndex = currentPage * rowsPerPage;
+    const endIndex = startIndex + rowsPerPage;
+    return data.slice(startIndex, endIndex);
+  };
+
+  const handleChangePage = (newPage: number) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleChangeRowsPerPage = (newRowsPerPage: number) => {
+    setRowsPerPage(newRowsPerPage);
+    setCurrentPage(0);
+  };
+
+  const resetPagination = () => {
+    setCurrentPage(0);
+  };
+
   // Define role-based tab access
   // Super Admin sees everything, specific roles see only their tabs
   const getRoleBasedTabs = () => {
@@ -271,7 +447,9 @@ const ECTAPortal: React.FC = () => {
       { index: 2, label: `Sales Contracts`, icon: <Description sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'Permit Officer'] },
       { index: 3, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
       { index: 4, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
-      { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
+      { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
+      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
+      { index: 7, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer'] },
     ];
     
     // Super Admin sees all tabs
@@ -348,18 +526,17 @@ const ECTAPortal: React.FC = () => {
       // Load contracts
       try {
         const contractsRes = await api.getContracts();
+        console.log('[ECTA] Contracts API response:', contractsRes);
+        console.log('[ECTA] First contract (raw):', contractsRes.data?.[0]);
+        
         if (contractsRes.success && contractsRes.data) {
           // Store all contracts first for KPI calculations
           setAllContracts(contractsRes.data);
           
-          // ✅ FILTER CONTRACTS: Only show contracts waiting for ECTA approval
-          // ECTA should ONLY see contracts with status: REGISTERED (waiting approval)
-          const ectaRelevantContracts = contractsRes.data.filter((c: any) => {
-            const status = c.ContractStatus || c.contractStatus || c.status || '';
-            return status === 'REGISTERED'; // Only show contracts waiting for approval
-          });
-          console.log(`[ECTA] Filtered ${ectaRelevantContracts.length}/${contractsRes.data.length} contracts needing ECTA approval`);
-          setContracts(ectaRelevantContracts);
+          // ✅ SHOW ALL CONTRACTS in the table, not just REGISTERED
+          // ECTA can see all contracts to track the full lifecycle
+          console.log(`[ECTA] Showing ${contractsRes.data.length} total contracts in table`);
+          setContracts(contractsRes.data); // Show ALL contracts
         }
       } catch (err) {
         console.warn('Failed to load contracts:', err);
@@ -411,6 +588,43 @@ const ECTAPortal: React.FC = () => {
       console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAuditStats = async () => {
+    try {
+      const response = await apiFetch('/audit/portal/recent?limit=1000', {
+        headers: getAuthHeaders()
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        const logs = data.data.logs || [];
+        
+        const totalActivities = logs.length;
+        const todaysActions = logs.filter((log: any) => {
+          const logDate = new Date(log.created_at);
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+          return logDate >= oneDayAgo;
+        }).length;
+        const blockchainVerified = logs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        const organizationsInvolved = new Set(
+          logs.map((log: any) => log.performed_by_org).filter(Boolean)
+        ).size;
+        
+        setAuditStats({
+          totalActivities,
+          todaysActions,
+          blockchainVerified,
+          organizationsInvolved,
+        });
+      }
+    } catch (error) {
+      console.error('[ECTA] Failed to load audit stats:', error);
     }
   };
 
@@ -576,6 +790,22 @@ Contact system administrator if the issue persists.`,
     const token = localStorage.getItem('authToken');
     let applicationDocuments: any[] = [];
 
+    // Helper function to format date safely
+    const formatUploadDate = (dateString: string | undefined): string => {
+      if (!dateString) return 'N/A';
+      try {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return 'N/A';
+        // Format as DD/MM/YYYY
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}/${month}/${year}`;
+      } catch (error) {
+        return 'N/A';
+      }
+    };
+
     const dedupeDocuments = (docs: any[]) => {
       const seen = new Map<string, any>();
 
@@ -591,7 +821,7 @@ Contact system administrator if the issue persists.`,
             type: doc.type || (doc.mimeType || 'application/pdf').split('/')[1]?.toUpperCase() || 'PDF',
             status: 'AVAILABLE',
             url: documentId ? `/api/v1/documents/${documentId}/download` : undefined,
-            uploadedDate: doc.uploadedDate || doc.uploadedAt ? new Date(doc.uploadedDate || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+            uploadedDate: formatUploadDate(doc.uploadedDate || doc.uploadedAt),
             size: doc.size && !isNaN(doc.size) ? `${(doc.size / 1024).toFixed(0)} KB` : (doc.file_size && !isNaN(doc.file_size) ? `${(doc.file_size / 1024).toFixed(0)} KB` : 'N/A'),
             category: doc.category || 'APPLICATION_DOCUMENT',
           });
@@ -619,13 +849,9 @@ Contact system administrator if the issue persists.`,
             type: (doc.mime_type || doc.mimeType || 'application/pdf').split('/')[1]?.toUpperCase() || 'PDF',
             status: 'AVAILABLE',
             url: (doc.document_id || doc.documentId || doc.id) ? `/api/v1/documents/${doc.document_id || doc.documentId || doc.id}/download` : undefined,
-            uploadedDate: doc.uploaded_at || doc.uploadedAt ? new Date(doc.uploaded_at || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: (() => {
-              const bytes = doc.file_size || doc.size;
-              if (!bytes || isNaN(bytes)) return 'N/A';
-              if (bytes < 1024) return `${bytes} bytes`;
-              return `${(bytes / 1024).toFixed(2)} KB`;
-            })(),
+            uploadedDate: doc.uploaded_at || doc.uploadedAt,
+            size: doc.file_size || doc.size,
+            file_size: doc.file_size || doc.size,
             category: doc.document_type || doc.category || 'APPLICATION_DOCUMENT',
           })));
         }
@@ -703,10 +929,29 @@ Contact system administrator if the issue persists.`,
       prerequisites: [
         {
           label: 'Minimum Capital Requirement',
-          status: parseFloat(application.capital_requirement) >= 50000000 ? 'PASSED' : 'FAILED',
-          details: parseFloat(application.capital_requirement) >= 50000000 
-            ? `Capital ${parseFloat(application.capital_requirement).toLocaleString()} ETB meets 50M ETB requirement` 
-            : `Capital ${parseFloat(application.capital_requirement).toLocaleString()} ETB is below 50M ETB requirement`
+          status: (() => {
+            const capital = parseFloat(application.capital_requirement);
+            const exporterType = application.exporter_type || 'company';
+            const minCapital = {
+              'private': 15000000,    // 15M ETB
+              'company': 20000000,    // 20M ETB
+              'individual': 10000000  // 10M ETB
+            }[exporterType] || 20000000;
+            return capital >= minCapital ? 'PASSED' : 'FAILED';
+          })(),
+          details: (() => {
+            const capital = parseFloat(application.capital_requirement);
+            const exporterType = application.exporter_type || 'company';
+            const minCapital = {
+              'private': 15000000,
+              'company': 20000000,
+              'individual': 10000000
+            }[exporterType] || 20000000;
+            const minCapitalStr = (minCapital / 1000000).toFixed(0) + 'M';
+            return capital >= minCapital 
+              ? `Capital ${capital.toLocaleString()} ETB meets ${minCapitalStr} ETB requirement for ${exporterType} exporter` 
+              : `Capital ${capital.toLocaleString()} ETB is below ${minCapitalStr} ETB requirement for ${exporterType} exporter`;
+          })()
         },
         {
           label: 'Professional Taster Certification',
@@ -747,10 +992,29 @@ Contact system administrator if the issue persists.`,
         },
         {
           label: 'Capital Adequacy',
-          status: parseFloat(application.capital_requirement) >= 50000000 ? 'COMPLIANT' : 'NON_COMPLIANT',
-          details: parseFloat(application.capital_requirement) >= 50000000 
-            ? 'Meets minimum capital requirement of 50 million ETB' 
-            : 'Does not meet minimum capital requirement'
+          status: (() => {
+            const capital = parseFloat(application.capital_requirement);
+            const exporterType = application.exporter_type || 'company';
+            const minCapital = {
+              'private': 15000000,
+              'company': 20000000,
+              'individual': 10000000
+            }[exporterType] || 20000000;
+            return capital >= minCapital ? 'COMPLIANT' : 'NON_COMPLIANT';
+          })(),
+          details: (() => {
+            const capital = parseFloat(application.capital_requirement);
+            const exporterType = application.exporter_type || 'company';
+            const minCapital = {
+              'private': 15000000,
+              'company': 20000000,
+              'individual': 10000000
+            }[exporterType] || 20000000;
+            const minCapitalStr = (minCapital / 1000000).toFixed(0) + ' million';
+            return capital >= minCapital 
+              ? `Meets minimum capital requirement of ${minCapitalStr} ETB for ${exporterType} exporter (ECTA Directive 1106/2025)` 
+              : `Does not meet minimum capital requirement of ${minCapitalStr} ETB for ${exporterType} exporter`;
+          })()
         },
         {
           label: 'Quality Standards Compliance',
@@ -840,7 +1104,7 @@ The exporter can reapply once all requirements are met.`,
         setContractApprovalDialogOpen(false);
         showSuccess(
           'Contract Approved',
-          `Contract ${selectedContract.contractID || selectedContract.contractId} has been approved for export compliance. Banks can now issue LC. Forex allocation will be done manually by banks.`
+          `Contract ${selectedContract.contractID || selectedContract.contractId} has been approved for export compliance. Banks can now issue LC and allocate forex.`
         );
         
         // Refresh contracts
@@ -1210,103 +1474,396 @@ The exporter can reapply once all requirements are met.`,
         p: { xs: 2, md: 3 },
       }}
     >
-      {/* Professional KPI Cards - At the very top */}
+      {/* Dynamic KPI Cards - Change based on active tab */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card 
-            sx={{ 
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              border: `2px solid ${tabValue === 0 ? '#ff9800' : 'transparent'}`,
-              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-            }}
-            onClick={() => setTabValue(0)}
-          >
-            <CardContent sx={{ textAlign: 'center', py: 3 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
-              </Box>
-              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                Pending Applications
-              </Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                {allApplications.filter(a => a.status === 'pending').length}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {/* Tab 0: Pending Applications */}
+        {tabValue === 0 && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Pending Review
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                    {allApplications.filter(a => a.status === 'pending').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Approved
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                    {allApplications.filter(a => a.status === 'approved').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Cancel sx={{ fontSize: 28, color: '#f44336' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Rejected
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
+                    {allApplications.filter(a => a.status === 'rejected').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Assignment sx={{ fontSize: 28, color: '#2196f3' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Total Applications
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
+                    {allApplications.length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
 
-        <Grid item xs={12} sm={6} md={3}>
-          <Card 
-            sx={{ 
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              border: `2px solid ${tabValue === 1 ? BRAND_COLOR : 'transparent'}`,
-              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-            }}
-            onClick={() => setTabValue(1)}
-          >
-            <CardContent sx={{ textAlign: 'center', py: 3 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${BRAND_COLOR}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                <Coffee sx={{ fontSize: 28, color: BRAND_COLOR }} />
-              </Box>
-              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                Approved Exporters
-              </Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, color: BRAND_COLOR, lineHeight: 1 }}>
-                {approvedApplications.length}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {/* Tab 1: Approved Exporters */}
+        {tabValue === 1 && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${BRAND_COLOR}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Coffee sx={{ fontSize: 28, color: BRAND_COLOR }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Active Exporters
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: BRAND_COLOR, lineHeight: 1 }}>
+                    {approvedApplications.filter(a => a.status === 'approved').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Expiring Soon
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                    {approvedApplications.filter(a => {
+                      if (!a.license_expiry_date) return false;
+                      const expiryDate = new Date(a.license_expiry_date);
+                      const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                      return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
+                    }).length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <ErrorOutline sx={{ fontSize: 28, color: '#f44336' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Expired Licenses
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
+                    {approvedApplications.filter(a => {
+                      if (!a.license_expiry_date) return false;
+                      const expiryDate = new Date(a.license_expiry_date);
+                      return expiryDate.getTime() < Date.now();
+                    }).length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Science sx={{ fontSize: 28, color: '#9c27b0' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Lab Certified
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
+                    {approvedApplications.filter(a => a.laboratory_facility && a.laboratory_facility.toLowerCase() === 'yes').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
 
-        <Grid item xs={12} sm={6} md={3}>
-          <Card 
-            sx={{ 
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              border: `2px solid ${tabValue === 2 ? '#2196f3' : 'transparent'}`,
-              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-            }}
-            onClick={() => setTabValue(2)}
-          >
-            <CardContent sx={{ textAlign: 'center', py: 3 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                <Description sx={{ fontSize: 28, color: '#2196f3' }} />
-              </Box>
-              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                Pending Contracts
-              </Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
-                {allContracts.filter(c => c.contractStatus === 'REGISTERED').length}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {/* Tab 2: Sales Contracts */}
+        {tabValue === 2 && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'REGISTERED' ? '#ff9800' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('REGISTERED')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <HourglassEmpty sx={{ fontSize: 28, color: '#ff9800' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Pending Approval
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'APPROVED' ? '#4caf50' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('APPROVED')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Approved
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'REJECTED' ? '#f44336' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('REJECTED')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Cancel sx={{ fontSize: 28, color: '#f44336' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Rejected
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'REJECTED' || c.status === 'REJECTED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card 
+                sx={{ 
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === '' ? '#2196f3' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Description sx={{ fontSize: 28, color: '#2196f3' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    All Contracts
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
+                    {allContracts.length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
 
-        <Grid item xs={12} sm={6} md={3}>
-          <Card 
-            sx={{ 
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              border: `2px solid ${tabValue === 3 ? '#4caf50' : 'transparent'}`,
-              '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-            }}
-            onClick={() => setTabValue(3)}
-          >
-            <CardContent sx={{ textAlign: 'center', py: 3 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                <Science sx={{ fontSize: 28, color: '#4caf50' }} />
-              </Box>
-              <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                Quality Inspections
-              </Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                {allInspectionRecords.length}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {/* Tab 3: Quality Inspections */}
+        {tabValue === 3 && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Pending sx={{ fontSize: 28, color: '#ff9800' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Pending Inspection
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                    {allShipments.filter(s => {
+                      const status = (s.status || (s as any).Status || '').toUpperCase();
+                      return (status === 'CREATED' || status === 'REGISTERED') && 
+                             !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                    }).length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Science sx={{ fontSize: 28, color: '#2196f3' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    In Progress
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
+                    {allInspectionRecords.filter(i => {
+                      const status = (i.status || (i as any).Status || '').toUpperCase();
+                      return status === 'REQUESTED' || status === 'IN_PROGRESS';
+                    }).length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Completed
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                    {allInspectionRecords.filter(i => {
+                      const status = (i.status || (i as any).Status || '').toUpperCase();
+                      return status === 'COMPLETED' || status === 'QUALITY_APPROVED';
+                    }).length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Assessment sx={{ fontSize: 28, color: '#9c27b0' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Total Inspections
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
+                    {allInspectionRecords.length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
+
+        {/* Tab 6: Audit Trail */}
+        {tabValue === 6 && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#1976d215', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Assessment sx={{ fontSize: 28, color: '#1976d2' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Total Activities
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#1976d2', lineHeight: 1 }}>
+                    {auditStats.totalActivities}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <TrendingUp sx={{ fontSize: 28, color: '#4caf50' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Today's Actions
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
+                    {auditStats.todaysActions}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <CheckCircle sx={{ fontSize: 28, color: '#9c27b0' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Blockchain Verified
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
+                    {auditStats.blockchainVerified}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ textAlign: 'center', py: 3 }}>
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <People sx={{ fontSize: 28, color: '#ff9800' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Organizations
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
+                    {auditStats.organizationsInvolved}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
       </Grid>
 
       {/* Main Tabs - Enhanced with full-width, rounded corners */}
@@ -1360,15 +1917,22 @@ The exporter can reapply once all requirements are met.`,
                 tab.index === 0 ? `${tab.label} (${allApplications.filter(a => a.status === 'pending').length})` :
                 tab.index === 1 ? `${tab.label} (${approvedApplications.length})` :
                 tab.index === 2 ? `${tab.label} (${allContracts.length})` :
-                tab.index === 3 ? `${tab.label} (${allExporters.length})` :
-                tab.index === 4 ? `${tab.label} (${allInspectionRecords.length})` :
-                tab.index === 5 ? `${tab.label} (${approvedApplications.filter(a => {
+                tab.index === 3 ? `${tab.label} (${(() => {
+                  const pendingShipments = allShipments.filter(s => {
+                    const status = (s.status || (s as any).Status || '').toUpperCase();
+                    return (status === 'CREATED' || status === 'REGISTERED') && 
+                           !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                  });
+                  return pendingShipments.length + allInspectionRecords.length;
+                })()})` :
+                tab.index === 4 ? `${tab.label} (${approvedApplications.filter(a => {
                   if (!a.license_expiry_date) return false;
                   const expiryDate = new Date(a.license_expiry_date);
                   const threeMonthsFromNow = new Date();
                   threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
                   return expiryDate <= threeMonthsFromNow;
                 }).length})` :
+                tab.index === 5 ? tab.label :
                 tab.label
               }
             />
@@ -1401,7 +1965,7 @@ The exporter can reapply once all requirements are met.`,
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {applications.map((application) => (
+                  {getPaginatedData(applications).map((application) => (
                     <TableRow key={application.application_id}>
                       <TableCell>{application.application_id}</TableCell>
                       <TableCell>{application.company_name}</TableCell>
@@ -1450,6 +2014,51 @@ The exporter can reapply once all requirements are met.`,
               </Table>
             </TableContainer>
           )}
+
+          {/* Pagination Controls */}
+          {applications.length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={5}>5</MenuItem>
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, applications.length)} of {applications.length}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(applications.length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
         </TabPanel>
 
         <TabPanel value={tabValue} index={1}>
@@ -1476,7 +2085,7 @@ The exporter can reapply once all requirements are met.`,
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {approvedApplications.map((application) => (
+                  {getPaginatedData(approvedApplications).map((application) => (
                     <TableRow key={application.application_id}>
                       <TableCell>
                         <Typography variant="body2" fontWeight="bold" color="primary">
@@ -1547,12 +2156,28 @@ The exporter can reapply once all requirements are met.`,
                                   const docsResponse = await api.get(`/documents/entity/EXPORTER_APPLICATION/${application.application_id}`);
                                   const docsData = docsResponse.data?.data || [];
                                   
+                                  // Helper function to format date safely
+                                  const formatUploadDate = (dateString: string | undefined): string => {
+                                    if (!dateString) return 'N/A';
+                                    try {
+                                      const date = new Date(dateString);
+                                      if (isNaN(date.getTime())) return 'N/A';
+                                      // Format as DD/MM/YYYY
+                                      const day = String(date.getDate()).padStart(2, '0');
+                                      const month = String(date.getMonth() + 1).padStart(2, '0');
+                                      const year = date.getFullYear();
+                                      return `${day}/${month}/${year}`;
+                                    } catch (error) {
+                                      return 'N/A';
+                                    }
+                                  };
+                                  
                                   const applicationDocuments = docsData.map((doc: any) => ({
                                     id: doc.document_id,
                                     name: doc.file_name,
                                     type: doc.mime_type?.split('/')[1]?.toUpperCase() || 'PDF',
                                     status: 'AVAILABLE',
-                                    uploadedDate: doc.uploaded_at ? formatDate(doc.uploaded_at) : 'N/A',
+                                    uploadedDate: formatUploadDate(doc.uploaded_at),
                                     size: doc.file_size ? `${Math.round(doc.file_size / 1024)} KB` : 'N/A'
                                   }));
                                   
@@ -1707,6 +2332,51 @@ The exporter can reapply once all requirements are met.`,
               </Table>
             </TableContainer>
           )}
+
+          {/* Pagination Controls */}
+          {approvedApplications.length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={5}>5</MenuItem>
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, approvedApplications.length)} of {approvedApplications.length}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(approvedApplications.length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
+          )}
         </TabPanel>
 
         <TabPanel value={tabValue} index={2}>
@@ -1717,8 +2387,17 @@ The exporter can reapply once all requirements are met.`,
             <strong>ECTA Role:</strong> Review and approve sales contracts for export compliance.  
             Approved contracts can proceed to banks for LC issuance. Forex is allocated separately per NBE policy (50% retention).
           </Alert>
-          {contracts.length === 0 ? (
-            <Alert severity="info">No contracts registered yet.</Alert>
+          
+          {contracts.filter(c => {
+            if (!contractStatusFilter) return true; // Show all when no filter
+            // Check both status and contractStatus fields
+            return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+          }).length === 0 ? (
+            <Alert severity="info">
+              {contractStatusFilter 
+                ? `No contracts with status "${contractStatusFilter}".` 
+                : 'No contracts registered yet.'}
+            </Alert>
           ) : (
             <TableContainer component={Paper}>
               <Table>
@@ -1736,7 +2415,13 @@ The exporter can reapply once all requirements are met.`,
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {contracts.map((contract) => (
+                  {getPaginatedData(contracts
+                    .filter(c => {
+                      if (!contractStatusFilter) return true; // Show all when no filter
+                      // Check both status and contractStatus fields
+                      return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+                    }))
+                    .map((contract) => (
                     <TableRow key={contract.contractId || contract.contractID}>
                       <TableCell>{contract.contractId || contract.contractID}</TableCell>
                       <TableCell>{contract.exporterId || contract.exporterID}</TableCell>
@@ -1762,6 +2447,17 @@ The exporter can reapply once all requirements are met.`,
                         {contract.contractStatus === 'REGISTERED' ? (
                           <Box display="flex" gap={1}>
                             <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Visibility />}
+                              onClick={() => {
+                                setSelectedContract(contract);
+                                setContractDetailsDialogOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                            <Button
                               variant="contained"
                               size="small"
                               sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
@@ -1785,11 +2481,50 @@ The exporter can reapply once all requirements are met.`,
                             </Button>
                           </Box>
                         ) : contract.contractStatus === 'APPROVED' ? (
-                          <Chip icon={<CheckCircle />} label="Approved" size="small" color="success" />
+                          <Box display="flex" gap={1}>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Visibility />}
+                              onClick={() => {
+                                setSelectedContract(contract);
+                                setContractDetailsDialogOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                            <Chip icon={<CheckCircle />} label="Approved" size="small" color="success" />
+                          </Box>
                         ) : contract.contractStatus === 'REJECTED' ? (
-                          <Chip icon={<Cancel />} label="Rejected" size="small" color="error" />
+                          <Box display="flex" gap={1}>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Visibility />}
+                              onClick={() => {
+                                setSelectedContract(contract);
+                                setContractDetailsDialogOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                            <Chip icon={<Cancel />} label="Rejected" size="small" color="error" />
+                          </Box>
                         ) : (
-                          <Chip label={contract.contractStatus} size="small" color="default" />
+                          <Box display="flex" gap={1}>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Visibility />}
+                              onClick={() => {
+                                setSelectedContract(contract);
+                                setContractDetailsDialogOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                            <Chip label={contract.contractStatus} size="small" color="default" />
+                          </Box>
                         )}
                       </TableCell>
                     </TableRow>
@@ -1797,6 +2532,63 @@ The exporter can reapply once all requirements are met.`,
                 </TableBody>
               </Table>
             </TableContainer>
+          )}
+
+          {/* Pagination Controls */}
+          {contracts.filter(c => {
+            if (!contractStatusFilter) return true;
+            return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+          }).length > 0 && (
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body2" color="black">Rows per page:</Typography>
+                <TextField
+                  select
+                  size="small"
+                  value={rowsPerPage}
+                  onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                  sx={{ width: 80 }}
+                >
+                  <MenuItem value={5}>5</MenuItem>
+                  <MenuItem value={10}>10</MenuItem>
+                  <MenuItem value={25}>25</MenuItem>
+                  <MenuItem value={50}>50</MenuItem>
+                  <MenuItem value={100}>100</MenuItem>
+                </TextField>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="black">
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, contracts.filter(c => {
+                    if (!contractStatusFilter) return true;
+                    return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+                  }).length)} of {contracts.filter(c => {
+                    if (!contractStatusFilter) return true;
+                    return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+                  }).length}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage === 0}
+                    onClick={() => handleChangePage(currentPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={currentPage >= Math.ceil(contracts.filter(c => {
+                      if (!contractStatusFilter) return true;
+                      return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
+                    }).length / rowsPerPage) - 1}
+                    onClick={() => handleChangePage(currentPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </Box>
+              </Box>
+            </Box>
           )}
         </TabPanel>
 
@@ -1821,7 +2613,8 @@ The exporter can reapply once all requirements are met.`,
             return dataToShow.length === 0 ? (
               <Alert severity="info">No inspection records to display</Alert>
             ) : (
-              <TableContainer component={Paper}>
+              <>
+                <TableContainer component={Paper}>
                 <Table>
                   <TableHead>
                     <TableRow>
@@ -1836,7 +2629,7 @@ The exporter can reapply once all requirements are met.`,
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {dataToShow.map((item: any, index) => {
+                    {getPaginatedData(dataToShow).map((item: any, index) => {
                       const isShipment = isPendingShipment(item);
                       const itemId = isShipment ? item.shipmentId : (item.inspectionID || item.InspectionID);
                       const shipmentId = isShipment ? item.shipmentId : (item.shipmentID || item.ShipmentID);
@@ -1943,6 +2736,52 @@ The exporter can reapply once all requirements are met.`,
                   </TableBody>
                 </Table>
               </TableContainer>
+
+              {/* Pagination Controls */}
+              {dataToShow.length > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="black">Rows per page:</Typography>
+                    <TextField
+                      select
+                      size="small"
+                      value={rowsPerPage}
+                      onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                      sx={{ width: 80 }}
+                    >
+                      <MenuItem value={5}>5</MenuItem>
+                      <MenuItem value={10}>10</MenuItem>
+                      <MenuItem value={25}>25</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                      <MenuItem value={100}>100</MenuItem>
+                    </TextField>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Typography variant="body2" color="black">
+                      Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, dataToShow.length)} of {dataToShow.length}
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage === 0}
+                        onClick={() => handleChangePage(currentPage - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={currentPage >= Math.ceil(dataToShow.length / rowsPerPage) - 1}
+                        onClick={() => handleChangePage(currentPage + 1)}
+                      >
+                        Next
+                      </Button>
+                    </Box>
+                  </Box>
+                </Box>
+              )}
+            </>
             );
           })()}
         </TabPanel>
@@ -1967,13 +2806,13 @@ The exporter can reapply once all requirements are met.`,
                 </TableRow>
               </TableHead>
               <TableBody>
-                {exporters
+                {getPaginatedData(exporters
                   .filter(e => {
                     const expiryDate = new Date(e.licenseExpiryDate);
                     const threeMonthsFromNow = new Date();
                     threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
                     return expiryDate <= threeMonthsFromNow;
-                  })
+                  }))
                   .map((exporter) => {
                     const daysRemaining = Math.ceil(
                       (new Date(exporter.licenseExpiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
@@ -2036,11 +2875,81 @@ The exporter can reapply once all requirements are met.`,
               </TableBody>
             </Table>
           </TableContainer>
+
+          {/* Pagination Controls */}
+          {(() => {
+            const expiringExporters = exporters.filter(e => {
+              const expiryDate = new Date(e.licenseExpiryDate);
+              const threeMonthsFromNow = new Date();
+              threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+              return expiryDate <= threeMonthsFromNow;
+            });
+            
+            return expiringExporters.length > 0 && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="black">Rows per page:</Typography>
+                  <TextField
+                    select
+                    size="small"
+                    value={rowsPerPage}
+                    onChange={(e) => handleChangeRowsPerPage(parseInt(e.target.value))}
+                    sx={{ width: 80 }}
+                  >
+                    <MenuItem value={5}>5</MenuItem>
+                    <MenuItem value={10}>10</MenuItem>
+                    <MenuItem value={25}>25</MenuItem>
+                    <MenuItem value={50}>50</MenuItem>
+                    <MenuItem value={100}>100</MenuItem>
+                  </TextField>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="black">
+                    Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, expiringExporters.length)} of {expiringExporters.length}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={currentPage === 0}
+                      onClick={() => handleChangePage(currentPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={currentPage >= Math.ceil(expiringExporters.length / rowsPerPage) - 1}
+                      onClick={() => handleChangePage(currentPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </Box>
+                </Box>
+              </Box>
+            );
+          })()}
         </TabPanel>
 
         <TabPanel value={tabValue} index={5}>
+          {/* Analytics Tab */}
+          <AnalyticsDashboard />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={7}>
+          {/* Audit Trail Tab */}
+          <AuditTrailTable
+            title="ECTA Portal - Complete Transaction History"
+            autoRefresh={true}
+            refreshInterval={60000}
+            showStats={false}
+            maxHeight={700}
+          />
         </TabPanel>
 
         <TabPanel value={tabValue} index={7}>
@@ -2832,11 +3741,211 @@ The exporter can reapply once all requirements are met.`,
         />
       )}
 
+      {/* Contract Details Dialog */}
+      <Dialog 
+        open={contractDetailsDialogOpen} 
+        onClose={() => setContractDetailsDialogOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Description />
+          Contract Details
+        </DialogTitle>
+        <DialogContent>
+          {selectedContract && (
+            <Box>
+              {/* Contract Information */}
+              <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+                  Contract Information
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Contract ID</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {selectedContract.contractID || selectedContract.contractId}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Status</Typography>
+                    <Box sx={{ mt: 0.5 }}>
+                      <StatusChip 
+                        status={selectedContract.contractStatus === 'REGISTERED' ? 'pending' : selectedContract.contractStatus === 'APPROVED' ? 'approved' : 'rejected'}
+                        label={selectedContract.contractStatus}
+                        brandColor={BRAND_COLOR}
+                      />
+                    </Box>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Registration Date</Typography>
+                    <Typography variant="body2">{new Date(selectedContract.registrationDate).toLocaleDateString()}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">EUDR Required</Typography>
+                    <Box sx={{ mt: 0.5 }}>
+                      {selectedContract.eudrRequired ? (
+                        <Chip icon={<CheckCircle />} label="Yes" size="small" color="success" />
+                      ) : (
+                        <Chip label="No" size="small" color="default" />
+                      )}
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Parties Information */}
+              <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+                  Parties
+                </Typography>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2" color="primary" gutterBottom>Exporter (Seller)</Typography>
+                    <Typography variant="body2"><strong>ID:</strong> {selectedContract.exporterId || selectedContract.exporterID}</Typography>
+                    {(selectedContract.exporterBank || selectedContract.ExporterBank) && (
+                      <Typography variant="body2"><strong>Bank:</strong> {selectedContract.exporterBank || selectedContract.ExporterBank}</Typography>
+                    )}
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2" color="primary" gutterBottom>Buyer</Typography>
+                    <Typography variant="body2"><strong>Name:</strong> {selectedContract.buyerId || selectedContract.buyerID}</Typography>
+                    <Typography variant="body2"><strong>Country:</strong> {selectedContract.buyerCountry}</Typography>
+                    {(selectedContract.buyerBank || selectedContract.BuyerBank) && (
+                      <Typography variant="body2"><strong>Bank:</strong> {selectedContract.buyerBank || selectedContract.BuyerBank}</Typography>
+                    )}
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Product & Pricing */}
+              <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+                  Product & Pricing
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Coffee Type</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{selectedContract.coffeeType}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Quantity</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{selectedContract.quantity?.toLocaleString()} kg</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Price per Kg</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{selectedContract.currency} {selectedContract.pricePerKg?.toLocaleString()}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="caption" color="text.secondary">Total Value</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                      {selectedContract.currency} {(selectedContract.quantity * selectedContract.pricePerKg)?.toLocaleString()}
+                    </Typography>
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Documents */}
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Description fontSize="small" />
+                  Contract Documents
+                </Typography>
+                {docsLoading ? (
+                  <Typography variant="body2" color="text.secondary">Loading documents...</Typography>
+                ) : contractDocs.length === 0 ? (
+                  <Alert severity="info">
+                    No documents have been uploaded for this contract yet.
+                  </Alert>
+                ) : (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Document Type</TableCell>
+                          <TableCell>Filename</TableCell>
+                          <TableCell>Size</TableCell>
+                          <TableCell>Uploaded</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align="right">Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {contractDocs.map((doc: any) => (
+                          <TableRow key={doc.document_id}>
+                            <TableCell>
+                              <Chip 
+                                label={doc.document_type?.replace(/_/g, ' ')} 
+                                size="small" 
+                                variant="outlined"
+                              />
+                            </TableCell>
+                            <TableCell>{doc.file_name || doc.filename}</TableCell>
+                            <TableCell>{doc.file_size ? `${(doc.file_size / 1024).toFixed(0)} KB` : (doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A')}</TableCell>
+                            <TableCell>{new Date(doc.uploaded_at).toLocaleDateString()}</TableCell>
+                            <TableCell>
+                              <Chip 
+                                size="small" 
+                                label={doc.verification_status || 'Pending'} 
+                                color={doc.verification_status === 'verified' ? 'success' : 'default'}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<Visibility />}
+                                onClick={() => handleViewDocument(doc.document_id)}
+                              >
+                                View
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </Paper>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setContractDetailsDialogOpen(false)}>
+            Close
+          </Button>
+          {selectedContract?.contractStatus === 'REGISTERED' && (
+            <>
+              <Button 
+                variant="contained" 
+                color="error"
+                onClick={() => {
+                  setContractDetailsDialogOpen(false);
+                  setContractRejectDialogOpen(true);
+                }}
+              >
+                Reject Contract
+              </Button>
+              <Button 
+                variant="contained" 
+                sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
+                onClick={() => {
+                  setContractDetailsDialogOpen(false);
+                  setContractApprovalDialogOpen(true);
+                }}
+              >
+                Approve Contract
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+
       {/* Contract Approval Dialog */}
       <Dialog 
         open={contractApprovalDialogOpen} 
         onClose={() => setContractApprovalDialogOpen(false)}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
         <DialogTitle>Approve Contract for Export</DialogTitle>
@@ -2849,32 +3958,97 @@ The exporter can reapply once all requirements are met.`,
                 This will approve the contract for export and allow banks to issue LC. Forex is allocated separately.
               </Alert>
               
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Contract ID:</strong> {selectedContract.contractID || selectedContract.contractId}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Exporter:</strong> {selectedContract.exporterID || selectedContract.exporterId}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Buyer:</strong> {selectedContract.buyerID || selectedContract.buyerId} ({selectedContract.buyerCountry})
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Coffee Type:</strong> {selectedContract.coffeeType}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Quantity:</strong> {selectedContract.quantity?.toLocaleString()} kg
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Price:</strong> {selectedContract.currency} {selectedContract.pricePerKg}/kg
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Total Value:</strong> {selectedContract.currency} {(selectedContract.quantity * selectedContract.pricePerKg).toLocaleString()}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>EUDR Required:</strong> {selectedContract.eudrRequired ? 'Yes' : 'No'}
+              <Grid container spacing={2} sx={{ mb: 2 }}>
+                <Grid item xs={6}>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Contract ID:</strong> {selectedContract.contractID || selectedContract.contractId}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Exporter:</strong> {selectedContract.exporterID || selectedContract.exporterId}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Buyer:</strong> {selectedContract.buyerID || selectedContract.buyerId}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Buyer Country:</strong> {selectedContract.buyerCountry}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Coffee Type:</strong> {selectedContract.coffeeType}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Quantity:</strong> {selectedContract.quantity?.toLocaleString()} kg
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Price:</strong> {selectedContract.currency} {selectedContract.pricePerKg}/kg
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    <strong>Total Value:</strong> {selectedContract.currency} {(selectedContract.quantity * selectedContract.pricePerKg).toLocaleString()}
+                  </Typography>
+                </Grid>
+              </Grid>
+              
+              <Divider sx={{ my: 2 }} />
+              
+              {/* Contract Documents Section */}
+              <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Description fontSize="small" />
+                Required Documents
               </Typography>
               
-              <Alert severity="warning" sx={{ mt: 2 }}>
+              <Box sx={{ mb: 2 }}>
+                {docsLoading ? (
+                  <Typography variant="body2" color="text.secondary">Loading documents...</Typography>
+                ) : contractDocs.length === 0 ? (
+                  <Alert severity="warning" sx={{ mb: 1 }}>
+                    No documents uploaded for this contract. Consider requesting documents before approval.
+                  </Alert>
+                ) : (
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Document Type</TableCell>
+                          <TableCell>Filename</TableCell>
+                          <TableCell>Uploaded</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align="right">Action</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {contractDocs.map((doc: any) => (
+                          <TableRow key={doc.document_id}>
+                            <TableCell>{doc.document_type?.replace(/_/g, ' ')}</TableCell>
+                            <TableCell>{doc.filename}</TableCell>
+                            <TableCell>{new Date(doc.uploaded_at).toLocaleDateString()}</TableCell>
+                            <TableCell>
+                              <Chip 
+                                size="small" 
+                                label={doc.verification_status || 'Pending'} 
+                                color={doc.verification_status === 'verified' ? 'success' : 'default'}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              <Button
+                                size="small"
+                                startIcon={<Visibility />}
+                                onClick={() => handleViewDocument(doc.document_id)}
+                              >
+                                View
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </Box>
+              
+              <Divider sx={{ my: 2 }} />
+              
+              <Alert severity="warning">
                 <Typography variant="body2">
                   By approving this contract, you confirm that:
                 </Typography>
@@ -2883,6 +4057,7 @@ The exporter can reapply once all requirements are met.`,
                   <Typography component="li" variant="body2">Quality standards are verified</Typography>
                   <Typography component="li" variant="body2">Exporter has valid license</Typography>
                   <Typography component="li" variant="body2">Minimum FOB price requirements are met</Typography>
+                  <Typography component="li" variant="body2">All required documents have been reviewed</Typography>
                 </Box>
               </Alert>
             </>

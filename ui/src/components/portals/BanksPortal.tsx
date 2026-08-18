@@ -60,8 +60,17 @@ import {
   Message as MessageOutlined,
   Send as SendOutlined,
   Person,
+  Assessment,
+  People,
+  PersonAdd,
+  Security,
+  AdminPanelSettings,
+  Timeline,
+  VerifiedUser,
+  AccountTree,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
+import AuditTrailTable from './AuditTrailTable';
 import DocumentVerificationPanel from './DocumentVerificationPanel';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
@@ -83,11 +92,13 @@ import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
 import { PaymentMethodTab } from './PaymentMethodTab';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
+import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 
 interface SalesContract {
   contractId: string;
-  nbeReferenceNumber: string;
+  nbeReferenceNumber?: string;
   exporterId: string;
+  buyerId?: string;        // Buyer ID
   buyerName: string;
   buyerCountry: string;
   buyerBank?: string;      // Issuing bank (buyer's bank)
@@ -307,6 +318,18 @@ const BanksPortal: React.FC = () => {
   const [showAuditTrail, setShowAuditTrail] = useState(false);
   const [auditEntityType, setAuditEntityType] = useState<'LC' | 'PAYMENT' | 'FOREX'>('LC');
   const [auditEntityId, setAuditEntityId] = useState<string>('');
+  const [auditStats, setAuditStats] = useState({
+    totalActivities: 0,
+    todaysActions: 0,
+    blockchainVerified: 0,
+    organizationsInvolved: 0,
+  });
+  const [userStats, setUserStats] = useState({
+    totalUsers: 0,
+    activeUsers: 0,
+    bankRoles: 0,
+    administrators: 0,
+  });
 
   // Search and Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -334,7 +357,9 @@ const BanksPortal: React.FC = () => {
       { index: 2, label: 'SWIFT Messages', icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
       { index: 3, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
       { index: 4, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
-      { index: 5, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
+      { index: 5, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
+      { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
+      { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -373,6 +398,40 @@ const BanksPortal: React.FC = () => {
     loadBankingData();
   }, []);
 
+  // Auto-fill LC form when dialog opens with a selected contract
+  useEffect(() => {
+    if (dialogOpen && dialogType === 'lc' && selectedContract) {
+      const userOrg = user?.organization || 'Commercial Bank of Ethiopia';
+      
+      let issuingBankValue = selectedContract.buyerBank || '';
+      if (!issuingBankValue && selectedContract.buyerName && selectedContract.buyerCountry) {
+        issuingBankValue = `${selectedContract.buyerName}'s Bank (${selectedContract.buyerCountry})`;
+      }
+      
+      const advisingBankValue = selectedContract.exporterBank || userOrg;
+      
+      const formData = {
+        issuingBank: issuingBankValue,
+        advisingBank: advisingBankValue,
+        beneficiary: selectedContract.exporterId || '',
+        terms: 'Payment against shipping documents as per UCP 600',
+        expiryDays: '90',
+      };
+      
+      console.log('[useEffect] Auto-filling LC form:', formData);
+      setLcForm(formData);
+    }
+  }, [dialogOpen, dialogType, selectedContract]);
+
+  // Load audit stats when Audit Trail tab is active
+  useEffect(() => {
+    if (activeTab === 7) {
+      loadAuditStats();
+    } else if (activeTab === 6) {
+      loadUserStats();
+    }
+  }, [activeTab]);
+
   const loadBankingData = async () => {
     const token = localStorage.getItem('authToken');
     if (!token) {
@@ -396,32 +455,52 @@ const BanksPortal: React.FC = () => {
       let nbeApprovedContracts: any[] = [];
       
       if (contractsResult.success) {
-        // Filter for NBE-approved contracts
-        nbeApprovedContracts = contractsResult.data.filter((c: any) => 
-          c.contractStatus === 'NBE_APPROVED' || c.contractStatus === 'APPROVED'
-        );
+        // Debug: Log all contract statuses
+        console.log('[BANKS] 🔍 All contracts from API:');
+        contractsResult.data.forEach((c: any, idx: number) => {
+          console.log(`  [${idx + 1}] ID: ${c.contractId || c.contractID}, status: "${c.status}", contractStatus: "${c.contractStatus}"`);
+        });
+        
+        // Filter for APPROVED contracts (ECTA-approved)
+        // Check BOTH status and contractStatus fields since API returns both
+        nbeApprovedContracts = contractsResult.data.filter((c: any) => {
+          const statusCheck = c.status === 'APPROVED' || c.status === 'NBE_APPROVED';
+          const contractStatusCheck = c.contractStatus === 'APPROVED' || c.contractStatus === 'NBE_APPROVED';
+          return statusCheck || contractStatusCheck;
+        });
         
         console.log(`[BANKS] Total contracts: ${contractsResult.data.length}`);
-        console.log(`[BANKS] ✅ NBE-approved contracts: ${nbeApprovedContracts.length}`);
+        console.log(`[BANKS] ✅ ECTA-approved contracts ready for LC issuance: ${nbeApprovedContracts.length}`);
         
         setContracts(nbeApprovedContracts.map((c: any) => {
           const mappedContract = {
             contractId: c.contractID || c.contractId,
-            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber,
+            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || undefined,
             exporterId: c.exporterID || c.exporterId,
-            buyerName: c.buyerID || c.buyerId,
-            buyerCountry: c.buyerCountry,
-            buyerBank: c.buyerBank || c.BuyerBank || '',
-            exporterBank: c.exporterBank || c.ExporterBank || '',
-            coffeeType: c.coffeeType,
-            quantity: c.quantity,
-            pricePerKg: c.pricePerKg,
-            totalValue: c.totalValue,
-            currency: c.currency,
-            status: c.contractStatus,
-            registrationDate: c.registrationDate,
-            approvalDate: c.approvalDate,
+            buyerId: c.buyerID || c.buyerId,
+            buyerName: c.buyerName || c.BuyerName || c.buyerID || c.buyerId, // Use buyerID as fallback if buyerName not available
+            buyerCountry: c.buyerCountry || c.BuyerCountry,
+            buyerBank: c.buyerBank || c.BuyerBank || undefined,
+            exporterBank: c.exporterBank || c.ExporterBank || undefined,
+            coffeeType: c.coffeeType || c.CoffeeType,
+            quantity: c.quantity || c.Quantity,
+            pricePerKg: c.pricePerKg || c.PricePerKg,
+            totalValue: c.totalValue || c.TotalValue,
+            currency: c.currency || c.Currency,
+            status: c.contractStatus || c.status,
+            registrationDate: c.registrationDate || c.registeredAt,
+            approvalDate: c.approvalDate || c.approvedAt,
           };
+          console.log('[BANKS] 🔍 Mapped contract:', mappedContract.contractId, {
+            buyerId: mappedContract.buyerId,
+            buyerName: mappedContract.buyerName,
+            buyerCountry: mappedContract.buyerCountry,
+            buyerBank: mappedContract.buyerBank,
+            nbeReferenceNumber: mappedContract.nbeReferenceNumber,
+            coffeeType: mappedContract.coffeeType,
+            quantity: mappedContract.quantity,
+            totalValue: mappedContract.totalValue
+          });
           return mappedContract;
         }));
       }
@@ -451,20 +530,21 @@ const BanksPortal: React.FC = () => {
           
           setLetterOfCredits(allLCs);
           console.log(`[BANKS] ✅ Letters of Credit loaded: ${allLCs.length}`);
+          console.log(`[BANKS] ℹ️  State should now have ${allLCs.length} LCs for Tab 0 KPI card`);
           
           // Filter LCs for Document Examination (status: DOCUMENTS_SUBMITTED)
           const forExamination = allLCs.filter((lc: any) => 
             lc.status === 'DOCUMENTS_SUBMITTED' || lc.status === 'UNDER_EXAMINATION'
           );
           setLcsForExamination(forExamination);
-          console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length}`);
+          console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length} (Tab 3 KPI)`);
           
           // Filter LCs for Payment Release (status: DOCUMENTS_VERIFIED)
           const forPaymentRelease = allLCs.filter((lc: any) => 
             lc.status === 'DOCUMENTS_VERIFIED' || lc.status === 'DOCUMENTS_ACCEPTED'
           );
           setLcsForPaymentRelease(forPaymentRelease);
-          console.log(`[BANKS] 💰 LCs ready for payment release: ${forPaymentRelease.length}`);
+          console.log(`[BANKS] 💰 LCs ready for payment release: ${forPaymentRelease.length} (Tab 4 KPI)`);
         }
       } catch (err) {
         console.error('[BANKS] ❌ Failed to load Letters of Credit:', err);
@@ -477,7 +557,7 @@ const BanksPortal: React.FC = () => {
         });
         const forexResult = await forexResponse.json();
         if (forexResult.success) {
-          setForexAllocations(forexResult.data.map((f: any) => ({
+          const mappedForex = forexResult.data.map((f: any) => ({
             forexId: f.forexId || f.ForexID,
             contractId: f.contractId || f.ContractID,
             exporterId: f.exporterId || f.ExporterID,
@@ -489,8 +569,10 @@ const BanksPortal: React.FC = () => {
             retentionRate: Number(f.retentionRate ?? f.RetentionRate) || 0,
             status: f.status || f.Status,
             expiryDate: f.expiryDate || f.ExpiryDate,
-          })));
-          console.log(`[BANKS] ✅ Forex allocations loaded: ${forexResult.data.length}`);
+          }));
+          setForexAllocations(mappedForex);
+          console.log(`[BANKS] ✅ Forex allocations loaded: ${forexResult.data.length} (Tab 1 KPI)`);
+          console.log(`[BANKS] ℹ️  State should now have ${mappedForex.length} forex allocations for Tab 1 KPI card`);
         }
       } catch (err) {
         console.warn('[BANKS] Could not load forex allocations:', err);
@@ -540,7 +622,8 @@ const BanksPortal: React.FC = () => {
         const consignmentsResult = await consignmentsResponse.json();
         if (consignmentsResult.success) {
           setConsignments(Array.isArray(consignmentsResult.data) ? consignmentsResult.data : []);
-          console.log(`[BANKS] Consignments loaded: ${consignmentsResult.data?.length || 0}`);
+          console.log(`[BANKS] Consignments loaded: ${consignmentsResult.data?.length || 0} (Tab 0 KPI)`);
+          console.log(`[BANKS] ℹ️  State should now have ${consignmentsResult.data?.length || 0} consignments for Tab 0 KPI card`);
         }
       } catch (err) {
         console.warn('Could not load consignments:', err);
@@ -567,17 +650,24 @@ const BanksPortal: React.FC = () => {
 
       console.log(`\n[BANKS] ═══════════════════════════════════════════════════`);
       console.log(`[BANKS] 📊 Data Loading Summary:`);
-      console.log(`[BANKS] ✅ NBE-Approved Contracts: ${nbeApprovedContracts?.length || 0}`);
-      console.log(`[BANKS] ✅ Letters of Credit: ${letterOfCredits.length}`);
-      console.log(`[BANKS] ✅ Forex Allocations: ${forexAllocations.length}`);
+      console.log(`[BANKS] ✅ ECTA-Approved Contracts (ready for LC): ${nbeApprovedContracts?.length || 0}`);
+      console.log(`[BANKS] ✅ Letters of Credit: ${letterOfCredits.length} (Tab 0 KPI)`);
+      console.log(`[BANKS] ✅ Forex Allocations: ${forexAllocations.length} (Tab 1 KPI)`);
       console.log(`[BANKS] ✅ Export Permits: ${exportPermits.length}`);
-      console.log(`[BANKS] ✅ Consignments: ${consignments.length}`);
-      console.log(`[BANKS] 📋 LCs for Document Examination: ${lcsForExamination.length}`);
-      console.log(`[BANKS] 💰 LCs for Payment Release: ${lcsForPaymentRelease.length}`);
-      console.log(`[BANKS] � Pending Document Verifications: ${pendingDocuments.length}`);
-      console.log(`[BANKS] ⏳ Documentary Collections (CAD): ${documentaryCollections.length} (Phase 2)`);
-      console.log(`[BANKS] ⏳ Advance Payments: ${advancePayments.length} (Phase 2)`);
+      console.log(`[BANKS] ✅ Consignments: ${consignments.length} (Tab 0 KPI)`);
+      console.log(`[BANKS] 📋 LCs for Document Examination: ${lcsForExamination.length} (Tab 3 KPI)`);
+      console.log(`[BANKS] 💰 LCs for Payment Release: ${lcsForPaymentRelease.length} (Tab 4 KPI)`);
+      console.log(`[BANKS] 📄 Pending Document Verifications: ${pendingDocuments.length}`);
+      console.log(`[BANKS] ⏳ Documentary Collections (CAD): ${documentaryCollections.length} (Tab 0 KPI - Phase 2)`);
+      console.log(`[BANKS] ⏳ Advance Payments: ${advancePayments.length} (Tab 0 KPI - Phase 2)`);
+      console.log(`[BANKS] ✅ SWIFT Messages: ${swiftMessages.length} (Tab 2 KPI)`);
       console.log(`[BANKS] ═══════════════════════════════════════════════════\n`);
+      
+      console.log(`[BANKS] 🎯 Tab 0 KPI Values Will Be:`);
+      console.log(`  - Letter of Credit: ${letterOfCredits.length}`);
+      console.log(`  - Documentary Collection: ${documentaryCollections.length}`);
+      console.log(`  - Advance Payment: ${advancePayments.length}`);
+      console.log(`  - Consignment: ${consignments.length}`);
 
       // Load SWIFT Statistics from /swift/statistics endpoint
       try {
@@ -601,7 +691,8 @@ const BanksPortal: React.FC = () => {
         const swiftMessagesResult = await swiftMessagesResponse.json();
         if (swiftMessagesResult.success) {
           setSwiftMessages(swiftMessagesResult.data || []);
-          console.log(`[BANKS] ✅ SWIFT messages loaded: ${swiftMessagesResult.data?.length || 0}`);
+          console.log(`[BANKS] ✅ SWIFT messages loaded: ${swiftMessagesResult.data?.length || 0} (Tab 2 KPI)`);
+          console.log(`[BANKS] ℹ️  State should now have ${swiftMessagesResult.data?.length || 0} messages for Tab 2 KPI card`);
         }
       } catch (err) {
         console.warn('[BANKS] Could not load SWIFT messages:', err);
@@ -613,6 +704,87 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  const loadUserStats = async () => {
+    try {
+      const response = await apiFetch('/users', {
+        headers: getAuthHeaders()
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        const users = data.data || [];
+        
+        const totalUsers = users.length;
+        const activeUsers = users.filter((u: any) => u.is_active === true || u.status === 'active').length;
+        const bankRoles = users.filter((u: any) => {
+          const role = (u.role || '').toUpperCase();
+          const org = (u.organization || '').toUpperCase();
+          return role.includes('BANK') || org.includes('BANK');
+        }).length;
+        const administrators = users.filter((u: any) => {
+          const role = (u.role || '').toUpperCase();
+          const username = (u.username || '').toLowerCase();
+          const fullName = (u.full_name || '').toLowerCase();
+          return role === 'ADMIN' || username.includes('admin') || fullName.includes('admin');
+        }).length;
+        
+        setUserStats({
+          totalUsers,
+          activeUsers,
+          bankRoles,
+          administrators,
+        });
+      }
+    } catch (error) {
+      console.error('[BANKS] Failed to load user stats:', error);
+    }
+  };
+
+  const loadAuditStats = async () => {
+    try {
+      const response = await apiFetch('/audit/portal/recent?limit=1000', {
+        headers: getAuthHeaders()
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        const logs = data.data.logs || [];
+        
+        // Calculate stats
+        const totalActivities = logs.length;
+        
+        // Count activities in last 24 hours
+        const todaysActions = logs.filter((log: any) => {
+          const logDate = new Date(log.created_at);
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+          return logDate >= oneDayAgo;
+        }).length;
+        
+        // Count blockchain verified activities
+        const blockchainVerified = logs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        
+        // Count unique organizations
+        const organizationsInvolved = new Set(
+          logs.map((log: any) => log.performed_by_org).filter(Boolean)
+        ).size;
+        
+        setAuditStats({
+          totalActivities,
+          todaysActions,
+          blockchainVerified,
+          organizationsInvolved,
+        });
+      }
+    } catch (error) {
+      console.error('[BANKS] Failed to load audit stats:', error);
+    }
+  };
+
   const handleOpenDialog = (type: 'lc' | 'forex' | 'permit', contract: SalesContract) => {
     console.log('=== LC Dialog Opening ===');
     console.log('Contract data:', {
@@ -620,6 +792,8 @@ const BanksPortal: React.FC = () => {
       exporterId: contract.exporterId,
       buyerBank: contract.buyerBank,
       exporterBank: contract.exporterBank,
+      buyerName: contract.buyerName,
+      buyerCountry: contract.buyerCountry,
       totalValue: contract.totalValue,
       currency: contract.currency
     });
@@ -629,22 +803,37 @@ const BanksPortal: React.FC = () => {
     
     // Auto-fill LC form with contract data
     if (type === 'lc') {
+      // Get logged-in bank user's organization for advising bank
+      const userOrg = user?.organization || 'Commercial Bank of Ethiopia';
+      
+      // For issuing bank: use contract's buyer bank if available, otherwise construct from buyer info
+      let issuingBankValue = contract.buyerBank || '';
+      if (!issuingBankValue && contract.buyerName && contract.buyerCountry) {
+        issuingBankValue = `${contract.buyerName}'s Bank (${contract.buyerCountry})`;
+      }
+      
+      // For advising bank: use contract's exporter bank if available, otherwise use user's org
+      const advisingBankValue = contract.exporterBank || userOrg;
+      
       const formData = {
-        issuingBank: contract.buyerBank || '',
-        advisingBank: contract.exporterBank || '',
+        issuingBank: issuingBankValue,
+        advisingBank: advisingBankValue,
         beneficiary: contract.exporterId || '',
         terms: 'Payment against shipping documents as per UCP 600',
         expiryDays: '90',
       };
+      
       console.log('Auto-filling LC form with data:', formData);
+      console.log('User organization:', userOrg);
       
-      // Add warning if banks are missing (old contract)
-      if (!contract.buyerBank || !contract.exporterBank) {
-        console.warn('⚠️ Contract missing bank data - this is likely an OLD contract created before bank fields were added');
-        console.warn('Create a NEW contract to test the auto-fill feature with bank data');
-      }
-      
+      // Set form data immediately
       setLcForm(formData);
+      
+      // Also set after a brief delay to ensure state updates
+      setTimeout(() => {
+        setLcForm(formData);
+        console.log('[DEBUG] LC form state updated:', formData);
+      }, 50);
     }
     
     setDialogOpen(true);
@@ -751,9 +940,9 @@ const BanksPortal: React.FC = () => {
           details: contract ? `Contract ${contract.contractId} found and verified` : 'Contract not found in system'
         },
         {
-          label: 'NBE Approval',
+          label: 'ECTA Approval',
           status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-          details: contract?.status === 'NBE_APPROVED' ? 'Contract approved by NBE' : `Current status: ${contract?.status || 'Unknown'}`
+          details: contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED' ? 'Contract approved by ECTA' : `Current status: ${contract?.status || 'Unknown'}`
         },
         {
           label: 'Amount Verification',
@@ -812,13 +1001,22 @@ const BanksPortal: React.FC = () => {
       additionalInfo: lc.status === 'REQUESTED' ? 
         'This LC is pending approval. Review all details carefully before proceeding.' :
         lc.status === 'ISSUED' ?
-        'This LC has been issued and is active. Exporter can proceed with shipment preparation.' :
+        'This LC has been issued and is active. Bank should allocate forex for this LC. After forex allocation, exporter can proceed with shipment.' :
         'Review LC details and current status.'
     });
     setValidationDialogOpen(true);
   };
 
   const handleViewContractDetails = async (contract: SalesContract) => {
+    console.log('[BANKS] 📄 handleViewContractDetails called with contract:', {
+      contractId: contract.contractId,
+      buyerName: contract.buyerName,
+      buyerId: contract.buyerId,
+      coffeeType: contract.coffeeType,
+      quantity: contract.quantity,
+      totalValue: contract.totalValue,
+    });
+    
     setSelectedContract(contract);
     
     // Fetch real documents for this contract
@@ -827,6 +1025,7 @@ const BanksPortal: React.FC = () => {
     
     if (token) {
       try {
+        console.log('[BANKS] 📄 Fetching documents for contract:', contract.contractId);
         const response = await apiFetch(`/documents/entity/CONTRACT/${contract.contractId}`, {
           method: 'GET',
           headers: {
@@ -836,25 +1035,33 @@ const BanksPortal: React.FC = () => {
         });
         
         const result = await response.json();
-        if (result.success && result.data) {
-          contractDocuments = result.data.map((doc: any) => ({
-            id: doc.documentId || doc.id,
-            name: doc.filename || doc.name,
-            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
-            status: 'AVAILABLE',
-            url: `/api/v1/documents/${doc.documentId || doc.id}`,
-            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
-            category: doc.category || 'CONTRACT_DOCUMENT',
-          }));
+        console.log('[BANKS] 📄 Documents API response:', { success: result.success, dataLength: result.data?.length });
+        
+        if (result.success && result.data && Array.isArray(result.data)) {
+          console.log('[BANKS] 📄 Raw documents from API:', result.data);
+          contractDocuments = result.data.map((doc: any) => {
+            const docId = doc.document_id || doc.documentId || doc.id;
+            return {
+              id: docId,
+              name: doc.file_name || doc.filename || doc.name,
+              type: (doc.mime_type || doc.mimeType || 'application/pdf').split('/')[1]?.toUpperCase() || 'PDF',
+              status: 'AVAILABLE',
+              url: `/api/v1/documents/${docId}/view`, // ✅ Fixed: Add /view to the URL
+              uploadedDate: doc.uploaded_at || doc.uploadedAt ? new Date(doc.uploaded_at || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+              size: doc.file_size || doc.size ? `${((doc.file_size || doc.size) / 1024).toFixed(0)} KB` : 'N/A',
+              category: doc.document_type || doc.category || 'CONTRACT_DOCUMENT',
+            };
+          });
+          console.log('[BANKS] 📄 Mapped documents:', contractDocuments);
         }
       } catch (error) {
-        console.error('Error fetching contract documents:', error);
+        console.error('[BANKS] ❌ Error fetching contract documents:', error);
       }
     }
     
     // If no documents found, provide standard required documents list
     if (contractDocuments.length === 0) {
+      console.log('[BANKS] ⚠️  No documents found for contract, showing MISSING placeholders');
       contractDocuments = [
         { id: '1', name: 'Sales Contract (Signed)', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
         { id: '2', name: 'Commercial Invoice', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
@@ -870,24 +1077,25 @@ const BanksPortal: React.FC = () => {
       title: `Contract Details - ${contract.contractId}`,
       summary: [
         { label: 'Contract ID', value: contract.contractId },
-        { label: 'NBE Reference', value: contract.nbeReferenceNumber },
+        ...(contract.nbeReferenceNumber ? [{ label: 'ECTA Reference', value: contract.nbeReferenceNumber }] : []),
         { label: 'Exporter', value: contract.exporterId },
-        { label: 'Buyer', value: contract.buyerName },
+        { label: 'Buyer ID', value: contract.buyerId || 'N/A' },
+        { label: 'Buyer Name', value: contract.buyerName || contract.buyerId || 'N/A' },
         { label: 'Buyer Country', value: contract.buyerCountry },
-        { label: 'Buyer Bank', value: contract.buyerBank || 'N/A' },
-        { label: 'Exporter Bank', value: contract.exporterBank || 'Commercial Bank of Ethiopia' },
+        ...(contract.buyerBank ? [{ label: 'Buyer Bank', value: contract.buyerBank }] : []),
+        ...(contract.exporterBank ? [{ label: 'Exporter Bank', value: contract.exporterBank }] : []),
         { label: 'Coffee Type', value: contract.coffeeType },
-        { label: 'Quantity', value: `${contract.quantity.toLocaleString()} kg` },
-        { label: 'Price per Kg', value: `$${contract.pricePerKg}` },
-        { label: 'Total Value', value: `$${contract.totalValue.toLocaleString()} ${contract.currency}` },
+        { label: 'Quantity', value: `${contract.quantity?.toLocaleString() || 0} kg` },
+        { label: 'Price per Kg', value: `$${contract.pricePerKg || 0}` },
+        { label: 'Total Value', value: `$${contract.totalValue?.toLocaleString() || 0} ${contract.currency}` },
         { label: 'Status', value: contract.status },
-        { label: 'Registration Date', value: new Date(contract.registrationDate).toLocaleDateString() },
+        { label: 'Registration Date', value: contract.registrationDate ? new Date(contract.registrationDate).toLocaleDateString() : 'N/A' },
       ],
       prerequisites: [
         {
-          label: 'NBE Approval',
+          label: 'ECTA Approval',
           status: (contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-          details: contract.status === 'NBE_APPROVED' ? 'Contract approved by National Bank of Ethiopia' : `Current status: ${contract.status}`
+          details: contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED' ? 'Contract approved by ECTA for export compliance' : `Current status: ${contract.status}`
         },
         {
           label: 'Exporter License',
@@ -933,10 +1141,10 @@ const BanksPortal: React.FC = () => {
           details: 'Complies with Ethiopian export regulations and coffee quality standards'
         },
       ],
-      additionalInfo: contract.status === 'NBE_APPROVED' ? 
-        'Contract is approved. You can now issue Letter of Credit for this contract.' :
+      additionalInfo: contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED' ? 
+        'This contract has been approved by ECTA. You can now issue a Letter of Credit for this contract.' :
         contract.status === 'PENDING' ?
-        'Contract is pending NBE approval. LC issuance will be available after approval.' :
+        'Contract is pending ECTA approval. LC issuance will be available after approval.' :
         'Review contract details and current status.'
     });
     setValidationDialogOpen(true);
@@ -1008,7 +1216,7 @@ const BanksPortal: React.FC = () => {
         showSuccess(
           'Letter of Credit Issued Successfully',
           `LC ${lcId} has been issued and registered on the blockchain`,
-          `Next Steps:\n1. NBE will allocate forex based on this LC\n2. Export permit will be issued\n3. Exporter can proceed with shipment`
+          `Next Steps:\n1. Bank allocates forex for this LC\n2. NBE monitors forex allocation for policy compliance\n3. Export permit will be issued\n4. Exporter can then proceed with shipment`
         );
         handleCloseDialog();
         loadBankingData();
@@ -1734,7 +1942,8 @@ const BanksPortal: React.FC = () => {
                 color: '#9b30b7',
                 subtitle: 'Bank-guaranteed (UCP 600)',
                 method: 'LC',
-                clickable: true
+                clickable: true,
+                debug: `LC Array Length: ${letterOfCredits.length}, Has Data: ${letterOfCredits.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <DirectionsBoat />, 
@@ -1743,7 +1952,8 @@ const BanksPortal: React.FC = () => {
                 color: '#2196F3',
                 subtitle: 'Cash Against Documents',
                 method: 'CAD',
-                clickable: true
+                clickable: true,
+                debug: `CAD Array Length: ${documentaryCollections.length} (Phase 2 - Not Implemented)`
               },
               { 
                 icon: <AttachMoney />, 
@@ -1752,7 +1962,8 @@ const BanksPortal: React.FC = () => {
                 color: '#ff9800',
                 subtitle: 'Payment before shipment',
                 method: 'ADVANCE',
-                clickable: true
+                clickable: true,
+                debug: `Advance Array Length: ${advancePayments.length} (Phase 2 - Not Implemented)`
               },
               { 
                 icon: <Assignment />, 
@@ -1761,7 +1972,8 @@ const BanksPortal: React.FC = () => {
                 color: '#4caf50',
                 subtitle: 'Fruits, Flowers, Meat',
                 method: 'CONSIGNMENT',
-                clickable: true
+                clickable: true,
+                debug: `Consignment Array Length: ${consignments.length}, Has Data: ${consignments.length > 0 ? 'YES' : 'NO'}`
               },
             ] : activeTab === 1 ? [
               // Tab 1: Forex Allocations KPIs - Show data in table
@@ -1780,7 +1992,8 @@ const BanksPortal: React.FC = () => {
                   setAmountMin('');
                   setAmountMax('');
                   setCurrentPage(0);
-                }
+                },
+                debug: `Forex Array Length: ${forexAllocations.length}, Has Data: ${forexAllocations.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <AttachMoney />, 
@@ -1850,7 +2063,8 @@ const BanksPortal: React.FC = () => {
                   setAmountMin('');
                   setAmountMax('');
                   setCurrentPage(0);
-                }
+                },
+                debug: `SWIFT Array Length: ${swiftMessages.length}, Has Data: ${swiftMessages.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <AccessTime />, 
@@ -1920,7 +2134,8 @@ const BanksPortal: React.FC = () => {
                   setAmountMax('');
                   setDocumentExaminationFilter('PENDING_EXAMINATION');
                   setCurrentPage(0);
-                }
+                },
+                debug: `Examination Array Length: ${lcsForExamination.length}, Has Data: ${lcsForExamination.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <CheckCircle />, 
@@ -1957,6 +2172,92 @@ const BanksPortal: React.FC = () => {
                 description: 'Percentage of documents compliant with UCP 600.',
                 clickable: false,
               },
+            ] : activeTab === 5 ? [
+              // Tab 5: Analytics KPIs
+              { 
+                icon: <Assessment />,
+                label: 'Total Metrics', 
+                value: '—', 
+                subtitle: 'View analytics dashboard',
+                color: '#1976d2',
+                clickable: false,
+              },
+            ] : activeTab === 6 ? [
+              // Tab 6: User Management KPIs
+              { 
+                icon: <People />, 
+                label: 'Total Users', 
+                value: userStats.totalUsers,
+                color: '#1976d2',
+                subtitle: 'All Roles',
+                description: 'Total users in the system.',
+                clickable: false,
+              },
+              { 
+                icon: <PersonAdd />, 
+                label: 'Active Users', 
+                value: userStats.activeUsers,
+                color: '#4caf50',
+                subtitle: 'Currently Active',
+                description: 'Users who are currently active.',
+                clickable: false,
+              },
+              { 
+                icon: <Security />, 
+                label: 'Bank Roles', 
+                value: userStats.bankRoles,
+                color: '#ff9800',
+                subtitle: 'Bank Staff',
+                description: 'Users with bank roles.',
+                clickable: false,
+              },
+              { 
+                icon: <AdminPanelSettings />, 
+                label: 'Administrators', 
+                value: userStats.administrators,
+                color: '#9b30b7',
+                subtitle: 'Admin Access',
+                description: 'Users with administrator privileges.',
+                clickable: false,
+              },
+            ] : activeTab === 7 ? [
+              // Tab 7: Audit Trail KPIs
+              { 
+                icon: <Timeline />, 
+                label: 'Total Activities', 
+                value: auditStats.totalActivities, 
+                color: '#1976d2',
+                subtitle: 'All Transactions',
+                description: 'Total audit trail activities.',
+                clickable: false,
+              },
+              { 
+                icon: <Assessment />, 
+                label: 'Today\'s Actions', 
+                value: auditStats.todaysActions, 
+                color: '#4caf50',
+                subtitle: 'Last 24 Hours',
+                description: 'Activities in the last 24 hours.',
+                clickable: false,
+              },
+              { 
+                icon: <VerifiedUser />, 
+                label: 'Blockchain Verified', 
+                value: auditStats.blockchainVerified, 
+                color: '#9c27b0',
+                subtitle: 'Immutable Records',
+                description: 'Records stored on blockchain.',
+                clickable: false,
+              },
+              { 
+                icon: <AccountTree />, 
+                label: 'Organizations', 
+                value: auditStats.organizationsInvolved, 
+                color: '#ff9800',
+                subtitle: 'Participants',
+                description: 'Organizations involved in transactions.',
+                clickable: false,
+              },
             ] : [
               // Tab 4: Payment Release KPIs - Show data in table
               { 
@@ -1974,7 +2275,8 @@ const BanksPortal: React.FC = () => {
                   setAmountMax('');
                   setPaymentReleaseFilter('READY_FOR_PAYMENT');
                   setCurrentPage(0);
-                }
+                },
+                debug: `Payment Release Array Length: ${lcsForPaymentRelease.length}, Has Data: ${lcsForPaymentRelease.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <CheckCircle />, 
@@ -2021,7 +2323,13 @@ const BanksPortal: React.FC = () => {
               },
             ];
 
-            return kpis.map((kpi: any, index) => (
+            return kpis.map((kpi: any, index) => {
+              // Debug log to see actual KPI values being rendered
+              if (index === 0) {
+                console.log(`[BANKS] 🎯 Rendering KPI cards for Tab ${activeTab}:`, kpis.map(k => `${k.label}: ${k.value}`));
+              }
+              
+              return (
               <Grid item xs={12} sm={6} md={3} key={index}>
                 <Card 
                   sx={{ 
@@ -2102,7 +2410,8 @@ const BanksPortal: React.FC = () => {
                   </CardContent>
                 </Card>
               </Grid>
-            ));
+            );
+            });
           })()}
         </Grid>
 
@@ -2181,8 +2490,48 @@ const BanksPortal: React.FC = () => {
               setDialogType(method.toLowerCase() as any);
               setDialogOpen(true);
             }}
-            onProcessStep={(paymentId, step) => {
-              console.log('Process step:', paymentId, step);
+            onProcessStep={async (paymentId, step) => {
+              console.log('[BANKS] Process step:', paymentId, step);
+              
+              if (step === 'Issue LC') {
+                // Find the contract/payment to issue LC for
+                // paymentId might be in format "CONTRACT1786342727251" or just "1786342727251"
+                const contractId = paymentId.replace(/^CONTRACT/, '');
+                
+                console.log('[BANKS] Looking for contract:', contractId, 'from paymentId:', paymentId);
+                console.log('[BANKS] Available contracts:', contracts.map((c: any) => c.contractId));
+                
+                // Check if it's an approved contract
+                const contract = contracts.find((c: any) => 
+                  c.contractId === contractId || 
+                  c.contractId === paymentId ||
+                  String(c.contractId) === String(contractId) ||
+                  String(c.contractId) === String(paymentId)
+                );
+                
+                if (contract) {
+                  console.log('[BANKS] Found contract:', contract.contractId, 'Status:', contract.status);
+                  // Open LC dialog for this approved contract using handleOpenDialog
+                  handleOpenDialog('lc', contract);
+                  return;
+                }
+                
+                // Check if it's an existing LC
+                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
+                if (lc) {
+                  showInfo('LC Already Issued', `LC ${paymentId} has already been issued`);
+                  return;
+                }
+                
+                showError('Contract Not Found', `Could not find contract for ${paymentId}`, 'Please refresh and try again');
+                return;
+              } else if (step === 'Reject LC') {
+                showWarning('Reject LC', `Rejecting LC request for payment ${paymentId}`);
+                // TODO: Implement LC rejection logic
+                return;
+              }
+              
+              // For other steps, show info
               showInfo('Process Step', `Processing ${step} for payment ${paymentId}`);
             }}
             onViewDetails={(payment) => {
@@ -2195,6 +2544,12 @@ const BanksPortal: React.FC = () => {
                   handleViewLCDetails(lc);
                   return;
                 }
+              }
+              
+              // Handle approved contract (AWAITING_LC status)
+              if (payment.status === 'AWAITING_LC' && payment.isContract && payment.contractData) {
+                handleViewContractDetails(payment.contractData);
+                return;
               }
               
               // Find related contract for the payment
@@ -2250,7 +2605,7 @@ const BanksPortal: React.FC = () => {
                       'No contract linked to this payment'
                   },
                   {
-                    label: 'NBE Approval',
+                    label: 'ECTA Approval',
                     status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'WARNING',
                     details: contract ? 
                       `Contract status: ${contract.status}` : 
@@ -2377,8 +2732,8 @@ const BanksPortal: React.FC = () => {
             Forex Allocation Management
           </Typography>
           <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>Forex Allocation Workflow:</strong> LC ISSUED → FOREX REQUESTED → APPROVED → ALLOCATED<br />
-            Each issued LC enables NBE forex allocation with 40% USD retention and 60% ETB conversion.
+            <strong>Forex Allocation Workflow:</strong> LC ISSUED → BANK ALLOCATES FOREX → NBE MONITORS COMPLIANCE<br />
+            Banks allocate forex for issued LCs per NBE policy (40% USD retention, 60% ETB conversion). NBE monitors compliance.
           </Alert>
 
           {/* Search and Filter Controls */}
@@ -2673,7 +3028,7 @@ const BanksPortal: React.FC = () => {
               </Grid>
               
               <Alert severity="info" sx={{ mt: 2 }}>
-                This contract has been approved by NBE. You can now issue a Letter of Credit for this contract.
+                This contract has been approved by ECTA. You can now issue a Letter of Credit for this contract.
               </Alert>
             </Box>
           )}
@@ -3335,7 +3690,7 @@ const BanksPortal: React.FC = () => {
                     {selectedLC.status === 'ISSUED' ? (
                       <>
                         <strong>LC Active:</strong> This Letter of Credit has been issued and is active. 
-                        The exporter can proceed with shipment preparation. NBE will allocate forex based on this LC.
+                        Bank should now allocate forex for this LC. After forex allocation and NBE monitoring, exporter can proceed with shipment.
                       </>
                     ) : selectedLC.status === 'APPROVED' ? (
                       <>
@@ -3358,7 +3713,7 @@ const BanksPortal: React.FC = () => {
                         Next Steps in Export Process:
                       </Typography>
                       <Typography variant="body2" component="div">
-                        1. <strong>NBE Forex Allocation:</strong> NBE will allocate foreign exchange (40/60 retention policy)<br />
+                        1. <strong>Bank Forex Allocation:</strong> Bank allocates foreign exchange per NBE policy (40/60 retention)<br />
                         2. <strong>Quality Inspection:</strong> ECTA conducts quality inspection and issues export permit<br />
                         3. <strong>Shipment Preparation:</strong> Exporter prepares shipment with required documents<br />
                         4. <strong>Document Submission:</strong> Exporter submits shipping documents to bank<br />
@@ -3495,7 +3850,7 @@ const BanksPortal: React.FC = () => {
                 1. Amendment will be recorded on blockchain<br />
                 2. All parties will be notified of the changes<br />
                 3. Original LC will show amendment history<br />
-                4. NBE forex allocation may need adjustment
+                4. Bank forex allocation may need adjustment
               </Alert>
             </>
           )}
@@ -3535,7 +3890,7 @@ const BanksPortal: React.FC = () => {
             <>
               <Alert severity="info" sx={{ mb: 3 }}>
                 <strong>International Trade Finance</strong><br />
-                Issuing LC confirms payment guarantee and enables forex allocation by NBE
+                LC provides payment guarantee to exporter. After issuance, bank allocates forex per NBE policy.
               </Alert>
 
               <Grid container spacing={2}>
@@ -3556,10 +3911,11 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <TextField
                     fullWidth
-                    label="Issuing Bank (Buyer's Bank)"
+                    label="Issuing Bank (Buyer's Bank) *"
                     value={lcForm.issuingBank}
                     onChange={(e) => setLcForm({...lcForm, issuingBank: e.target.value})}
                     placeholder="e.g., Deutsche Bank AG, Frankfurt"
+                    helperText="Bank that opens/issues the LC on behalf of the buyer"
                     required
                   />
                 </Grid>
@@ -3567,10 +3923,11 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <TextField
                     fullWidth
-                    label="Advising Bank (Exporter's Bank)"
+                    label="Advising Bank (Exporter's Bank) *"
                     value={lcForm.advisingBank}
                     onChange={(e) => setLcForm({...lcForm, advisingBank: e.target.value})}
                     placeholder="e.g., Commercial Bank of Ethiopia"
+                    helperText="Bank that advises/notifies exporter of the LC"
                     required
                   />
                 </Grid>
@@ -3578,10 +3935,11 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <TextField
                     fullWidth
-                    label="Beneficiary (Exporter)"
+                    label="Beneficiary (Exporter) *"
                     value={lcForm.beneficiary}
                     onChange={(e) => setLcForm({...lcForm, beneficiary: e.target.value})}
                     placeholder="Exporter company name and account"
+                    helperText="Exporter who will receive payment under the LC"
                     required
                   />
                 </Grid>
@@ -3641,8 +3999,8 @@ const BanksPortal: React.FC = () => {
 
               <Alert severity="warning" sx={{ mt: 3 }}>
                 <strong>Next Steps After LC Issuance:</strong><br />
-                1. NBE allocates foreign exchange<br />
-                2. Export permit issued by bank<br />
+                1. Bank allocates foreign exchange per NBE policy<br />
+                2. Export permit issued by ECTA<br />
                 3. Exporter ships coffee with required documents<br />
                 4. Bank verifies documents and releases payment
               </Alert>
@@ -4313,9 +4671,25 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 5: User Management */}
+      {/* Tab 5: Analytics */}
       {activeTab === 5 && (
+        <AnalyticsDashboard />
+      )}
+
+      {/* Tab 6: User Management */}
+      {activeTab === 6 && (
         <UserManagement />
+      )}
+
+      {/* Tab 7: Audit Trail */}
+      {activeTab === 7 && (
+        <AuditTrailTable
+          title="Banks Portal - Complete Transaction History"
+          autoRefresh={true}
+          refreshInterval={60000}
+          showStats={false}
+          maxHeight={700}
+        />
       )}
 
       {/* Audit Trail Viewer */}

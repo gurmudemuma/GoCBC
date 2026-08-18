@@ -157,18 +157,40 @@ const ProfessionalLoginPage: React.FC = () => {
         }}
       />
 
-      <Container maxWidth="xl" sx={{ position: 'relative', zIndex: 1, py: 2 }}>
-        <Grid container spacing={0} alignItems="center" sx={{ minHeight: '100vh' }}>
+      <Container 
+        maxWidth="xl" 
+        sx={{ 
+          position: 'relative', 
+          zIndex: 1, 
+          py: { xs: 2, md: 4 },
+          px: { xs: 1, sm: 2, md: 3 }, // Responsive horizontal padding
+          overflow: 'hidden', // Prevent horizontal scroll
+          width: '100%',
+          maxWidth: { xs: '100vw', sm: '100%' } // Prevent overflow on mobile
+        }}
+      >
+        <Grid container spacing={0} alignItems="stretch" sx={{ minHeight: '100vh', width: '100%', margin: 0 }}>
           
-          <Grid item xs={12} lg={7} sx={{ display: 'flex', alignItems: 'center', py: 3 }}>
+          {/* Left Side - Hero Section */}
+          <Grid 
+            item 
+            xs={12} 
+            md={7} 
+            sx={{ 
+              display: 'flex',
+              alignItems: 'center', 
+              py: { xs: 2, md: 3 },
+              px: { xs: 1, sm: 2 } // Responsive padding
+            }}
+          >
             <Fade in={mounted} timeout={1000}>
-              <Box sx={{ width: '100%', px: { xs: 3, md: 6 } }}>
+              <Box sx={{ width: '100%', px: { xs: 2, sm: 3, md: 6 } }}>
                 
-                <Stack direction="row" alignItems="center" spacing={2} mb={2}>
+                <Stack direction="row" alignItems="center" spacing={{ xs: 1.5, sm: 2 }} mb={{ xs: 1.5, md: 2 }}>
                   <Box
                     sx={{
-                      width: 56,
-                      height: 56,
+                      width: { xs: 48, md: 56 },
+                      height: { xs: 48, md: 56 },
                       borderRadius: 2,
                       background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
                       display: 'flex',
@@ -177,7 +199,7 @@ const ProfessionalLoginPage: React.FC = () => {
                       boxShadow: '0 8px 24px rgba(155, 48, 183, 0.3)',
                     }}
                   >
-                    <Coffee sx={{ fontSize: 32, color: '#FFD700' }} />
+                    <Coffee sx={{ fontSize: { xs: 28, md: 32 }, color: '#FFD700' }} />
                   </Box>
                   <Box>
                     <Typography 
@@ -186,7 +208,8 @@ const ProfessionalLoginPage: React.FC = () => {
                       sx={{ 
                         color: '#1a1a1a',
                         letterSpacing: '-0.5px',
-                        lineHeight: 1.2
+                        lineHeight: 1.2,
+                        fontSize: { xs: '0.95rem', sm: '1.1rem', md: '1.25rem' }
                       }}
                     >
                       Ethiopian Coffee Export
@@ -196,7 +219,8 @@ const ProfessionalLoginPage: React.FC = () => {
                       fontWeight="700" 
                       sx={{ 
                         color: '#9b30b7',
-                        letterSpacing: '-0.5px' 
+                        letterSpacing: '-0.5px',
+                        fontSize: { xs: '0.95rem', sm: '1.1rem', md: '1.25rem' }
                       }}
                     >
                       Consortium Blockchain
@@ -208,10 +232,11 @@ const ProfessionalLoginPage: React.FC = () => {
                   variant="h4" 
                   fontWeight="700" 
                   sx={{ 
-                    mb: 2,
+                    mb: { xs: 1.5, md: 2 },
                     color: '#1a1a1a',
                     letterSpacing: '-1px',
                     lineHeight: 1.2,
+                    fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
                   }}
                 >
                   Transforming Coffee Export
@@ -222,25 +247,26 @@ const ProfessionalLoginPage: React.FC = () => {
                 <Typography 
                   variant="body1" 
                   sx={{ 
-                    mb: 3,
+                    mb: { xs: 2, md: 3 },
                     color: '#616161',
                     fontWeight: 400,
                     lineHeight: 1.5,
-                    maxWidth: '600px'
+                    maxWidth: '600px',
+                    fontSize: { xs: '0.875rem', sm: '0.95rem', md: '1rem' }
                   }}
                 >
                   A unified digital ecosystem connecting all stakeholders with transparent, 
                   compliant, and efficient coffee trade operations.
                 </Typography>
 
-                <Grid container spacing={2} mb={3}>
+                <Grid container spacing={{ xs: 1.5, md: 2 }} mb={{ xs: 2, md: 3 }}>
                   {features.map((feature, index) => (
                     <Grid item xs={12} sm={4} key={index}>
                       <Zoom in={mounted} timeout={1200 + index * 200}>
                         <Paper
                           elevation={0}
                           sx={{
-                            p: 2,
+                            p: { xs: 1.5, sm: 2, md: 2.5 },
                             height: '100%',
                             background: 'rgba(255, 255, 255, 0.9)',
                             backdropFilter: 'blur(10px)',
@@ -258,7 +284,8 @@ const ProfessionalLoginPage: React.FC = () => {
                           <Box 
                             sx={{ 
                               color: feature.color,
-                              mb: 1
+                              mb: { xs: 0.5, md: 1.5 },
+                              '& svg': { fontSize: { xs: 24, md: 32 } }
                             }}
                           >
                             {feature.icon}
@@ -267,13 +294,20 @@ const ProfessionalLoginPage: React.FC = () => {
                             variant="body2" 
                             fontWeight="700" 
                             gutterBottom
-                            sx={{ color: '#1a1a1a' }}
+                            sx={{ 
+                              color: '#1a1a1a',
+                              fontSize: { xs: '0.8rem', sm: '0.85rem', md: '0.875rem' }
+                            }}
                           >
                             {feature.title}
                           </Typography>
                           <Typography 
                             variant="caption" 
-                            sx={{ color: '#616161', lineHeight: 1.4 }}
+                            sx={{ 
+                              color: '#616161', 
+                              lineHeight: 1.5,
+                              fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                            }}
                           >
                             {feature.desc}
                           </Typography>
@@ -286,7 +320,7 @@ const ProfessionalLoginPage: React.FC = () => {
                 <Paper
                   elevation={0}
                   sx={{
-                    p: 3,
+                    p: { xs: 2, sm: 2.5, md: 3 },
                     background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
                     borderRadius: 2,
                     color: 'white',
@@ -294,20 +328,26 @@ const ProfessionalLoginPage: React.FC = () => {
                 >
                   <Grid container spacing={2}>
                     <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700">8</Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
+                        8
+                      </Typography>
+                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
                         Organizations
                       </Typography>
                     </Grid>
                     <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700">100%</Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
+                        100%
+                      </Typography>
+                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
                         Traceable
                       </Typography>
                     </Grid>
                     <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700">2026</Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
+                        2026
+                      </Typography>
+                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
                         EUDR Ready
                       </Typography>
                     </Grid>
@@ -318,6 +358,7 @@ const ProfessionalLoginPage: React.FC = () => {
             </Fade>
           </Grid>
 
+          {/* Right Side - Login Form */}
           <Grid 
             item 
             xs={12} 
@@ -325,12 +366,73 @@ const ProfessionalLoginPage: React.FC = () => {
             sx={{ 
               display: 'flex', 
               alignItems: 'center',
+              justifyContent: 'center',
               background: 'white',
-              py: 3
+              py: { xs: 4, md: 3 },
+              minHeight: { xs: '100vh', lg: 'auto' }, // Full height on mobile
             }}
           >
             <Zoom in={mounted} timeout={1000}>
-              <Box sx={{ width: '100%', px: { xs: 3, md: 5 } }}>
+              <Box sx={{ width: '100%', maxWidth: '480px', px: { xs: 3, sm: 4, md: 5 } }}>
+                
+                {/* Mobile Logo Header - Only visible on small screens */}
+                <Box 
+                  sx={{ 
+                    display: { xs: 'block', lg: 'none' }, 
+                    mb: 4,
+                    textAlign: 'center'
+                  }}
+                >
+                  <Stack direction="row" alignItems="center" justifyContent="center" spacing={2} mb={2}>
+                    <Box
+                      sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: '0 8px 24px rgba(155, 48, 183, 0.3)',
+                      }}
+                    >
+                      <Coffee sx={{ fontSize: 28, color: '#FFD700' }} />
+                    </Box>
+                    <Box sx={{ textAlign: 'left' }}>
+                      <Typography 
+                        variant="body1" 
+                        fontWeight="700" 
+                        sx={{ 
+                          color: '#1a1a1a',
+                          letterSpacing: '-0.3px',
+                          lineHeight: 1.2
+                        }}
+                      >
+                        Ethiopian Coffee Export
+                      </Typography>
+                      <Typography 
+                        variant="body1" 
+                        fontWeight="700" 
+                        sx={{ 
+                          color: '#9b30b7',
+                          letterSpacing: '-0.3px' 
+                        }}
+                      >
+                        Consortium Blockchain
+                      </Typography>
+                    </Box>
+                  </Stack>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ 
+                      color: '#616161',
+                      maxWidth: '400px',
+                      mx: 'auto'
+                    }}
+                  >
+                    Transforming coffee export through blockchain technology
+                  </Typography>
+                </Box>
                 
                 <Box mb={3} textAlign="center">
                   <Box
@@ -382,7 +484,7 @@ const ProfessionalLoginPage: React.FC = () => {
                 )}
 
                 <form onSubmit={handleSubmit}>
-                  <Stack spacing={2.5}>
+                  <Stack spacing={{ xs: 2, sm: 2.5 }}>
                     
                     <Box>
                       <Typography 
@@ -400,10 +502,11 @@ const ProfessionalLoginPage: React.FC = () => {
                         required
                         autoFocus
                         placeholder="Enter your username"
+                        size="medium"
                         InputProps={{
                           startAdornment: (
                             <InputAdornment position="start">
-                              <Person sx={{ color: '#9e9e9e' }} />
+                              <Person sx={{ color: '#9e9e9e', fontSize: { xs: 20, sm: 24 } }} />
                             </InputAdornment>
                           ),
                         }}
@@ -412,6 +515,7 @@ const ProfessionalLoginPage: React.FC = () => {
                             borderRadius: 2,
                             backgroundColor: '#f5f5f5',
                             transition: 'all 0.2s ease',
+                            fontSize: { xs: '16px', sm: '1rem' }, // Prevent zoom on iOS
                             '& fieldset': {
                               borderColor: 'transparent',
                             },
@@ -449,11 +553,12 @@ const ProfessionalLoginPage: React.FC = () => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         required
+                        size="medium"
                         placeholder="Enter your password"
                         InputProps={{
                           startAdornment: (
                             <InputAdornment position="start">
-                              <Lock sx={{ color: '#9e9e9e' }} />
+                              <Lock sx={{ color: '#9e9e9e', fontSize: { xs: 20, sm: 24 } }} />
                             </InputAdornment>
                           ),
                           endAdornment: (
@@ -474,6 +579,7 @@ const ProfessionalLoginPage: React.FC = () => {
                             borderRadius: 2,
                             backgroundColor: '#f5f5f5',
                             transition: 'all 0.2s ease',
+                            fontSize: { xs: '16px', sm: '1rem' }, // Prevent zoom on iOS
                             '& fieldset': {
                               borderColor: 'transparent',
                             },
@@ -523,17 +629,17 @@ const ProfessionalLoginPage: React.FC = () => {
                       size="large"
                       disabled={loading}
                       sx={{
-                        py: 1.5,
+                        py: { xs: 1.5, sm: 1.75 },
                         borderRadius: 2,
                         textTransform: 'none',
-                        fontSize: '1rem',
+                        fontSize: { xs: '0.95rem', sm: '1rem' },
                         fontWeight: 600,
                         background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
-                        boxShadow: '0 4px 12px rgba(25, 118, 210, 0.3)',
+                        boxShadow: '0 4px 12px rgba(155, 48, 183, 0.3)',
                         transition: 'all 0.2s ease',
                         '&:hover': {
                           background: 'linear-gradient(135deg, #7a2596 0%, #6d1f8a 100%)',
-                          boxShadow: '0 6px 16px rgba(25, 118, 210, 0.4)',
+                          boxShadow: '0 6px 16px rgba(155, 48, 183, 0.4)',
                           transform: 'translateY(-1px)',
                         },
                         '&:active': {
@@ -554,12 +660,13 @@ const ProfessionalLoginPage: React.FC = () => {
                   </Stack>
                 </form>
 
-                <Divider sx={{ my: 3 }}>
+                <Divider sx={{ my: { xs: 2.5, sm: 3 } }}>
                   <Chip
                     label="New Exporter"
                     size="small"
                     sx={{
                       fontWeight: 600,
+                      fontSize: { xs: '0.75rem', sm: '0.8125rem' },
                       backgroundColor: alpha('#FFD700', 0.15),
                       color: '#9b30b7',
                       border: `1px solid ${alpha('#FFD700', 0.3)}`,
@@ -574,10 +681,10 @@ const ProfessionalLoginPage: React.FC = () => {
                   onClick={() => router.push('/register-exporter')}
                   startIcon={<Coffee />}
                   sx={{
-                    py: 1.5,
+                    py: { xs: 1.5, sm: 1.75 },
                     borderRadius: 2,
                     textTransform: 'none',
-                    fontSize: '1rem',
+                    fontSize: { xs: '0.95rem', sm: '1rem' },
                     fontWeight: 600,
                     borderColor: '#FFD700',
                     color: '#9b30b7',
@@ -598,7 +705,7 @@ const ProfessionalLoginPage: React.FC = () => {
                   variant="caption"
                   display="block"
                   textAlign="center"
-                  sx={{ color: '#9e9e9e', mt: 2 }}
+                  sx={{ color: '#9e9e9e', mt: { xs: 2.5, sm: 3 }, fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
                 >
                   © 2026 Ethiopian Coffee Export Consortium
                 </Typography>

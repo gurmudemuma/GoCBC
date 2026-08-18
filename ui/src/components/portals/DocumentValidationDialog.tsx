@@ -344,22 +344,16 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                     try {
                                       const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
                                       
-                                      // Construct document URL with inline parameter
-                                      let docUrl: string;
-                                      if (doc.url && doc.url.startsWith('http')) {
-                                        docUrl = `${doc.url}?inline=true`;
-                                      } else if (doc.url && doc.url.startsWith('/api/v1/')) {
-                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}?inline=true`;
-                                      } else if (doc.id) {
-                                        docUrl = `${apiUrl}/documents/${doc.id}/download?inline=true`;
-                                      } else {
+                                      // Always use document ID to construct URL (most reliable)
+                                      if (!doc.id) {
                                         throw new Error('Document ID is missing');
                                       }
+                                      
+                                      const docUrl = `${apiUrl}/documents/${doc.id}/download?inline=true`;
                                       
                                       console.log('[DOCUMENT] Viewing document:', { 
                                         docId: doc.id, 
                                         docUrl, 
-                                        docUrlRaw: doc.url,
                                         docStatus: doc.status,
                                         docName: doc.name,
                                         apiUrl
@@ -422,25 +416,18 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                                     try {
                                       const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
                                       
-                                      // Construct document URL - only use doc.url if it's a full URL, otherwise use doc.id
-                                      let docUrl: string;
-                                      if (doc.url && doc.url.startsWith('http')) {
-                                        docUrl = doc.url;
-                                      } else if (doc.url && doc.url.startsWith('/api/v1/')) {
-                                        // Remove /api/v1/ prefix if present to avoid duplication
-                                        docUrl = `${apiUrl}${doc.url.replace('/api/v1', '')}`;
-                                      } else if (doc.id) {
-                                        docUrl = `${apiUrl}/documents/${doc.id}/download`;
-                                      } else {
+                                      // Always use document ID to construct URL (most reliable)
+                                      if (!doc.id) {
                                         throw new Error('Document ID is missing');
                                       }
+                                      
+                                      const docUrl = `${apiUrl}/documents/${doc.id}/download`;
                                       
                                       console.log('[DOCUMENT] Downloading document:', { 
                                         docId: doc.id, 
                                         docUrl, 
                                         docName: doc.name,
                                         docStatus: doc.status,
-                                        docUrlRaw: doc.url,
                                         apiUrl
                                       });
                                       

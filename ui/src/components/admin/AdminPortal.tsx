@@ -67,8 +67,10 @@ import {
   OpenInNew,
   Visibility,
   Apps,
+  Category,
 } from '@mui/icons-material';
 import { useRouter } from 'next/router';
+import AuditTrailTable from '../portals/AuditTrailTable';
 import {
   LineChart,
   Line,
@@ -89,6 +91,9 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import UserManagement from './UserManagement';
 import api from '@/utils/api';
+import SystemOverview from '../portals/SystemOverview';
+import SystemTraceability from '../portals/SystemTraceability';
+import ExporterTraceability from '../portals/ExporterTraceability';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -181,6 +186,19 @@ const AdminPortal: React.FC = () => {
   const [expiringCerts, setExpiringCerts] = useState<CertificateExpiry[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
+  
+  // System Traceability stats
+  const [traceabilityStats, setTraceabilityStats] = useState({
+    totalActivities: 0,
+    uniqueEntities: 0,
+    uniqueUsers: 0,
+    blockchainVerified: 0,
+  });
+  
+  // System Traceability filters (passed when KPI cards are clicked)
+  const [traceabilityFilters, setTraceabilityFilters] = useState<any>({
+    timestamp: Date.now() // Add timestamp to force updates
+  });
 
   const BRAND_COLOR = '#1976d2'; // Admin blue
 
@@ -189,6 +207,8 @@ const AdminPortal: React.FC = () => {
     loadOrganizationStats();
     loadRecentActivities();
     loadExpiringCertificates();
+    loadBlockchainHealth(); // Load REAL blockchain health
+    loadTraceabilityStats(); // Load System Traceability stats
   }, []);
 
   // Auto-refresh functionality
@@ -200,6 +220,7 @@ const AdminPortal: React.FC = () => {
       loadOrganizationStats();
       loadRecentActivities();
       loadExpiringCertificates();
+      loadTraceabilityStats();
     }, refreshInterval * 1000);
 
     return () => clearInterval(interval);
@@ -241,13 +262,17 @@ const AdminPortal: React.FC = () => {
         }));
       }
 
-      // Simulate blockchain data (would come from real fabric API)
-      setStats(prev => ({
-        ...prev,
-        totalContracts: Math.floor(Math.random() * 500) + 200,
-        totalShipments: Math.floor(Math.random() * 300) + 100,
-        totalTransactions: Math.floor(Math.random() * 5000) + 1000,
-      }));
+      // Load REAL blockchain data from traceability service
+      const traceabilityResponse = await api.get('/traceability/system/statistics');
+      if (traceabilityResponse.data.success) {
+        const traceData = traceabilityResponse.data.data;
+        setStats(prev => ({
+          ...prev,
+          totalContracts: traceData.contracts.total,
+          totalShipments: traceData.shipments.total,
+          totalTransactions: traceData.auditLogs.total,
+        }));
+      }
     } catch (error) {
       console.error('Failed to load system stats:', error);
     } finally {
@@ -260,6 +285,18 @@ const AdminPortal: React.FC = () => {
       const usersResponse = await api.get('/users?limit=1000');
       if (usersResponse.data.success) {
         const users = usersResponse.data.data;
+        
+        // Get REAL blockchain identities (gracefully handle if unavailable)
+        let identities: any[] = [];
+        try {
+          const identitiesResponse = await api.get('/crypto-users/identities');
+          if (identitiesResponse.data.success) {
+            identities = identitiesResponse.data.data || [];
+          }
+        } catch (idError) {
+          console.warn('Blockchain identities unavailable:', idError);
+          // Continue without identities - will show 0 for enrolled
+        }
         
         const orgColors: Record<string, string> = {
           ECTA: '#1976d2',
@@ -274,11 +311,17 @@ const AdminPortal: React.FC = () => {
         const organizations = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING', 'EXPORTERS'];
         const orgStats: OrganizationStats[] = organizations.map(org => {
           const orgUsers = users.filter((u: any) => u.organization === org || (org === 'EXPORTERS' && u.role === 'EXPORTER'));
+          
+          // Count REAL enrolled identities for this organization
+          const orgIdentities = identities.filter((id: any) => 
+            id.mspId === `${org}MSP` || (org === 'EXPORTERS' && id.mspId === 'ExportersMSP')
+          );
+          
           return {
             organization: org,
             userCount: orgUsers.length,
             activeUsers: orgUsers.filter((u: any) => u.status === 'active').length,
-            enrolledIdentities: Math.floor(orgUsers.length * 0.7), // Estimate
+            enrolledIdentities: orgIdentities.length, // ✅ REAL DATA (or 0 if unavailable)
             color: orgColors[org] || '#666',
           };
         });
@@ -292,7 +335,7 @@ const AdminPortal: React.FC = () => {
 
   const loadRecentActivities = async () => {
     try {
-      const response = await api.get('/audit/recent-activities?limit=10');
+      const response = await api.get('/audit/portal/recent?limit=10');
       if (response.data.success) {
         setRecentActivities(response.data.data);
       }
@@ -343,7 +386,208 @@ const AdminPortal: React.FC = () => {
     }
   };
 
-  // Dynamic KPI data based on active tab
+  const loadBlockchainHealth = async () => {
+    try {
+      const response = await api.get('/blockchain/network');
+      if (response.data.success) {
+        const data = response.data.data;
+        setBlockchainHealth({
+          status: data.status === 'healthy' ? 'healthy' : 'error',
+          blockHeight: data.blockHeight || 0, // REAL from ledger
+          transactionsPerSecond: data.transactionsPerSecond || 0, // REAL calculated
+          averageBlockTime: data.averageBlockTime || 0, // REAL calculated
+          peers: data.peers || 1,
+          orderers: data.orderers || 1,
+          chaincodes: data.chaincodes || 3,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load blockchain health:', error);
+      setBlockchainHealth(prev => ({ ...prev, status: 'error' }));
+    }
+  };
+
+  const loadTraceabilityStats = async () => {
+    try {
+      const response = await api.get('/audit/portal/recent?limit=1000');
+      if (response.data.success) {
+        const allLogs = response.data.data.logs || [];
+        
+        // Calculate statistics
+        const uniqueEntities = new Set(allLogs.map((log: any) => `${log.entity_type}-${log.entity_id}`)).size;
+        const uniqueUsers = new Set(allLogs.map((log: any) => log.performed_by)).size;
+        const blockchainVerified = allLogs.filter((log: any) => 
+          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
+        ).length;
+        
+        setTraceabilityStats({
+          totalActivities: allLogs.length,
+          uniqueEntities,
+          uniqueUsers,
+          blockchainVerified,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load traceability stats:', error);
+    }
+  };
+
+  // Handle KPI card clicks - navigate to appropriate tab and apply filters
+  const handleKPICardClick = (tabIndex: number, cardIndex: number) => {
+    switch (tabIndex) {
+      case 0: // User Management
+        setTabValue(5); // Switch to System Traceability to show user activities
+        if (cardIndex === 0) {
+          // Total Users - show all USER entity activities
+          setTraceabilityFilters({
+            entityTypeFilter: 'USER',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 1) {
+          // Active Users - show recent USER activities
+          setTraceabilityFilters({
+            entityTypeFilter: 'USER',
+            dateRange: 'week',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 2) {
+          // Exporters - show EXPORTER and EXPORTER_APPLICATION activities
+          setTraceabilityFilters({
+            entityTypeFilter: 'EXPORTER',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        }
+        break;
+        
+      case 1: // System Overview
+        // Blockchain metrics - navigate to System Traceability
+        setTabValue(5);
+        if (cardIndex === 0) {
+          // Block Height - show all blockchain activities
+          setTraceabilityFilters({
+            searchQuery: 'blockchain-verified',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 1 || cardIndex === 2) {
+          // TPS or Peers - show recent blockchain activities
+          setTraceabilityFilters({
+            searchQuery: 'blockchain-verified',
+            dateRange: 'today',
+            timestamp: Date.now()
+          });
+        }
+        break;
+        
+      case 2: // Analytics
+        setTabValue(5); // Switch to System Traceability for drilling down
+        if (cardIndex === 0) {
+          // Transactions - show all blockchain-verified
+          setTraceabilityFilters({
+            searchQuery: 'blockchain-verified',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 1) {
+          // Contracts - filter by entity type
+          setTraceabilityFilters({
+            entityTypeFilter: 'CONTRACT',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 2) {
+          // Shipments - filter by entity type
+          setTraceabilityFilters({
+            entityTypeFilter: 'SHIPMENT',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 3) {
+          // Avg Block Time - show recent blockchain activities
+          setTraceabilityFilters({
+            searchQuery: 'blockchain-verified',
+            dateRange: 'today',
+            timestamp: Date.now()
+          });
+        }
+        break;
+        
+      case 3: // Settings
+        setTabValue(5);
+        if (cardIndex === 0) {
+          // Identities - show USER creation/management activities
+          setTraceabilityFilters({
+            entityTypeFilter: 'USER',
+            actionFilter: 'ALL',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 1) {
+          // Expiring Soon - show recent USER activities
+          setTraceabilityFilters({
+            entityTypeFilter: 'USER',
+            dateRange: 'month',
+            timestamp: Date.now()
+          });
+        }
+        break;
+        
+      case 4: // Portal Access
+        // Not applicable - just navigation links
+        break;
+        
+      case 5: // System Traceability
+        setTabValue(5);
+        if (cardIndex === 0) {
+          // Total Activities - reset all filters
+          setTraceabilityFilters({
+            entityTypeFilter: 'ALL',
+            actionFilter: 'ALL',
+            organizationFilter: 'ALL',
+            dateRange: 'all',
+            searchQuery: '',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 1) {
+          // Unique Entities - show all, no duplicate filtering yet
+          setTraceabilityFilters({
+            entityTypeFilter: 'ALL',
+            actionFilter: 'ALL',
+            organizationFilter: 'ALL',
+            dateRange: 'all',
+            searchQuery: '',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 2) {
+          // Unique Users - can't filter by this yet, just reset
+          setTraceabilityFilters({
+            entityTypeFilter: 'ALL',
+            actionFilter: 'ALL',
+            organizationFilter: 'ALL',
+            dateRange: 'all',
+            searchQuery: '',
+            timestamp: Date.now()
+          });
+        } else if (cardIndex === 3) {
+          // Blockchain Verified - show only blockchain
+          setTraceabilityFilters({
+            searchQuery: 'blockchain-verified',
+            entityTypeFilter: 'ALL',
+            actionFilter: 'ALL',
+            organizationFilter: 'ALL',
+            dateRange: 'all',
+            timestamp: Date.now()
+          });
+        }
+        break;
+        
+      default:
+        break;
+    }
+  };
+
   const getKPICards = () => {
     switch (tabValue) {
       case 0: // User Management
@@ -470,6 +714,37 @@ const AdminPortal: React.FC = () => {
             subtitle: 'Consensus nodes',
           },
         ];
+      case 5: // System Traceability
+        return [
+          {
+            title: 'Total Activities',
+            value: traceabilityStats.totalActivities,
+            icon: <Timeline color="primary" />,
+            bgcolor: '#e3f2fd',
+            subtitle: 'All system actions',
+          },
+          {
+            title: 'Unique Entities',
+            value: traceabilityStats.uniqueEntities,
+            icon: <Category color="success" />,
+            bgcolor: '#e8f5e9',
+            subtitle: 'Items traced',
+          },
+          {
+            title: 'Unique Users',
+            value: traceabilityStats.uniqueUsers,
+            icon: <Person color="warning" />,
+            bgcolor: '#fff3e0',
+            subtitle: 'Active performers',
+          },
+          {
+            title: 'Blockchain Verified',
+            value: traceabilityStats.blockchainVerified,
+            icon: <VerifiedUser color="info" />,
+            bgcolor: '#e1f5fe',
+            subtitle: 'Cryptographically signed',
+          },
+        ];
       default:
         return [
           {
@@ -543,26 +818,51 @@ const AdminPortal: React.FC = () => {
 
       {/* Dynamic KPI Cards - Change based on active tab */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        {kpiCards.map((card, index) => (
-          <Grid item xs={12} sm={6} md={3} key={index}>
-            <Card sx={{ bgcolor: card.bgcolor, transition: 'all 0.3s ease', '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 } }}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  {card.icon}
-                  <Typography variant="h6" fontWeight={600}>
-                    {card.value}
+        {kpiCards.map((card, index) => {
+          // Determine if this card is clickable based on tab and card index
+          const isClickable = 
+            (tabValue === 0 && (index === 0 || index === 1 || index === 2)) || // User Management: Total, Active, Exporters
+            (tabValue === 1 && (index === 0 || index === 1 || index === 2)) || // System Overview: Block Height, TPS, Peers
+            (tabValue === 2) || // Analytics: All 4 cards clickable
+            (tabValue === 3 && (index === 0 || index === 1)) || // Settings: Identities, Expiring
+            (tabValue === 5); // System Traceability: All 4 cards clickable
+          
+          return (
+            <Grid item xs={12} sm={6} md={3} key={index}>
+              <Card 
+                sx={{ 
+                  bgcolor: card.bgcolor, 
+                  transition: 'all 0.3s ease', 
+                  cursor: isClickable ? 'pointer' : 'default',
+                  '&:hover': { 
+                    transform: isClickable ? 'translateY(-6px)' : 'translateY(-2px)', 
+                    boxShadow: isClickable ? 6 : 4 
+                  } 
+                }}
+                onClick={() => {
+                  if (isClickable) {
+                    handleKPICardClick(tabValue, index);
+                  }
+                }}
+              >
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    {card.icon}
+                    <Typography variant="h6" fontWeight={600}>
+                      {card.value}
+                    </Typography>
+                  </Box>
+                  <Typography variant="body2" fontWeight={600} color="text.primary" gutterBottom>
+                    {card.title}
                   </Typography>
-                </Box>
-                <Typography variant="body2" fontWeight={600} color="text.primary" gutterBottom>
-                  {card.title}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {card.subtitle}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
+                  <Typography variant="caption" color="text.secondary">
+                    {card.subtitle}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          );
+        })}
       </Grid>
 
       {/* Alert for Admin */}
@@ -623,6 +923,11 @@ const AdminPortal: React.FC = () => {
             icon={<Apps sx={{ fontSize: 20 }} />} 
             iconPosition="start" 
           />
+          <Tab 
+            label="System Traceability" 
+            icon={<Timeline sx={{ fontSize: 20 }} />} 
+            iconPosition="start" 
+          />
         </Tabs>
       </Paper>
 
@@ -633,265 +938,8 @@ const AdminPortal: React.FC = () => {
       </TabPanel>
 
       <TabPanel value={tabValue} index={1}>
-        {/* System Overview Tab */}
-        <Grid container spacing={3}>
-          {/* Blockchain Health Status */}
-          <Grid item xs={12}>
-            <Card>
-              <CardContent>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <CloudQueue color="primary" />
-                    <Typography variant="h6">Blockchain Network Health</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                    <Chip
-                      label={blockchainHealth.status.toUpperCase()}
-                      color={
-                        blockchainHealth.status === 'healthy' ? 'success' :
-                        blockchainHealth.status === 'warning' ? 'warning' : 'error'
-                      }
-                      icon={
-                        blockchainHealth.status === 'healthy' ? <CheckCircle /> :
-                        blockchainHealth.status === 'warning' ? <Warning /> : <ErrorIcon />
-                      }
-                    />
-                    <Tooltip title="Refresh">
-                      <IconButton size="small" onClick={loadSystemStats}>
-                        <Refresh />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                </Box>
-
-                <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <Storage sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.blockHeight}</Typography>
-                      <Typography variant="body2" color="text.secondary">Block Height</Typography>
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <Speed sx={{ fontSize: 40, color: 'success.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.transactionsPerSecond}</Typography>
-                      <Typography variant="body2" color="text.secondary">TPS (Transactions/sec)</Typography>
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <Timeline sx={{ fontSize: 40, color: 'info.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.averageBlockTime}s</Typography>
-                      <Typography variant="body2" color="text.secondary">Avg Block Time</Typography>
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <DataUsage sx={{ fontSize: 40, color: 'warning.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.peers}</Typography>
-                      <Typography variant="body2" color="text.secondary">Peer Nodes</Typography>
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <CloudQueue sx={{ fontSize: 40, color: 'secondary.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.orderers}</Typography>
-                      <Typography variant="body2" color="text.secondary">Orderer Nodes</Typography>
-                    </Box>
-                  </Grid>
-
-                  <Grid item xs={12} sm={6} md={4}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-                      <Description sx={{ fontSize: 40, color: 'error.main', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold">{blockchainHealth.chaincodes}</Typography>
-                      <Typography variant="body2" color="text.secondary">Active Chaincodes</Typography>
-                    </Box>
-                  </Grid>
-                </Grid>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Business Statistics */}
-          <Grid item xs={12} md={6}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Coffee color="primary" />
-                  Business Operations
-                </Typography>
-                <List>
-                  <ListItem>
-                    <ListItemIcon>
-                      <Description />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Total Contracts"
-                      secondary={
-                        <Typography variant="h6" component="span" color="primary">
-                          {stats.totalContracts}
-                        </Typography>
-                      }
-                    />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemIcon>
-                      <LocalShipping />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Total Shipments"
-                      secondary={
-                        <Typography variant="h6" component="span" color="success.main">
-                          {stats.totalShipments}
-                        </Typography>
-                      }
-                    />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemIcon>
-                      <AccountBalance />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Blockchain Transactions"
-                      secondary={
-                        <Typography variant="h6" component="span" color="secondary.main">
-                          {stats.totalTransactions}
-                        </Typography>
-                      }
-                    />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemIcon>
-                      <Person />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Active Exporters"
-                      secondary={
-                        <Typography variant="h6" component="span" color="info.main">
-                          {stats.totalExporters}
-                        </Typography>
-                      }
-                    />
-                  </ListItem>
-                </List>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Recent Activities */}
-          <Grid item xs={12} md={6}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <HistoryIcon color="primary" />
-                  Recent System Activities
-                </Typography>
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Action</TableCell>
-                        <TableCell>User</TableCell>
-                        <TableCell>Time</TableCell>
-                        <TableCell>Status</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {recentActivities.length > 0 ? (
-                        recentActivities.map((activity) => (
-                          <TableRow key={activity.id}>
-                            <TableCell>
-                              <Typography variant="body2">{activity.action}</Typography>
-                              {activity.targetUsername && (
-                                <Typography variant="caption" color="text.secondary">
-                                  Target: {activity.targetUsername}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Chip
-                                label={activity.organization}
-                                size="small"
-                                variant="outlined"
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Typography variant="caption">
-                                {new Date(activity.timestamp).toLocaleString()}
-                              </Typography>
-                            </TableCell>
-                            <TableCell>
-                              <Chip
-                                label={activity.status}
-                                size="small"
-                                color={
-                                  activity.status === 'success' ? 'success' :
-                                  activity.status === 'warning' ? 'warning' : 'error'
-                                }
-                              />
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      ) : (
-                        <TableRow>
-                          <TableCell colSpan={4} align="center">
-                            <Typography variant="body2" color="text.secondary">
-                              No recent activities
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Expiring Certificates Alert */}
-          {expiringCerts.length > 0 && (
-            <Grid item xs={12}>
-              <Alert severity="warning" icon={<Warning />}>
-                <Typography variant="subtitle2" gutterBottom>
-                  ⚠️ {expiringCerts.length} Certificate(s) Expiring Soon
-                </Typography>
-                <List dense>
-                  {expiringCerts.slice(0, 5).map((cert) => (
-                    <ListItem key={cert.userId}>
-                      <ListItemIcon>
-                        <Fingerprint fontSize="small" />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={`${cert.username} (${cert.organization})`}
-                        secondary={`Expires in ${cert.daysRemaining} days - ${new Date(cert.expiresAt).toLocaleDateString()}`}
-                      />
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => setTabValue(0)}
-                      >
-                        Renew
-                      </Button>
-                    </ListItem>
-                  ))}
-                </List>
-                {expiringCerts.length > 5 && (
-                  <Typography variant="caption" color="text.secondary">
-                    ... and {expiringCerts.length - 5} more certificates
-                  </Typography>
-                )}
-              </Alert>
-            </Grid>
-          )}
-        </Grid>
+        {/* System Overview Tab - Aggregate Statistics */}
+        <SystemOverview />
       </TabPanel>
 
       <TabPanel value={tabValue} index={2}>
@@ -1721,6 +1769,14 @@ const AdminPortal: React.FC = () => {
             </Card>
           </Grid>
         </Grid>
+      </TabPanel>
+
+      <TabPanel value={tabValue} index={5}>
+        {/* System Traceability Tab - Complete Activity Trail & Audit Logs */}
+        <SystemTraceability 
+          hideStats={true} 
+          initialFilters={traceabilityFilters}
+        />
       </TabPanel>
     </Box>
   );

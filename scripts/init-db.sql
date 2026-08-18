@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS exporter_applications (
 );
 
 -- Audit Trail
+-- Audit Trail Table (Professional Standards)
 CREATE TABLE IF NOT EXISTS audit_trail (
     id SERIAL PRIMARY KEY,
     entity_type VARCHAR(50) NOT NULL,
@@ -159,20 +160,38 @@ CREATE TABLE IF NOT EXISTS audit_trail (
     action VARCHAR(50) NOT NULL,
     performed_by VARCHAR(100) NOT NULL,
     organization VARCHAR(100) NOT NULL,
-    changes JSONB,
+    performed_by_org VARCHAR(100),
+    old_value TEXT,
+    new_value TEXT,
+    reason TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    ip_address VARCHAR(50),
     blockchain_tx_id VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    
+    -- Professional audit trail requirements
+    CONSTRAINT audit_trail_entity_check CHECK (entity_type != '' AND entity_id != ''),
+    CONSTRAINT audit_trail_action_check CHECK (action != ''),
+    CONSTRAINT audit_trail_performer_check CHECK (performed_by != '')
 );
 
--- Create indexes
-CREATE INDEX idx_coffee_lots_status ON coffee_lots(status);
-CREATE INDEX idx_export_contracts_status ON export_contracts(status);
-CREATE INDEX idx_forex_declarations_status ON forex_declarations(nbe_approval_status);
-CREATE INDEX idx_customs_declarations_status ON customs_declarations(clearance_status);
-CREATE INDEX idx_shipments_status ON shipments(status);
-CREATE INDEX idx_exporter_applications_status ON exporter_applications(status);
-CREATE INDEX idx_exporter_applications_email ON exporter_applications(email);
-CREATE INDEX idx_audit_trail_entity ON audit_trail(entity_type, entity_id);
+-- Create professional indexes for audit queries
+CREATE INDEX IF NOT EXISTS idx_audit_trail_entity ON audit_trail(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_created_at ON audit_trail(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_performer ON audit_trail(performed_by);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_organization ON audit_trail(organization);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_action ON audit_trail(action);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_source ON audit_trail USING gin ((metadata->'source'));
+CREATE INDEX IF NOT EXISTS idx_audit_trail_entity_created ON audit_trail(entity_type, entity_id, created_at DESC);
+
+-- Create other necessary indexes
+CREATE INDEX IF NOT EXISTS idx_coffee_lots_status ON coffee_lots(status);
+CREATE INDEX IF NOT EXISTS idx_export_contracts_status ON export_contracts(status);
+CREATE INDEX IF NOT EXISTS idx_forex_declarations_status ON forex_declarations(nbe_approval_status);
+CREATE INDEX IF NOT EXISTS idx_customs_declarations_status ON customs_declarations(clearance_status);
+CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
+CREATE INDEX IF NOT EXISTS idx_exporter_applications_status ON exporter_applications(status);
+CREATE INDEX IF NOT EXISTS idx_exporter_applications_email ON exporter_applications(email);
 
 -- Insert default admin user (password: admin123)
 -- Note: The password hash below needs to be generated with: bcrypt.hash('admin123', 10)

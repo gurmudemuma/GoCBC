@@ -582,16 +582,16 @@ Ethiopian Customs Commission (ECC)
               {/* Transaction Signature */}
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
-                  {log.signature.source?.includes('Database') ? 'Record Information' : 'Transaction Signature'}
+                  {(log.signature as any).source?.includes('Database') ? 'Record Information' : 'Transaction Signature'}
                 </Typography>
                 <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
                   <Typography variant="caption" component="div">
                     <strong>Transaction ID:</strong> {log.signature.transactionId}
                   </Typography>
                   <Typography variant="caption" component="div">
-                    <strong>Source:</strong> {log.signature.source || 'Blockchain'}
+                    <strong>Source:</strong> {(log.signature as any).source || 'Blockchain'}
                   </Typography>
-                  {log.signature.recordType !== 'DATABASE' && (
+                  {(log.signature as any).recordType !== 'DATABASE' && (
                     <>
                       <Typography variant="caption" component="div">
                         <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
@@ -604,7 +604,7 @@ Ethiopian Customs Commission (ECC)
                       </Typography>
                     </>
                   )}
-                  {log.signature.recordType === 'DATABASE' && (
+                  {(log.signature as any).recordType === 'DATABASE' && (
                     <Typography variant="caption" component="div">
                       <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
                     </Typography>
@@ -615,19 +615,19 @@ Ethiopian Customs Commission (ECC)
               {/* Identity */}
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
-                  {log.signature.recordType === 'DATABASE' ? 'Actor Information' : 'Cryptographic Identity'}
+                  {(log.signature as any).recordType === 'DATABASE' ? 'Actor Information' : 'Cryptographic Identity'}
                 </Typography>
                 <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
                   <Typography variant="caption" component="div">
-                    <strong>User:</strong> {log.signature.caller.username}
+                    <strong>User:</strong> {(log.signature.caller as any).username || log.signature.caller.commonName}
                   </Typography>
                   <Typography variant="caption" component="div">
                     <strong>Role:</strong> {log.signature.caller.role}
                   </Typography>
                   <Typography variant="caption" component="div">
-                    <strong>Organization:</strong> {log.signature.caller.organization}
+                    <strong>Organization:</strong> {(log.signature.caller as any).organization || log.signature.caller.organizationUnit}
                   </Typography>
-                  {log.signature.recordType !== 'DATABASE' && log.signature.caller.mspId && (
+                  {(log.signature as any).recordType !== 'DATABASE' && log.signature.caller.mspId && (
                     <>
                       <Typography variant="caption" component="div">
                         <strong>MSP ID:</strong> {log.signature.caller.mspId}
@@ -647,7 +647,7 @@ Ethiopian Customs Commission (ECC)
               </Box>
 
               {/* Endorsement - only for blockchain records */}
-              {log.signature.recordType !== 'DATABASE' && (
+              {(log.signature as any).recordType !== 'DATABASE' && (
                 <Box>
                   <Typography variant="subtitle2" gutterBottom>
                     Endorsement

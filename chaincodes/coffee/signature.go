@@ -390,6 +390,39 @@ func (c *CoffeeContract) QueryAuditLogsByActor(
 	return auditLogs, nil
 }
 
+// QueryAllAuditLogs retrieves all audit logs from the blockchain
+// Used for system statistics and metrics
+func (c *CoffeeContract) QueryAllAuditLogs(
+	ctx contractapi.TransactionContextInterface,
+) ([]*AuditLog, error) {
+
+	// Query all audit logs using range query
+	resultsIterator, err := ctx.GetStub().GetStateByRange("AUDIT_", "AUDIT_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all audit logs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var auditLogs []*AuditLog
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var auditLog AuditLog
+		err = json.Unmarshal(queryResponse.Value, &auditLog)
+		if err != nil {
+			// Skip invalid logs
+			continue
+		}
+
+		auditLogs = append(auditLogs, &auditLog)
+	}
+
+	return auditLogs, nil
+}
+
 // QueryAuditLogsByTimeRange retrieves logs within a time range
 func (c *CoffeeContract) QueryAuditLogsByTimeRange(
 	ctx contractapi.TransactionContextInterface,
@@ -507,3 +540,4 @@ func CalculateDataHash(data interface{}) (string, error) {
 	hash := sha256.Sum256(dataJSON)
 	return hex.EncodeToString(hash[:]), nil
 }
+// Updated Wed, Aug 12, 2026 11:23:30 AM

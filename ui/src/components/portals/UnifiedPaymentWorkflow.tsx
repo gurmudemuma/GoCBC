@@ -176,7 +176,22 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
     
     switch (selectedPaymentMethod) {
       case 'LC':
-        allPayments = letterOfCredits.map(lc => {
+        // FOR LC: Show approved contracts awaiting LC issuance + existing LCs
+        // First, add approved contracts as "pending LC requests"
+        const pendingLCRequests = contracts.map(contract => ({
+          ...contract,
+          id: contract.contractId,
+          amount: contract.totalValue,
+          currency: contract.currency,
+          exporter: contract.exporterId,
+          status: 'AWAITING_LC', // Custom status for contracts pending LC
+          currentStep: 0,
+          isContract: true, // Flag to identify this as a contract, not an LC
+          contractData: contract, // Keep full contract data
+        }));
+        
+        // Then, add existing LCs
+        const existingLCs = letterOfCredits.map(lc => {
           // Check if this LC has a pending forex request
           const forexRequest = forexAllocations.find(f => f.lcId === lc.lcId);
           let effectiveStatus = lc.status;
@@ -197,8 +212,12 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             status: effectiveStatus,
             currentStep: getCurrentStep(effectiveStatus, 'LC'),
             forexRequest, // Include forex data for reference
+            isContract: false, // This is an LC, not a contract
           };
         });
+        
+        // Combine: pending contracts first, then existing LCs
+        allPayments = [...pendingLCRequests, ...existingLCs];
         break;
       case 'CAD':
         allPayments = documentaryCollections.map(cad => ({
@@ -272,6 +291,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
   const getCurrentStep = (status: string, method: string): number => {
     const stepMappings: Record<string, Record<string, number>> = {
       LC: {
+        'AWAITING_LC': 0,         // Approved contract awaiting LC issuance
         'REQUESTED': 0,           // LC Requested
         'APPROVED': 1,            // Approve Request (ready for issuance)
         'ISSUED': 2,              // Issue LC (MT700 sent)
@@ -321,23 +341,6 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           {selectedMethodConfig?.name} Management
         </Typography>
         <Box sx={{ display: 'flex', gap: 2 }}>
-          {contracts.length > 0 && (
-            <Button
-              variant="contained"
-              startIcon={<Payment />}
-              onClick={() => onCreatePayment(selectedPaymentMethod, {})}
-              sx={{
-                bgcolor: CBE_COLORS.purple,
-                color: CBE_COLORS.white,
-                fontWeight: 600,
-                '&:hover': {
-                  bgcolor: CBE_COLORS.purpleDark,
-                },
-              }}
-            >
-              Create New {selectedMethodConfig?.name}
-            </Button>
-          )}
           <Button
             variant="outlined"
             startIcon={<Description />}
@@ -367,7 +370,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
       </Box>
 
       {/* Info Alert for LC Payment Method */}
-      {selectedPaymentMethod === 'LC' && (
+      {selectedPaymentMethod === 'LC' && payments.filter(p => p.isContract).length > 0 && (
         <Alert 
           severity="info" 
           sx={{ 
@@ -376,8 +379,20 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             borderLeft: `4px solid ${CBE_COLORS.purple}`,
           }}
         >
-          <strong>Note:</strong> LCs with ISSUED status have moved to <strong>Banking Operations → Forex Allocation</strong> tab. 
-          Forex allocation is handled separately per NBE policy guidelines.
+          <strong>Pending LC Requests:</strong> {payments.filter(p => p.isContract).length} approved {payments.filter(p => p.isContract).length === 1 ? 'contract is' : 'contracts are'} ready for Letter of Credit issuance. Review contract details and issue LCs below.
+        </Alert>
+      )}
+      
+      {selectedPaymentMethod === 'LC' && payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length > 0 && (
+        <Alert 
+          severity="info" 
+          sx={{ 
+            mb: 2,
+            bgcolor: 'rgba(33, 150, 243, 0.05)',
+            borderLeft: `4px solid #2196f3`,
+          }}
+        >
+          <strong>Active LCs:</strong> {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length} issued {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length === 1 ? 'Letter of Credit' : 'Letters of Credit'} in progress. View details below to track status and forex allocation.
         </Alert>
       )}
 
@@ -444,7 +459,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                     px: 2,
                     borderBottom: 'none'
                   }}>
-                    ID
+                    {selectedPaymentMethod === 'LC' ? 'Contract/LC ID' : 'ID'}
                   </TableCell>
                   <TableCell sx={{ 
                     bgcolor: CBE_COLORS.black,
@@ -457,6 +472,19 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                   }}>
                     Exporter
                   </TableCell>
+                  {selectedPaymentMethod === 'LC' && (
+                    <TableCell sx={{ 
+                      bgcolor: CBE_COLORS.black,
+                      color: CBE_COLORS.golden,
+                      fontWeight: 700,
+                      fontSize: '0.875rem',
+                      py: 1,
+                      px: 2,
+                      borderBottom: 'none'
+                    }}>
+                      Buyer
+                    </TableCell>
+                  )}
                   <TableCell sx={{ 
                     bgcolor: CBE_COLORS.black,
                     color: CBE_COLORS.golden,
@@ -528,6 +556,20 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                           {payment.exporter}
                         </Typography>
                       </TableCell>
+                      {selectedPaymentMethod === 'LC' && payment.isContract && (
+                        <TableCell>
+                          <Typography variant="body2" sx={{ color: CBE_COLORS.black }}>
+                            {payment.contractData?.buyerName || 'N/A'}
+                          </Typography>
+                        </TableCell>
+                      )}
+                      {selectedPaymentMethod === 'LC' && !payment.isContract && (
+                        <TableCell>
+                          <Typography variant="body2" sx={{ color: CBE_COLORS.gray, fontStyle: 'italic' }}>
+                            —
+                          </Typography>
+                        </TableCell>
+                      )}
                       <TableCell>
                         <Typography variant="body2" sx={{ fontWeight: 700, color: CBE_COLORS.purple }}>
                           ${payment.amount?.toLocaleString()} {payment.currency}
@@ -591,8 +633,50 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                           >
                             View Details
                           </Button>
-                          {/* Only show action button if current step is a bank action */}
-                          {payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
+                          
+                          {/* Special handling for AWAITING_LC status (approved contracts) */}
+                          {payment.status === 'AWAITING_LC' && payment.isContract && (
+                            <>
+                              <Button
+                                size="small"
+                                variant="contained"
+                                startIcon={<CheckCircle fontSize="small" />}
+                                onClick={() => onProcessStep(payment.id, 'Issue LC')}
+                                sx={{
+                                  bgcolor: CBE_COLORS.golden,
+                                  color: CBE_COLORS.black,
+                                  fontWeight: 600,
+                                  textTransform: 'none',
+                                  '&:hover': {
+                                    bgcolor: CBE_COLORS.goldenLight,
+                                  },
+                                }}
+                              >
+                                Issue LC
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => onProcessStep(payment.id, 'Reject LC')}
+                                sx={{
+                                  borderColor: '#d32f2f',
+                                  color: '#d32f2f',
+                                  fontWeight: 600,
+                                  textTransform: 'none',
+                                  '&:hover': {
+                                    borderColor: '#b71c1c',
+                                    bgcolor: 'rgba(211, 47, 47, 0.05)',
+                                  },
+                                }}
+                              >
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                          
+                          {/* Regular action buttons for existing LCs */}
+                          {payment.status !== 'AWAITING_LC' && 
+                           payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
                            payment.status !== 'PAID' && 
                            payment.status !== 'SETTLED' &&
                            selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
@@ -615,7 +699,8 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                             </Button>
                           )}
                           {/* Show info if next step is not a bank action */}
-                          {payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
+                          {payment.status !== 'AWAITING_LC' &&
+                           payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
                            payment.status !== 'PAID' && 
                            payment.status !== 'SETTLED' &&
                            !selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
@@ -696,24 +781,6 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           </Box>
         )}
       </Paper>
-
-      {/* Available Contracts Alert */}
-      {contracts.length > 0 && (
-        <Alert 
-          severity="info" 
-          sx={{ 
-            mt: 3,
-            bgcolor: 'rgba(0, 0, 0, 0.05)',
-            color: CBE_COLORS.black,
-            border: `1px solid ${CBE_COLORS.black}`,
-            '& .MuiAlert-icon': {
-              color: CBE_COLORS.purple,
-            },
-          }}
-        >
-          <strong>{contracts.length} NBE-approved contracts</strong> are available for payment processing via {selectedMethodConfig?.name}
-        </Alert>
-      )}
     </Box>
   );
 };
