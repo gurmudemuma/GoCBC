@@ -1239,7 +1239,7 @@ const BanksPortal: React.FC = () => {
 
       if (requestResult.success) {
         // Then immediately approve and issue it
-        await apiFetch('/banking/lc/${lcId}/approve', {
+        await apiFetch(`/banking/lc/${lcId}/approve`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -1252,7 +1252,7 @@ const BanksPortal: React.FC = () => {
           }),
         });
 
-        await apiFetch('/banking/lc/${lcId}/issue', {
+        await apiFetch(`/banking/lc/${lcId}/issue`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -1314,7 +1314,7 @@ const BanksPortal: React.FC = () => {
 
     try {
       // The backend will automatically use the logged-in user's organization as the bank
-      const response = await apiFetch('/banking/lc/${lcId}/approve', {
+      const response = await apiFetch(`/banking/lc/${lcId}/approve`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -1362,7 +1362,7 @@ const BanksPortal: React.FC = () => {
         const lc = letterOfCredits.find(l => l.lcId === lcId);
         if (!lc) continue;
 
-        const response = await apiFetch('/banking/lc/${lcId}/approve', {
+        const response = await apiFetch(`/banking/lc/${lcId}/approve`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -1418,7 +1418,7 @@ const BanksPortal: React.FC = () => {
     if (!token) return;
 
     try {
-      const response = await apiFetch('/banking/lc/${selectedLC.lcId}/amend', {
+      const response = await apiFetch(`/banking/lc/${selectedLC.lcId}/amend`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
