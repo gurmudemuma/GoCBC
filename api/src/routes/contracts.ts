@@ -281,6 +281,8 @@ router.get('/', async (req, res) => {
         buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
         buyerName: contract?.buyerName || contract?.BuyerName || '',
         buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
+        buyerBank: contract?.buyerBank || contract?.BuyerBank || '',
+        exporterBank: contract?.exporterBank || contract?.ExporterBank || '',
         coffeeType: contract?.coffeeType || contract?.CoffeeType || '', // ✅ FIX: Add coffeeType mapping
         amount: contract?.amount ?? contract?.Amount ?? 0,
         currency: contract?.currency || contract?.Currency || 'USD',
