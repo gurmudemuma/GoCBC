@@ -2543,6 +2543,18 @@ const BanksPortal: React.FC = () => {
             onProcessStep={async (paymentId, step) => {
               console.log('[BANKS] Process step:', paymentId, step);
               
+              if (step === 'Approve Request') {
+                // Handle LC approval request
+                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
+                if (lc) {
+                  console.log('[BANKS] Approving LC:', lc.lcId);
+                  await handleApproveLC(lc.lcId, lc.exporterId);
+                  return;
+                }
+                showError('LC Not Found', `Could not find LC ${paymentId}`, 'Please refresh and try again');
+                return;
+              }
+              
               if (step === 'Issue LC') {
                 // Find the contract/payment to issue LC for
                 // paymentId might be in format "CONTRACT1786342727251" or just "1786342727251"
