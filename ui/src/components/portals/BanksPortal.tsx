@@ -806,14 +806,35 @@ const BanksPortal: React.FC = () => {
       // Get logged-in bank user's organization for advising bank
       const userOrg = user?.organization || 'Commercial Bank of Ethiopia';
       
-      // For issuing bank: use contract's buyer bank if available, otherwise construct from buyer info
+      // ✅ DEBUG: Log the contract object to see what we have
+      console.log('[LC FORM] Contract object received:', {
+        contractId: contract.contractId,
+        buyerBank: contract.buyerBank,
+        exporterBank: contract.exporterBank,
+        buyerName: contract.buyerName,
+        buyerCountry: contract.buyerCountry,
+        exporterId: contract.exporterId
+      });
+      
+      // ✅ FIX: Better issuing bank handling
       let issuingBankValue = contract.buyerBank || '';
-      if (!issuingBankValue && contract.buyerName && contract.buyerCountry) {
-        issuingBankValue = `${contract.buyerName}'s Bank (${contract.buyerCountry})`;
+      if (!issuingBankValue) {
+        // If buyer bank not specified, leave blank so user must enter it
+        console.warn('[LC FORM] ⚠️ Buyer bank not found in contract');
+        issuingBankValue = '';
+      } else {
+        console.log('[LC FORM] ✅ Using buyerBank as issuing bank:', issuingBankValue);
       }
       
-      // For advising bank: use contract's exporter bank if available, otherwise use user's org
-      const advisingBankValue = contract.exporterBank || userOrg;
+      // ✅ FIX: Better advising bank handling  
+      let advisingBankValue = contract.exporterBank || '';
+      if (!advisingBankValue) {
+        // Use the logged-in bank's organization as advising bank
+        console.log('[LC FORM] Using user organization as advising bank:', userOrg);
+        advisingBankValue = userOrg;
+      } else {
+        console.log('[LC FORM] ✅ Using exporterBank as advising bank:', advisingBankValue);
+      }
       
       const formData = {
         issuingBank: issuingBankValue,
@@ -823,8 +844,7 @@ const BanksPortal: React.FC = () => {
         expiryDays: '90',
       };
       
-      console.log('Auto-filling LC form with data:', formData);
-      console.log('User organization:', userOrg);
+      console.log('[LC FORM] Final form data:', formData);
       
       // Set form data immediately
       setLcForm(formData);
@@ -832,7 +852,7 @@ const BanksPortal: React.FC = () => {
       // Also set after a brief delay to ensure state updates
       setTimeout(() => {
         setLcForm(formData);
-        console.log('[DEBUG] LC form state updated:', formData);
+        console.log('[LC FORM] Form state confirmed after delay');
       }, 50);
     }
     
@@ -861,42 +881,72 @@ const BanksPortal: React.FC = () => {
     let lcDocuments: any[] = [];
     
     if (token) {
-      try {
-        const response = await apiFetch(`/documents/entity/LC/${lc.lcId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        
-        const result = await response.json();
-        if (result.success && result.data) {
-          lcDocuments = result.data.map((doc: any) => ({
-            id: doc.documentId || doc.id,
-            name: doc.filename || doc.name,
-            type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
-            status: 'AVAILABLE',
-            url: `/api/v1/documents/${doc.documentId || doc.id}`,
-            uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-            size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
-            category: doc.category || 'LC_DOCUMENT',
-          }));
+      // First, try to get documents from the related contract (primary source)
+      if (lc.contractId) {
+        try {
+          console.log(`[LC DOCS] Fetching contract documents for LC ${lc.lcId} from contract ${lc.contractId}`);
+          const response = await apiFetch(`/contracts/${lc.contractId}/documents`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          const result = await response.json();
+          if (result.success && result.data && result.data.documents) {
+            lcDocuments = result.data.documents.map((doc: any) => ({
+              id: doc.document_id || doc.documentId || doc.id,
+              name: doc.file_name || doc.filename || doc.name,
+              type: (doc.mime_type || doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+              status: 'AVAILABLE',
+              url: `/api/v1/documents/${doc.document_id || doc.documentId || doc.id}`,
+              uploadedDate: doc.uploaded_at || doc.uploadedAt ? new Date(doc.uploaded_at || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+              size: doc.file_size || doc.size ? `${((doc.file_size || doc.size) / 1024).toFixed(0)} KB` : 'N/A',
+              category: doc.document_type || doc.category || 'CONTRACT_DOCUMENT',
+              documentType: doc.document_type || doc.documentType || 'UNKNOWN',
+            }));
+            console.log(`[LC DOCS] ✅ Found ${lcDocuments.length} documents from contract ${lc.contractId}`);
+          }
+        } catch (error) {
+          console.error(`[LC DOCS] Error fetching contract documents for ${lc.contractId}:`, error);
         }
-      } catch (error) {
-        console.error('Error fetching LC documents:', error);
+      }
+      
+      // If no contract documents found, try LC-specific documents
+      if (lcDocuments.length === 0) {
+        try {
+          const response = await apiFetch(`/documents/entity/LC/${lc.lcId}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          const result = await response.json();
+          if (result.success && result.data) {
+            lcDocuments = result.data.map((doc: any) => ({
+              id: doc.documentId || doc.id,
+              name: doc.filename || doc.name,
+              type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
+              status: 'AVAILABLE',
+              url: `/api/v1/documents/${doc.documentId || doc.id}`,
+              uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
+              size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
+              category: doc.category || 'LC_DOCUMENT',
+            }));
+            console.log(`[LC DOCS] ✅ Found ${lcDocuments.length} LC-specific documents`);
+          }
+        } catch (error) {
+          console.error('[LC DOCS] Error fetching LC documents:', error);
+        }
       }
     }
     
-    // If no documents found, provide standard required documents list
+    // Only show warning if truly no documents exist
     if (lcDocuments.length === 0) {
-      lcDocuments = [
-        { id: '1', name: 'LC Application Form', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
-        { id: '2', name: 'Sales Contract Copy', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
-        { id: '3', name: 'Proforma Invoice', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
-        { id: '4', name: 'Buyer Bank Details', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
-        { id: '5', name: 'SWIFT Message MT700', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
-      ];
+      console.warn(`[LC DOCS] ⚠️ No documents found for LC ${lc.lcId} (contract: ${lc.contractId})`);
     }
     
     // Find the related contract
