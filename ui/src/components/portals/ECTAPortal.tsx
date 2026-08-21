@@ -569,7 +569,7 @@ const ECTAPortal: React.FC = () => {
       }
 
       // Set inspection records for the Quality Control KPI row
-      const inspectionData = inspectionsRes.data?.data;
+      const inspectionData = inspectionsRes.data?.data?.inspections;
       if (inspectionData && Array.isArray(inspectionData)) {
         setInspectionRecords(inspectionData);
         setAllInspectionRecords(inspectionData);
@@ -1164,6 +1164,9 @@ The exporter can reapply once all requirements are met.`,
         shipmentID: shipment.shipmentId,
         contractID: shipment.contractId,
         exporterID: shipment.exporterId,
+        coffeeType: shipment.grade || shipment.coffeeType || 'Arabica',
+        quantity: shipment.quantity || 0,
+        sampleSize: 100,
         scheduledDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days from now
       });
       
@@ -2622,7 +2625,13 @@ The exporter can reapply once all requirements are met.`,
                       <TableCell width="15%">Shipment ID</TableCell>
                       <TableCell width="12%">Exporter</TableCell>
                       <TableCell width="10%">Status</TableCell>
-                      <TableCell width="10%">Date</TableCell>
+                      <TableCell width="10%">
+                        <Tooltip title="Shows Scheduled Date for pending inspections, Inspection Date for completed">
+                          <Box component="span" sx={{ borderBottom: '1px dotted', cursor: 'help' }}>
+                            Date
+                          </Box>
+                        </Tooltip>
+                      </TableCell>
                       <TableCell width="10%">Quality Score</TableCell>
                       <TableCell width="10%">Certificate</TableCell>
                       <TableCell width="18%" align="right">Actions</TableCell>
@@ -2634,12 +2643,51 @@ The exporter can reapply once all requirements are met.`,
                       const itemId = isShipment ? item.shipmentId : (item.inspectionID || item.InspectionID);
                       const shipmentId = isShipment ? item.shipmentId : (item.shipmentID || item.ShipmentID);
                       const exporterId = isShipment ? item.exporterId : (item.exporterID || item.ExporterID);
-                      const status = isShipment ? 'PENDING' : (item.status || item.Status || 'UNKNOWN');
-                      const date = isShipment 
-                        ? (item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'N/A')
-                        : (item.inspectionDate || item.approvalDate || item.scheduledDate) 
-                          ? new Date(item.inspectionDate || item.approvalDate || item.scheduledDate).toLocaleDateString() 
-                          : 'N/A';
+                      
+                      // Map database status to workflow status
+                      const rawStatus = isShipment ? 'PENDING' : (item.status || item.Status || 'UNKNOWN');
+                      const status = (() => {
+                        const normalized = String(rawStatus).toUpperCase();
+                        // Map 'pending' from database to 'REQUESTED' (scheduled, awaiting inspection)
+                        if (normalized === 'PENDING' && !isShipment && item.requestedDate) {
+                          return 'REQUESTED';
+                        }
+                        // Map 'completed' to 'APPROVED' or 'REJECTED' based on passed field
+                        if (normalized === 'COMPLETED') {
+                          return item.passed ? 'APPROVED' : 'REJECTED';
+                        }
+                        return normalized;
+                      })();
+                      
+                      // Professional date display based on inspection status
+                      const date = (() => {
+                        if (isShipment) {
+                          // For pending shipments, show when created
+                          return item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'N/A';
+                        }
+                        
+                        // For inspections, show appropriate date based on status
+                        const currentStatus = (item.status || '').toUpperCase();
+                        
+                        if (currentStatus === 'PENDING' || currentStatus === 'REQUESTED') {
+                          // Show scheduled/requested date for pending inspections
+                          const schedDate = item.requestedDate || item.scheduledDate || item.createdAt;
+                          return schedDate ? new Date(schedDate).toLocaleDateString() : 'Not Scheduled';
+                        } else if (currentStatus === 'INSPECTED') {
+                          // Show inspection date for inspected (awaiting approval)
+                          const inspDate = item.inspectionDate || item.createdAt;
+                          return inspDate ? new Date(inspDate).toLocaleDateString() : 'N/A';
+                        } else if (currentStatus === 'APPROVED' || currentStatus === 'REJECTED' || currentStatus === 'COMPLETED') {
+                          // Show inspection date, fall back to requested date or created date
+                          const compDate = item.inspectionDate || item.approvalDate || item.requestedDate || item.createdAt;
+                          return compDate ? new Date(compDate).toLocaleDateString() : 'N/A';
+                        }
+                        
+                        // Fallback
+                        const anyDate = item.inspectionDate || item.requestedDate || item.createdAt;
+                        return anyDate ? new Date(anyDate).toLocaleDateString() : 'N/A';
+                      })();
+                      
                       const qualityScore = isShipment ? 'N/A' : (item.overall || item.overallScore || 'N/A');
                       const certificate = isShipment ? '-' : (item.certificateNo || '-');
 

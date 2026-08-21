@@ -17,6 +17,7 @@ interface ApprovalEmailData {
   licenseNumber: string;
   email: string;
   username: string;
+  oldUsername?: string;  // ✅ OLD temporary username for reference
   temporaryPassword: string;
   bankName?: string;
   bankBranch?: string;
@@ -167,6 +168,16 @@ ${options.text || options.html}
     }
   }
 
+  // Public method for generic email sending (used by notification service)
+  public async send(to: string, subject: string, message: string): Promise<boolean> {
+    return this.sendEmail({
+      to,
+      subject,
+      html: message.replace(/\n/g, '<br>'),
+      text: message
+    });
+  }
+
   public async sendApprovalEmail(data: ApprovalEmailData): Promise<boolean> {
     const subject = `🎉 Exporter Application Approved - ${data.exporterName}`;
 
@@ -226,13 +237,21 @@ ${options.text || options.html}
       </div>
       ` : ''}
       
-      <h3>🔐 Your Login Credentials:</h3>
+      <h3>🔐 Your Login Credentials (UPDATED):</h3>
       <div class="credentials-box">
-        <div class="info-item">
-          <span class="info-label">Username:</span> <strong>${data.username}</strong>
+        <div class="warning">
+          ⚠️ <strong>Important: Your username has been updated!</strong><br>
+          Your temporary application username has been replaced with your official Exporter ID.
         </div>
         <div class="info-item">
-          <span class="info-label">Temporary Password:</span> <strong>${data.temporaryPassword}</strong>
+          <span class="info-label">NEW Username:</span> <strong>${data.username}</strong>
+        </div>
+        ${data.oldUsername ? `<div class="info-item" style="text-decoration: line-through; opacity: 0.6;">
+          <span class="info-label">Old Username (no longer valid):</span> ${data.oldUsername}
+        </div>` : ''}
+        <div class="info-item">
+          <span class="info-label">Password:</span> <strong>${data.temporaryPassword}</strong><br>
+          <small style="color: #666;">Your password remains the same. Please change it after logging in.</small>
         </div>
         <div class="info-item">
           <span class="info-label">Portal URL:</span> <a href="${data.loginUrl}">${data.loginUrl}</a>

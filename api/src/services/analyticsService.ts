@@ -465,7 +465,7 @@ export class AnalyticsService {
   // ==================== HELPER METHODS ====================
 
   private buildDateFilter(dateFrom?: string, dateTo?: string): string {
-    const filters = [];
+    const filters: string[] = [];
     
     if (dateFrom) {
       filters.push(`created_at >= '${dateFrom}'`);

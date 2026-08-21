@@ -208,17 +208,19 @@ router.post('/exporter-applications',
         submittedAt,
       ]);
       
-      const applicationId = appResult.id;
+      // ✅ FIX: Use application_id (APP-XXXXX) not the numeric id
+      const applicationId = appResult.application_id;  // APP-XXXXX format
+      const numericId = appResult.id;  // Numeric database ID
 
-      // Step 2: Generate temporary credentials
+      // Step 2: Generate temporary credentials using the numeric ID for the database
       const applicantCredentialsService = require('../services/applicantCredentialsService').default;
       const credentials = await applicantCredentialsService.generateCredentials(
-        applicationId,
+        numericId,  // Use numeric ID for database FK relationship
         applicationData.email,
         applicationData.companyName
       );
       
-      logger.info(`✅ Application submitted: ID=${applicationId}, Username=${credentials.username}`);
+      logger.info(`✅ Application submitted: ID=${applicationId}, Database ID=${numericId}, Username=${credentials.username}`);
       
       // Step 3: Send credentials email immediately (non-blocking - don't fail if email fails)
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -281,7 +283,8 @@ router.post('/exporter-applications/:applicationId/approve',
       const { applicationId } = req.params;
       const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankAccountNumber, bankBranch, bankBranchCode } = req.body;
       
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1', [applicationId]);
+      // ✅ FIX: Use application_id (APP-XXXXX) not id (numeric)
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
       
       if (!application || (application.status !== 'pending' && application.status !== 'approved')) {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or already rejected' }, timestamp: new Date().toISOString() });
@@ -347,7 +350,7 @@ router.post('/exporter-applications/:applicationId/approve',
 
       // Step 3: Convert temporary credentials to full account
       const applicantCredentialsService = require('../services/applicantCredentialsService').default;
-      await applicantCredentialsService.convertToFullAccount(parseInt(applicationId), exporterId);
+      await applicantCredentialsService.convertToFullAccount(application.id, exporterId);  // Use numeric id for FK
       logger.info(`✅ Converted temporary account to full exporter account: ${exporterId}`);
       
       // Step 4: Update application with license details
@@ -366,7 +369,7 @@ router.post('/exporter-applications/:applicationId/approve',
              bank_account_number = $10,
              bank_branch = $11,
              bank_branch_code = $12
-         WHERE id = $13`,
+         WHERE application_id = $13`,
         ['approved', approvalDate, exporterId, ectaLicenseNumber, approvalDate, expiryDate,
          licenseResult.digitalSignature, licenseResult.verificationCode,
          bankName || null, bankAccountNumber || null, bankBranch || null, bankBranchCode || null, applicationId]
@@ -399,11 +402,15 @@ router.post('/exporter-applications/:applicationId/approve',
       
       // Step 5: Send approval email with license download link
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      const username = application.temp_username || exporterId;
       
-      // Get temporary password from application
+      // ✅ NEW USERNAME: After approval, user logs in with exporterId (e.g., EXP3414033)
+      // The convertToFullAccount method already updated the username in the database
+      const newUsername = exporterId;  // Standard format username
+      const oldUsername = application.temp_username;  // Old temporary username
+      
+      // Get temporary password from application (same password, just username changed)
       const tempPwdResult = await postgresDb.get(
-        'SELECT temp_password FROM exporter_applications WHERE id = $1',
+        'SELECT temp_password FROM exporter_applications WHERE application_id = $1',
         [applicationId]
       );
       
@@ -413,8 +420,9 @@ router.post('/exporter-applications/:applicationId/approve',
         exporterId,
         licenseNumber: ectaLicenseNumber,
         email: application.email,
-        username,
-        temporaryPassword: '(use the password sent earlier)',
+        username: newUsername,  // ✅ Send the NEW username (exporterId)
+        oldUsername: oldUsername,  // Include old username for reference
+        temporaryPassword: 'Use your existing password',
         bankName: bankName || undefined,
         bankBranch: bankBranch || undefined,
         bankBranchCode: bankBranchCode || undefined,
@@ -462,7 +470,8 @@ router.post('/exporter-applications/:applicationId/reject',
       const { applicationId } = req.params;
       const { reason } = req.body;
       
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1', [applicationId]);
+      // ✅ FIX: Use application_id (APP-XXXXX) not id (numeric)
+      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
       
       if (!application || application.status !== 'pending') {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND' }, timestamp: new Date().toISOString() });
@@ -478,7 +487,7 @@ router.post('/exporter-applications/:applicationId/reject',
 
       // Step 2: Update application status to rejected
       await postgresDb.run(
-        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE id = $4',
+        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE application_id = $4',
         ['rejected', new Date().toISOString(), reason, applicationId]
       );
       
@@ -2055,10 +2064,17 @@ router.get('/payments', authMiddleware, async (req, res) => {
  */
 router.get('/shipments', authMiddleware, async (req, res) => {
   try {
-    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
+    const user = (req as any).user;
+    const userRole = user?.role || '';
+    const exporterId = user?.exporterId || 'EXP2026001';
     
-    // Query shipments filtered by exporterId
-    const result = await fabricService.queryShipments({ exporterId });
+    // ECTA users see ALL shipments for quality control
+    // Exporters only see their own shipments
+    const isECTA = userRole === 'ECTA' || userRole === 'ADMIN' || userRole.includes('ECTA') || userRole.includes('Quality') || userRole.includes('Lab');
+    
+    // Query shipments - ECTA gets all, exporters get filtered
+    const queryParams = isECTA ? {} : { exporterId };
+    const result = await fabricService.queryShipments(queryParams);
 
     if (result.success) {
       const normalizedShipments = (result.data || []).map((shipment: any) => ({

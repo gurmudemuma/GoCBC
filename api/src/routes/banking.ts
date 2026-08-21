@@ -530,10 +530,10 @@ router.post('/lc/:lcID/issue',
           const lcData = await fabricService.getLC(lcID);
           if (lcData.success && lcData.data) {
             const lc = lcData.data;
-            const forexId = `FOREX_${lcID}_${Date.now()}_v2`; // Add _v2 suffix for proper schema
+            const forexId = `FOREX_${lcID}_${Date.now()}`; // Create unique forex ID with LC reference
             
             // RequestForex takes 5 parameters: forexID, contractID, exporterID, amount, currency
-            // NOTE: LC ID is NOT part of RequestForex parameters (added during allocation)
+            // NOTE: LC ID is NOT part of RequestForex parameters (linked during allocation)
             const forexResult = await fabricService.invokeChaincode('RequestForex', [
               forexId,
               lc.contractId || lc.ContractID || '',
@@ -727,7 +727,7 @@ router.get('/lcs', async (req, res) => {
     const result = await fabricService.queryAllLCs();
     
     if (result.success) {
-      const lcs = dedupeById(result.data || [], 'LCID', 'lcId');
+      const lcs = dedupeById(result.data || [], (lc: any) => lc.LCID || lc.lcId);
       res.json({
         success: true,
         data: lcs.filter(isValidLC),
@@ -760,7 +760,17 @@ router.get('/lcs', async (req, res) => {
  */
 router.get('/payments', async (req, res) => {
   try {
-    const result = await fabricService.queryAllPayments();
+    // Get exporterId from query params or user context if needed
+    const exporterId = req.query.exporterId as string;
+    
+    if (!exporterId) {
+      return res.status(400).json({
+        success: false,
+        error: 'exporterId parameter is required'
+      });
+    }
+    
+    const result = await fabricService.queryPayments({ exporterId });
     
     if (result.success) {
       res.json({

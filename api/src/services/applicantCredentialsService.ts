@@ -106,6 +106,7 @@ class ApplicantCredentialsService {
 
   /**
    * Convert temporary account to full exporter account upon approval
+   * Updates username from temporary format (applicant_xxx) to standard format (exporterId)
    */
   async convertToFullAccount(applicationId: number, exporterId: string): Promise<void> {
     // Get application details
@@ -118,41 +119,45 @@ class ApplicantCredentialsService {
       throw new Error('Application not found');
     }
     
-    // Check if user already exists
+    // Get password from application
+    const pwdResult = await db.get(
+      `SELECT temp_password FROM exporter_applications WHERE id = $1`,
+      [applicationId]
+    );
+    
+    if (!pwdResult) {
+      throw new Error('Application password not found');
+    }
+    
+    // Check if user exists with temporary username
     const existingUser = await db.get(
-      `SELECT id FROM users WHERE username = $1 OR email = $2`,
-      [app.temp_username, app.email]
+      `SELECT id FROM users WHERE username = $1`,
+      [app.temp_username]
     );
     
     if (existingUser) {
-      // User already exists, just update role and exporter_id
+      // ✅ Update existing user: change username from temporary to exporterId
       await db.run(
         `UPDATE users 
-         SET role = 'EXPORTER', exporter_id = $1, status = 'active', organization = 'EXPORTER'
+         SET username = $1, 
+             role = 'EXPORTER', 
+             exporter_id = $1, 
+             status = 'active', 
+             organization = 'EXPORTER'
          WHERE username = $2`,
         [exporterId, app.temp_username]
       );
     } else {
-      // Get password from application
-      const pwdResult = await db.get(
-        `SELECT temp_password FROM exporter_applications WHERE id = $1`,
-        [applicationId]
-      );
-      
-      if (!pwdResult) {
-        throw new Error('Application password not found');
-      }
-      
-      // Create full user account
+      // Create new user with exporterId as username
       await db.run(
         `INSERT INTO users (username, email, password_hash, full_name, role, organization, exporter_id, status)
-         VALUES ($1, $2, $3, $4, 'EXPORTER', 'EXPORTER', $5, 'active')
+         VALUES ($1, $2, $3, $4, 'EXPORTER', 'EXPORTER', $1, 'active')
          ON CONFLICT (username) DO UPDATE SET
            role = 'EXPORTER',
-           exporter_id = $5,
+           exporter_id = $1,
            status = 'active',
            organization = 'EXPORTER'`,
-        [app.temp_username, app.email, pwdResult.temp_password, app.company_name, exporterId]
+        [exporterId, app.email, pwdResult.temp_password, app.company_name]
       );
     }
     

@@ -55,6 +55,7 @@ import {
   CloudUpload,
   DirectionsBoat,
   FlightTakeoff,
+  LocalShipping,
   Edit,
   Cancel,
   Message as MessageOutlined,
@@ -136,6 +137,7 @@ interface LetterOfCredit {
   advisingDate?: string;
   confirmationStatus?: 'CONFIRMED' | 'UNCONFIRMED';
   paymentTerms?: string;
+  terms?: string;
 }
 
 interface ForexAllocation {
@@ -353,8 +355,8 @@ const BanksPortal: React.FC = () => {
     
     const allTabs = [
       { index: 0, label: 'Payment Methods', icon: <Payment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
-      { index: 1, label: 'Forex Allocations', icon: <CurrencyExchange />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
-      { index: 2, label: 'SWIFT Messages', icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
+      { index: 1, label: `Forex Allocations${forexAllocations.length > 0 ? ` (${forexAllocations.length})` : ''}`, icon: <CurrencyExchange />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
+      { index: 2, label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
       { index: 3, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
       { index: 4, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
       { index: 5, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
@@ -506,6 +508,7 @@ const BanksPortal: React.FC = () => {
       }
 
       // Load Letters of Credit from /banking/lc endpoint
+      let allLCs: any[] = [];
       try {
         const lcResponse = await apiFetch('/banking/lc', {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -514,7 +517,7 @@ const BanksPortal: React.FC = () => {
         console.log('[BANKS] LC Response:', { status: lcResponse.status, success: lcResult.success, count: lcResult.data?.length });
         
         if (lcResult.success) {
-          const allLCs = lcResult.data.map((lc: any) => ({
+          allLCs = lcResult.data.map((lc: any) => ({
             lcId: lc.lcId || lc.LCID,
             contractId: lc.contractId || lc.ContractID,
             exporterId: lc.exporterId || lc.ExporterID,
@@ -532,16 +535,17 @@ const BanksPortal: React.FC = () => {
           console.log(`[BANKS] ✅ Letters of Credit loaded: ${allLCs.length}`);
           console.log(`[BANKS] ℹ️  State should now have ${allLCs.length} LCs for Tab 0 KPI card`);
           
-          // Filter LCs for Document Examination (status: DOCUMENTS_SUBMITTED)
+          // Filter LCs for Document Examination (LCs with documents attached, status: ISSUED)
+          // Note: After fix, document submission doesn't change LC status, so we need to check if documents exist
           const forExamination = allLCs.filter((lc: any) => 
-            lc.status === 'DOCUMENTS_SUBMITTED' || lc.status === 'UNDER_EXAMINATION'
+            lc.status === 'ISSUED' && lc.documents && lc.documents.length > 0
           );
           setLcsForExamination(forExamination);
           console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length} (Tab 3 KPI)`);
           
-          // Filter LCs for Payment Release (status: DOCUMENTS_VERIFIED)
+          // Filter LCs for Payment Release (status: UTILIZED - documents verified)
           const forPaymentRelease = allLCs.filter((lc: any) => 
-            lc.status === 'DOCUMENTS_VERIFIED' || lc.status === 'DOCUMENTS_ACCEPTED'
+            lc.status === 'UTILIZED'
           );
           setLcsForPaymentRelease(forPaymentRelease);
           console.log(`[BANKS] 💰 LCs ready for payment release: ${forPaymentRelease.length} (Tab 4 KPI)`);
@@ -556,8 +560,10 @@ const BanksPortal: React.FC = () => {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const forexResult = await forexResponse.json();
+        let mappedForex: ForexAllocation[] = [];
+        
         if (forexResult.success) {
-          const mappedForex = forexResult.data.map((f: any) => ({
+          mappedForex = forexResult.data.map((f: any) => ({
             forexId: f.forexId || f.ForexID,
             contractId: f.contractId || f.ContractID,
             exporterId: f.exporterId || f.ExporterID,
@@ -570,10 +576,67 @@ const BanksPortal: React.FC = () => {
             status: f.status || f.Status,
             expiryDate: f.expiryDate || f.ExpiryDate,
           }));
-          setForexAllocations(mappedForex);
-          console.log(`[BANKS] ✅ Forex allocations loaded: ${forexResult.data.length} (Tab 1 KPI)`);
-          console.log(`[BANKS] ℹ️  State should now have ${mappedForex.length} forex allocations for Tab 1 KPI card`);
+          console.log(`[BANKS] ✅ Forex allocations loaded from /forex: ${forexResult.data.length}`);
         }
+
+        // Add ISSUED and FOREX_ALLOCATED LCs as forex requests if they don't already have forex records
+        if (allLCs && allLCs.length > 0) {
+          // Include both ISSUED and FOREX_ALLOCATED statuses
+          const forexRelatedLCs = allLCs.filter((lc: any) => 
+            lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED'
+          );
+          console.log(`[BANKS] 🔍 Found ${forexRelatedLCs.length} forex-related LCs (ISSUED/FOREX_ALLOCATED/FOREX_BACKED)`);
+          console.log(`[BANKS] 📋 Forex-related LCs:`, forexRelatedLCs.map(lc => ({ lcId: lc.lcId, status: lc.status, amount: lc.amount })));
+          console.log(`[BANKS] 📋 Existing forex records from API:`, mappedForex.map(f => ({ forexId: f.forexId, lcId: f.lcId, status: f.status })));
+          
+          for (const lc of forexRelatedLCs) {
+            // Check if this LC already has a forex allocation
+            // Match by: 1) lcId exact match, 2) forexId pattern (contains LC ID), 3) contract+exporter match
+            const matchingForex = mappedForex.filter(f => {
+              const lcIdMatch = f.lcId && f.lcId === lc.lcId;
+              const forexIdMatch = f.forexId && f.forexId.includes(lc.lcId);
+              const metadataMatch = f.contractId && f.exporterId && 
+                f.contractId === lc.contractId && f.exporterId === lc.exporterId;
+              return lcIdMatch || forexIdMatch || metadataMatch;
+            });
+            
+            const hasForex = matchingForex.length > 0;
+            
+            if (!hasForex) {
+              // Create synthetic forex record for LC without forex allocation record
+              // Use appropriate status based on LC status
+              const forexStatus = lc.status === 'FOREX_ALLOCATED' ? 'ALLOCATED' : 'REQUESTED';
+              
+              const syntheticForex: ForexAllocation = {
+                forexId: `FOREX_${lc.lcId}_PENDING`,
+                contractId: lc.contractId || '',
+                exporterId: lc.exporterId || '',
+                lcId: lc.lcId,
+                requestedAmount: Number(lc.amount || 0),
+                allocatedAmount: lc.status === 'FOREX_ALLOCATED' ? Number(lc.amount || 0) : 0,
+                currency: lc.currency || 'USD',
+                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? 115.5 : 0,
+                retentionRate: 40,
+                status: forexStatus,
+                expiryDate: lc.expiryDate || '',
+              };
+              mappedForex.push(syntheticForex);
+              console.log(`[BANKS] ➕ Added ${lc.status} LC ${lc.lcId} as synthetic forex ${forexStatus}`, syntheticForex);
+            } else {
+              console.log(`[BANKS] ✓ LC ${lc.lcId} (${lc.status}) already has forex allocation:`, matchingForex);
+            }
+          }
+        }
+
+        setForexAllocations(mappedForex);
+        console.log(`[BANKS] ✅ Total forex allocations (including synthetic): ${mappedForex.length}`);
+        console.log(`[BANKS] 📊 Final forex allocations for table:`, mappedForex.map(f => ({ 
+          forexId: f.forexId, 
+          lcId: f.lcId, 
+          status: f.status,
+          requestedAmount: f.requestedAmount,
+          allocatedAmount: f.allocatedAmount
+        })));
       } catch (err) {
         console.warn('[BANKS] Could not load forex allocations:', err);
       }
@@ -1225,7 +1288,7 @@ const BanksPortal: React.FC = () => {
         terms: lcForm.terms,
       };
 
-      // First request LC
+      // Only request LC - don't auto-approve or auto-issue
       const requestResponse = await apiFetch('/banking/lc/request', {
         method: 'POST',
         headers: {
@@ -1238,35 +1301,10 @@ const BanksPortal: React.FC = () => {
       const requestResult = await requestResponse.json();
 
       if (requestResult.success) {
-        // Then immediately approve and issue it
-        await apiFetch(`/banking/lc/${lcId}/approve`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            issuingBank: lcForm.issuingBank,
-            advisingBank: lcForm.advisingBank,
-            beneficiary: lcForm.beneficiary,
-          }),
-        });
-
-        await apiFetch(`/banking/lc/${lcId}/issue`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            terms: lcForm.terms,
-          }),
-        });
-
         showSuccess(
-          'Letter of Credit Issued Successfully',
-          `LC ${lcId} has been issued and registered on the blockchain`,
-          `Next Steps:\n1. Bank allocates forex for this LC\n2. NBE monitors forex allocation for policy compliance\n3. Export permit will be issued\n4. Exporter can then proceed with shipment`
+          'Letter of Credit Requested',
+          `LC ${lcId} has been created with status REQUESTED`,
+          `Next Steps:\n1. Review the LC request in the table below\n2. Click "Approve Request" to approve the LC\n3. After approval, click "Issue LC" to send MT700 message\n4. Bank then allocates forex for this LC`
         );
         handleCloseDialog();
         loadBankingData();
@@ -1654,12 +1692,45 @@ const BanksPortal: React.FC = () => {
     }
 
     try {
+      // For REQUESTED status (synthetic forex from ISSUED LCs), we need to create the forex request first
+      if (forex.status === 'REQUESTED' && forex.forexId.includes('_PENDING')) {
+        // Step 1: Create the forex request
+        const forexId = `FOREX_${forex.lcId}_${Date.now()}`;
+        const requestPayload = {
+          forexId: forexId,
+          lcId: forex.lcId,
+          contractId: forex.contractId,
+          exporterId: forex.exporterId,
+          amount: forex.requestedAmount || 0,
+          currency: forex.currency || 'USD',
+        };
+        
+        showInfo('Creating Forex Request', 'Creating forex allocation request...');
+        
+        const requestResponse = await apiFetch('/forex/request', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestPayload),
+        });
+        
+        const requestResult = await requestResponse.json();
+        if (!requestResult.success) {
+          showError('Forex Request Failed', requestResult.error?.message || 'Failed to create forex request');
+          return;
+        }
+        
+        // Update forexId for allocation step
+        forex.forexId = forexId;
+        showInfo('Allocating Forex', 'Allocating foreign exchange...');
+      }
+      
+      // Step 2: Allocate the forex
       const payload = {
         forexId: forex.forexId,
         lcId: forex.lcId || '',
-        amount: forex.allocatedAmount || forex.requestedAmount || 0,
+        amount: forex.requestedAmount || forex.allocatedAmount || 0,
         exchangeRate: forex.exchangeRate || 115.5,
-        retentionRate: forex.retentionRate || 50,
+        retentionRate: forex.retentionRate || 40,
         officer: forex.officer || 'Bank Officer',
         approvalRef: `BANK-${Date.now()}`,
         expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
@@ -1673,7 +1744,8 @@ const BanksPortal: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        showSuccess('Forex Allocated', `Forex ${forex.forexId} allocated successfully`);
+        showSuccess('Forex Allocated', `Forex allocated successfully for LC ${forex.lcId}`, `40% USD retention, 60% ETB conversion per NBE policy`);
+        setAllocationDialogOpen(false);
         loadBankingData();
       } else {
         showError('Allocation Failed', result.error?.message || 'Unknown error');
@@ -1780,12 +1852,15 @@ const BanksPortal: React.FC = () => {
 
   const getFilteredForex = () => {
     let filtered = forexAllocations;
+    console.log(`[BANKS] 🔍 getFilteredForex() called with ${forexAllocations.length} total forex allocations`);
+    
     if (searchTerm) {
       filtered = filtered.filter(forex => 
         forex.forexId.toLowerCase().includes(searchTerm.toLowerCase()) ||
         forex.lcId.toLowerCase().includes(searchTerm.toLowerCase()) ||
         forex.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
       );
+      console.log(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
     }
     if (filterStatus !== 'ALL') {
       if (filterStatus === 'APPROVED_OR_ALLOCATED') {
@@ -1793,13 +1868,18 @@ const BanksPortal: React.FC = () => {
       } else {
         filtered = filtered.filter(forex => forex.status === filterStatus);
       }
+      console.log(`[BANKS] 🔍 After status filter (status: "${filterStatus}"): ${filtered.length} items`);
     }
     if (amountMin) {
       filtered = filtered.filter(forex => forex.allocatedAmount >= parseFloat(amountMin));
+      console.log(`[BANKS] 🔍 After min amount filter (min: ${amountMin}): ${filtered.length} items`);
     }
     if (amountMax) {
       filtered = filtered.filter(forex => forex.allocatedAmount <= parseFloat(amountMax));
+      console.log(`[BANKS] 🔍 After max amount filter (max: ${amountMax}): ${filtered.length} items`);
     }
+    
+    console.log(`[BANKS] ✅ getFilteredForex() returning ${filtered.length} items`);
     return filtered;
   };
 
@@ -1844,7 +1924,7 @@ const BanksPortal: React.FC = () => {
 
   const getFilteredDocumentExaminationLCs = () => {
     const baseList = documentExaminationFilter === 'VERIFIED'
-      ? letterOfCredits.filter(lc => lc.status === 'DOCUMENTS_VERIFIED')
+      ? letterOfCredits.filter(lc => lc.status === 'UTILIZED') // UTILIZED = documents verified
       : lcsForExamination;
 
     if (!searchTerm) {
@@ -2047,11 +2127,15 @@ const BanksPortal: React.FC = () => {
               },
               { 
                 icon: <AttachMoney />, 
-                label: 'Forex Allocated', 
-                value: `$${(forexAllocations.reduce((s, f) => s + (Number(f.allocatedAmount) || 0), 0) / 1000000).toFixed(1)}M`, 
+                label: 'Total Requested', 
+                value: `$${(forexAllocations.reduce((s, f) => {
+                  // For REQUESTED, use requestedAmount; for others, use allocatedAmount
+                  const amount = f.status === 'REQUESTED' ? (Number(f.requestedAmount) || 0) : (Number(f.allocatedAmount) || 0);
+                  return s + amount;
+                }, 0) / 1000000).toFixed(1)}M`, 
                 color: '#9b30b7',
                 subtitle: 'Total USD',
-                description: 'Sum of all allocated forex amounts in USD.',
+                description: 'Sum of all requested and allocated forex amounts in USD.',
                 clickable: true,
                 selected: filterStatus === 'ALLOCATED',
                 onClick: () => {
@@ -2064,11 +2148,11 @@ const BanksPortal: React.FC = () => {
               },
               { 
                 icon: <CheckCircle />, 
-                label: 'Approved', 
+                label: 'Allocated', 
                 value: forexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length, 
                 color: '#4caf50',
                 subtitle: 'Ready to Use',
-                description: 'Requests approved or already allocated.',
+                description: 'Forex approved or already allocated.',
                 clickable: true,
                 selected: filterStatus === 'APPROVED_OR_ALLOCATED',
                 onClick: () => {
@@ -2081,16 +2165,16 @@ const BanksPortal: React.FC = () => {
               },
               { 
                 icon: <AccessTime />, 
-                label: 'Pending Approval', 
-                value: forexAllocations.filter(f => f.status === 'PENDING').length, 
+                label: 'Pending Allocation', 
+                value: forexAllocations.filter(f => f.status === 'PENDING' || f.status === 'REQUESTED').length, 
                 color: '#ff9800',
-                subtitle: 'Awaiting Review',
-                description: 'Requests still waiting for NBE approval.',
+                subtitle: 'Awaiting Action',
+                description: 'LC issued, awaiting bank forex allocation.',
                 clickable: true,
-                selected: filterStatus === 'PENDING',
+                selected: filterStatus === 'PENDING' || filterStatus === 'REQUESTED',
                 onClick: () => {
                   setSearchTerm('');
-                  setFilterStatus('PENDING');
+                  setFilterStatus('REQUESTED');
                   setAmountMin('');
                   setAmountMax('');
                   setCurrentPage(0);
@@ -2190,7 +2274,7 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <CheckCircle />, 
                 label: 'Examined Today', 
-                value: letterOfCredits.filter(lc => lc.status === 'DOCUMENTS_VERIFIED').length, 
+                value: letterOfCredits.filter(lc => lc.status === 'UTILIZED').length, // UTILIZED = documents verified
                 color: '#4caf50',
                 subtitle: 'Completed',
                 description: 'Show LCs whose documents were verified.',
@@ -2556,14 +2640,54 @@ const BanksPortal: React.FC = () => {
               }
               
               if (step === 'Issue LC') {
-                // Find the contract/payment to issue LC for
-                // paymentId might be in format "CONTRACT1786342727251" or just "1786342727251"
+                // Handle issuing approved LC (send MT700)
+                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
+                if (lc) {
+                  // Check if LC is already issued
+                  if (lc.status === 'ISSUED' || lc.status === 'ACTIVE') {
+                    showInfo('LC Already Issued', `LC ${paymentId} has already been issued`);
+                    return;
+                  }
+                  
+                  // Check if LC is approved
+                  if (lc.status !== 'APPROVED') {
+                    showWarning('LC Not Approved', `LC ${paymentId} must be approved before issuing`, 'Current status: ' + lc.status);
+                    return;
+                  }
+                  
+                  // Issue the LC (send MT700)
+                  try {
+                    const token = localStorage.getItem('authToken');
+                    const response = await apiFetch(`/banking/lc/${lc.lcId}/issue`, {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        terms: lc.terms || 'Payment against shipping documents as per UCP 600',
+                      }),
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                      showSuccess(
+                        'LC Issued Successfully',
+                        `MT700 message sent for LC ${lc.lcId}`,
+                        'The Letter of Credit has been issued and is now active'
+                      );
+                      loadBankingData();
+                    } else {
+                      showError('LC Issue Failed', result.error?.message || 'Failed to issue LC');
+                    }
+                  } catch (error: any) {
+                    showError('Network Error', 'Failed to issue LC', error.message);
+                  }
+                  return;
+                }
+                
+                // If not found in LCs, check if it's a contract (for backward compatibility)
                 const contractId = paymentId.replace(/^CONTRACT/, '');
-                
-                console.log('[BANKS] Looking for contract:', contractId, 'from paymentId:', paymentId);
-                console.log('[BANKS] Available contracts:', contracts.map((c: any) => c.contractId));
-                
-                // Check if it's an approved contract
                 const contract = contracts.find((c: any) => 
                   c.contractId === contractId || 
                   c.contractId === paymentId ||
@@ -2578,16 +2702,11 @@ const BanksPortal: React.FC = () => {
                   return;
                 }
                 
-                // Check if it's an existing LC
-                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
-                if (lc) {
-                  showInfo('LC Already Issued', `LC ${paymentId} has already been issued`);
-                  return;
-                }
-                
-                showError('Contract Not Found', `Could not find contract for ${paymentId}`, 'Please refresh and try again');
+                showError('LC/Contract Not Found', `Could not find LC or contract for ${paymentId}`, 'Please refresh and try again');
                 return;
-              } else if (step === 'Reject LC') {
+              }
+              
+              if (step === 'Reject LC') {
                 showWarning('Reject LC', `Rejecting LC request for payment ${paymentId}`);
                 // TODO: Implement LC rejection logic
                 return;
@@ -2795,7 +2914,8 @@ const BanksPortal: React.FC = () => {
           </Typography>
           <Alert severity="info" sx={{ mb: 3 }}>
             <strong>Forex Allocation Workflow:</strong> LC ISSUED → BANK ALLOCATES FOREX → NBE MONITORS COMPLIANCE<br />
-            Banks allocate forex for issued LCs per NBE policy (40% USD retention, 60% ETB conversion). NBE monitors compliance.
+            Banks allocate forex for issued LCs per NBE policy (40% USD retention, 60% ETB conversion) after LC issuance. NBE monitors compliance.<br />
+            <strong>REQUESTED status:</strong> LC has been issued and is awaiting forex allocation by the bank.
           </Alert>
 
           {/* Search and Filter Controls */}
@@ -2825,6 +2945,7 @@ const BanksPortal: React.FC = () => {
               sx={{ minWidth: 150 }}
             >
               <MenuItem value="ALL">All Status</MenuItem>
+              <MenuItem value="REQUESTED">Requested (Awaiting Allocation)</MenuItem>
               <MenuItem value="ALLOCATED">Allocated</MenuItem>
               <MenuItem value="APPROVED_OR_ALLOCATED">Approved</MenuItem>
               <MenuItem value="PENDING">Pending</MenuItem>
@@ -2867,7 +2988,7 @@ const BanksPortal: React.FC = () => {
 
                     {forexAllocations.length === 0 ? (
             <Alert severity="warning">
-              No forex allocations yet. Allocations are triggered by NBE after LC issuance.
+              No forex allocation requests yet. When an LC is issued, it will appear here as a forex allocation request.
             </Alert>
           ) : getFilteredForex().length === 0 ? (
             <Alert severity="warning">
@@ -2892,10 +3013,11 @@ const BanksPortal: React.FC = () => {
                 </TableHead>
                 <TableBody>
                   {getPaginatedData(getFilteredForex()).map((forex) => {
-                    const allocatedAmount = forex.allocatedAmount || 0;
-                    const exchangeRate = forex.exchangeRate || 0;
-                    const usdRetention = allocatedAmount * 0.4;
-                    const etbConversion = allocatedAmount * 0.6 * exchangeRate;
+                    // For REQUESTED status, use requestedAmount; for ALLOCATED, use allocatedAmount
+                    const displayAmount = forex.status === 'REQUESTED' ? (forex.requestedAmount || 0) : (forex.allocatedAmount || 0);
+                    const exchangeRate = forex.exchangeRate || 115.5; // Default NBE rate if not set
+                    const usdRetention = displayAmount * 0.4;
+                    const etbConversion = displayAmount * 0.6 * exchangeRate;
                     
                     return (
                       <TableRow key={forex.forexId}>
@@ -2903,9 +3025,10 @@ const BanksPortal: React.FC = () => {
                         <TableCell>{forex.lcId || 'N/A'}</TableCell>
                         <TableCell>{forex.exporterId || 'N/A'}</TableCell>
                         <TableCell>
-                          <strong>${allocatedAmount.toLocaleString()}</strong>
+                          <strong>${displayAmount.toLocaleString()}</strong>
+                          {forex.status === 'REQUESTED' && <Chip label="Requested" size="small" sx={{ ml: 1, bgcolor: '#ff9800', color: '#fff' }} />}
                         </TableCell>
-                        <TableCell>{exchangeRate} ETB/USD</TableCell>
+                        <TableCell>{exchangeRate.toFixed(2)} ETB/USD</TableCell>
                         <TableCell>
                           ${usdRetention.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                         </TableCell>
@@ -2915,7 +3038,7 @@ const BanksPortal: React.FC = () => {
                         <TableCell>
                           <StatusChip 
                             label={forex.status || 'PENDING'} 
-                            status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                            status={forex.status === 'ALLOCATED' ? 'APPROVED' : forex.status === 'REQUESTED' ? 'PENDING' : 'PENDING'} 
                           />
                         </TableCell>
                         <TableCell>
@@ -2944,18 +3067,22 @@ const BanksPortal: React.FC = () => {
                               variant="contained"
                               startIcon={<CheckCircle />}
                               onClick={() => {
+                                console.log('[BANKS] Allocate Forex button clicked', forex);
                                 setSelectedForex(forex);
+                                console.log('[BANKS] Setting allocation form...');
                                 setAllocationForm({
                                   forexId: forex.forexId,
                                   lcId: forex.lcId || '',
-                                  amount: forex.allocatedAmount || forex.requestedAmount || 0,
+                                  amount: forex.requestedAmount || forex.allocatedAmount || 0,
                                   exchangeRate: forex.exchangeRate || 115.5,
-                                  retentionRate: forex.retentionRate || 50,
-                                  officer: forex.officer || '',
+                                  retentionRate: forex.retentionRate || 40,
+                                  officer: user?.username || user?.fullName || 'Bank Officer',
                                   approvalRef: `BANK-${Date.now()}`,
                                   expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
                                 });
+                                console.log('[BANKS] Opening allocation dialog...');
                                 setAllocationDialogOpen(true);
+                                console.log('[BANKS] Dialog should now be open');
                               }}
                               sx={{
                                 bgcolor: '#9b30b7',
@@ -2963,7 +3090,7 @@ const BanksPortal: React.FC = () => {
                               }}
                               disabled={forex.status === 'ALLOCATED'}
                             >
-                              Allocate
+                              {forex.status === 'REQUESTED' ? 'Allocate Forex' : 'Allocate'}
                             </Button>
                           </Box>
                         </TableCell>
@@ -3444,15 +3571,17 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <Divider />
                   <Typography variant="subtitle2" sx={{ mt: 2, mb: 1, color: '#9b30b7' }}>
-                    Allocation Breakdown
+                    {selectedForex.status === 'REQUESTED' ? 'Requested Allocation' : 'Allocation Breakdown'}
                   </Typography>
                 </Grid>
 
-                {/* Allocated Amount */}
+                {/* Amount (Requested or Allocated) */}
                 <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="text.secondary">Allocated Amount</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedForex.status === 'REQUESTED' ? 'Requested Amount' : 'Allocated Amount'}
+                  </Typography>
                   <Typography variant="h6" color="primary" fontWeight={700}>
-                    ${(selectedForex.allocatedAmount || 0).toLocaleString()} USD
+                    ${(selectedForex.status === 'REQUESTED' ? (selectedForex.requestedAmount || 0) : (selectedForex.allocatedAmount || 0)).toLocaleString()} USD
                   </Typography>
                 </Grid>
 
@@ -3460,8 +3589,11 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="text.secondary">Exchange Rate</Typography>
                   <Typography variant="h6" fontWeight={600}>
-                    {selectedForex.exchangeRate || 0} ETB/USD
+                    {(selectedForex.exchangeRate || 115.5).toFixed(2)} ETB/USD
                   </Typography>
+                  {selectedForex.status === 'REQUESTED' && (
+                    <Typography variant="caption" color="text.secondary">Default NBE rate</Typography>
+                  )}
                 </Grid>
 
                 {/* USD Retention (40%) */}
@@ -3469,10 +3601,10 @@ const BanksPortal: React.FC = () => {
                   <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
                     <Typography variant="body2" color="text.secondary">40% USD Retention</Typography>
                     <Typography variant="h5" fontWeight={700} color="#1976d2">
-                      ${((selectedForex.allocatedAmount || 0) * 0.4).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                      ${((selectedForex.status === 'REQUESTED' ? (selectedForex.requestedAmount || 0) : (selectedForex.allocatedAmount || 0)) * 0.4).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Retained in USD account
+                      {selectedForex.status === 'REQUESTED' ? 'Will be retained in USD account' : 'Retained in USD account'}
                     </Typography>
                   </Paper>
                 </Grid>
@@ -3482,10 +3614,10 @@ const BanksPortal: React.FC = () => {
                   <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
                     <Typography variant="body2" color="text.secondary">60% ETB Conversion</Typography>
                     <Typography variant="h5" fontWeight={700} color="#2e7d32">
-                      {((selectedForex.allocatedAmount || 0) * 0.6 * (selectedForex.exchangeRate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                      {((selectedForex.status === 'REQUESTED' ? (selectedForex.requestedAmount || 0) : (selectedForex.allocatedAmount || 0)) * 0.6 * (selectedForex.exchangeRate || 115.5)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Converted to Ethiopian Birr
+                      {selectedForex.status === 'REQUESTED' ? 'Will be converted to Ethiopian Birr' : 'Converted to Ethiopian Birr'}
                     </Typography>
                   </Paper>
                 </Grid>
@@ -3520,6 +3652,18 @@ const BanksPortal: React.FC = () => {
                     </Alert>
                   </Grid>
                 )}
+                
+                {/* Info Alert for REQUESTED */}
+                {selectedForex.status === 'REQUESTED' && (
+                  <Grid item xs={12}>
+                    <Alert severity="info" sx={{ mt: 2 }}>
+                      <Typography variant="body2">
+                        <strong>Forex Allocation Requested:</strong> This LC has been issued and requires forex allocation by the bank. 
+                        Click "Allocate Forex" to allocate foreign exchange per NBE policy (40% USD retention, 60% ETB conversion).
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
               </Grid>
             </Box>
           )}
@@ -3546,46 +3690,6 @@ const BanksPortal: React.FC = () => {
 
       {/* LC Details Dialog */}
       <Dialog open={dialogOpen && dialogType === 'lcDetails'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-
-      <ForexAllocationDialog
-        open={allocationDialogOpen}
-        form={allocationForm}
-        onChange={(f) => setAllocationForm(f)}
-        onClose={() => setAllocationDialogOpen(false)}
-        onConfirm={async (f) => {
-          if (!f.forexId || !f.lcId) {
-            showError('Validation', 'Forex ID and LC Reference are required');
-            return;
-          }
-          await handleAllocateForex({
-            forexId: f.forexId,
-            lcId: f.lcId,
-            allocatedAmount: f.amount,
-            exchangeRate: f.exchangeRate,
-            retentionRate: f.retentionRate,
-            officer: f.officer,
-            approvalRef: f.approvalRef,
-            expiryDate: f.expiryDate,
-          });
-          setAllocationDialogOpen(false);
-        }}
-      />
-
-      {/* SWIFT Compose Dialog */}
-      <SwiftComposeDialog
-        open={swiftComposeOpen}
-        form={swiftForm}
-        onChange={(f) => setSwiftForm(f)}
-        onClose={() => setSwiftComposeOpen(false)}
-        onConfirm={async (f) => {
-          if (f.messageType === 'MT700' && !f.linkedLcId) {
-            showError('Validation', 'Linked LC ID is required for MT700');
-            return;
-          }
-          await handleSendSwiftMessage(f);
-          setSwiftComposeOpen(false);
-        }}
-      />
         <DialogTitle>
           <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
           Letter of Credit Details
@@ -4131,6 +4235,56 @@ const BanksPortal: React.FC = () => {
         title={notification.title}
         message={notification.message}
         details={notification.details}
+      />
+
+      {/* Forex Allocation Dialog */}
+      <ForexAllocationDialog
+        open={allocationDialogOpen}
+        form={allocationForm}
+        onChange={(f) => {
+          console.log('[BANKS] Forex form changed:', f);
+          setAllocationForm(f);
+        }}
+        onClose={() => {
+          console.log('[BANKS] Closing allocation dialog');
+          setAllocationDialogOpen(false);
+        }}
+        onConfirm={async (f) => {
+          console.log('[BANKS] Allocation confirmed:', f);
+          if (!f.forexId || !f.lcId) {
+            showError('Validation', 'Forex ID and LC Reference are required');
+            return;
+          }
+          // Pass the full selected forex object with form updates
+          await handleAllocateForex({
+            ...selectedForex, // Include all original forex data (status, contractId, exporterId, currency, etc.)
+            forexId: f.forexId,
+            lcId: f.lcId,
+            requestedAmount: f.amount, // Use the form amount as requestedAmount
+            allocatedAmount: f.amount, // Also set as allocatedAmount for compatibility
+            exchangeRate: f.exchangeRate,
+            retentionRate: f.retentionRate,
+            officer: f.officer,
+            approvalRef: f.approvalRef,
+            expiryDate: f.expiryDate,
+          });
+        }}
+      />
+
+      {/* SWIFT Compose Dialog */}
+      <SwiftComposeDialog
+        open={swiftComposeOpen}
+        form={swiftForm}
+        onChange={(f) => setSwiftForm(f)}
+        onClose={() => setSwiftComposeOpen(false)}
+        onConfirm={async (f) => {
+          if (f.messageType === 'MT700' && !f.linkedLcId) {
+            showError('Validation', 'Linked LC ID is required for MT700');
+            return;
+          }
+          await handleSendSwiftMessage(f);
+          setSwiftComposeOpen(false);
+        }}
       />
 
       {/* Document Validation Dialog */}

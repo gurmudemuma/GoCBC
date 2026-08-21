@@ -278,60 +278,9 @@ router.post('/',
       if (result.success) {
         logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
         
-        // Link shipment to LC if contract has one
-        try {
-          const lcResult = await fabricService.queryChaincode('QueryLCsByContract', [contractID]);
-          if (lcResult.success && lcResult.data && Array.isArray(lcResult.data) && lcResult.data.length > 0) {
-            // DEBUG: Log all LCs found for this contract
-            logger.info(`[DEBUG] Found ${lcResult.data.length} LC(s) for contract ${contractID}`);
-            
-            // Filter for valid LCs (must have LC ID, status, and amount > 0)
-            const validLCs = lcResult.data.filter((lc: any) => {
-              const lcId = lc.lcId || lc.LCID || lc.lcID;
-              const hasValidId = lcId && lcId.trim() !== '';
-              const hasValidStatus = lc.status && lc.status.trim() !== '';
-              const hasValidAmount = lc.amount && lc.amount > 0;
-              return hasValidId && hasValidStatus && hasValidAmount;
-            });
-            
-            logger.info(`[DEBUG] Found ${validLCs.length} valid LC(s) after filtering`);
-            
-            if (validLCs.length === 0) {
-              logger.warn(`[SHIPMENT] No valid LCs found for contract ${contractID} - shipment created without LC link`);
-            } else {
-              // Use the most recent valid LC (highest status priority: ISSUED > APPROVED > REQUESTED)
-              const statusPriority: {[key: string]: number} = {
-                'ISSUED': 3,
-                'FOREX_ALLOCATED': 2,
-                'APPROVED': 1,
-                'REQUESTED': 0
-              };
-              
-              const lc = validLCs.sort((a: any, b: any) => {
-                const priorityA = statusPriority[a.status] || 0;
-                const priorityB = statusPriority[b.status] || 0;
-                return priorityB - priorityA; // Descending order
-              })[0];
-              
-              const lcID = lc.lcId || lc.LCID || lc.lcID;
-              
-              logger.info(`[DEBUG] Selected LC ${lcID} with status ${lc.status} for shipment linking`);
-              
-              // Update LC status to SHIPPED
-              const linkResult = await fabricService.invokeChaincode('LinkShipmentToLC', [lcID, shipmentID]);
-              if (linkResult.success) {
-                logger.info(`✅ LC ${lcID} linked to shipment ${shipmentID}, status updated to SHIPPED`);
-              } else {
-                logger.warn(`⚠️ Failed to link LC to shipment: ${linkResult.error}`);
-              }
-            }
-          } else {
-            logger.info(`[SHIPMENT] No LC found for contract ${contractID} - shipment created without LC link`);
-          }
-        } catch (lcError) {
-          logger.warn('[SHIPMENT] Could not link to LC:', lcError);
-          // Non-fatal - shipment created successfully
-        }
+        // DON'T link shipment to LC yet - this will be done after ECTA quality approval
+        // The LC status should only change to SHIPPED after quality inspection is approved
+        logger.info(`[SHIPMENT] Shipment ${shipmentID} created for contract ${contractID}. LC linking will happen after ECTA quality approval.`);
         
         res.status(201).json({
           success: true,

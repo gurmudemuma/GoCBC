@@ -220,7 +220,14 @@ router.post('/upload',
       const documentID = `DOC-${Date.now()}${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
       const finalEntityType = entityType || 'CONTRACT';
       const finalEntityId = entityId || documentID;
-      const finalDocType = documentType || 'OTHER';
+      
+      // ✅ AUTOMATIC TYPE CORRECTION: Convert SALES_CONTRACT to CONTRACT_SIGNED for contracts
+      let finalDocType = documentType || 'OTHER';
+      if (finalEntityType === 'CONTRACT' && finalDocType === 'SALES_CONTRACT') {
+        finalDocType = 'CONTRACT_SIGNED';
+        logger.info(`Auto-corrected document type from SALES_CONTRACT to CONTRACT_SIGNED for contract ${finalEntityId}`);
+      }
+      
       const finalFileName = fileName || file.originalname;
 
       logger.info('Uploading authenticated document:', { 
@@ -498,10 +505,10 @@ router.get('/:documentId/download',
 // Add alias for /view endpoint (same as /download with inline=true)
 router.get('/:documentId/view',
   authMiddleware,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: Function) => {
     // Redirect to download with inline=true
     req.query.inline = 'true';
-    return router.handle(req, res, () => {});
+    next();
   }
 );
 

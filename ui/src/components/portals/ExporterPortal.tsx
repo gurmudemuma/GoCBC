@@ -749,8 +749,11 @@ const ExporterPortal: React.FC = () => {
             status: lc.status || lc.Status,
             issuingBank: lc.issuingBank || lc.IssuingBank || 'N/A',
             advisingBank: lc.advisingBank || lc.AdvisingBank || lc.beneficiaryBank || lc.BeneficiaryBank,
-            issuedDate: lc.issuedDate || lc.IssuedDate || lc.issueDate || lc.IssueDate,
+            issuedDate: lc.issueDate || lc.IssueDate || lc.issuedDate || lc.IssuedDate || null, // Note: API returns issueDate, map to issuedDate
+            requestDate: lc.requestDate || lc.RequestDate || null,
+            approvalDate: lc.approvalDate || lc.ApprovalDate || null,
             expiryDate: lc.expiryDate || lc.ExpiryDate,
+            messages: lc.messages || [], // For SWIFT messages
           }));
           
           // Filter out incomplete LCs - only keep those with essential fields populated
@@ -758,18 +761,22 @@ const ExporterPortal: React.FC = () => {
             lc.lcId && 
             lc.amount && 
             lc.status && 
-            lc.expiryDate &&
-            lc.issuedDate  // Only show if issued date exists
+            lc.expiryDate
+            // Don't require issueDate - REQUESTED and APPROVED LCs won't have it yet
           );
           
           console.log(`[EXPORTER] Loaded ${myLCs.length} LCs, ${completeLCs.length} complete LCs for exporter`);
           setLCStatuses(completeLCs);
           setAllLCStatuses(completeLCs);
           console.log(`Loaded ${myLCs.length} LCs for exporter`);
+          
+          // Store for use in forex loading below
+          var loadedLCsForForex: any = completeLCs;
         }
       }
     } catch (error) {
       console.warn('Could not load LCs:', error);
+      var loadedLCsForForex: any = [];
     }
 
     // Load Forex allocations for current exporter
@@ -784,40 +791,73 @@ const ExporterPortal: React.FC = () => {
             (f.exporterId || f.ExporterID) === currentExporterId
           );
           
-          // Filter out incomplete Forex - only show allocations with complete data
-          const validForex = myForex.filter((f: any) => {
-            const forexId = f.forexId || f.ForexID || '';
-            const allocatedAmount = f.allocatedAmount || f.AllocatedAmount || 0;
-            const contractId = f.contractId || f.ContractID || '';
-            const status = f.status || f.Status || '';
-            
-            const hasValidData = forexId !== '' && allocatedAmount > 0 && contractId !== '' && status !== '';
-            
-            if (!hasValidData) {
-              console.log(`[EXPORTER] Filtering out incomplete Forex ${forexId} (amount: ${allocatedAmount}, contractId: "${contractId}", status: "${status}")`);
-            }
-            
-            return hasValidData;
-          });
+          console.log(`[EXPORTER] Raw forex data from API: ${myForex.length} records`);
           
-          console.log(`[EXPORTER] Filtered from ${myForex.length} to ${validForex.length} valid Forex allocations`);
-          
-          const mappedForex = validForex.map((f: any) => ({
+          const mappedForex = myForex.map((f: any) => ({
             forexId: f.forexId || f.ForexID,
             contractId: f.contractId || f.ContractID,
-            requestedAmount: f.requestedAmount || f.RequestedAmount,
-            allocatedAmount: f.allocatedAmount || f.AllocatedAmount,
+            exporterId: f.exporterId || f.ExporterID,
+            lcId: f.lcId || f.LCID,
+            requestedAmount: f.requestedAmount || f.RequestedAmount || 0,
+            allocatedAmount: f.allocatedAmount || f.AllocatedAmount || 0,
             currency: f.currency || f.Currency,
-            exchangeRate: f.exchangeRate || f.ExchangeRate,
-            retentionRate: f.retentionRate || f.RetentionRate,
+            exchangeRate: f.exchangeRate || f.ExchangeRate || 0,
+            retentionRate: f.retentionRate || f.RetentionRate || 40,
             status: f.status || f.Status,
             expiryDate: f.expiryDate || f.ExpiryDate,
             allocationDate: f.allocationDate || f.AllocationDate,
             requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
           }));
+          
+          // Add synthetic forex for LCs with FOREX_ALLOCATED status but no forex record
+          // Use loadedLCsForForex from above instead of lcStatuses state
+          console.log(`[EXPORTER] Checking ${loadedLCsForForex.length} loaded LCs for synthetic forex creation`);
+          if (loadedLCsForForex && loadedLCsForForex.length > 0) {
+            const forexRelatedLCs = loadedLCsForForex.filter((lc: any) => 
+              // Only include LCs with forex-related statuses (exclude REQUESTED)
+              lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED' || lc.status === 'UTILIZED'
+            );
+            console.log(`[EXPORTER] Found ${forexRelatedLCs.length} LCs with forex-related statuses`);
+            
+            for (const lc of forexRelatedLCs) {
+              // Check if this LC already has a forex record
+              const hasForex = mappedForex.some((f: any) => {
+                const lcIdMatch = f.lcId && f.lcId === lc.lcId;
+                const forexIdMatch = f.forexId && f.forexId.includes(lc.lcId);
+                const metadataMatch = f.contractId && f.exporterId && 
+                  f.contractId === lc.contractId && f.exporterId === currentExporterId;
+                return lcIdMatch || forexIdMatch || metadataMatch;
+              });
+              
+              if (!hasForex) {
+                // Create synthetic forex record
+                const lcStatus = String(lc.status);
+                // ISSUED or UTILIZED means forex has been allocated
+                const forexStatus = (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? 'ALLOCATED' : 'REQUESTED';
+                const syntheticForex = {
+                  forexId: `FOREX_${lc.lcId}_PENDING`,
+                  contractId: lc.contractId || '',
+                  exporterId: currentExporterId,
+                  lcId: lc.lcId,
+                  requestedAmount: Number(lc.amount || 0),
+                  allocatedAmount: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? Number(lc.amount || 0) : 0,
+                  currency: lc.currency || 'USD',
+                  exchangeRate: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? 115.5 : 0,
+                  retentionRate: 40,
+                  status: forexStatus,
+                  expiryDate: lc.expiryDate || '',
+                  allocationDate: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? new Date().toISOString() : undefined,
+                  requestDate: new Date(),
+                };
+                mappedForex.push(syntheticForex);
+                console.log(`[EXPORTER] ➕ Added synthetic forex for ${lc.status} LC ${lc.lcId}`);
+              }
+            }
+          }
+          
           setForexStatuses(mappedForex);
           setAllForexStatuses(mappedForex);
-          console.log(`Loaded ${validForex.length} forex allocations for exporter`);
+          console.log(`[EXPORTER] Total forex allocations (including synthetic): ${mappedForex.length}`);
         }
       }
     } catch (error) {
@@ -876,7 +916,7 @@ const ExporterPortal: React.FC = () => {
           const inspectionsResult = await inspectionsResponse.json();
           
           let approvedShipmentIds: Set<string> = new Set();
-          if (inspectionsResult.success && inspectionsResult.data) {
+          if (inspectionsResult.success && inspectionsResult.data && Array.isArray(inspectionsResult.data)) {
             console.log('[EXPORTER] Loaded quality inspections:', inspectionsResult.data.length);
             // Find all approved inspections
             const approvedInspections = inspectionsResult.data.filter((i: any) => 
@@ -891,6 +931,8 @@ const ExporterPortal: React.FC = () => {
               console.log(JSON.stringify(myShipments[0], null, 2));
               console.log('[EXPORTER] ======================================================');
             }
+          } else {
+            console.log('[EXPORTER] Loaded quality inspections: no data or not an array', inspectionsResult.data);
           }
           
           // Filter out shipments with empty/invalid data - ONLY show shipments with complete data
@@ -1939,8 +1981,11 @@ const ExporterPortal: React.FC = () => {
     {
       field: 'status',
       headerName: 'Status',
-      width: 150,
-      renderCell: (params) => <StatusChip status={params.value} />,
+      width: 180,
+      renderCell: (params) => {
+        // For pending rows, show the actual LC/Forex status
+        return <StatusChip status={params.value} />;
+      },
     },
     {
       field: 'transportMode',
@@ -1986,10 +2031,44 @@ const ExporterPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 200,
+      width: 250,
       sortable: false,
       renderCell: (params) => {
         const shipment = params.row;
+        
+        // For pending shipment rows, show Register button
+        if (shipment.isPending) {
+          const contract = contracts.find(c => c.contractId === shipment.contractId);
+          return (
+            <Button
+              variant="contained"
+              size="small"
+              color="success"
+              startIcon={<Assignment />}
+              onClick={() => {
+                setCreateShipmentDialogOpen(true);
+                // Pre-select the contract
+                if (contract) {
+                  const forex = forexStatuses.find(f => f.contractId === contract.contractId);
+                  setNewShipment({
+                    ...newShipment,
+                    contractId: contract.contractId,
+                  });
+                  
+                  // Auto-fill form with contract data
+                  if (forex) {
+                    applyContractToShipment(contract, forex.exchangeRate);
+                  }
+                }
+              }}
+              sx={{ fontWeight: 600 }}
+            >
+              Register Shipment
+            </Button>
+          );
+        }
+        
+        // For existing shipments, show regular actions
         const status = shipment.status || shipment.Status;
         return (
           <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -2102,10 +2181,10 @@ const ExporterPortal: React.FC = () => {
             }
           >
             <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-              🎉 NBE Forex Allocated — Proceed to Coffee Procurement & Shipment Registration
+              🎉 Bank Forex Allocated — Proceed to Coffee Procurement & Shipment Registration
             </Typography>
             <Typography variant="body2">
-              NBE has allocated <strong>${forexAllocatedAlert.allocatedAmount.toLocaleString()} {forexAllocatedAlert.currency}</strong> for contract <strong>{forexAllocatedAlert.contractId}</strong>
+              Your bank has allocated <strong>${forexAllocatedAlert.allocatedAmount.toLocaleString()} {forexAllocatedAlert.currency}</strong> for contract <strong>{forexAllocatedAlert.contractId}</strong>
               {' '}at <strong>{forexAllocatedAlert.exchangeRate} ETB/USD</strong> (40% retained in USD, 60% converted to ETB).
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -2225,7 +2304,7 @@ const ExporterPortal: React.FC = () => {
                   Forex & Banking
                 </Typography>
                 <Typography variant="h4" sx={{ fontWeight: 700, color: '#FFD700', lineHeight: 1 }}>
-                  {forexStatuses.length}
+                  {forexStatuses.filter(f => f.status === 'ALLOCATED').length + lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length}
                 </Typography>
               </CardContent>
             </Card>
@@ -2370,7 +2449,7 @@ const ExporterPortal: React.FC = () => {
           >
             <Tab label={`Dashboard`} icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`My Contracts (${contracts.length})`} icon={<Description sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`Forex & Banking (${forexStatuses.length})`} icon={<AccountBalance sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label={`Forex & Banking (${forexStatuses.filter(f => f.status === 'ALLOCATED').length + lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length})`} icon={<AccountBalance sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`Shipments (${shipments.length})`} icon={<LocalShipping sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`LC & Payments (${lcStatuses.length})`} icon={<AttachMoney sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
@@ -3371,13 +3450,20 @@ const ExporterPortal: React.FC = () => {
             </ModernCard>
           </Grid>
 
-          {/* Letters of Credit */}
+          {/* Letters of Credit - Only show those with forex-related statuses */}
           <Grid item xs={12}>
             <ModernCard>
               <CardContent>
                 <Typography variant="h6" gutterBottom>Letters of Credit</Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {lcStatuses.map((lc) => (
+                  {lcStatuses
+                    .filter(lc => {
+                      // Only show LCs that have forex allocation
+                      // Valid LC statuses with forex: ISSUED, UTILIZED (FOREX_ALLOCATED is a custom status that may exist)
+                      const forexStatuses = ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'];
+                      return forexStatuses.includes(lc.status);
+                    })
+                    .map((lc) => (
                     <Card key={lc.lcId} variant="outlined">
                       <CardContent>
                         <Grid container spacing={2}>
@@ -3386,7 +3472,8 @@ const ExporterPortal: React.FC = () => {
                             <Typography variant="body2" fontWeight="bold">{lc.lcId}</Typography>
                           </Grid>
                           <Grid item xs={12} sm={6}>
-                            <StatusChip status={lc.status} />
+                            {/* Show forex allocation status, not shipment status */}
+                            <StatusChip status="ALLOCATED" label="Forex Allocated" />
                           </Grid>
                           <Grid item xs={12} sm={6}>
                             <Typography variant="caption" color="text.secondary">Amount</Typography>
@@ -3410,6 +3497,11 @@ const ExporterPortal: React.FC = () => {
                       </CardContent>
                     </Card>
                   ))}
+                  {lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length === 0 && (
+                    <Alert severity="info">
+                      No Letters of Credit with forex allocation yet. LCs will appear here once forex is allocated by NBE.
+                    </Alert>
+                  )}
                 </Box>
               </CardContent>
             </ModernCard>
@@ -3536,44 +3628,96 @@ const ExporterPortal: React.FC = () => {
           )}
 
           {/* Shipments DataGrid Table */}
-          {shipments.length === 0 ? (
-            <Alert severity="info">
-              <Typography variant="body2">
-                <strong>No shipments yet.</strong> Create a shipment for your approved contracts.
-                <br /><br />
-                <strong>Workflow:</strong>
-                <br />1. Your contract must be approved by NBE
-                <br />2. Bank issues Letter of Credit (LC)
-                <br />3. Create shipment — this automatically requests ECTA quality inspection
-                <br />4. ECTA inspector performs physical & cupping inspection
-                <br />5. ECTA approves quality and issues Export Permit
-                <br />6. After permit issued, proceed to customs clearance and shipping
-              </Typography>
-            </Alert>
-          ) : (
-            <DataGrid
-              rows={shipments}
-              columns={shipmentColumns}
-              getRowId={(row) => row.shipmentId}
-              autoHeight
-              pageSizeOptions={[10, 25, 50]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 10 } },
-              }}
-              sx={{
-                '& .MuiDataGrid-row:hover': {
-                  bgcolor: 'action.hover',
-                },
-                '& .MuiDataGrid-cell': {
-                  borderColor: 'rgba(0, 0, 0, 0.08)',
-                },
-                '& .MuiDataGrid-columnHeaders': {
-                  bgcolor: 'rgba(0, 0, 0, 0.04)',
-                  fontWeight: 700,
-                },
-              }}
-            />
-          )}
+          {(() => {
+            // Create synthetic pending shipment rows for contracts ready to ship
+            const readyForexContracts = forexStatuses.filter(f => {
+              const hasShipment = shipments.some(s => 
+                (s.contractId || '').toLowerCase() === (f.contractId || '').toLowerCase()
+              );
+              return f.status === 'ALLOCATED' && !hasShipment;
+            });
+            
+            const pendingShipmentRows = readyForexContracts.map(forex => {
+              // Find the contract to get full details
+              const contract = contracts.find(c => c.contractId === forex.contractId);
+              // Find the LC to get status
+              const lc = lcStatuses.find(lc => lc.contractId === forex.contractId);
+              
+              return {
+                shipmentId: `PENDING_${forex.contractId}`,
+                contractId: forex.contractId,
+                buyerId: contract?.buyerName || 'N/A',
+                quantity: contract?.quantity || 0,
+                status: lc?.status || 'FOREX_ALLOCATED',
+                coffeeType: 'Arabica',
+                grade: 'Grade 1-2',
+                origin: 'Ethiopia',
+                harvestSeason: '',
+                processingMethod: 'Washed',
+                packagingType: 'Jute Bags',
+                numberOfBags: Math.ceil((contract?.quantity || 0) / 60),
+                weightPerBag: 60,
+                warehouseLocation: 'Addis Ababa ECX Warehouse',
+                qualityScore: 0,
+                moisture: 0,
+                defects: 0,
+                createdAt: new Date().toISOString(),
+                isPending: true, // Flag to identify pending rows
+              };
+            });
+            
+            const allRows = [...pendingShipmentRows, ...shipments];
+            
+            if (allRows.length === 0) {
+              return (
+                <Alert severity="info">
+                  <Typography variant="body2">
+                    <strong>No shipments yet.</strong> Create a shipment for your approved contracts.
+                    <br /><br />
+                    <strong>Workflow:</strong>
+                    <br />1. Your contract must be approved by NBE
+                    <br />2. Bank issues Letter of Credit (LC)
+                    <br />3. Create shipment — this automatically requests ECTA quality inspection
+                    <br />4. ECTA inspector performs physical & cupping inspection
+                    <br />5. ECTA approves quality and issues Export Permit
+                    <br />6. After permit issued, proceed to customs clearance and shipping
+                  </Typography>
+                </Alert>
+              );
+            }
+            
+            return (
+              <DataGrid
+                rows={allRows}
+                columns={shipmentColumns}
+                getRowId={(row) => row.shipmentId}
+                autoHeight
+                pageSizeOptions={[10, 25, 50]}
+                initialState={{
+                  pagination: { paginationModel: { pageSize: 10 } },
+                }}
+                getRowClassName={(params) => params.row.isPending ? 'pending-shipment-row' : ''}
+                sx={{
+                  '& .MuiDataGrid-row:hover': {
+                    bgcolor: 'action.hover',
+                  },
+                  '& .MuiDataGrid-cell': {
+                    borderColor: 'rgba(0, 0, 0, 0.08)',
+                  },
+                  '& .MuiDataGrid-columnHeaders': {
+                    bgcolor: 'rgba(0, 0, 0, 0.04)',
+                    fontWeight: 700,
+                  },
+                  '& .pending-shipment-row': {
+                    bgcolor: 'rgba(76, 175, 80, 0.1)',
+                    '&:hover': {
+                      bgcolor: 'rgba(76, 175, 80, 0.2)',
+                    },
+                  },
+                }}
+              />
+            );
+          })()}
         </Box>
       </TabPanel>
 
@@ -4768,6 +4912,28 @@ This contract is registered with ECTA and approved by NBE.
               </Typography>
             </Alert>
             
+            {/* Hidden file input */}
+            <input
+              type="file"
+              id="shipment-document-upload"
+              multiple
+              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  const newDocs = Array.from(e.target.files).map(file => ({
+                    file,
+                    category: 'Shipping Document',
+                    documentId: `DOC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    uploadDate: new Date().toISOString()
+                  }));
+                  setShipmentDocuments(prev => [...prev, ...newDocs]);
+                  // Reset file input
+                  e.target.value = '';
+                }
+              }}
+            />
+            
             <Box sx={{ 
               border: '2px dashed', 
               borderColor: shipmentDocuments.length > 0 ? 'success.main' : 'grey.400',
@@ -4785,7 +4951,7 @@ This contract is registered with ECTA and approved by NBE.
                   <Button 
                     variant="outlined" 
                     startIcon={<Upload />}
-                    disabled
+                    onClick={() => document.getElementById('shipment-document-upload')?.click()}
                     sx={{ mt: 1 }}
                   >
                     Upload Documents
@@ -4799,7 +4965,20 @@ This contract is registered with ECTA and approved by NBE.
                   </Typography>
                   <List dense>
                     {shipmentDocuments.map((doc, idx) => (
-                      <ListItem key={idx}>
+                      <ListItem 
+                        key={idx}
+                        secondaryAction={
+                          <IconButton 
+                            edge="end" 
+                            size="small"
+                            onClick={() => {
+                              setShipmentDocuments(prev => prev.filter((_, i) => i !== idx));
+                            }}
+                          >
+                            <Delete fontSize="small" />
+                          </IconButton>
+                        }
+                      >
                         <ListItemText 
                           primary={doc.file.name}
                           secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
@@ -4810,7 +4989,7 @@ This contract is registered with ECTA and approved by NBE.
                   <Button 
                     variant="outlined" 
                     startIcon={<Upload />}
-                    disabled
+                    onClick={() => document.getElementById('shipment-document-upload')?.click()}
                     size="small"
                   >
                     Add More Documents

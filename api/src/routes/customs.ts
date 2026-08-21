@@ -118,4 +118,94 @@ router.get('/clearances',
   }
 );
 
+/**
+ * GET /api/v1/customs/permit-ready
+ * Returns all shipments that have received export permits from ECTA Quality Control
+ * Status: permit_issued means ECTA has issued the export permit
+ */
+router.get('/permit-ready',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching permit-ready shipments (status=permit_issued)');
+      
+      // Fetch all inspections with status 'permit_issued'
+      const inspections = await postgresDb.all(`
+        SELECT 
+          inspection_id,
+          shipment_id,
+          exporter_id,
+          contract_id,
+          coffee_type,
+          quantity,
+          status,
+          passed,
+          grade,
+          certification_number,
+          requested_date,
+          inspection_date,
+          remarks,
+          created_at,
+          updated_at
+        FROM quality_inspections
+        WHERE status = 'permit_issued'
+        ORDER BY updated_at DESC, created_at DESC
+      `);
+      
+      // Transform to camelCase and extract permit number and score from remarks
+      const transformed = inspections.map((insp: any) => {
+        // Extract permit number from remarks (format: "EXPORT PERMIT ISSUED: PERMIT123456...")
+        let exportPermitNo = 'N/A';
+        let totalScore: number | null = null;
+        
+        if (insp.remarks) {
+          // Extract permit number
+          const permitMatch = insp.remarks.match(/EXPORT PERMIT ISSUED:\s*([A-Z0-9]+)/);
+          if (permitMatch) exportPermitNo = permitMatch[1];
+          
+          // Extract overall score (format: "Overall score: 87")
+          const scoreMatch = insp.remarks.match(/Overall score:\s*(\d+)/i);
+          if (scoreMatch) totalScore = parseInt(scoreMatch[1], 10);
+        }
+        
+        return {
+          inspectionId: insp.inspection_id,
+          shipmentId: insp.shipment_id,
+          exporterId: insp.exporter_id,
+          contractId: insp.contract_id,
+          coffeeType: insp.coffee_type,
+          quantity: parseFloat(insp.quantity || 0),
+          status: insp.status,
+          passed: insp.passed,
+          qualityGrade: insp.grade,
+          classification: insp.grade, // Alias for grade
+          totalScore: totalScore, // Extract from remarks
+          certificateNo: insp.certification_number,
+          exportPermitNo: exportPermitNo,
+          requestedDate: insp.requested_date,
+          inspectionDate: insp.inspection_date,
+          remarks: insp.remarks,
+          createdAt: insp.created_at,
+          updatedAt: insp.updated_at
+        };
+      });
+      
+      logger.info(`[CUSTOMS] Found ${transformed.length} permit-ready shipments`);
+      
+      res.json({ 
+        success: true, 
+        data: transformed,
+        timestamp: new Date().toISOString() 
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching permit-ready shipments:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 export default router;

@@ -867,14 +867,14 @@ func (c *CoffeeContract) ExamineLCDocuments(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("LC must be in ISSUED status for document examination (current: %s)", lc.Status)
 	}
 
-	// Update LC with examination results
-	lc.Status = compliant // "true" = COMPLIANT, "false" = DISCREPANT
+	// Update LC with examination results - move to UTILIZED if compliant
 	if compliant == "true" {
-		lc.Status = "DOCUMENTS_VERIFIED"
-		fmt.Printf("ExamineLCDocuments: Documents COMPLIANT for LC %s\n", lcID)
+		lc.Status = "UTILIZED" // Documents verified, ready for payment
+		fmt.Printf("ExamineLCDocuments: Documents COMPLIANT for LC %s, status set to UTILIZED\n", lcID)
 	} else {
-		lc.Status = "DOCUMENTS_DISCREPANT"
-		fmt.Printf("ExamineLCDocuments: Documents DISCREPANT for LC %s: %s\n", lcID, discrepancies)
+		// Keep as ISSUED if discrepant, exporter must resubmit
+		// lc.Status remains "ISSUED"
+		fmt.Printf("ExamineLCDocuments: Documents DISCREPANT for LC %s: %s (status remains ISSUED)\n", lcID, discrepancies)
 	}
 
 	lc.UpdatedAt = time.Now()
@@ -944,9 +944,9 @@ func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("failed to unmarshal LC: %w", err)
 	}
 
-	// Only DOCUMENTS_VERIFIED LCs can proceed to payment
-	if lc.Status != "DOCUMENTS_VERIFIED" {
-		return fmt.Errorf("documents must be verified before payment release (current status: %s)", lc.Status)
+	// Only UTILIZED LCs can proceed to payment (documents already verified)
+	if lc.Status != "UTILIZED" {
+		return fmt.Errorf("LC must be UTILIZED (documents verified) before payment release (current status: %s)", lc.Status)
 	}
 
 	// Verify amount does not exceed LC amount
@@ -954,8 +954,8 @@ func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("payment amount (%.2f) exceeds LC amount (%.2f)", paymentAmount, lc.Amount)
 	}
 
-	// Update LC status to PAID
-	lc.Status = "PAID"
+	// LC status remains UTILIZED (no change needed - already utilized when documents verified)
+	// lc.Status = "UTILIZED" (already set)
 	lc.UtilizationDate = paymentDate
 	lc.UpdatedAt = time.Now()
 
@@ -1018,8 +1018,9 @@ func (c *CoffeeContract) LinkShipmentToLC(ctx contractapi.TransactionContextInte
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
-	// Update LC status to SHIPPED
-	lc.Status = "SHIPPED"
+	// Keep LC status as ISSUED - do NOT change to SHIPPED (SHIPPED is not a valid LC status)
+	// LC status should remain ISSUED until documents are submitted (then UTILIZED)
+	// lc.Status = "SHIPPED" // ❌ REMOVED - Invalid LC status
 	lc.UpdatedAt = txTime
 
 	lcJSON, err = json.Marshal(lc)
@@ -1042,7 +1043,7 @@ func (c *CoffeeContract) LinkShipmentToLC(ctx contractapi.TransactionContextInte
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("LCShipmentCreated", eventJSON)
 
-	fmt.Printf("LinkShipmentToLC: LC %s linked to shipment %s, status updated to SHIPPED\n", lcID, shipmentID)
+	fmt.Printf("LinkShipmentToLC: LC %s linked to shipment %s, status remains %s\n", lcID, shipmentID, lc.Status)
 	return nil
 }
 
@@ -1066,9 +1067,9 @@ func (c *CoffeeContract) SubmitLCDocuments(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to unmarshal LC: %v", err)
 	}
 
-	// Only update if LC is shipped
-	if lc.Status != "SHIPPED" {
-		return fmt.Errorf("LC status must be SHIPPED to submit documents, current: %s", lc.Status)
+	// Only update if LC is ISSUED (documents can be submitted after shipment is linked)
+	if lc.Status != "ISSUED" && lc.Status != "FOREX_ALLOCATED" {
+		return fmt.Errorf("LC status must be ISSUED to submit documents, current: %s", lc.Status)
 	}
 
 	// Get timestamp
@@ -1079,7 +1080,8 @@ func (c *CoffeeContract) SubmitLCDocuments(ctx contractapi.TransactionContextInt
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	// Update LC status and attach documents
-	lc.Status = "DOCUMENTS_SUBMITTED"
+	// Keep status as ISSUED - documents submitted but not yet verified
+	// lc.Status remains "ISSUED"
 	lc.Documents = documentIDs
 	lc.UpdatedAt = txTime
 

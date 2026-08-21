@@ -1,35 +1,52 @@
-const { Pool } = require('pg');
+// Check documents for contract CONTRACT1787051634593
+const { DatabaseService } = require('./dist/services/databaseService');
 
-const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  database: 'cecbs',
-  user: 'cecbs',
-  password: 'cecbs123'
-});
-
-async function checkDocs() {
+async function checkContractDocs() {
+  const db = DatabaseService.getInstance();
+  
+  const contractID = 'CONTRACT1787051634593';
+  
+  console.log(`\n=== CHECKING DOCUMENTS FOR ${contractID} ===\n`);
+  
   try {
-    // Check all documents
-    const allDocs = await pool.query('SELECT document_id, entity_type, entity_id, document_type, file_name, file_size FROM documents ORDER BY uploaded_at DESC LIMIT 20');
-    console.log('\n=== ALL RECENT DOCUMENTS ===');
-    console.log(JSON.stringify(allDocs.rows, null, 2));
+    // Get documents
+    const documents = await db.all(
+      `SELECT document_id, document_type, file_name, verification_status, status, entity_type, entity_id
+       FROM documents 
+       WHERE entity_id = $1`,
+      [contractID]
+    );
     
-    // Check contract documents specifically
-    const contractDocs = await pool.query(`SELECT document_id, entity_type, entity_id, document_type, file_name, file_size FROM documents WHERE UPPER(entity_type) = 'CONTRACT' ORDER BY uploaded_at DESC`);
-    console.log('\n=== CONTRACT DOCUMENTS ===');
-    console.log(JSON.stringify(contractDocs.rows, null, 2));
+    console.log(`Found ${documents.length} documents:\n`);
     
-    // Check what entity_types exist
-    const entityTypes = await pool.query('SELECT DISTINCT entity_type FROM documents');
-    console.log('\n=== DISTINCT ENTITY TYPES ===');
-    console.log(JSON.stringify(entityTypes.rows, null, 2));
+    documents.forEach((doc, idx) => {
+      console.log(`${idx + 1}. ${doc.file_name}`);
+      console.log(`   Type: ${doc.document_type}`);
+      console.log(`   Entity: ${doc.entity_type}/${doc.entity_id}`);
+      console.log(`   Verification: ${doc.verification_status || 'NOT_VERIFIED'}`);
+      console.log(`   Status: ${doc.status}\n`);
+    });
+    
+    // Check for CONTRACT_SIGNED
+    const contractSigned = documents.find(d => d.document_type === 'CONTRACT_SIGNED');
+    
+    if (!contractSigned) {
+      console.log('❌ MISSING: CONTRACT_SIGNED document is required for approval');
+    } else if (contractSigned.verification_status !== 'verified') {
+      console.log(`❌ NOT VERIFIED: CONTRACT_SIGNED exists but verification_status is "${contractSigned.verification_status || 'NULL'}"`);
+      console.log('   It must be "verified" before approval');
+    } else {
+      console.log('✅ CONTRACT_SIGNED is present and verified');
+    }
+    
+    // Check what the document validation function expects
+    console.log('\n=== REQUIRED DOCUMENT TYPES FOR CONTRACT APPROVAL ===\n');
+    console.log('The system requires: CONTRACT_SIGNED');
+    console.log('\nDocument types found:', documents.map(d => d.document_type).join(', '));
     
   } catch (error) {
-    console.error('Error:', error.message);
-  } finally {
-    await pool.end();
+    console.error('Error:', error);
   }
 }
 
-checkDocs();
+checkContractDocs().then(() => process.exit(0));

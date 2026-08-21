@@ -3,7 +3,7 @@
 
 import { logger } from '../utils/logger';
 import { DatabaseService } from './databaseService';
-import emailService from './emailService';
+import EmailService from './emailService';
 import smsService from './smsService';
 import webhookService from './webhookService';
 
@@ -56,7 +56,8 @@ export class NotificationService {
     // Send via enabled channels
     if (channels.includes('email') && prefs.email_enabled && recipient.email) {
       try {
-        await emailService.sendEmail(recipient.email, subject, message, message);
+        const emailService = EmailService.getInstance();
+        await emailService.send(recipient.email, subject, message);
         results.email = true;
       } catch (error) {
         logger.error('Email notification failed:', error);
@@ -127,8 +128,8 @@ export class NotificationService {
     events?: any;
   }): Promise<boolean> {
     try {
-      const fields = [];
-      const values = [];
+      const fields: string[] = [];
+      const values: any[] = [];
       let idx = 1;
 
       if (preferences.email_enabled !== undefined) {

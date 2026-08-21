@@ -12,7 +12,7 @@ const fabricService = FabricService.getInstance();
 
 // ==================== FOREX ALLOCATION ROUTES ====================
 
-// GET /api/v1/forex — all forex allocations
+      // GET /api/v1/forex — all forex allocations
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const result = await fabricService.queryAllForex();
@@ -21,16 +21,21 @@ router.get('/', authMiddleware, async (req, res) => {
         forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
         contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
         exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
+        lcId: fx?.lcId || fx?.LCID || fx?.lcID || '', // ✅ Add LCID field mapping
         amount: fx?.amount ?? fx?.Amount ?? 0,
         currency: fx?.currency || fx?.Currency || 'USD',
         status: fx?.status || fx?.Status || 'REQUESTED',
+        requestedAmount: fx?.requestedAmount ?? fx?.RequestedAmount ?? 0, // ✅ Add requestedAmount field
         allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
         exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
         retention: fx?.retention ?? fx?.Retention ?? 0,
-        expiryDate: fx?.expiryDate || fx?.expiry_date || null,
-        requestDate: fx?.requestDate || fx?.request_date || null,
-        utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
-        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+        retentionRate: fx?.retentionRate ?? fx?.RetentionRate ?? 0, // ✅ Add retentionRate field
+        expiryDate: fx?.expiryDate || fx?.ExpiryDate || fx?.expiry_date || null,
+        requestDate: fx?.requestDate || fx?.RequestDate || fx?.request_date || null,
+        allocationDate: fx?.allocationDate || fx?.AllocationDate || fx?.allocation_date || null,
+        utilizationDate: fx?.utilizationDate || fx?.UtilizationDate || fx?.utilization_date || null,
+        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NBEApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+        nbeOfficer: fx?.nbeOfficer || fx?.NBEOfficer || '',
       }));
 
       const validForex = dedupeById(normalizedForex.filter(isValidForex), (fx: any) => fx.forexId);

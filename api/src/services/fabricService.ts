@@ -1267,8 +1267,12 @@ export class FabricService {
     return this.getPaymentsByExporter(params.exporterId);
   }
 
-  public async queryShipments(params: { exporterId: string }): Promise<ChaincodeResponse> {
-    return this.getShipmentsByExporter(params.exporterId);
+  public async queryShipments(params: { exporterId?: string }): Promise<ChaincodeResponse> {
+    if (params.exporterId) {
+      return this.getShipmentsByExporter(params.exporterId);
+    } else {
+      return this.getAllShipments();
+    }
   }
 
   // ==================== QUALITY INSPECTION OPERATIONS ====================

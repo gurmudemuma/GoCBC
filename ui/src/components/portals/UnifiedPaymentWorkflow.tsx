@@ -177,41 +177,92 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
     switch (selectedPaymentMethod) {
       case 'LC':
         // FOR LC: Show approved contracts awaiting LC issuance + existing LCs
-        // First, add approved contracts as "pending LC requests"
-        const pendingLCRequests = contracts.map(contract => ({
-          ...contract,
-          id: contract.contractId,
-          amount: contract.totalValue,
-          currency: contract.currency,
-          exporter: contract.exporterId,
-          status: 'AWAITING_LC', // Custom status for contracts pending LC
-          currentStep: 0,
-          isContract: true, // Flag to identify this as a contract, not an LC
-          contractData: contract, // Keep full contract data
-        }));
+        // First, add approved contracts as "pending LC requests" - but only if no LC exists yet
+        const pendingLCRequests = contracts
+          .filter(contract => {
+            // Only show contract if NO LC exists for it yet
+            const lcExists = letterOfCredits.some(lc => lc.contractId === contract.contractId);
+            return !lcExists;
+          })
+          .map(contract => ({
+            ...contract,
+            id: contract.contractId,
+            amount: contract.totalValue,
+            currency: contract.currency,
+            exporter: contract.exporterId,
+            status: 'AWAITING_LC', // Custom status for contracts pending LC
+            currentStep: -1, // Not in workflow yet
+            isContract: true, // Flag to identify this as a contract, not an LC
+            contractData: contract, // Keep full contract data
+          }));
         
-        // Then, add existing LCs
-        const existingLCs = letterOfCredits.map(lc => {
-          // Check if this LC has a pending forex request
-          const forexRequest = forexAllocations.find(f => f.lcId === lc.lcId);
-          let effectiveStatus = lc.status;
-          
-          // If LC is ISSUED but has a pending forex request, treat it as FOREX_REQUESTED
-          if (lc.status === 'ISSUED' && forexRequest && forexRequest.status === 'REQUESTED') {
-            effectiveStatus = 'FOREX_REQUESTED';
-          } else if (lc.status === 'ISSUED' && forexRequest && forexRequest.status === 'ALLOCATED') {
-            effectiveStatus = 'FOREX_ALLOCATED';
-          }
-          
+        // Then, add existing LCs - but exclude LCs that belong in Forex tab
+        // LCs with forex allocations (any status) stay in Forex Allocations tab
+        console.log('[PAYMENT METHODS] Available forex allocations:', forexAllocations.map(f => ({ forexId: f.forexId, lcId: f.lcId, status: f.status })));
+        
+        const existingLCs = letterOfCredits
+          .filter(lc => {
+            console.log(`[PAYMENT METHODS] Checking LC ${lc.lcId}, status: ${lc.status}`);
+            
+            // ✅ CRITICAL: Exclude LCs with forex-related statuses
+            // These statuses indicate the LC is in the forex allocation workflow
+            const forexRelatedStatuses = ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED', 'FOREX_REQUESTED'];
+            if (forexRelatedStatuses.includes(lc.status)) {
+              console.log(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - status is ${lc.status} (forex-related)`);
+              return false;
+            }
+            
+            // Exclude any LC that has a forex allocation record (REQUESTED, ALLOCATED, UTILIZED, EXPIRED)
+            // Match by:
+            // 1. Exact lcId match
+            // 2. forexId pattern match (e.g., FOREX_LC1787055024941_timestamp)
+            // 3. contractId + exporterId match (for forex without lcId populated yet)
+            const hasForex = forexAllocations.some(f => {
+              // Exact lcId match
+              const lcIdMatch = f.lcId && lc.lcId && (
+                f.lcId === lc.lcId || 
+                f.lcId?.toLowerCase() === lc.lcId?.toLowerCase() ||
+                f.lcId.replace(/\s/g, '') === lc.lcId.replace(/\s/g, '')
+              );
+              
+              // forexId pattern match (forexId contains LC ID, e.g., FOREX_LC1787055024941_12345)
+              const forexIdMatch = f.forexId && lc.lcId && f.forexId.includes(lc.lcId);
+              
+              // contractId + exporterId match (for forex records without lcId yet)
+              const metadataMatch = f.contractId && f.exporterId && lc.contractId && lc.exporterId && 
+                f.contractId === lc.contractId && f.exporterId === lc.exporterId;
+              
+              const match = lcIdMatch || forexIdMatch || metadataMatch;
+              
+              if (match) {
+                console.log(`[PAYMENT METHODS] Found matching forex for ${lc.lcId}:`, {
+                  forexId: f.forexId,
+                  lcId: f.lcId || '(not set)',
+                  status: f.status,
+                  matchType: lcIdMatch ? 'lcId' : forexIdMatch ? 'forexId' : 'metadata'
+                });
+              }
+              return match;
+            });
+            
+            if (hasForex) {
+              console.log(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - has forex allocation record`);
+              return false;
+            }
+            
+            console.log(`[PAYMENT METHODS] ✅ Including ${lc.lcId} in Payment Methods`);
+            // Include all other LCs in Payment Methods workflow
+            return true;
+          })
+          .map(lc => {
           return {
             ...lc,
             id: lc.lcId,
             amount: lc.amount,
             currency: lc.currency,
             exporter: lc.exporterId,
-            status: effectiveStatus,
-            currentStep: getCurrentStep(effectiveStatus, 'LC'),
-            forexRequest, // Include forex data for reference
+            status: lc.status,
+            currentStep: getCurrentStep(lc.status, 'LC'),
             isContract: false, // This is an LC, not a contract
           };
         });
@@ -257,20 +308,16 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
     }
     
     // CRITICAL FILTER: Only show payments where bank needs to take action IN THIS TAB
-    // Forex allocation happens in Banking Operations tab, so hide those LCs here
+    // Show all LC statuses in the table for complete visibility
     const methodConfig = PAYMENT_METHODS.find(m => m.id === selectedPaymentMethod);
     if (!methodConfig) return [];
     
     return allPayments.filter(payment => {
-      // For LC: Hide if status is ISSUED (waiting for forex/shipment - handled elsewhere)
+      // For LC: Show ALL valid statuses (REQUESTED, APPROVED, ISSUED, UTILIZED, EXPIRED)
+      // Note: SHIPPED, DOCUMENTS_SUBMITTED, DOCUMENTS_VERIFIED are NOT valid LC statuses
       if (selectedPaymentMethod === 'LC') {
-        if (payment.status === 'ISSUED') {
-          return false; // Don't show - LC is issued, forex allocation happens in Banking Operations → Forex Allocation tab
-        }
-        // Hide if waiting for shipment (exporter action, not bank)
-        if (payment.status === 'SHIPPED' && payment.currentStep === 3) {
-          return false; // Don't show - exporter must ship goods
-        }
+        // Show everything - bank needs to see complete LC lifecycle
+        return true;
       }
       
       // Show if completed (for history/reference)
@@ -291,15 +338,14 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
   const getCurrentStep = (status: string, method: string): number => {
     const stepMappings: Record<string, Record<string, number>> = {
       LC: {
-        'AWAITING_LC': 0,         // Approved contract awaiting LC issuance
-        'REQUESTED': 0,           // LC Requested
-        'APPROVED': 1,            // Approve Request (ready for issuance)
-        'ISSUED': 2,              // Issue LC (MT700 sent)
-        'SHIPPED': 3,             // Awaiting Shipment (goods in transit)
-        'DOCUMENTS_SUBMITTED': 4, // Verify Documents (bank examines)
-        'DOCUMENTS_VERIFIED': 4,  // Verify Documents (bank approved docs)
-        'PAID': 5,                // Release Payment (MT103 sent)
-        'SETTLED': 5,             // Release Payment (complete)
+        'AWAITING_LC': -1,        // Approved contract awaiting LC creation (not in workflow yet)
+        'REQUESTED': 0,           // LC Requested - shows "Approve Request" button (step 1)
+        'APPROVED': 1,            // LC Approved - shows "Issue LC" button (step 2)
+        'ISSUED': 2,              // LC Issued (MT700 sent) - forex allocated, awaiting documents
+        'UTILIZED': 4,            // Documents verified, LC can be used for payment
+        'EXPIRED': 5,             // LC expired
+        'PAID': 5,                // Payment released (MT103 sent)
+        'SETTLED': 5,             // Payment complete
       },
       CAD: {
         'PENDING': 0,
