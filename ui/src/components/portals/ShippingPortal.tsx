@@ -257,11 +257,28 @@ const ShippingPortal: React.FC = () => {
     }
 
     try {
-      // Load shipments with CUSTOMS_CLEARED status (ready for shipping)
+      // STEP 1: Load shipments from blockchain
       const shipmentsResponse = await apiFetch('/shipments', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const shipmentsResult = await shipmentsResponse.json();
+      
+      // STEP 2: Load customs clearances from database (to catch shipments where blockchain update failed)
+      const clearancesResponse = await apiFetch('/customs/clearances', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const clearancesResult = await clearancesResponse.json();
+      
+      console.log(`[SHIPPING] Loaded ${clearancesResult.success ? clearancesResult.data?.length : 0} customs clearances from database`);
+      
+      // Create a set of cleared shipment IDs
+      const clearedShipmentIds = new Set(
+        clearancesResult.success && clearancesResult.data 
+          ? clearancesResult.data.map((c: any) => c.shipment_id || c.shipmentId).filter(Boolean)
+          : []
+      );
+      
+      console.log('[SHIPPING] Cleared shipment IDs from database:', Array.from(clearedShipmentIds));
       
       if (shipmentsResult.success && shipmentsResult.data) {
         // Log all shipments with their statuses for debugging
@@ -288,11 +305,17 @@ const ShippingPortal: React.FC = () => {
           updated: s.UpdatedAt || s.updatedAt,
         })));
         
-        // Filter for shipments in shipping workflow - REAL STATUSES ONLY FROM BLOCKCHAIN
+        // Filter for shipments in shipping workflow
+        // Include shipments with shipping statuses OR cleared in customs database
         const readyShipments = uniqueShipments.filter((s: any) => {
+          const shipmentId = s.ShipmentID || s.shipmentId;
           const status = (s.Status || s.status || s.shipmentStatus || '').toUpperCase().trim();
-          // Include ONLY real blockchain shipping statuses (no fake data)
-          return status === 'CUSTOMS_CLEARED' || 
+          
+          // Check if cleared in database (even if blockchain status isn't updated)
+          const isClearedInDatabase = clearedShipmentIds.has(shipmentId);
+          
+          // Include if: cleared in database OR has a shipping workflow status
+          const hasShippingStatus = status === 'CUSTOMS_CLEARED' || 
                  status === 'LAND_TRANSPORT' ||
                  status === 'PORT_ARRIVED' ||
                  status === 'CONTAINER_STUFFED' ||
@@ -301,7 +324,13 @@ const ShippingPortal: React.FC = () => {
                  status === 'IN_TRANSIT' ||
                  status === 'DESTINATION_ARRIVED' ||
                  status === 'DELIVERED' ||
-                 status === 'LOADED'; // B/L or AWB recorded
+                 status === 'LOADED';
+          
+          if (isClearedInDatabase && !hasShippingStatus) {
+            console.log(`[SHIPPING] ✅ Including ${shipmentId} - cleared in database (blockchain status: ${status})`);
+          }
+          
+          return isClearedInDatabase || hasShippingStatus;
         });
         
         console.log(`[SHIPPING] Ready for shipping: ${readyShipments.length}`);
@@ -319,13 +348,16 @@ const ShippingPortal: React.FC = () => {
           const exporterId = s.exporterId || s.ExporterID || 'UNKNOWN';
           const status = (s.status || s.Status || 'PENDING').toUpperCase().trim();
           
+          // Check if this shipment is cleared in database
+          const isClearedInDatabase = clearedShipmentIds.has(shipmentId);
+          
           // DEBUG: Log status mapping for each shipment
-          console.log(`[SHIPPING] Mapping ${shipmentId}: blockchain status="${status}"`);
+          console.log(`[SHIPPING] Mapping ${shipmentId}: blockchain status="${status}", database cleared=${isClearedInDatabase}`);
           
           // Transport mode from blockchain
           const transportMode = s.transportMode || s.TransportMode || 'SEA';
           
-          // Map shipment status to shipping status - STRICT 1:1 MAPPING, NO FAKE DEFAULTS
+          // Map shipment status to shipping status
           let shippingStatus: ShippingRecord['status'];
           
           // Priority order: most specific to least specific (DELIVERED first to avoid fallthrough)
@@ -349,6 +381,10 @@ const ShippingPortal: React.FC = () => {
             shippingStatus = 'CUSTOMS_CLEARED';
           } else if (status === 'LOADED') {
             // LOADED = B/L recorded, treat as CUSTOMS_CLEARED (ready for land transport)
+            shippingStatus = 'CUSTOMS_CLEARED';
+          } else if (isClearedInDatabase) {
+            // If cleared in database but blockchain status not updated, treat as CUSTOMS_CLEARED
+            console.log(`[SHIPPING] ⚠️ Using database clearance for ${shipmentId} (blockchain status: ${status})`);
             shippingStatus = 'CUSTOMS_CLEARED';
           } else {
             // ERROR: Unknown status - do NOT show in shipping portal
@@ -1122,6 +1158,10 @@ const ShippingPortal: React.FC = () => {
       width: 150,
       valueGetter: (params) => {
         const row = params.row;
+        // For CUSTOMS_CLEARED status, documents haven't been created yet
+        if (row.status === 'CUSTOMS_CLEARED') {
+          return '(Pending)';
+        }
         return row.transportMode === 'SEA' 
           ? row.billOfLading || row.containerNumber || 'N/A'
           : row.airwayBill || row.flightNumber || 'N/A';
@@ -1133,6 +1173,10 @@ const ShippingPortal: React.FC = () => {
       width: 150,
       valueGetter: (params) => {
         const row = params.row;
+        // For CUSTOMS_CLEARED status, vessel/flight not assigned yet
+        if (row.status === 'CUSTOMS_CLEARED') {
+          return '(To be assigned)';
+        }
         return row.transportMode === 'SEA' 
           ? row.vesselName || 'N/A'
           : row.flightNumber || row.vesselName || 'N/A';

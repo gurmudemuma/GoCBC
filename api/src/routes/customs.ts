@@ -2,10 +2,12 @@ import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import { authMiddleware } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
+import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
+const fabricService = FabricService.getInstance();
 
 const validateRequest = (req: Request, res: Response, next: any) => {
   const errors = validationResult(req);
@@ -18,6 +20,78 @@ const validateRequest = (req: Request, res: Response, next: any) => {
   }
   next();
 };
+
+/**
+ * GET /api/v1/customs/declarations
+ * Get all customs declarations (for checking which shipments have declarations)
+ */
+router.get('/declarations',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching all customs declarations');
+
+      const declarations = await postgresDb.all(
+        `SELECT 
+          declaration_number, 
+          shipment_id, 
+          exporter_id,
+          declaration_type,
+          hs_code,
+          quantity,
+          customs_value_usd,
+          currency,
+          destination,
+          port_of_exit,
+          eudr_compliant,
+          additional_notes,
+          status,
+          customs_officer,
+          inspection_required,
+          created_at,
+          updated_at
+        FROM customs_declarations 
+        ORDER BY created_at DESC`
+      );
+
+      logger.info(`[CUSTOMS] Found ${declarations.length} declarations`);
+
+      // Map to camelCase for frontend
+      const mappedDeclarations = declarations.map((d: any) => ({
+        declarationId: d.declaration_number,
+        shipmentId: d.shipment_id,
+        exporterId: d.exporter_id,
+        declarationType: d.declaration_type,
+        hsCode: d.hs_code,
+        quantity: parseFloat(d.quantity || 0),
+        value: parseFloat(d.customs_value_usd || 0),
+        currency: d.currency,
+        destination: d.destination,
+        portOfExit: d.port_of_exit,
+        eudrCompliant: d.eudr_compliant,
+        additionalNotes: d.additional_notes,
+        status: d.status,
+        customsOfficer: d.customs_officer,
+        inspectionRequired: d.inspection_required,
+        submissionDate: d.created_at,
+        updatedAt: d.updated_at
+      }));
+
+      res.json({
+        success: true,
+        data: mappedDeclarations,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching declarations:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 router.post('/risk-assessment',
   authMiddleware,
@@ -107,7 +181,11 @@ router.get('/clearances',
       query += ' ORDER BY created_at DESC';
       const clearances = await postgresDb.all(query, params);
 
-      res.json({ success: true, data: { clearances }, timestamp: new Date().toISOString() });
+      res.json({ 
+        success: true, 
+        data: clearances,  // Return array directly, not nested in object
+        timestamp: new Date().toISOString() 
+      });
     } catch (error: any) {
       res.status(500).json({
         success: false,
@@ -132,25 +210,30 @@ router.get('/permit-ready',
       // Fetch all inspections with status 'permit_issued'
       const inspections = await postgresDb.all(`
         SELECT 
-          inspection_id,
-          shipment_id,
-          exporter_id,
-          contract_id,
-          coffee_type,
-          quantity,
-          status,
-          passed,
-          grade,
-          certification_number,
-          requested_date,
-          inspection_date,
-          remarks,
-          created_at,
-          updated_at
-        FROM quality_inspections
-        WHERE status = 'permit_issued'
-        ORDER BY updated_at DESC, created_at DESC
+          qi.inspection_id,
+          qi.shipment_id,
+          qi.exporter_id,
+          qi.contract_id,
+          qi.coffee_type,
+          qi.quantity,
+          qi.status,
+          qi.passed,
+          qi.grade,
+          qi.certification_number,
+          qi.requested_date,
+          qi.inspection_date,
+          qi.remarks,
+          qi.created_at,
+          qi.updated_at,
+          cd.declaration_number
+        FROM quality_inspections qi
+        LEFT JOIN customs_declarations cd ON qi.shipment_id = cd.shipment_id
+        WHERE qi.status = 'permit_issued'
+          AND cd.declaration_number IS NULL
+        ORDER BY qi.updated_at DESC, qi.created_at DESC
       `);
+      
+      logger.info(`[CUSTOMS] Found ${inspections.length} quality inspections with permit_issued status (excluding already declared)`);
       
       // Transform to camelCase and extract permit number and score from remarks
       const transformed = inspections.map((insp: any) => {
@@ -208,4 +291,472 @@ router.get('/permit-ready',
   }
 );
 
+/**
+ * GET /api/v1/customs/declarations
+ * Returns all customs declarations with their complete data
+ */
+router.get('/declarations',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching all customs declarations');
+
+      const declarations = await postgresDb.all(
+        `SELECT 
+          declaration_number, 
+          shipment_id, 
+          exporter_id,
+          declaration_type,
+          hs_code,
+          quantity,
+          customs_value_usd,
+          currency,
+          destination,
+          port_of_exit,
+          eudr_compliant,
+          additional_notes,
+          status,
+          customs_officer,
+          inspection_required,
+          created_at,
+          updated_at
+        FROM customs_declarations 
+        ORDER BY created_at DESC`
+      );
+
+      logger.info(`[CUSTOMS] Found ${declarations.length} declarations`);
+
+      // Map to camelCase for frontend
+      const mappedDeclarations = declarations.map((d: any) => ({
+        declarationId: d.declaration_number,
+        shipmentId: d.shipment_id,
+        exporterId: d.exporter_id,
+        declarationType: d.declaration_type,
+        hsCode: d.hs_code,
+        quantity: parseFloat(d.quantity || 0),
+        value: parseFloat(d.customs_value_usd || 0),
+        currency: d.currency,
+        destination: d.destination,
+        portOfExit: d.port_of_exit,
+        eudrCompliant: d.eudr_compliant,
+        additionalNotes: d.additional_notes,
+        status: d.status,
+        customsOfficer: d.customs_officer,
+        inspectionRequired: d.inspection_required,
+        submissionDate: d.created_at,
+        updatedAt: d.updated_at
+      }));
+
+      res.json({
+        success: true,
+        data: mappedDeclarations,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching declarations:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/declaration/submit
+ * Submit a new customs declaration for a shipment with export permit
+ */
+router.post('/declaration/submit',
+  authMiddleware,
+  [
+    body('declarationID').notEmpty(),
+    body('shipmentID').notEmpty(),
+    body('exporterID').notEmpty(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        declarationID,
+        shipmentID,
+        exporterID,
+        declarationType,
+        hsCode,
+        quantity,
+        value,
+        currency,
+        destination,
+        portOfExit,
+        eudrCompliant,
+        additionalNotes
+      } = req.body;
+
+      logger.info(`[CUSTOMS] Submitting declaration ${declarationID} for shipment ${shipmentID}`);
+
+      // Check if declaration already exists for this shipment
+      const existingDeclaration = await postgresDb.get(
+        `SELECT declaration_number FROM customs_declarations WHERE shipment_id = $1`,
+        [shipmentID]
+      );
+
+      if (existingDeclaration) {
+        logger.warn(`[CUSTOMS] Declaration for shipment ${shipmentID} already exists (${existingDeclaration.declaration_number})`);
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'DECLARATION_EXISTS', 
+            message: 'A customs declaration has already been submitted for this shipment. Please contact customs if you need to update it.' 
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Store in customs_declarations table with full declaration data
+      await postgresDb.run(
+        `INSERT INTO customs_declarations (
+          declaration_number, shipment_id, exporter_id, declaration_type, hs_code, 
+          quantity, customs_value_usd, currency, destination, port_of_exit, 
+          eudr_compliant, additional_notes, status, inspection_required, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())`,
+        [
+          declarationID, 
+          shipmentID, 
+          exporterID, 
+          declarationType || 'STANDARD',
+          hsCode || '090111',
+          quantity || 0,
+          value || 0, 
+          currency || 'USD',
+          destination || 'Unknown',
+          portOfExit || 'Djibouti Port',
+          eudrCompliant || false,
+          additionalNotes || '',
+          'SUBMITTED',
+          true
+        ]
+      );
+
+      logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationID,
+          shipmentID,
+          status: 'SUBMITTED',
+          message: 'Declaration submitted successfully and ready for customs officer review'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error submitting declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/test-shipment-update/:shipmentId
+ * Test endpoint to manually update shipment status to CUSTOMS_CLEARED
+ */
+router.post('/test-shipment-update/:shipmentId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentId } = req.params;
+      
+      logger.info(`[CUSTOMS TEST] Checking shipment ${shipmentId}...`);
+      
+      // Check if shipment exists
+      const shipment = await fabricService.getShipment(shipmentId);
+      
+      if (!shipment.success || !shipment.data) {
+        return res.json({
+          success: false,
+          error: 'Shipment not found on blockchain',
+          shipmentId
+        });
+      }
+      
+      const currentStatus = shipment.data.status || shipment.data.Status;
+      logger.info(`[CUSTOMS TEST] Current status: ${currentStatus}`);
+      
+      // Update to CUSTOMS_CLEARED
+      const result = await fabricService.invokeChaincode('UpdateShipmentStatus', [
+        shipmentId,
+        'CUSTOMS_CLEARED'
+      ]);
+      
+      logger.info(`[CUSTOMS TEST] Update result:`, result);
+      
+      // Verify the update
+      const updatedShipment = await fabricService.getShipment(shipmentId);
+      const newStatus = updatedShipment.data?.status || updatedShipment.data?.Status;
+      
+      res.json({
+        success: true,
+        shipmentId,
+        oldStatus: currentStatus,
+        newStatus: newStatus,
+        updateResult: result
+      });
+      
+    } catch (error: any) {
+      logger.error('[CUSTOMS TEST] Error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+);
+
 export default router;
+
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/review
+ * Schedule inspection and assign customs officer
+ */
+router.post('/declaration/:declarationId/review',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { assignedInspector, scheduledDate, priorityLevel, location, inspectionType, inspectorNotes } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Scheduling inspection for declaration ${declarationId} by ${user.username}`);
+
+      // Use the assigned inspector's username directly (no more mapping)
+      const officerName = assignedInspector || user.username || 'Customs Officer';
+
+      // Update declaration with assigned officer and status
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET customs_officer = $1, status = $2, updated_at = NOW() 
+         WHERE declaration_number = $3`,
+        [officerName, 'UNDER_INSPECTION', declarationId]
+      );
+
+      logger.info(`[CUSTOMS] Declaration ${declarationId} updated: officer=${officerName}, status=UNDER_INSPECTION`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          status: 'UNDER_INSPECTION',
+          assignedOfficer: officerName,
+          message: 'Inspection scheduled successfully'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error scheduling inspection:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * Complete inspection and move declaration to UNDER_REVIEW status
+ */
+router.post('/declaration/:declarationId/complete-inspection',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { inspectionResult, inspectorComments, completedDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Completing inspection for declaration ${declarationId} by ${user.username}`);
+
+      // Update declaration status to UNDER_REVIEW after inspection
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET status = $1, updated_at = NOW() 
+         WHERE declaration_number = $2`,
+        ['UNDER_REVIEW', declarationId]
+      );
+
+      logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} inspection completed: status=UNDER_REVIEW`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          status: 'UNDER_REVIEW',
+          inspectionResult: inspectionResult || 'PASSED',
+          message: 'Inspection completed successfully. Declaration moved to UNDER_REVIEW for final clearance.'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error completing inspection:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/clear
+ * Clear a customs declaration (final approval)
+ */
+router.post('/declaration/:declarationId/clear',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { 
+        clearanceNumber, 
+        clearedBy, 
+        clearanceDate,
+        clearanceType,
+        exportDuty,
+        vatAmount,
+        exitPoint,
+        validityPeriod,
+        transportMode,
+        finalDestinationPort,
+        estimatedDepartureDate,
+        containerNumber,
+        sealNumber,
+        shippingLine,
+        clearanceRemarks,
+        officerNotes
+      } = req.body;
+      
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Clearing declaration ${declarationId} by ${user.username}`);
+
+      // Update declaration status to CLEARED
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET status = $1, customs_officer = $2, updated_at = NOW() 
+         WHERE declaration_number = $3`,
+        ['CLEARED', clearedBy || user.username, declarationId]
+      );
+
+      // Get shipment ID from declaration
+      const declaration = await postgresDb.get(
+        `SELECT shipment_id FROM customs_declarations WHERE declaration_number = $1`,
+        [declarationId]
+      );
+
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Declaration not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Store clearance record
+      const clearanceID = clearanceNumber || `CLR-${Date.now()}`;
+      await postgresDb.run(
+        `INSERT INTO customs_clearances (
+          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          clearanceID, 
+          declaration.shipment_id, 
+          clearanceNumber, 
+          'CLEARED',
+          clearedBy || user.username, 
+          clearanceDate || new Date().toISOString()
+        ]
+      );
+
+      logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully with clearance ${clearanceNumber}`);
+
+      // Update shipment status to CUSTOMS_CLEARED on blockchain
+      if (declaration.shipment_id) {
+        logger.info(`[CUSTOMS] 🚢 Updating shipment ${declaration.shipment_id} to CUSTOMS_CLEARED on blockchain`);
+        
+        try {
+          // Connect as CustomsMSP to have authority to update shipment status
+          await fabricService.connectAsOrg('CustomsMSP');
+          logger.info(`[CUSTOMS] Connected as CustomsMSP`);
+          
+          // First verify the shipment exists on blockchain
+          const shipmentCheck = await fabricService.queryChaincode('ReadShipment', [declaration.shipment_id]);
+          
+          if (!shipmentCheck.success || !shipmentCheck.data) {
+            logger.error(`[CUSTOMS] ❌ Shipment ${declaration.shipment_id} not found on blockchain!`);
+            logger.error(`[CUSTOMS] Shipment check result:`, JSON.stringify(shipmentCheck));
+          } else {
+            const currentStatus = shipmentCheck.data.status || shipmentCheck.data.Status;
+            logger.info(`[CUSTOMS] Current blockchain status: ${currentStatus}`);
+            
+            // Use direct chaincode invocation to update status
+            // CustomsMSP has authority to set CUSTOMS_CLEARED directly
+            const result = await fabricService.invokeChaincode('UpdateShipmentStatus', [
+              declaration.shipment_id,
+              'CUSTOMS_CLEARED'
+            ]);
+            
+            if (result.success) {
+              logger.info(`[CUSTOMS] ✅ Shipment ${declaration.shipment_id} status updated to CUSTOMS_CLEARED on blockchain`);
+              
+              // Verify the update worked
+              const verifyCheck = await fabricService.queryChaincode('ReadShipment', [declaration.shipment_id]);
+              const newStatus = verifyCheck.data?.status || verifyCheck.data?.Status;
+              logger.info(`[CUSTOMS] ✅ Verified new blockchain status: ${newStatus}`);
+            } else {
+              logger.error(`[CUSTOMS] ❌ Failed to update shipment status:`, result.error);
+            }
+          }
+        } catch (shipmentError: any) {
+          logger.error(`[CUSTOMS] ❌ Exception updating shipment status:`, shipmentError);
+          logger.error(`[CUSTOMS] Error stack:`, shipmentError.stack);
+          // Continue even if blockchain update fails - clearance is recorded in DB
+        }
+      } else {
+        logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId}`);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          clearanceNumber,
+          shipmentID: declaration.shipment_id,
+          status: 'CLEARED',
+          clearedBy: clearedBy || user.username,
+          message: 'Declaration cleared successfully',
+          debug: {
+            shipmentIdFound: !!declaration.shipment_id,
+            shipmentIdValue: declaration.shipment_id
+          }
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error clearing declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);

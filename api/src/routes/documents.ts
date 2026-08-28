@@ -504,15 +504,129 @@ router.get('/:documentId/download',
 
 // Add alias for /view endpoint (same as /download with inline=true)
 router.get('/:documentId/view',
-  authMiddleware,
-  async (req: Request, res: Response, next: Function) => {
-    // Redirect to download with inline=true
-    req.query.inline = 'true';
+  // Support token in query parameter for iframe viewing
+  async (req: Request, res: Response, next: any) => {
+    const tokenFromQuery = req.query.token as string;
+    if (tokenFromQuery && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${tokenFromQuery}`;
+    }
     next();
+  },
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      
+      logger.info(`Document view requested: ${documentId}`);
+      
+      // Get document info from database
+      const doc = await postgresDb.get(
+        'SELECT * FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+      
+      if (!doc) {
+        logger.warn(`Document not found in database: ${documentId}`);
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
+      
+      // Check if file exists
+      if (!doc.file_path || !fs.existsSync(doc.file_path)) {
+        logger.error(`File not found on disk: ${doc.file_path}`);
+        return res.status(404).json({
+          success: false,
+          error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Remove X-Frame-Options to allow iframe embedding
+      res.removeHeader('X-Frame-Options');
+      
+      // Set content type
+      res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+      
+      // Set content disposition for inline viewing
+      res.setHeader('Content-Disposition', `inline; filename="${doc.file_name}"`);
+      
+      // Allow embedding in iframes from localhost:3000
+      res.setHeader('Content-Security-Policy', "frame-ancestors 'self' http://localhost:3000");
+      
+      logger.info(`Streaming file for viewing: ${doc.file_name}`);
+      
+      // Send file
+      const fileStream = fs.createReadStream(doc.file_path);
+      fileStream.pipe(res);
+      
+      // ✅ LOG TO AUDIT TRAIL - Document Viewed
+      try {
+        const user = (req as any).user;
+        await postgresDb.run(
+          `INSERT INTO audit_trail (
+            entity_type, entity_id, action, performed_by, performed_by_org, 
+            old_value, new_value, reason, metadata, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            'DOCUMENT',
+            documentId,
+            'VIEW',
+            user?.sub || user?.username || 'USER',
+            user?.org || 'UNKNOWN',
+            'N/A',
+            'VIEWED',
+            `Document viewed: ${doc.file_name}`,
+            JSON.stringify({
+              documentId,
+              fileName: doc.file_name,
+              entityType: doc.entity_type,
+              entityId: doc.entity_id,
+              documentType: doc.document_type,
+              fileSize: doc.file_size,
+              mimeType: doc.mime_type,
+              viewedBy: user?.username,
+              role: user?.role,
+              organization: user?.org,
+              timestamp: new Date().toISOString()
+            }),
+            req.ip || (req as any).connection?.remoteAddress || 'unknown'
+          ]
+        );
+        logger.info(`✅ Audit log created for document view: ${documentId} by ${user?.username}`);
+      } catch (auditError) {
+        logger.error('Failed to create document view audit log:', auditError);
+        // Don't fail the request if audit logging fails
+      }
+      
+      fileStream.on('error', (err) => {
+        logger.error('Error streaming file:', err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            error: { code: 'STREAM_ERROR', message: 'Failed to stream file' },
+            timestamp: new Date().toISOString()
+          });
+        }
+      });
+    } catch (error: any) {
+      logger.error('Document view error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'SERVER_ERROR', message: error.message },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
   }
 );
 
-// Add alias without /download suffix
+// Add alias without /download suffix for metadata only
 router.get('/:documentId',
   authMiddleware,
   async (req: Request, res: Response) => {

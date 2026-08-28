@@ -1834,4 +1834,135 @@ router.get('/activity-log',
   }
 );
 
+/**
+ * GET /api/v1/users/debug/exporter/:exporterId
+ * Debug endpoint to check exporter data retrieval
+ */
+router.get('/debug/exporter/:exporterId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { exporterId } = req.params;
+
+      const user = await db.get(
+        `SELECT 
+         u.id, u.username, u.full_name, u.phone as user_phone, u.exporter_id,
+         ea.contact_person, ea.phone as contact_phone, ea.company_name, ea.email as contact_email
+         FROM users u
+         LEFT JOIN exporter_applications ea ON u.exporter_id = ea.exporter_id
+         WHERE u.exporter_id = $1`,
+        [exporterId]
+      );
+
+      res.json({
+        success: true,
+        debug: {
+          query: 'SELECT u.id, u.username, u.full_name, u.phone as user_phone, u.exporter_id, ea.contact_person, ea.phone as contact_phone, ea.company_name FROM users u LEFT JOIN exporter_applications ea ON u.exporter_id = ea.license_number WHERE u.exporter_id = $1',
+          params: [exporterId],
+          result: user,
+          fieldCheck: {
+            has_contact_person: !!user?.contact_person,
+            has_contact_phone: !!user?.contact_phone,
+            has_user_phone: !!user?.user_phone,
+            contact_person_value: user?.contact_person || 'NULL',
+            contact_phone_value: user?.contact_phone || 'NULL',
+            user_phone_value: user?.user_phone || 'NULL',
+          }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+);
+
 export default router;
+
+
+/**
+ * GET /api/v1/users/by-exporter/:exporterId
+ * Get user by exporter ID with company info
+ */
+router.get('/by-exporter/:exporterId',
+  authMiddleware,
+  [param('exporterId').notEmpty().withMessage('Exporter ID is required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { exporterId } = req.params;
+
+      // Join with exporter_applications to get company name and contact info
+      const user = await db.get(
+        `SELECT 
+         u.id, 
+         u.username, 
+         u.email, 
+         u.full_name, 
+         u.role, 
+         u.organization, 
+         u.exporter_id, 
+         u.ecta_license, 
+         u.phone as user_phone, 
+         u.permissions, 
+         u.status, 
+         u.created_at, 
+         u.last_login,
+         ea.company_name, 
+         ea.contact_person, 
+         ea.phone as contact_phone, 
+         ea.email as contact_email,
+         ea.bank_name, 
+         ea.bank_branch
+         FROM users u
+         LEFT JOIN exporter_applications ea ON u.exporter_id = ea.exporter_id
+         WHERE u.exporter_id = $1`,
+        [exporterId]
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Parse permissions JSON
+      user.permissions = JSON.parse(user.permissions || '[]');
+      
+      // Add logging to see what we got
+      logger.info('[USERS] Retrieved user by exporter ID:', {
+        exporterId,
+        contact_person: user.contact_person,
+        contact_phone: user.contact_phone,
+        user_phone: user.user_phone,
+        company_name: user.company_name,
+      });
+
+      res.json({
+        success: true,
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error retrieving user by exporter ID:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to retrieve user',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);

@@ -101,8 +101,12 @@ class CECBSServer {
           styleSrc: ["'self'", "'unsafe-inline'"],
           scriptSrc: ["'self'"],
           imgSrc: ["'self'", "data:", "https:"],
+          frameSrc: ["'self'"], // Allow iframes from same origin
         },
       },
+      frameguard: {
+        action: 'sameorigin' // Allow same-origin framing (for document preview)
+      }
     }));
 
     // CORS configuration

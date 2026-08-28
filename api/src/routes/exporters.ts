@@ -1595,8 +1595,8 @@ router.post('/applications/:applicationId/approve',
       // Update application status
       await new Promise((resolve, reject) => {
         db.run(
-          'UPDATE exporter_applications SET status = ?, approved_at = ?, exporter_id = ? WHERE application_id = ?',
-          ['approved', new Date().toISOString(), exporterId, applicationId],
+          'UPDATE exporter_applications SET status = ?, approved_at = ?, exporter_id = ?, license_number = ? WHERE application_id = ?',
+          ['approved', new Date().toISOString(), exporterId, exporterId, applicationId],
           (err: any) => {
             if (err) reject(err);
             else resolve(true);

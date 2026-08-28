@@ -125,6 +125,7 @@ const CustomsPortal: React.FC = () => {
   const [clearanceDialogOpen, setClearanceDialogOpen] = useState(false);
   const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
   const [rejectionDialogOpen, setRejectionDialogOpen] = useState(false);
+  const [customsOfficers, setCustomsOfficers] = useState<any[]>([]);
   const [newDeclarationDialogOpen, setNewDeclarationDialogOpen] = useState(false);
   const [customsDocUploadOpen, setCustomsDocUploadOpen] = useState(false);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
@@ -137,14 +138,13 @@ const CustomsPortal: React.FC = () => {
     const isSuperAdmin = userRole === 'ADMIN';
     
     const allTabs = [
-      { index: 0, label: 'Permit Ready', icon: <Assignment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer'] },
-      { index: 1, label: 'Submitted', icon: <LocalShipping />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
-      { index: 2, label: 'Inspecting', icon: <Security />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer'] },
-      { index: 3, label: 'Under Review', icon: <Warning />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
-      { index: 4, label: 'Cleared', icon: <CheckCircle />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
-      { index: 5, label: 'Rejected', icon: <Cancel />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
-      { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
-      { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer', 'Clearance Officer'] },
+      { index: 0, label: 'Submitted', icon: <LocalShipping />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
+      { index: 1, label: 'Inspecting', icon: <Security />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer'] },
+      { index: 2, label: 'Under Review', icon: <Warning />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
+      { index: 3, label: 'Cleared', icon: <CheckCircle />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
+      { index: 4, label: 'Rejected', icon: <Cancel />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
+      { index: 5, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
+      { index: 6, label: 'Audit Trail', icon: <Assessment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer', 'Clearance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -170,6 +170,12 @@ const CustomsPortal: React.FC = () => {
     inspectorName: '',
     clearanceNumber: '',
     companyName: '',
+    customsDuties: '0',
+    validityDays: '30',
+    expiryDate: '',
+    fobValueETB: '0',
+    processingFee: '0',
+    documentationFee: '0',
   });
 
   // Inspection Dialog Form State
@@ -237,12 +243,23 @@ const CustomsPortal: React.FC = () => {
     if (clearanceDialogOpen && selectedDeclaration) {
       const clearanceNum = clearanceAutoData.clearanceNumber || `CLR-${Date.now()}`;
       
+      // Use the inspector name directly (it's already a username from the declaration)
+      let officerUsername = clearanceAutoData.inspectorName || 'customsAdmin';
+      
+      // If we have officers loaded, find the first one as fallback
+      if (!clearanceAutoData.inspectorName && customsOfficers.length > 0) {
+        officerUsername = customsOfficers[0].username;
+      }
+      
       setClearanceForm({
         ...clearanceForm,
         clearanceNumber: clearanceNum,
+        customsDuties: clearanceAutoData.customsDuties || '0',
+        validityPeriod: clearanceAutoData.validityDays || '30',
+        clearedBy: officerUsername,
       });
     }
-  }, [clearanceDialogOpen, selectedDeclaration, clearanceAutoData]);
+  }, [clearanceDialogOpen, selectedDeclaration, clearanceAutoData, customsOfficers]);
 
   // New Declaration Form State
   const [newDeclarationForm, setNewDeclarationForm] = useState({
@@ -642,6 +659,97 @@ ${solution}`);
   });
   const [rejectionDetailsDialogOpen, setRejectionDetailsDialogOpen] = useState(false);
   
+  // Document viewer state
+  const [documentViewerOpen, setDocumentViewerOpen] = useState(false);
+  const [currentDocumentUrl, setCurrentDocumentUrl] = useState('');
+  const [currentDocumentTitle, setCurrentDocumentTitle] = useState('');
+  const [shipmentDocuments, setShipmentDocuments] = useState<any[]>([]);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
+  
+  // Fetch actual documents for a declaration
+  const fetchDeclarationDocuments = async (declarationNumber: string) => {
+    setLoadingDocuments(true);
+    const token = localStorage.getItem('authToken');
+    try {
+      console.log('[CUSTOMS] Fetching documents for declaration:', declarationNumber);
+      console.log('[CUSTOMS] API URL:', `/documents/entity/CUSTOMS_DECLARATION/${declarationNumber}`);
+      
+      const response = await apiFetch(`/documents/entity/CUSTOMS_DECLARATION/${declarationNumber}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      console.log('[CUSTOMS] Response status:', response.status);
+      const result = await response.json();
+      console.log('[CUSTOMS] Documents API full response:', JSON.stringify(result, null, 2));
+      
+      if (result.success) {
+        let docs = [];
+        
+        // Handle different response structures
+        if (Array.isArray(result.data)) {
+          docs = result.data;
+        } else if (result.data && Array.isArray(result.data.documents)) {
+          docs = result.data.documents;
+        } else if (result.data) {
+          docs = [result.data];
+        }
+        
+        console.log('[CUSTOMS] Parsed documents array:', docs);
+        console.log('[CUSTOMS] Number of documents:', docs.length);
+        
+        if (docs.length > 0) {
+          console.log('[CUSTOMS] First document structure:', JSON.stringify(docs[0], null, 2));
+          console.log('[CUSTOMS] First document keys:', Object.keys(docs[0]));
+          console.log('[CUSTOMS] First document.id:', docs[0].id);
+          console.log('[CUSTOMS] First document.document_id:', docs[0].document_id);
+        }
+        
+        setShipmentDocuments(docs);
+      } else {
+        console.error('[CUSTOMS] API returned success=false:', result.error);
+        setShipmentDocuments([]);
+      }
+    } catch (error: any) {
+      console.error('[CUSTOMS] Failed to fetch documents - Error:', error);
+      console.error('[CUSTOMS] Error message:', error.message);
+      console.error('[CUSTOMS] Error stack:', error.stack);
+      setShipmentDocuments([]);
+    } finally {
+      setLoadingDocuments(false);
+    }
+  };
+  
+  const handleViewDocument = (documentId: string, docTitle: string) => {
+    console.log('[CUSTOMS] handleViewDocument called with:', { documentId, docTitle });
+    
+    if (!documentId) {
+      console.error('[CUSTOMS] No document ID provided!');
+      alert('Error: Document ID is missing');
+      return;
+    }
+    
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+    const token = localStorage.getItem('authToken');
+    // Open document in new tab instead of iframe to avoid CSP issues
+    const viewUrl = `${apiBaseUrl}/api/v1/documents/${documentId}/view?token=${token}`;
+    console.log('[CUSTOMS] Opening document in new tab:', viewUrl);
+    window.open(viewUrl, '_blank');
+  };
+  
+  // Fetch documents when detail dialog opens
+  useEffect(() => {
+    console.log('[CUSTOMS] useEffect triggered - selectedDeclaration:', selectedDeclaration);
+    if (selectedDeclaration?.declarationId) {
+      console.log('[CUSTOMS] Calling fetchDeclarationDocuments with:', selectedDeclaration.declarationId);
+      fetchDeclarationDocuments(selectedDeclaration.declarationId);
+    } else {
+      console.log('[CUSTOMS] No declarationId found in selectedDeclaration');
+      if (selectedDeclaration) {
+        console.log('[CUSTOMS] Available fields in selectedDeclaration:', Object.keys(selectedDeclaration));
+      }
+    }
+  }, [selectedDeclaration?.declarationId]);
+  
   // Snackbar state for professional success/error messages
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
@@ -722,6 +830,38 @@ ${solution}`);
       // Get inspector name from declaration if available
       const inspectorName = declaration.customsOfficer || 'Officer Alemayehu T.';
       
+      // Calculate customs duties and VAT
+      // Ethiopian coffee export duties:
+      // - Standard export duty: 0% (coffee is promoted export)
+      // - VAT: 0% (export goods are VAT-exempt)
+      // - Processing fee: 0.5% of FOB value
+      // - Documentation fee: Fixed 500 ETB
+      
+      const fobValueUSD = declaration.value;
+      const exchangeRate = 56.5; // ETB/USD approximate rate
+      const fobValueETB = fobValueUSD * exchangeRate;
+      
+      const processingFeeRate = 0.005; // 0.5%
+      const processingFee = fobValueETB * processingFeeRate;
+      const documentationFee = 500; // Fixed 500 ETB
+      const totalDuties = processingFee + documentationFee;
+      
+      // Calculate clearance validity based on destination
+      // Standard: 30 days
+      // Air freight: 14 days (faster transit)
+      // EUDR shipments: 14 days (time-sensitive compliance)
+      let validityDays = 30;
+      if (declaration.transportMode === 'AIR') {
+        validityDays = 14;
+      } else if (declaration.eudrCompliant) {
+        validityDays = 14;
+      }
+      
+      // Calculate expiry date
+      const clearanceDate = new Date();
+      const expiryDate = new Date(clearanceDate);
+      expiryDate.setDate(expiryDate.getDate() + validityDays);
+      
       // Fetch exporter company name
       const exporterResponse = await apiFetch(`/users/${declaration.exporterId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -739,12 +879,21 @@ ${solution}`);
         inspectorName,
         clearanceNumber,
         companyName,
+        customsDuties: Math.round(totalDuties).toString(),
+        validityDays: validityDays.toString(),
+        expiryDate: expiryDate.toISOString().split('T')[0],
+        fobValueETB: Math.round(fobValueETB).toString(),
+        processingFee: Math.round(processingFee).toString(),
+        documentationFee: documentationFee.toString(),
       });
       
       console.log('[CUSTOMS] ✅ Auto-mapped clearance data:', {
         clearanceNumber,
         inspectorName,
         companyName,
+        customsDuties: Math.round(totalDuties),
+        validityDays,
+        fobValueETB: Math.round(fobValueETB),
       });
     } catch (error) {
       console.warn('[CUSTOMS] Could not auto-map clearance data:', error);
@@ -776,6 +925,7 @@ ${solution}`);
   useEffect(() => {
     loadData();
     loadPermitReadyShipments();
+    loadCustomsOfficers();
   }, []);
 
   useEffect(() => {
@@ -799,6 +949,27 @@ ${solution}`);
       }
     } catch (error) {
       console.error('[CUSTOMS] Failed to load permit-ready shipments:', error);
+    }
+  };
+
+  const loadCustomsOfficers = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await apiFetch('/users', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const result = await response.json();
+      if (result.success && result.data) {
+        // Get all active users
+        const officers = result.data.filter((user: any) => user.status === 'active');
+        setCustomsOfficers(officers);
+        console.log('[CUSTOMS] Loaded users for officer dropdown:', officers.length);
+      }
+    } catch (error) {
+      console.error('[CUSTOMS] Failed to load users:', error);
     }
   };
 
@@ -1119,62 +1290,16 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
       console.log('[CUSTOMS] Clearing declaration:', declarationId);
       console.log('[CUSTOMS] Clearance form data:', clearanceForm);
       
-      // STEP 1: Verify certificates exist before clearance
-      const declaration = declarations.find(d => d.declarationId === declarationId);
-      if (declaration) {
-        console.log('[CUSTOMS] Verifying certificates for shipment:', declaration.shipmentId);
-        
-        // Check Phytosanitary Certificate
-        try {
-          const phytoResponse = await apiFetch(`/phytosanitary/shipment/${declaration.shipmentId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          const phytoResult = await phytoResponse.json();
-          
-          if (!phytoResult.success || !phytoResult.data || phytoResult.data.length === 0) {
-            const proceed = window.confirm(
-              '⚠️ WARNING: No phytosanitary certificate found!\n\n' +
-              'Phytosanitary certificate is required for all agricultural exports (IPPC standards).\n\n' +
-              'Proceed with clearance anyway?'
-            );
-            if (!proceed) {
-              console.log('[CUSTOMS] Clearance cancelled - missing phytosanitary certificate');
-              return;
-            }
-          } else {
-            const validCert = phytoResult.data.find((c: any) => c.status === 'ISSUED');
-            if (!validCert) {
-              setSnackbar({
-                open: true,
-                message: 'Phytosanitary certificate exists but is not valid (expired or revoked)',
-                severity: 'warning',
-              });
-              return;
-            }
-            console.log('[CUSTOMS] ✅ Valid phytosanitary certificate found:', validCert.certificateNumber);
-          }
-        } catch (error) {
-          console.warn('[CUSTOMS] Could not verify phytosanitary certificate:', error);
-        }
-        
-        // Check Insurance Certificate (for CIF incoterms)
-        try {
-          const insuranceResponse = await apiFetch(`/insurance/shipment/${declaration.shipmentId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          const insuranceResult = await insuranceResponse.json();
-          
-          if (insuranceResult.success && insuranceResult.data && insuranceResult.data.length > 0) {
-            console.log('[CUSTOMS] ✅ Insurance certificate found');
-          } else {
-            console.log('[CUSTOMS] ℹ️ No insurance certificate (may not be required for FOB)');
-          }
-        } catch (error) {
-          console.warn('[CUSTOMS] Could not verify insurance certificate:', error);
-        }
-      }
+      // Documents are verified via the documents table and displayed in detail view
+      // No need for separate certificate validation here
       
-      // STEP 2: Proceed with customs clearance
+      // Get declaration for shipment linking
+      const declaration = declarations.find(d => d.declarationId === declarationId);
+      
+      // Generate a fresh unique clearance number for this submission
+      const uniqueClearanceNumber = `CLR-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      
+      // Proceed with customs clearance
       const response = await apiFetch(`/customs/declaration/${declarationId}/clear`, {
         method: 'POST',
         headers: {
@@ -1182,9 +1307,8 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          clearanceNumber: clearanceForm.clearanceNumber || `CLR-${Date.now()}`,
+          clearanceNumber: uniqueClearanceNumber,
           dutiesAmount: clearanceForm.customsDuties,
-          vatAmount: clearanceForm.vatAmount,
           clearanceType: clearanceForm.clearanceType,
           clearedBy: clearanceForm.clearedBy,
           exitPoint: clearanceForm.exitPoint,
@@ -1197,66 +1321,19 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
       const result = await response.json();
       if (result.success) {
         console.log('[CUSTOMS] ✅ Declaration cleared successfully');
+        console.log('[CUSTOMS] Response data:', result.data);
+        console.log('[CUSTOMS] Shipment ID:', result.data?.shipmentID);
+        console.log('[CUSTOMS] Debug info:', result.data?.debug);
         
-        // STEP 3: Trigger ECX auto-release if applicable
-        if (declaration?.shipmentId) {
-          console.log('[CUSTOMS] ℹ️ Customs cleared - ECX auto-release will be triggered for linked lots');
-        }
-
-        // STEP 4: AUTO-TRIGGER SHIPPING WORKFLOW
-        const shipmentId = result.shipmentID || declaration?.shipmentId;
-        if (shipmentId) {
-          try {
-            console.log('[CUSTOMS] 🚢 Auto-triggering shipping workflow for:', shipmentId);
-            
-            // Update shipment status to ready for shipping
-            const shipmentResponse = await apiFetch(`/shipments/${shipmentId}/status`, {
-              method: 'PUT',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                status: 'READY_FOR_SHIPPING',
-                notes: 'Customs cleared - ready for freight booking and shipping'
-              })
-            });
-            
-            const shipmentResult = await shipmentResponse.json();
-            if (shipmentResult.success) {
-              console.log('[CUSTOMS] ✅ Shipment status updated to READY_FOR_SHIPPING');
-              
-              // Show clearance success with shipping info
-              setSnackbar({
-                open: true,
-                message: `Declaration cleared! Clearance #${result.clearanceNumber}. Shipment ready for shipping - navigate to Shipping Portal to book freight.`,
-                severity: 'success',
-              });
-            } else {
-              console.warn('[CUSTOMS] ⚠️ Could not update shipment status:', shipmentResult.error);
-              setSnackbar({
-                open: true,
-                message: `Declaration cleared! Clearance #${result.clearanceNumber}. Please manually trigger shipping workflow.`,
-                severity: 'success',
-              });
-            }
-          } catch (shippingError) {
-            console.error('[CUSTOMS] ⚠️ Shipping workflow trigger failed:', shippingError);
-            // Still show clearance success even if shipping trigger fails
-            setSnackbar({
-              open: true,
-              message: `Declaration cleared! Clearance #${result.clearanceNumber}. Please navigate to Shipping Portal to continue.`,
-              severity: 'success',
-            });
-          }
-        } else {
-          // Fallback: no shipment ID
-          setSnackbar({
-            open: true,
-            message: `Declaration cleared! Clearance #${result.clearanceNumber}. Export authorized.`,
-            severity: 'success',
-          });
-        }
+        // Backend already updated shipment status to CUSTOMS_CLEARED on blockchain
+        // No need for frontend to update it again
+        
+        // Show success message with shipping info
+        setSnackbar({
+          open: true,
+          message: `Declaration cleared! Clearance #${result.data.clearanceNumber}. ${result.data?.debug?.shipmentIdFound ? 'Shipment updated on blockchain.' : 'Warning: No shipment ID found!'} Navigate to Shipping Portal.`,
+          severity: 'success',
+        });
         
         setClearanceDialogOpen(false);
         
@@ -1267,7 +1344,6 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
           clearedBy: 'OFFICER_ALEMAYEHU',
           clearanceType: 'FULL',
           customsDuties: '0',
-          vatAmount: '0',
           exitPoint: 'DJIBOUTI',
           validityPeriod: '30',
           clearanceRemarks: '',
@@ -1539,6 +1615,167 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       });
     }
   };
+  
+  // Smart columns that show tab-specific status and appropriate actions
+  const getSmartColumns = (currentStage: string, stageLabel: string): GridColDef[] => [
+    { field: 'declarationId', headerName: 'Declaration ID', width: 140 },
+    { field: 'shipmentId', headerName: 'Shipment ID', width: 150 },
+    { field: 'exporterId', headerName: 'Exporter', width: 130 },
+    {
+      field: 'declarationType',
+      headerName: 'Type',
+      width: 120,
+      renderCell: (params) => (
+        <Chip
+          label={params.value}
+          size="small"
+          color={
+            params.value === 'STANDARD' ? 'primary' :
+            params.value === 'SIMPLIFIED' ? 'secondary' : 'success'
+          }
+        />
+      ),
+    },
+    { field: 'quantity', headerName: 'Quantity (kg)', width: 110 },
+    {
+      field: 'value',
+      headerName: 'Value',
+      width: 110,
+      renderCell: (params) => formatCurrency(params.value, params.row.currency),
+    },
+    { field: 'destination', headerName: 'Destination', width: 120 },
+    {
+      field: 'tabStatus',
+      headerName: 'Status',
+      width: 160,
+      renderCell: (params) => {
+        const isCurrentStage = params.row.status === currentStage;
+        return (
+          <Chip
+            label={isCurrentStage ? `${stageLabel} - Pending` : `${stageLabel} - Completed`}
+            size="small"
+            color={isCurrentStage ? 'warning' : 'success'}
+            icon={isCurrentStage ? <Warning /> : <CheckCircle />}
+          />
+        );
+      },
+    },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 250,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
+      renderCell: (params) => {
+        const isCurrentStage = params.row.status === currentStage;
+        
+        // If action already completed, show only View Details
+        if (!isCurrentStage) {
+          return (
+            <Tooltip title="View Declaration Details">
+              <IconButton 
+                size="small" 
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedDeclaration(params.row);
+                }}
+              >
+                <Visibility />
+              </IconButton>
+            </Tooltip>
+          );
+        }
+        
+        // Otherwise, show action buttons based on current stage
+        return (
+          <Box onClick={(e) => e.stopPropagation()} sx={{ display: 'flex', gap: 0.5 }}>
+            <Tooltip title="View Declaration Details">
+              <IconButton 
+                size="small" 
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedDeclaration(params.row);
+                }}
+              >
+                <Visibility />
+              </IconButton>
+            </Tooltip>
+            
+            {/* SUBMITTED → Schedule Inspection */}
+            {params.row.status === 'SUBMITTED' && (
+              <Tooltip title="Schedule Physical Inspection">
+                <IconButton 
+                  size="small" 
+                  color="warning"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedDeclaration(params.row);
+                    autoMapInspectionData(params.row);
+                    setInspectionDialogOpen(true);
+                  }}
+                >
+                  <Security />
+                </IconButton>
+              </Tooltip>
+            )}
+            
+            {/* UNDER_INSPECTION → Complete Inspection */}
+            {params.row.status === 'UNDER_INSPECTION' && (
+              <Tooltip title="Complete Physical Inspection">
+                <IconButton 
+                  size="small" 
+                  color="success"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCompleteInspection(params.row.declarationId);
+                  }}
+                >
+                  <CheckCircle />
+                </IconButton>
+              </Tooltip>
+            )}
+            
+            {/* UNDER_REVIEW → Clear or Reject */}
+            {params.row.status === 'UNDER_REVIEW' && (
+              <>
+                <Tooltip title="Approve & Clear Declaration">
+                  <IconButton 
+                    size="small" 
+                    color="success"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedDeclaration(params.row);
+                      autoMapClearanceData(params.row);
+                      setClearanceDialogOpen(true);
+                    }}
+                  >
+                    <CheckCircle />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Reject Declaration">
+                  <IconButton 
+                    size="small" 
+                    color="error"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedDeclaration(params.row);
+                      setRejectionDialogOpen(true);
+                    }}
+                  >
+                    <Cancel />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </Box>
+        );
+      },
+    },
+  ];
+  
   const declarationColumns: GridColDef[] = [
     { field: 'declarationId', headerName: 'Declaration ID', width: 140 },
     { field: 'shipmentId', headerName: 'Shipment ID', width: 150 },
@@ -1685,15 +1922,28 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
   ];
 
   const getDeclarationStats = () => {
-    const permitReady = permitReadyShipments.length;
-    const submitted = declarations.filter(d => d.status === 'SUBMITTED').length;
-    const underInspection = declarations.filter(d => d.status === 'UNDER_INSPECTION').length;
-    const underReview = declarations.filter(d => d.status === 'UNDER_REVIEW').length;
+    // Historical counts - show how many declarations have reached each stage
+    // A declaration in UNDER_REVIEW has passed through SUBMITTED and UNDER_INSPECTION
+    // A declaration in CLEARED has passed through all previous stages
+    
+    const statusHierarchy = {
+      'SUBMITTED': 1,
+      'UNDER_INSPECTION': 2,
+      'UNDER_REVIEW': 3,
+      'CLEARED': 4,
+      'REJECTED': 4, // Same level as cleared (terminal state)
+    };
+    
+    // Count declarations that have reached or passed each stage
+    const submitted = declarations.filter(d => statusHierarchy[d.status] >= 1).length;
+    const underInspection = declarations.filter(d => statusHierarchy[d.status] >= 2).length;
+    const underReview = declarations.filter(d => statusHierarchy[d.status] >= 3).length;
     const cleared = declarations.filter(d => d.status === 'CLEARED').length;
     const rejected = declarations.filter(d => d.status === 'REJECTED').length;
+    
     const totalValue = declarations.reduce((sum, declaration) => sum + declaration.value, 0);
 
-    return { permitReady, submitted, underInspection, underReview, cleared, rejected, totalValue };
+    return { submitted, underInspection, underReview, cleared, rejected, totalValue };
   };
 
   const stats = getDeclarationStats();
@@ -1719,12 +1969,11 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {[
-          { icon: <Assignment />, label: 'Permit Ready', value: stats.permitReady, color: '#9c27b0', index: 0 },
-          { icon: <LocalShipping />, label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 1 },
-          { icon: <Security />, label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 2 },
-          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 3 },
-          { icon: <CheckCircle />, label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 4 },
-          { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 5 },
+          { icon: <LocalShipping />, label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
+          { icon: <Security />, label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 1 },
+          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
+          { icon: <CheckCircle />, label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
+          { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 4 },
         ].map((kpi, idx) => (
           <Grid item xs={12} sm={6} md={2} key={idx}>
             <Card 
@@ -1808,29 +2057,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         </Box>
       </Alert>
 
-      {/* 2026 EUDR Compliance Alert */}
-      <Alert severity="info" sx={{ mb: 2 }}>
-        <Typography variant="body2">
-          <strong>EUDR Compliance (2026):</strong> Enhanced documentation required for EU destinations. 
-          Deforestation-free verification mandatory for all coffee exports to European Union.
-          <br />
-          <strong>Processing Time:</strong> Standard: 1.8 days • EUDR Enhanced: 6.5 days • Risk-based: 3.1 days
-        </Typography>
-      </Alert>
 
-      {/* Certificate Verification Alert (NEW) */}
-      <Alert severity="success" sx={{ mb: 3 }}>
-        <Typography variant="body2" fontWeight="bold">
-          🌿 Certificate Verification (NEW)
-        </Typography>
-        <Typography variant="body2">
-          Before clearance approval, the system automatically verifies:
-          • <strong>Phytosanitary Certificate</strong> (IPPC required for all agricultural exports)
-          • <strong>Insurance Certificate</strong> (ICC required for CIF incoterm shipments)
-          <br />
-          Missing certificates will trigger warnings during clearance process.
-        </Typography>
-      </Alert>
 
       {/* Tabs - Customs Workflow (Banks/ECTA Portal Style) */}
       <Paper sx={{ 
@@ -1884,100 +2111,22 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
       <Box>
 
-        {/* Tab 0: Permit Ready (Shipments with ECTA Export Permits) */}
+        {/* Tab 0: Inspection Scheduled */}
         <TabPanel value={tabValue} index={0}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            📋 Permit-Ready Shipments (ECTA Export Permits Issued)
-          </Typography>
-          
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <Typography variant="body2" fontWeight={600}>
-              Ready for Customs Declaration
-            </Typography>
-            <Typography variant="body2">
-              These shipments have passed ECTA quality inspection and received export permits. 
-              Click "Create Declaration" to begin customs clearance process.
-            </Typography>
-          </Alert>
-
-          <Box sx={{ mb: 3 }}>
-            {permitReadyShipments.length > 0 ? (
-              <TableContainer component={Paper}>
-                <Table>
-                  <TableHead>
-                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
-                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Inspection ID</TableCell>
-                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Shipment ID</TableCell>
-                      <TableCell sx={{ width: '12%', fontWeight: 600 }}>Exporter</TableCell>
-                      <TableCell sx={{ width: '12%', fontWeight: 600 }}>Quality Grade</TableCell>
-                      <TableCell sx={{ width: '10%', fontWeight: 600 }}>Score</TableCell>
-                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Certificate No</TableCell>
-                      <TableCell sx={{ width: '15%', fontWeight: 600 }}>Export Permit</TableCell>
-                      <TableCell align="right" sx={{ width: '6%', fontWeight: 600 }}>Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {permitReadyShipments.map((shipment: any) => (
-                      <TableRow key={shipment.inspectionId} hover>
-                        <TableCell>{shipment.inspectionId}</TableCell>
-                        <TableCell>{shipment.shipmentId}</TableCell>
-                        <TableCell>{shipment.exporterId}</TableCell>
-                        <TableCell>{shipment.qualityGrade || shipment.classification || 'N/A'}</TableCell>
-                        <TableCell>{shipment.totalScore ? `${shipment.totalScore}/10` : 'N/A'}</TableCell>
-                        <TableCell>{shipment.certificateNo || 'N/A'}</TableCell>
-                        <TableCell>
-                          <Chip 
-                            label={shipment.exportPermitNo || 'N/A'} 
-                            color="success" 
-                            size="small"
-                            icon={<CheckCircle />}
-                          />
-                        </TableCell>
-                        <TableCell align="right">
-                          <Button
-                            variant="contained"
-                            size="small"
-                            startIcon={<Assignment />}
-                            onClick={() => handleCreateDeclarationFromPermit(shipment.shipmentId, shipment.inspectionId)}
-                            sx={{
-                              backgroundColor: '#9c27b0',
-                              '&:hover': { backgroundColor: '#7b1fa2' }
-                            }}
-                          >
-                            Create Declaration
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            ) : (
-              <Alert severity="warning">
-                <Typography variant="body2">
-                  No permit-ready shipments found. Inspections must be completed by ECTA before customs declarations can be processed.
-                </Typography>
-              </Alert>
-            )}
-          </Box>
-        </TabPanel>
-
-        {/* Tab 1: Submitted Declarations */}
-        <TabPanel value={tabValue} index={1}>
-          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            📤 Submitted Declarations (Awaiting Inspection)
+            📤 Submitted Declarations
           </Typography>
           
           <Alert severity="info" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              <strong>Actions Required:</strong> Schedule physical inspection for these declarations
+              <strong>Action Required:</strong> Schedule inspections for SUBMITTED declarations
             </Typography>
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => d.status === 'SUBMITTED')}
-              columns={declarationColumns}
+              rows={declarations.filter(d => d.status !== 'DRAFT')}
+              columns={getSmartColumns('SUBMITTED', 'Inspection Scheduled')}
               getRowId={(row) => row.declarationId}
               loading={loading}
               pageSizeOptions={[10, 25, 50]}
@@ -1988,22 +2137,48 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Box>
         </TabPanel>
 
-        {/* Tab 2: Under Inspection */}
+        {/* Tab 1: Inspection Completed */}
+        <TabPanel value={tabValue} index={1}>
+          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+            🔍 Under Inspection
+          </Typography>
+          
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              <strong>Action Required:</strong> Complete inspections for UNDER_INSPECTION declarations
+            </Typography>
+          </Alert>
+
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={declarations.filter(d => ['UNDER_INSPECTION', 'UNDER_REVIEW', 'CLEARED', 'REJECTED'].includes(d.status))}
+              columns={getSmartColumns('UNDER_INSPECTION', 'Inspection Completed')}
+              getRowId={(row) => row.declarationId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{
+                pagination: { paginationModel: { pageSize: 10 } },
+              }}
+            />
+          </Box>
+        </TabPanel>
+
+        {/* Tab 2: Under Review */}
         <TabPanel value={tabValue} index={2}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            🔍 Under Inspection (Physical Verification In Progress)
+            ⚖️ Under Review
           </Typography>
           
           <Alert severity="warning" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              <strong>Actions Required:</strong> Complete physical inspection and mark as passed/failed
+              <strong>Action Required:</strong> Clear or reject UNDER_REVIEW declarations
             </Typography>
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => d.status === 'UNDER_INSPECTION')}
-              columns={declarationColumns}
+              rows={declarations.filter(d => ['UNDER_REVIEW', 'CLEARED', 'REJECTED'].includes(d.status))}
+              columns={getSmartColumns('UNDER_REVIEW', 'Review Completed')}
               getRowId={(row) => row.declarationId}
               loading={loading}
               pageSizeOptions={[10, 25, 50]}
@@ -2014,65 +2189,48 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Box>
         </TabPanel>
 
-        {/* Tab 3: Under Review */}
+        {/* Tab 3: Cleared */}
         <TabPanel value={tabValue} index={3}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            ⚖️ Under Review (Ready for Clearance Decision)
-          </Typography>
-          
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <Typography variant="body2">
-              <strong>Actions Required:</strong> Review documents and either CLEAR or REJECT declaration
-            </Typography>
-          </Alert>
-
-          <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
-              rows={declarations.filter(d => d.status === 'UNDER_REVIEW')}
-              columns={declarationColumns}
-              getRowId={(row) => row.declarationId}
-              loading={loading}
-              pageSizeOptions={[10, 25, 50]}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 10 } },
-              }}
-            />
-          </Box>
-        </TabPanel>
-
-        {/* Tab 4: Cleared */}
-        <TabPanel value={tabValue} index={4}>
-          <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            ✅ Cleared Declarations (Authorized for Export)
+            ✅ Cleared Declarations
           </Typography>
           
           <Alert severity="success" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              <strong>Status:</strong> Export authorized. Shipments ready for freight booking and shipping.
+              <strong>Completed:</strong> All declarations cleared for export (View Only)
             </Typography>
           </Alert>
 
-          <Box sx={{ mb: 3 }}>
-            <CustomsClearedShipments />
+          <Box sx={{ height: 600, width: '100%' }}>
+            <DataGrid
+              rows={declarations.filter(d => d.status === 'CLEARED')}
+              columns={getSmartColumns('CLEARED', 'Declaration Cleared')}
+              getRowId={(row) => row.declarationId}
+              loading={loading}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{
+                pagination: { paginationModel: { pageSize: 10 } },
+              }}
+            />
           </Box>
         </TabPanel>
 
-        {/* Tab 5: Rejected */}
-        <TabPanel value={tabValue} index={5}>
+        {/* Tab 4: Rejected */}
+        <TabPanel value={tabValue} index={4}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-            ❌ Rejected Declarations (Require Corrections)
+            ❌ Rejected Declarations
           </Typography>
           
           <Alert severity="error" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              <strong>Status:</strong> These declarations have been rejected. Exporters must correct issues and resubmit.
+              <strong>Completed:</strong> All declarations rejected (View Only)
             </Typography>
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
               rows={declarations.filter(d => d.status === 'REJECTED')}
-              columns={declarationColumns}
+              columns={getSmartColumns('REJECTED', 'Declaration Rejected')}
               getRowId={(row) => row.declarationId}
               loading={loading}
               pageSizeOptions={[10, 25, 50]}
@@ -2083,12 +2241,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Box>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={5}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <TabPanel value={tabValue} index={6}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="Customs Portal - Complete Transaction History"
@@ -2100,130 +2258,280 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         </TabPanel>
       </Box>
 
-      {/* Declaration Detail Dialog */}
-      <Dialog open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen && !rejectionDialogOpen} onClose={() => setSelectedDeclaration(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Customs Declaration Details</DialogTitle>
+      {/* Declaration Detail Dialog - Comprehensive View */}
+      <Dialog 
+        open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen && !rejectionDialogOpen} 
+        onClose={() => setSelectedDeclaration(null)} 
+        maxWidth="lg" 
+        fullWidth
+      >
+        <DialogTitle sx={{ bgcolor: '#f5f5f5', borderBottom: '2px solid #0F47AF' }}>
+          <Box display="flex" alignItems="center" gap={2}>
+            <Assignment sx={{ color: '#0F47AF', fontSize: 32 }} />
+            <Box>
+              <Typography variant="h6" fontWeight={700}>
+                Customs Declaration Details
+              </Typography>
+              <Typography variant="body2" color="textSecondary">
+                Declaration ID: {selectedDeclaration?.declarationId}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
         <DialogContent>
           {selectedDeclaration && (
-            <Box sx={{ pt: 2 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Declaration ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedDeclaration.declarationId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Shipment ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedDeclaration.shipmentId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Exporter</Typography>
-                  <Typography variant="body1">{selectedDeclaration.exporterId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Destination</Typography>
-                  <Typography variant="body1">{selectedDeclaration.destination}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Intended Transport</Typography>
-                  <Chip
-                    icon={selectedDeclaration.transportMode === 'AIR' ? <FlightTakeoff /> : <DirectionsBoat />}
-                    label={selectedDeclaration.transportMode === 'AIR' ? 'Air Freight' : 'Sea Freight'}
-                    color={selectedDeclaration.transportMode === 'AIR' ? 'secondary' : 'primary'}
-                    size="small"
-                  />
-                </Grid>
-                {selectedDeclaration.transportMode === 'AIR' && (
-                  <Grid item xs={12}>
-                    <Alert severity="info">
-                      <Typography variant="body2">
-                        <strong>Priority Processing:</strong> Air freight shipment requires expedited customs clearance.
-                        Target clearance time: 24 hours.
-                      </Typography>
-                    </Alert>
-                  </Grid>
-                )}
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Declaration Type</Typography>
-                  <Box sx={{ mt: 0.5 }}>
-                    <Chip
-                      label={selectedDeclaration.declarationType}
-                      size="small"
-                      color={
-                        selectedDeclaration.declarationType === 'STANDARD' ? 'primary' :
-                        selectedDeclaration.declarationType === 'SIMPLIFIED' ? 'secondary' : 'success'
-                      }
-                    />
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">HS Code</Typography>
-                  <Typography variant="body1">{selectedDeclaration.hsCode}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Quantity</Typography>
-                  <Typography variant="body1">{selectedDeclaration.quantity.toLocaleString()} kg</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Value</Typography>
-                  <Typography variant="body1" color="primary" fontWeight={600}>
-                    {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">EUDR Compliant</Typography>
-                  <Box>
-                    {selectedDeclaration.eudrCompliant ? (
-                      <CheckCircle color="success" />
-                    ) : (
-                      <Cancel color="disabled" />
-                    )}
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Inspection Required</Typography>
-                  <Box>
-                    {selectedDeclaration.inspectionRequired ? (
-                      <Security color="warning" />
-                    ) : (
-                      <CheckCircle color="success" />
-                    )}
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Status</Typography>
-                  <StatusChip status={selectedDeclaration.status} />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Submission Date</Typography>
-                  <Typography variant="body1">{formatDate(selectedDeclaration.submissionDate)}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Customs Officer</Typography>
-                  <Typography variant="body1">{selectedDeclaration.customsOfficer}</Typography>
-                </Grid>
-                {selectedDeclaration.clearanceDate && (
+            <Box sx={{ pt: 3 }}>
+              {/* Status Banner */}
+              <Alert 
+                severity={
+                  selectedDeclaration.status === 'CLEARED' ? 'success' :
+                  selectedDeclaration.status === 'REJECTED' ? 'error' :
+                  selectedDeclaration.status === 'UNDER_REVIEW' ? 'info' : 'warning'
+                }
+                sx={{ mb: 3 }}
+              >
+                <Typography variant="body1" fontWeight={600}>
+                  Current Status: <StatusChip status={selectedDeclaration.status} />
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  {selectedDeclaration.status === 'CLEARED' && 'This declaration has been cleared for export. Shipment authorized.'}
+                  {selectedDeclaration.status === 'REJECTED' && 'This declaration has been rejected. Corrections required before resubmission.'}
+                  {selectedDeclaration.status === 'UNDER_REVIEW' && 'This declaration is under review for clearance decision.'}
+                  {selectedDeclaration.status === 'UNDER_INSPECTION' && 'Physical inspection in progress.'}
+                  {selectedDeclaration.status === 'SUBMITTED' && 'Declaration submitted. Awaiting inspection scheduling.'}
+                </Typography>
+              </Alert>
+
+              {/* Shipment Information */}
+              <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: '#fafafa', border: '1px solid #e0e0e0' }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: '#0F47AF' }}>
+                  📦 Shipment Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <Grid container spacing={2}>
                   <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="textSecondary">Clearance Date</Typography>
-                    <Typography variant="body1">{formatDate(selectedDeclaration.clearanceDate)}</Typography>
+                    <Typography variant="body2" color="textSecondary">Shipment ID</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedDeclaration.shipmentId}</Typography>
                   </Grid>
-                )}
-              </Grid>
-              
-              {selectedDeclaration.status === 'UNDER_REVIEW' && (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  This declaration is under review. {selectedDeclaration.inspectionRequired ? 'Inspection is required before clearance.' : 'Review and clear to proceed with export.'}
-                </Alert>
-              )}
-              
-              {selectedDeclaration.status === 'CLEARED' && (
-                <Alert severity="success" sx={{ mt: 2 }}>
-                  This declaration has been cleared. The shipment is authorized for export.
-                </Alert>
-              )}
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Exporter</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedDeclaration.exporterId}</Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Destination Country</Typography>
+                    <Typography variant="body1">{selectedDeclaration.destination}</Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Transport Mode</Typography>
+                    <Chip
+                      icon={selectedDeclaration.transportMode === 'AIR' ? <FlightTakeoff /> : <DirectionsBoat />}
+                      label={selectedDeclaration.transportMode === 'AIR' ? 'Air Freight' : 'Sea Freight'}
+                      color={selectedDeclaration.transportMode === 'AIR' ? 'secondary' : 'primary'}
+                      size="small"
+                    />
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Declaration Details */}
+              <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: '#fafafa', border: '1px solid #e0e0e0' }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: '#0F47AF' }}>
+                  📋 Declaration Details
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Declaration Type</Typography>
+                    <Box sx={{ mt: 0.5 }}>
+                      <Chip
+                        label={selectedDeclaration.declarationType}
+                        size="small"
+                        color={
+                          selectedDeclaration.declarationType === 'STANDARD' ? 'primary' :
+                          selectedDeclaration.declarationType === 'SIMPLIFIED' ? 'secondary' : 'success'
+                        }
+                      />
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">HS Code</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedDeclaration.hsCode}</Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Quantity</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedDeclaration.quantity.toLocaleString()} kg</Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Declared Value</Typography>
+                    <Typography variant="h6" color="primary" fontWeight={700}>
+                      {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">EUDR Compliant</Typography>
+                    <Box display="flex" alignItems="center" gap={1} mt={0.5}>
+                      {selectedDeclaration.eudrCompliant ? (
+                        <>
+                          <CheckCircle color="success" />
+                          <Typography variant="body2" color="success.main" fontWeight={600}>Yes - EU Ready</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Cancel color="disabled" />
+                          <Typography variant="body2" color="textSecondary">No</Typography>
+                        </>
+                      )}
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Physical Inspection</Typography>
+                    <Box display="flex" alignItems="center" gap={1} mt={0.5}>
+                      {selectedDeclaration.inspectionRequired ? (
+                        <>
+                          <Security color="warning" />
+                          <Typography variant="body2" color="warning.main" fontWeight={600}>Required</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle color="success" />
+                          <Typography variant="body2" color="success.main" fontWeight={600}>Not Required</Typography>
+                        </>
+                      )}
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Timeline */}
+              <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: '#fafafa', border: '1px solid #e0e0e0' }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: '#0F47AF' }}>
+                  ⏱️ Processing Timeline
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Submission Date</Typography>
+                    <Typography variant="body1" fontWeight={600}>{formatDate(selectedDeclaration.submissionDate)}</Typography>
+                  </Grid>
+                  {selectedDeclaration.clearanceDate && (
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="body2" color="textSecondary">Clearance Date</Typography>
+                      <Typography variant="body1" fontWeight={600}>{formatDate(selectedDeclaration.clearanceDate)}</Typography>
+                    </Grid>
+                  )}
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Assigned Officer</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedDeclaration.customsOfficer}</Typography>
+                  </Grid>
+                </Grid>
+              </Paper>
+
+              {/* Documents Section */}
+              <Paper elevation={0} sx={{ p: 2, bgcolor: '#fafafa', border: '1px solid #e0e0e0' }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ color: '#0F47AF' }}>
+                    📄 Supporting Documents
+                  </Typography>
+                  <Chip 
+                    label="View All Documents" 
+                    size="small" 
+                    clickable
+                    color="primary"
+                    icon={<Visibility />}
+                    onClick={() => {
+                      window.open(`/documents/shipment/${selectedDeclaration.shipmentId}`, '_blank');
+                    }}
+                  />
+                </Box>
+                <Divider sx={{ mb: 2 }} />
+                
+                <Grid container spacing={2}>
+                  {loadingDocuments ? (
+                    <Grid item xs={12}>
+                      <Box display="flex" justifyContent="center" alignItems="center" py={4}>
+                        <Typography>Loading documents...</Typography>
+                      </Box>
+                    </Grid>
+                  ) : shipmentDocuments.length > 0 ? (
+                    shipmentDocuments.map((doc: any) => (
+                      <Grid item xs={12} md={6} key={doc.id || doc.document_id}>
+                        <Paper 
+                          elevation={1} 
+                          sx={{ 
+                            p: 2, 
+                            bgcolor: 'white', 
+                            borderLeft: '4px solid #4caf50',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s',
+                            '&:hover': {
+                              boxShadow: 3,
+                              transform: 'translateY(-2px)',
+                            }
+                          }}
+                          onClick={() => {
+                            const docId = doc.document_id || doc.id;
+                            const docName = doc.document_name || doc.file_name || doc.document_type;
+                            console.log('[CUSTOMS] Clicking document card:', { docId, docName, fullDoc: doc });
+                            handleViewDocument(docId, docName);
+                          }}
+                        >
+                          <Box display="flex" alignItems="flex-start" gap={1.5}>
+                            <CheckCircle sx={{ color: '#4caf50', mt: 0.5 }} />
+                            <Box flex={1}>
+                              <Typography variant="body1" fontWeight={600} gutterBottom>
+                                {doc.file_name || doc.document_name || doc.document_type?.replace(/_/g, ' ')}
+                              </Typography>
+                              <Typography variant="body2" color="textSecondary" sx={{ fontSize: '0.85rem' }}>
+                                {doc.document_type?.replace(/_/g, ' ') || doc.category || doc.document_category || 'Supporting document'}
+                              </Typography>
+                              <Box display="flex" gap={1} mt={1}>
+                                <Chip label={doc.status === 'active' ? 'Verified' : doc.status} size="small" color="success" sx={{ fontSize: '0.75rem' }} />
+                                <Chip label={doc.file_type?.toUpperCase() || 'PDF'} size="small" variant="outlined" sx={{ fontSize: '0.75rem' }} />
+                              </Box>
+                            </Box>
+                            <IconButton 
+                              size="small" 
+                              color="primary"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const docId = doc.document_id || doc.id;
+                                window.open(`/api/v1/documents/${docId}/download`, '_blank');
+                              }}
+                            >
+                              <Download fontSize="small" />
+                            </IconButton>
+                          </Box>
+                        </Paper>
+                      </Grid>
+                    ))
+                  ) : (
+                    <Grid item xs={12}>
+                      <Alert severity="info">
+                        <Typography variant="body2">
+                          No documents have been uploaded for this customs declaration yet.
+                        </Typography>
+                      </Alert>
+                    </Grid>
+                  )}
+                </Grid>
+
+                <Button
+                  variant="contained"
+                  size="medium"
+                  startIcon={<Download />}
+                  fullWidth
+                  sx={{ mt: 3, textTransform: 'none', fontWeight: 600 }}
+                  onClick={() => {
+                    alert('Downloading all declaration documents as ZIP file...');
+                  }}
+                >
+                  Download All Documents as ZIP
+                </Button>
+              </Paper>
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ p: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0' }}>
           <Button
             variant="outlined"
             size="small"
@@ -2235,125 +2543,11 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
             }}
             sx={{ textTransform: 'none', mr: 'auto' }}
           >
-            Audit Trail
+            View Audit Trail
           </Button>
           <AnimatedButton onClick={() => setSelectedDeclaration(null)}>
             Close
           </AnimatedButton>
-          {selectedDeclaration?.status === 'UNDER_REVIEW' && (
-            <>
-              {selectedDeclaration.inspectionRequired && (
-                <AnimatedButton
-                  variant="outlined"
-                  brandColor="#ff9800"
-                  onClick={() => {
-                    if (selectedDeclaration) {
-                      autoMapInspectionData(selectedDeclaration);
-                    }
-                    setInspectionDialogOpen(true);
-                  }}
-                >
-                  Schedule Inspection
-                </AnimatedButton>
-              )}
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#f44336"
-                onClick={() => {
-                  setRejectionDialogOpen(true);
-                }}
-              >
-                Reject Declaration
-              </AnimatedButton>
-              <AnimatedButton
-                variant="contained"
-                brandColor="#4caf50"
-                onClick={() => {
-                  if (selectedDeclaration) {
-                    autoMapClearanceData(selectedDeclaration);
-                  }
-                  setClearanceDialogOpen(true);
-                }}
-              >
-                Clear Declaration
-              </AnimatedButton>
-            </>
-          )}
-          {selectedDeclaration?.status === 'SUBMITTED' && (
-            <>
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#ff9800"
-                onClick={() => {
-                  if (selectedDeclaration) {
-                    autoMapInspectionData(selectedDeclaration);
-                  }
-                  setInspectionDialogOpen(true);
-                }}
-              >
-                Schedule Inspection
-              </AnimatedButton>
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#f44336"
-                onClick={() => {
-                  setRejectionDialogOpen(true);
-                }}
-              >
-                Reject Declaration
-              </AnimatedButton>
-            </>
-          )}
-          {selectedDeclaration?.status === 'REJECTED' && (
-            <>
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#ff9800"
-                onClick={() => {
-                  setRejectionDetailsDialogOpen(true);
-                }}
-              >
-                View Rejection Details
-              </AnimatedButton>
-            </>
-          )}
-          {selectedDeclaration?.status === 'UNDER_INSPECTION' && (
-            <>
-              <AnimatedButton
-                variant="contained"
-                brandColor="#4caf50"
-                onClick={() => {
-                  if (selectedDeclaration) {
-                    handleCompleteInspection(selectedDeclaration.declarationId);
-                  }
-                }}
-              >
-                Complete Inspection
-              </AnimatedButton>
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#f44336"
-                onClick={() => {
-                  setRejectionDialogOpen(true);
-                }}
-              >
-                Reject After Inspection
-              </AnimatedButton>
-            </>
-          )}
-          {selectedDeclaration?.status === 'CLEARED' && (
-            <>
-              <AnimatedButton
-                variant="outlined"
-                brandColor="#2196f3"
-                onClick={() => {
-                  alert(`Declaration Cleared\n\nClearance Number: CLR-${Date.now()}\nExport Authorized: Yes\nShipment Status: CUSTOMS_CLEARED\n\nThe shipment is authorized for export.`);
-                }}
-              >
-                View Clearance Certificate
-              </AnimatedButton>
-            </>
-          )}
         </DialogActions>
       </Dialog>
 
@@ -2592,29 +2786,99 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         <DialogContent>
           {selectedDeclaration && (
             <Box sx={{ pt: 2 }}>
-              {/* Declaration Summary */}
-              <Alert severity="info" sx={{ mb: 3 }}>
-                <Typography variant="body2">
-                  <strong>Declaration:</strong> {selectedDeclaration.declarationId}<br />
-                  <strong>Shipment:</strong> {selectedDeclaration.shipmentId}<br />
-                  <strong>Exporter:</strong> {selectedDeclaration.exporterId}
-                  {clearanceAutoData.companyName && ` (${clearanceAutoData.companyName})`}<br />
-                  <strong>Quantity:</strong> {selectedDeclaration.quantity.toLocaleString()} kg<br />
-                  <strong>Value:</strong> {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}<br />
-                  <strong>Destination:</strong> {selectedDeclaration.destination}<br />
-                  <strong>HS Code:</strong> {selectedDeclaration.hsCode}
+              {/* Declaration Summary Card */}
+              <Paper elevation={2} sx={{ p: 2.5, mb: 3, bgcolor: '#f8f9fa', borderLeft: '4px solid #0F47AF' }}>
+                <Typography variant="h6" gutterBottom sx={{ color: '#0F47AF', fontWeight: 600, mb: 2 }}>
+                  📋 Declaration Summary
                 </Typography>
-              </Alert>
+                <Grid container spacing={2}>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Declaration ID</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.declarationId}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Shipment ID</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.shipmentId}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Exporter</Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      {selectedDeclaration.exporterId}
+                      {clearanceAutoData.companyName && <><br /><Typography variant="caption">({clearanceAutoData.companyName})</Typography></>}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Quantity</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.quantity.toLocaleString()} kg</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">FOB Value</Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      ${selectedDeclaration?.value.toLocaleString()} USD
+                      {clearanceAutoData.fobValueETB && <><br /><Typography variant="caption">≈ {clearanceAutoData.fobValueETB} ETB</Typography></>}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Destination</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.destination}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">HS Code</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.hsCode}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">Transport Mode</Typography>
+                    <Typography variant="body2" fontWeight={600}>{selectedDeclaration.transportMode || 'SEA'}</Typography>
+                  </Grid>
+                  <Grid item xs={6} md={4}>
+                    <Typography variant="caption" color="textSecondary">EUDR Compliant</Typography>
+                    <Chip 
+                      label={selectedDeclaration.eudrCompliant ? 'Yes' : 'No'} 
+                      size="small" 
+                      color={selectedDeclaration.eudrCompliant ? 'success' : 'default'}
+                    />
+                  </Grid>
+                </Grid>
+              </Paper>
 
+              {/* Calculated Fees Summary */}
               {clearanceAutoData.clearanceNumber && (
-                <Alert severity="success" sx={{ mb: 2 }}>
-                  <Typography variant="body2">
-                    ✅ <strong>Auto-Generated Clearance Data:</strong><br />
-                    Clearance Number: {clearanceAutoData.clearanceNumber}<br />
-                    Reviewing Officer: {clearanceAutoData.inspectorName}
+                <Paper elevation={2} sx={{ p: 2.5, mb: 3, bgcolor: '#f0f9ff', borderLeft: '4px solid #4caf50' }}>
+                  <Typography variant="h6" gutterBottom sx={{ color: '#2e7d32', fontWeight: 600, mb: 2 }}>
+                    💰 Calculated Fees & Duties
                   </Typography>
-                </Alert>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6} md={3}>
+                      <Typography variant="caption" color="textSecondary">Processing Fee (0.5%)</Typography>
+                      <Typography variant="body2" fontWeight={600}>{clearanceAutoData.processingFee} ETB</Typography>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Typography variant="caption" color="textSecondary">Documentation Fee</Typography>
+                      <Typography variant="body2" fontWeight={600}>{clearanceAutoData.documentationFee} ETB</Typography>
+                    </Grid>
+                    <Grid item xs={6} md={4}>
+                      <Typography variant="caption" color="textSecondary">Total Customs Duties</Typography>
+                      <Typography variant="body1" fontWeight={700} color="primary">{clearanceAutoData.customsDuties} ETB</Typography>
+                    </Grid>
+                    <Grid item xs={12}>
+                      <Divider sx={{ my: 1 }} />
+                      <Box display="flex" justifyContent="space-between" alignItems="center">
+                        <Typography variant="body2" color="textSecondary">
+                          Clearance Validity: <strong>{clearanceAutoData.validityDays} days</strong> (expires {clearanceAutoData.expiryDate})
+                        </Typography>
+                        <Typography variant="body2" color="textSecondary">
+                          Reviewing Officer: <strong>{clearanceAutoData.inspectorName}</strong>
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  </Grid>
+                </Paper>
               )}
+
+              {/* Clearance Form Fields */}
+              <Typography variant="h6" gutterBottom sx={{ color: '#0F47AF', fontWeight: 600, mb: 2, mt: 3 }}>
+                📝 Clearance Details
+              </Typography>
 
               <Grid container spacing={2}>
                 {/* Clearance Number */}
@@ -2651,13 +2915,22 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     select
                     required
                     label="Cleared By (Officer)"
-                    defaultValue="OFFICER_ALEMAYEHU"
-                    helperText="Customs officer authorizing clearance"
+                    value={clearanceForm.clearedBy}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, clearedBy: e.target.value })}
+                    helperText={clearanceAutoData.inspectorName ? `Current officer: ${clearanceAutoData.inspectorName}` : 'Select customs officer authorizing clearance'}
+                    InputProps={{
+                      sx: clearanceAutoData.inspectorName ? { bgcolor: 'info.50' } : {}
+                    }}
                   >
-                    <MenuItem value="OFFICER_ALEMAYEHU">Officer Alemayehu T. (Senior Inspector)</MenuItem>
-                    <MenuItem value="OFFICER_TIGIST">Officer Tigist M. (EUDR Specialist)</MenuItem>
-                    <MenuItem value="OFFICER_DAWIT">Officer Dawit K. (Physical Inspection)</MenuItem>
-                    <MenuItem value="OFFICER_SARA">Officer Sara H. (Documentary Review)</MenuItem>
+                    {customsOfficers.length > 0 ? (
+                      customsOfficers.map((officer) => (
+                        <MenuItem key={officer.username} value={officer.username}>
+                          {officer.fullName || officer.username} - {officer.role} ({officer.organization || 'N/A'})
+                        </MenuItem>
+                      ))
+                    ) : (
+                      <MenuItem value="" disabled>Loading users...</MenuItem>
+                    )}
                   </TextField>
                 </Grid>
 
@@ -2685,24 +2958,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     required
                     type="number"
                     label="Customs Duties (ETB)"
-                    defaultValue="0"
-                    helperText="Total duties and taxes payable"
+                    value={clearanceForm.customsDuties}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, customsDuties: e.target.value })}
+                    helperText={`Processing fee (0.5%) + Documentation fee (500 ETB)`}
                     InputProps={{
-                      startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>
-                    }}
-                  />
-                </Grid>
-
-                {/* VAT Amount */}
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth
-                    type="number"
-                    label="VAT Amount (ETB)"
-                    defaultValue="0"
-                    helperText="Value Added Tax (if applicable)"
-                    InputProps={{
-                      startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>
+                      startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>,
+                      sx: clearanceAutoData.customsDuties !== '0' ? { bgcolor: 'success.50' } : {}
                     }}
                   />
                 </Grid>
@@ -2731,47 +2992,18 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     select
                     required
                     label="Clearance Validity"
-                    defaultValue="30"
-                    helperText="How long clearance remains valid"
+                    value={clearanceForm.validityPeriod}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, validityPeriod: e.target.value })}
+                    helperText={clearanceAutoData.expiryDate ? `Expires: ${clearanceAutoData.expiryDate}` : 'How long clearance remains valid'}
+                    InputProps={{
+                      sx: clearanceAutoData.validityDays !== '30' ? { bgcolor: 'info.50' } : {}
+                    }}
                   >
-                    <MenuItem value="7">7 Days (Standard)</MenuItem>
-                    <MenuItem value="14">14 Days (Extended)</MenuItem>
-                    <MenuItem value="30">30 Days (Maximum)</MenuItem>
+                    <MenuItem value="7">7 Days (Expedited)</MenuItem>
+                    <MenuItem value="14">14 Days (Air Freight / EUDR)</MenuItem>
+                    <MenuItem value="30">30 Days (Standard Sea Freight)</MenuItem>
                     <MenuItem value="CUSTOM">Custom Period</MenuItem>
                   </TextField>
-                </Grid>
-
-                {/* Certificate Verification */}
-                <Grid item xs={12}>
-                  <Typography variant="subtitle2" gutterBottom sx={{ mt: 1 }}>
-                    Certificate & Document Verification:
-                  </Typography>
-                  <Box sx={{ pl: 2 }}>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked />
-                      <Typography variant="body2">Export Permit Verified</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked />
-                      <Typography variant="body2">Quality Inspection Certificate Verified</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked />
-                      <Typography variant="body2">Phytosanitary Certificate Verified</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked />
-                      <Typography variant="body2">Commercial Invoice Verified</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked={selectedDeclaration.eudrCompliant} />
-                      <Typography variant="body2">EUDR Due Diligence Statement Verified</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center">
-                      <Checkbox defaultChecked />
-                      <Typography variant="body2">Insurance Certificate Verified (if CIF)</Typography>
-                    </Box>
-                  </Box>
                 </Grid>
 
                 {/* Clearance Remarks */}
@@ -2798,32 +3030,6 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   />
                 </Grid>
               </Grid>
-
-              {/* EUDR Compliance Confirmation */}
-              {selectedDeclaration.eudrCompliant && (
-                <Alert severity="success" sx={{ mt: 2 }}>
-                  <Typography variant="body2">
-                    <strong>✅ EUDR Compliance Verified</strong><br />
-                    This shipment meets EU Deforestation Regulation requirements:
-                    • Geolocation data verified<br />
-                    • Deforestation-free certification confirmed<br />
-                    • Complete supply chain traceability documented<br />
-                    • Due diligence statement compliant
-                  </Typography>
-                </Alert>
-              )}
-
-              {/* Final Authorization Warning */}
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                <Typography variant="body2">
-                  <strong>⚠️ Final Authorization</strong><br />
-                  By clearing this declaration, you authorize the export of goods and confirm:
-                  • All documents have been verified<br />
-                  • Duties and taxes (if any) have been assessed<br />
-                  • Goods comply with export regulations<br />
-                  • Clearance will be recorded on blockchain (immutable)
-                </Typography>
-              </Alert>
             </Box>
           )}
         </DialogContent>
@@ -3485,6 +3691,62 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           {snackbar.message}
         </Alert>
       </Snackbar>
+      
+      {/* Document Viewer Dialog */}
+      <Dialog 
+        open={documentViewerOpen} 
+        onClose={() => setDocumentViewerOpen(false)} 
+        maxWidth="lg" 
+        fullWidth
+        PaperProps={{
+          sx: { height: '90vh' }
+        }}
+      >
+        <DialogTitle sx={{ bgcolor: '#f5f5f5', borderBottom: '1px solid #e0e0e0' }}>
+          <Box display="flex" alignItems="center" justifyContent="space-between">
+            <Box display="flex" alignItems="center" gap={2}>
+              <Visibility sx={{ color: '#0F47AF' }} />
+              <Typography variant="h6" fontWeight={600}>
+                {currentDocumentTitle}
+              </Typography>
+            </Box>
+            <IconButton 
+              onClick={() => setDocumentViewerOpen(false)}
+              size="small"
+            >
+              <Cancel />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ flex: 1, width: '100%', height: '100%' }}>
+            <iframe
+              src={currentDocumentUrl}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+              }}
+              title={currentDocumentTitle}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0' }}>
+          <Button
+            variant="outlined"
+            startIcon={<Download />}
+            onClick={() => {
+              const downloadUrl = currentDocumentUrl.replace('/view?', '/download?');
+              window.open(downloadUrl, '_blank');
+            }}
+          >
+            Download
+          </Button>
+          <AnimatedButton onClick={() => setDocumentViewerOpen(false)}>
+            Close
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

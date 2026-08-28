@@ -870,6 +870,104 @@ func (c *CoffeeContract) RejectSalesContract(ctx contractapi.TransactionContextI
 	return nil
 }
 
+// UpdateSalesContractBuyer - Admin function to correct buyer ID in sales contract
+// Any authorized organization can update buyer information for data correction purposes
+func (c *CoffeeContract) UpdateSalesContractBuyer(ctx contractapi.TransactionContextInterface, 
+	contractID, newBuyerID string) error {
+	
+	// ✅ CAPTURE MSP IDENTITY of updater
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+	
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = mspID // Fallback
+	}
+	
+	log.Printf("Contract %s buyer ID being updated by: %s (MSP: %s), New Buyer ID: %s", 
+		contractID, updaterID, mspID, newBuyerID)
+
+	// Read existing contract
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return err
+	}
+
+	// Capture previous buyer ID for audit
+	previousBuyerID := contract.BuyerID
+
+	// Validate new buyer ID is not empty
+	if newBuyerID == "" {
+		return fmt.Errorf("new buyer ID cannot be empty")
+	}
+
+	// Validate new buyer ID is not same as exporter ID
+	if newBuyerID == contract.ExporterID {
+		return fmt.Errorf("buyer ID cannot be same as exporter ID: %s", newBuyerID)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update buyer ID
+	contract.BuyerID = newBuyerID
+	contract.UpdatedAt = timestamp
+
+	// Marshal and save
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+
+	err = ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON)
+	if err != nil {
+		return err
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "buyerID", OldValue: previousBuyerID, NewValue: newBuyerID, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: contract.EUDRRequired,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Buyer ID corrected from %s to %s by %s", previousBuyerID, newBuyerID, mspID),
+	}
+
+	err = c.CreateAuditLog(ctx, "UPDATE", "CONTRACT", contractID, previousBuyerID, newBuyerID, changes,
+		fmt.Sprintf("Buyer ID corrected by %s from %s to %s", mspID, previousBuyerID, newBuyerID), compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":      "ContractBuyerUpdated",
+		"contractID":     contractID,
+		"exporterID":     contract.ExporterID,
+		"previousBuyer":  previousBuyerID,
+		"newBuyer":       newBuyerID,
+		"timestamp":      timestamp.Format(time.RFC3339),
+		"updatedBy":      updaterID,
+		"updatedByMSP":   mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractBuyerUpdated", eventJSON)
+
+	log.Printf("✅ Contract %s buyer ID updated from %s to %s", contractID, previousBuyerID, newBuyerID)
+	return nil
+}
+
 func (c *CoffeeContract) UpdateExporterLaboratory(ctx contractapi.TransactionContextInterface, exporterID string, certifiedStr string) error {
 	// ✅ CAPTURE MSP IDENTITY
 	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()

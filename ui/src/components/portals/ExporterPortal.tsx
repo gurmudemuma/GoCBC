@@ -36,6 +36,7 @@ import {
   FormControlLabel,
   Switch,
   ThemeProvider,
+  Paper,
 } from '@mui/material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
 import BankSelect from '@/components/common/BankSelect';
@@ -77,6 +78,7 @@ import {
   VerifiedUser,
   Business,
   Refresh,
+  AttachFile,
 } from '@mui/icons-material';
 
 import { alpha } from '@mui/material/styles';
@@ -163,7 +165,9 @@ type TransportMode = 'SEA' | 'AIR';
 interface ShipmentStatus {
   shipmentId: string;
   contractId: string;
+  buyerId?: string;
   quantity: number;
+  grade?: string;
   status: 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'SHIPPED';
   transportMode?: TransportMode;
   billOfLading?: string;
@@ -230,6 +234,8 @@ const ExporterPortal: React.FC = () => {
   const [allShipments, setAllShipments] = useState<ShipmentStatus[]>([]);
   const [payments, setPayments] = useState<PaymentStatus[]>([]);
   const [allPayments, setAllPayments] = useState<PaymentStatus[]>([]);
+  const [shipmentsWithPermits, setShipmentsWithPermits] = useState<Set<string>>(new Set());
+  const [shipmentsWithDeclarations, setShipmentsWithDeclarations] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   
   // Dialog States
@@ -277,6 +283,7 @@ const ExporterPortal: React.FC = () => {
   // Document upload states - removed DocumentUploadDialog, using simple file input
   const [contractDocuments, setContractDocuments] = useState<any[]>([]);
   const [shipmentDocuments, setShipmentDocuments] = useState<any[]>([]);
+  const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
   
   const [newContract, setNewContract] = useState({
     buyerName: '',
@@ -509,6 +516,74 @@ const ExporterPortal: React.FC = () => {
     }
   };
   
+  const loadQualityInspections = async (token: string | null) => {
+    if (!token) return;
+    
+    try {
+      console.log('[EXPORTER] Fetching quality inspections...');
+      const response = await apiFetch('/quality/inspections?limit=500', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const result = await response.json();
+      console.log('[EXPORTER] Quality inspections API response:', result);
+      
+      if (result.success && result.data) {
+        const inspections = result.data.inspections || result.data;
+        console.log('[EXPORTER] Total inspections:', inspections.length);
+        console.log('[EXPORTER] First inspection:', inspections[0]);
+        
+        // Find shipments that have export permits
+        // The key check is: status === 'permit_issued' (this is set by the API when permit is issued)
+        const permittedShipments = inspections
+          .filter((insp: any) => {
+            const shipmentId = insp.shipment_id || insp.shipmentId || insp.shipmentID || insp.ShipmentID;
+            const status = (insp.status || insp.Status || '').toLowerCase();
+            
+            // Permit is issued when status is 'permit_issued'
+            const hasPermit = shipmentId && status === 'permit_issued';
+            
+            console.log('[EXPORTER] Inspection', insp.inspection_id || insp.inspectionID, '- status:', status, '- shipment_id:', shipmentId, '- hasPermit:', hasPermit);
+            return hasPermit;
+          })
+          .map((insp: any) => insp.shipment_id || insp.shipmentId || insp.shipmentID || insp.ShipmentID);
+        
+        console.log('[EXPORTER] Shipments with export permits:', permittedShipments);
+        setShipmentsWithPermits(new Set(permittedShipments));
+      }
+    } catch (error) {
+      console.error('[EXPORTER] Failed to load quality inspections:', error);
+    }
+  };
+  
+  const loadCustomsDeclarations = async (token: string | null) => {
+    if (!token) return;
+    
+    try {
+      console.log('[EXPORTER] Loading customs declarations from backend...');
+      const response = await apiFetch('/customs/declarations', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data) {
+          // Extract shipment IDs directly from declarations (backend returns camelCase)
+          const declaredShipmentIds = result.data
+            .map((decl: any) => decl.shipmentId)
+            .filter(Boolean);
+          
+          console.log('[EXPORTER] Found declarations for shipments:', declaredShipmentIds);
+          setShipmentsWithDeclarations(new Set(declaredShipmentIds));
+        }
+      }
+    } catch (error) {
+      console.error('[EXPORTER] Failed to load customs declarations:', error);
+    }
+  };
+  
   const loadExporterData = async () => {
     // Get user info from token
     const token = localStorage.getItem('authToken');
@@ -526,6 +601,12 @@ const ExporterPortal: React.FC = () => {
         console.warn('Could not decode token:', e);
       }
     }
+    
+    // Load quality inspections to check which shipments have export permits
+    await loadQualityInspections(token);
+    
+    // Load customs declarations to check which shipments have been declared
+    await loadCustomsDeclarations(token);
     
     // Load Exporter Profile from API
     try {
@@ -1527,18 +1608,15 @@ const ExporterPortal: React.FC = () => {
       const result = await response.json();
       
       if (result.success) {
-        showSuccess(
-          '🛃 Customs Declaration Submitted Successfully',
-          `Declaration ${declarationId} submitted to Ethiopian Customs Commission`,
-          'What happens next:\n' +
-          '• ECC customs officer reviews declaration & documents (1-3 days)\n' +
-          '• Physical inspection may be scheduled based on risk assessment\n' +
-          '• EUDR compliance verified for EU destinations\n' +
-          '• Customs clearance issued upon approval\n\n' +
-          'You will be notified of any updates. Track status in Shipments tab.'
-        );
+        // Add shipment to declarations set
+        const updatedDeclarations = new Set([...shipmentsWithDeclarations, selectedShipmentForCustoms.shipmentId]);
+        console.log('[EXPORTER] Updated declarations after submit:', Array.from(updatedDeclarations));
+        setShipmentsWithDeclarations(updatedDeclarations);
+        
+        // Close dialog and reset form BEFORE showing success message
         setCustomsDeclarationDialogOpen(false);
         setSelectedShipmentForCustoms(null);
+        setCustomsDocuments([]);
         setCustomsForm({
           hsCode: '090111',
           portOfExit: 'Djibouti Port',
@@ -1546,7 +1624,22 @@ const ExporterPortal: React.FC = () => {
           additionalNotes: '',
           eudrCompliant: true,
         });
-        loadExporterData(); // Reload to update status
+        
+        // Show success message
+        showSuccess(
+          'Customs Declaration Submitted Successfully',
+          `Declaration ${declarationId} submitted to Ethiopian Customs Commission`,
+          'What happens next:\n' +
+          '• ECC customs officer will be assigned when they start reviewing your declaration\n' +
+          '• Officer reviews declaration & documents (1-3 days)\n' +
+          '• Physical inspection may be scheduled based on risk assessment\n' +
+          '• EUDR compliance verified for EU destinations\n' +
+          '• Customs clearance issued upon approval\n\n' +
+          'You will be notified of any updates. Track status in Shipments tab.'
+        );
+        
+        // Force re-render by updating shipments array reference
+        setShipments([...shipments]);
       } else {
         showError(
           'Customs Declaration Failed',
@@ -1802,39 +1895,130 @@ const ExporterPortal: React.FC = () => {
     }
   };
   
-  // Calculate Dashboard KPIs from real blockchain data
-  const activeContracts = contracts.filter(c => 
-    c.status === 'ACTIVE' || 
-    c.status === 'APPROVED' || 
-    c.status === 'NBE_APPROVED' ||
-    c.status === 'REGISTERED'
-  ).length;
-  
-  const pendingApprovals = contracts.filter(c => 
-    c.status === 'REGISTERED' && !c.approvalDate
-  ).length;
-  
-  const inTransitShipments = shipments.filter(s => 
-    s.status === 'IN_TRANSIT' || 
-    s.status === 'DEPARTED' ||
-    s.status === 'SHIPPED'
-  ).length;
-  
-  const totalExportValue = contracts.reduce((sum, c) => sum + (c.totalValue || 0), 0);
+  // Calculate Dashboard KPIs - Similar to CustomsPortal pattern
+  const getExporterStats = () => {
+    // Overall counts
+    const totalContracts = contracts.length;
+    const totalShipments = shipments.length;
+    const totalForex = forexStatuses.length;
+    const totalLCs = lcStatuses.length;
+    const totalPayments = payments.length;
+    
+    // Contract statuses
+    const contractsRegistered = contracts.filter(c => c.status === 'REGISTERED').length;
+    const contractsApproved = contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED').length;
+    const contractsActive = contracts.filter(c => c.status === 'ACTIVE').length;
+    
+    // Shipment statuses
+    const shipmentsCreated = shipments.filter(s => s.status === 'CREATED').length;
+    const shipmentsBooked = shipments.filter(s => s.status === 'BOOKED' || s.status === 'LOADED').length;
+    const shipmentsInTransit = shipments.filter(s => ['IN_TRANSIT', 'DEPARTED', 'SHIPPED'].includes(s.status)).length;
+    const shipmentsDelivered = shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length;
+    
+    // Forex statuses
+    const forexRequested = forexStatuses.filter(f => f.status === 'REQUESTED').length;
+    const forexAllocated = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
+    
+    // LC statuses
+    const lcRequested = lcStatuses.filter(lc => lc.status === 'REQUESTED').length;
+    const lcIssued = lcStatuses.filter(lc => ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
+    
+    // Customs statuses
+    // Customs KPI calculations based on customs status logic (matching the table display)
+    const customsAwaitingPermit = shipments.filter(s => {
+      const hasPermit = shipmentsWithPermits.has(s.shipmentId);
+      const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
+      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      // "Awaiting Permit" = not cleared, not declared, not has permit
+      return !isCleared && !hasDeclared && !hasPermit;
+    }).length;
+    
+    const customsPendingDeclaration = shipments.filter(s => {
+      const hasPermit = shipmentsWithPermits.has(s.shipmentId);
+      const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
+      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      // "Pending Declaration" (Ready to Declare) = has permit, not declared, not cleared
+      return hasPermit && !hasDeclared && !isCleared;
+    }).length;
+    
+    const customsDeclared = shipments.filter(s => {
+      const hasPermit = shipmentsWithPermits.has(s.shipmentId);
+      const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
+      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      // "Declared" = has declared, not cleared yet
+      return hasDeclared && !isCleared;
+    }).length;
+    
+    const customsCleared = shipments.filter(s => ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status)).length;
+    
+    // Payment statuses
+    const paymentsPending = payments.filter(p => p.status === 'PENDING').length;
+    const paymentsProcessing = payments.filter(p => ['DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED'].includes(p.status)).length;
+    const paymentsReceived = payments.filter(p => p.status === 'SWIFT_RECEIVED').length;
+    const paymentsSettled = payments.filter(p => p.status === 'SETTLED').length;
+    
+    // Reports/analytics
+    const totalExportValue = contracts.reduce((sum, c) => sum + (c.totalValue || 0), 0);
+    const totalQuantity = contracts.reduce((sum, c) => sum + c.quantity, 0);
+    const avgContractValue = totalContracts > 0 ? totalExportValue / totalContracts : 0;
+    const successRate = totalContracts > 0 
+      ? Math.round((contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE').length / totalContracts) * 100)
+      : 0;
+    
+    return {
+      // Dashboard (tab 0)
+      totalContracts,
+      totalShipments,
+      totalForexAndLC: forexAllocated + lcIssued,
+      totalLCs,
+      
+      // My Contracts (tab 1)
+      contractsRegistered,
+      contractsApproved,
+      contractsActive,
+      
+      // Forex & Banking (tab 2)
+      forexRequested,
+      forexAllocated,
+      lcRequested,
+      lcIssued,
+      
+      // Shipments (tab 3)
+      shipmentsCreated,
+      shipmentsBooked,
+      shipmentsInTransit,
+      shipmentsDelivered,
+      
+      // Customs (tab 4)
+      customsAwaitingPermit,
+      customsPermitIssued: customsPendingDeclaration,
+      customsDeclared: customsDeclared,
+      customsCleared: customsCleared,
+      customsTotal: totalShipments,
+      
+      // LC & Payments (tab 5)
+      paymentsPending,
+      paymentsProcessing,
+      paymentsReceived,
+      paymentsSettled,
+      
+      // Reports (tab 6)
+      totalExportValue,
+      totalQuantity,
+      avgContractValue,
+      successRate,
+      
+      // Audit Trail (tab 7) - uses auditStats state
+    };
+  };
+
+  const stats = getExporterStats();
 
   // Debug logging for KPI calculations
   console.log('[EXPORTER KPIs] Calculating dashboard metrics:', {
-    totalContracts: contracts.length,
-    contractStatuses: contracts.map(c => c.status),
-    activeContracts,
-    pendingApprovals,
-    totalShipments: shipments.length,
-    shipmentStatuses: shipments.map(s => s.status),
-    inTransitShipments,
-    totalExportValue,
-    totalLCs: lcStatuses.length,
-    totalForex: forexStatuses.length,
-    totalPayments: payments.length,
+    tabValue,
+    stats,
+    auditStats,
   });
 
   
@@ -2093,8 +2277,8 @@ const ExporterPortal: React.FC = () => {
               </IconButton>
             </Tooltip>
             
-            {(status === 'CREATED' || status === 'BOOKED') && (
-              <Tooltip title="Submit Customs Declaration">
+            {shipmentsWithPermits.has(shipment.shipmentId) && (
+              <Tooltip title="Submit Customs Declaration (Export Permit Issued)">
                 <IconButton
                   size="small"
                   color="success"
@@ -2233,187 +2417,144 @@ const ExporterPortal: React.FC = () => {
           </Grid>
         </Box>
 
-        {/* Professional KPI Cards - Dynamic based on active tab */}
+        {/* Professional KPI Cards - Dynamic based on active tab (CustomsPortal pattern) */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
-          {tabValue !== 6 ? (
-            // KPI Cards for other tabs (Dashboard, Contracts, Forex, Shipments, LC)
-            <>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card 
-                  sx={{ 
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    border: `2px solid ${tabValue === 1 ? brandPrimary : 'transparent'}`,
-                    '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                  }}
-                  onClick={() => setTabValue(1)}
-                >
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${brandPrimary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                      <Description sx={{ fontSize: 28, color: brandPrimary }} />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                      My Contracts
-                    </Typography>
-                    <Typography variant="h4" sx={{ fontWeight: 700, color: brandPrimary, lineHeight: 1 }}>
-                      {contracts.length}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card 
-              sx={{ 
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                border: `2px solid ${tabValue === 3 ? '#2196F3' : 'transparent'}`,
-                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-              }}
-              onClick={() => setTabValue(3)}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196F315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                  <LocalShipping sx={{ fontSize: 28, color: '#2196F3' }} />
-                </Box>
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                  Shipments
-                </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196F3', lineHeight: 1 }}>
-                  {shipments.length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card 
-              sx={{ 
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                border: `2px solid ${tabValue === 2 ? '#FFD700' : 'transparent'}`,
-                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-              }}
-              onClick={() => setTabValue(2)}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#FFD70015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                  <AccountBalance sx={{ fontSize: 28, color: '#FFD700' }} />
-                </Box>
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                  Forex & Banking
-                </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700, color: '#FFD700', lineHeight: 1 }}>
-                  {forexStatuses.filter(f => f.status === 'ALLOCATED').length + lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={3}>
-            <Card 
-              sx={{ 
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                border: `2px solid ${tabValue === 4 ? '#4CAF50' : 'transparent'}`,
-                '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-              }}
-              onClick={() => setTabValue(4)}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4CAF5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                  <AttachMoney sx={{ fontSize: 28, color: '#4CAF50' }} />
-                </Box>
-                <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                  LC & Payments
-                </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700, color: '#4CAF50', lineHeight: 1 }}>
-                  {lcStatuses.length}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-            </>
-          ) : (
-            // KPI Cards for Audit Trail tab - Journey Tracking
-            <>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#1976d215', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                      <Timeline sx={{ fontSize: 28, color: '#1976d2' }} />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                      Total Activities
-                    </Typography>
-                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#1976d2', lineHeight: 1 }}>
-                      {auditStats.totalActivities}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
-                      All tracked actions
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} sm={6} md={3}>
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                      <Business sx={{ fontSize: 28, color: '#ff9800' }} />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                      Organizations
-                    </Typography>
-                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                      {auditStats.organizationsInvolved}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
-                      Journey participants
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} sm={6} md={3}>
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                      <TrendingUp sx={{ fontSize: 28, color: '#4caf50' }} />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                      Status Changes
-                    </Typography>
-                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                      {auditStats.statusChanges}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
-                      Progress milestones
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} sm={6} md={3}>
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                    <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                      <VerifiedUser sx={{ fontSize: 28, color: '#9c27b0' }} />
-                    </Box>
-                    <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                      Blockchain Verified
-                    </Typography>
-                    <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
-                      {auditStats.blockchainVerified}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#999', fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
-                      Immutable records
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            </>
-          )}
+          {/* Define KPI cards for each tab */}
+          {(tabValue === 0 ? (
+            // Dashboard - Overall Summary
+            [
+              { icon: <Description />, label: 'My Contracts', value: stats.totalContracts, color: brandPrimary, clickTab: 1 },
+              { icon: <LocalShipping />, label: 'Shipments', value: stats.totalShipments, color: '#2196F3', clickTab: 3 },
+              { icon: <AccountBalance />, label: 'Forex & Banking', value: stats.totalForexAndLC, color: '#FFD700', clickTab: 2 },
+              { icon: <AttachMoney />, label: 'LC & Payments', value: stats.totalLCs, color: '#4CAF50', clickTab: 5 },
+            ]
+          ) : tabValue === 1 ? (
+            // My Contracts - Status Breakdown
+            [
+              { icon: <Description />, label: 'Total Contracts', value: stats.totalContracts, color: brandPrimary },
+              { icon: <Assessment />, label: 'Registered', value: stats.contractsRegistered, color: '#FF9800' },
+              { icon: <CheckCircle />, label: 'Approved', value: stats.contractsApproved, color: '#4CAF50' },
+              { icon: <TrendingUp />, label: 'Active', value: stats.contractsActive, color: '#2196F3' },
+            ]
+          ) : tabValue === 2 ? (
+            // Forex & Banking - Forex/LC Status
+            [
+              { icon: <Assessment />, label: 'Forex Requested', value: stats.forexRequested, color: '#FF9800' },
+              { icon: <CheckCircle />, label: 'Forex Allocated', value: stats.forexAllocated, color: '#4CAF50' },
+              { icon: <Description />, label: 'LC Requested', value: stats.lcRequested, color: '#2196F3' },
+              { icon: <AccountBalance />, label: 'LC Issued', value: stats.lcIssued, color: brandPrimary },
+            ]
+          ) : tabValue === 3 ? (
+            // Shipments - Shipment Status
+            [
+              { icon: <Add />, label: 'Created', value: stats.shipmentsCreated, color: '#FF9800' },
+              { icon: <Category />, label: 'Booked', value: stats.shipmentsBooked, color: '#2196F3' },
+              { icon: <LocalShipping />, label: 'In Transit', value: stats.shipmentsInTransit, color: brandPrimary },
+              { icon: <CheckCircle />, label: 'Delivered', value: stats.shipmentsDelivered, color: '#4CAF50' },
+            ]
+          ) : tabValue === 4 ? (
+            // Customs - Customs Status
+            [
+              { icon: <Warning />, label: 'Awaiting Permit', value: stats.customsAwaitingPermit, color: '#FF9800' },
+              { icon: <Assignment />, label: 'Ready to Declare', value: stats.customsPermitIssued, color: '#9c27b0' },
+              { icon: <CheckCircle />, label: 'Declared', value: stats.customsDeclared, color: '#2196F3' },
+              { icon: <LocalShipping />, label: 'Cleared', value: stats.customsCleared, color: '#4CAF50' },
+            ]
+          ) : tabValue === 5 ? (
+            // LC & Payments - Payment Status
+            [
+              { icon: <Assessment />, label: 'Pending', value: stats.paymentsPending, color: '#FF9800' },
+              { icon: <History />, label: 'Processing', value: stats.paymentsProcessing, color: '#2196F3' },
+              { icon: <AttachMoney />, label: 'Received', value: stats.paymentsReceived, color: brandPrimary },
+              { icon: <CheckCircle />, label: 'Settled', value: stats.paymentsSettled, color: '#4CAF50' },
+            ]
+          ) : tabValue === 6 ? (
+            // Reports - Overall Statistics
+            [
+              { icon: <AttachMoney />, label: 'Total Value', value: `$${(stats.totalExportValue / 1000000).toFixed(1)}M`, color: '#4CAF50' },
+              { icon: <Category />, label: 'Total Quantity', value: `${(stats.totalQuantity / 1000).toFixed(1)}T`, color: '#2196F3' },
+              { icon: <TrendingUp />, label: 'Avg Contract', value: `$${(stats.avgContractValue / 1000).toFixed(0)}K`, color: brandPrimary },
+              { icon: <CheckCircle />, label: 'Success Rate', value: `${stats.successRate}%`, color: '#FF9800' },
+            ]
+          ) : tabValue === 7 ? (
+            // Audit Trail - Audit Statistics
+            [
+              { icon: <Assessment />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
+              { icon: <Business />, label: 'Organizations', value: auditStats.organizationsInvolved, color: '#ff9800' },
+              { icon: <Timeline />, label: 'Status Changes', value: auditStats.statusChanges, color: '#4caf50' },
+              { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
+            ]
+          ) : []).map((kpi: any, idx: number) => (
+            <Grid item xs={12} sm={6} md={3} key={idx}>
+              <Card 
+                sx={{ 
+                  cursor: kpi.clickTab !== undefined ? 'pointer' : 'default',
+                  height: 140,
+                  border: kpi.clickTab === tabValue ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
+                  bgcolor: 'white',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  borderRadius: 2,
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                  '&:hover': kpi.clickTab !== undefined ? {
+                    boxShadow: `0 8px 24px ${kpi.color}40`,
+                    transform: 'translateY(-4px)',
+                    borderColor: kpi.color,
+                  } : {},
+                }}
+                onClick={() => kpi.clickTab !== undefined && setTabValue(kpi.clickTab)}
+              >
+                <CardContent sx={{ 
+                  textAlign: 'center', 
+                  py: 2.5, 
+                  px: 2,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}>
+                  <Box sx={{ 
+                    width: 48, 
+                    height: 48, 
+                    borderRadius: '50%', 
+                    bgcolor: `${kpi.color}15`, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    mb: 1.5
+                  }}>
+                    {React.cloneElement(kpi.icon as React.ReactElement, { 
+                      sx: { fontSize: 28, color: kpi.color } 
+                    })}
+                  </Box>
+                  <Typography 
+                    variant="caption" 
+                    sx={{ 
+                      color: '#666', 
+                      textTransform: 'uppercase', 
+                      fontWeight: 600, 
+                      fontSize: '0.7rem', 
+                      letterSpacing: 0.5, 
+                      mb: 0.5, 
+                      display: 'block' 
+                    }}
+                  >
+                    {kpi.label}
+                  </Typography>
+                  <Typography 
+                    variant="h4" 
+                    sx={{ 
+                      fontWeight: 700, 
+                      color: kpi.color,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {kpi.value}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
         </Grid>
 
         {/* Tabs */}
@@ -2451,6 +2592,7 @@ const ExporterPortal: React.FC = () => {
             <Tab label={`My Contracts (${contracts.length})`} icon={<Description sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`Forex & Banking (${forexStatuses.filter(f => f.status === 'ALLOCATED').length + lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length})`} icon={<AccountBalance sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`Shipments (${shipments.length})`} icon={<LocalShipping sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label={`LC & Payments (${lcStatuses.length})`} icon={<AttachMoney sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
@@ -2582,7 +2724,7 @@ const ExporterPortal: React.FC = () => {
                 <Box sx={{ display: 'flex', justifyContent: 'space-around', mt: 3, pt: 2, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography variant="h5" fontWeight={700} color="primary">
-                      ${totalExportValue.toLocaleString()}
+                      ${stats.totalExportValue.toLocaleString()}
                     </Typography>
                     <Typography variant="caption" color="textSecondary">
                       Total Export Value
@@ -2606,7 +2748,7 @@ const ExporterPortal: React.FC = () => {
                   </Box>
                   <Box sx={{ textAlign: 'center' }}>
                     <Typography variant="h5" fontWeight={700} sx={{ color: brandSecondary }}>
-                      {contracts.length > 0 ? `$${(totalExportValue / contracts.length).toLocaleString()}` : '$0'}
+                      {contracts.length > 0 ? `$${(stats.totalExportValue / contracts.length).toLocaleString()}` : '$0'}
                     </Typography>
                     <Typography variant="caption" color="textSecondary">
                       Avg Contract Value
@@ -2676,7 +2818,7 @@ const ExporterPortal: React.FC = () => {
                           In Progress
                         </Typography>
                         <Typography variant="h4" fontWeight={700}>
-                          {inTransitShipments + pendingApprovals}
+                          {stats.shipmentsInTransit + stats.contractsRegistered}
                         </Typography>
                         <Typography variant="body2" sx={{ opacity: 0.9 }}>
                           Active Items
@@ -3722,6 +3864,271 @@ const ExporterPortal: React.FC = () => {
       </TabPanel>
 
       <TabPanel value={tabValue} index={4}>
+        {/* Customs Declaration Tab */}
+        <Box>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+            <Typography variant="h5" sx={{ fontWeight: 600, color: BRAND_COLOR }}>
+              🛃 Customs Declarations
+            </Typography>
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Track your shipments through the complete customs clearance workflow: Quality Inspection → Export Permit → Customs Declaration → Clearance
+          </Typography>
+
+          {/* DataGrid Table */}
+          <Card sx={{ boxShadow: 3 }}>
+            <DataGrid
+              key={`customs-grid-${shipmentsWithDeclarations.size}`}
+              rows={shipments.map((shipment) => {
+                const contract = contracts.find(c => c.contractId === shipment.contractId);
+                const hasPermit = shipmentsWithPermits.has(shipment.shipmentId);
+                const hasDeclared = shipmentsWithDeclarations.has(shipment.shipmentId);
+                const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(shipment.status);
+                
+                console.log(`[EXPORTER] Shipment ${shipment.shipmentId}: hasPermit=${hasPermit}, hasDeclared=${hasDeclared}, isCleared=${isCleared}`);
+                
+                // Determine quality inspection status
+                let qualityStatus = 'Pending';
+                let qualityColor = '#FF9800';
+                if (hasPermit || isCleared) {
+                  qualityStatus = 'Approved';
+                  qualityColor = '#4CAF50';
+                }
+                
+                // Determine export permit status
+                let permitStatus = 'Not Issued';
+                let permitColor = '#FF9800';
+                if (hasPermit || isCleared) {
+                  permitStatus = 'Issued';
+                  permitColor = '#4CAF50';
+                }
+                
+                // Determine customs declaration status
+                let customsStatus = 'Not Declared';
+                let customsColor = '#FF9800';
+                if (isCleared) {
+                  customsStatus = 'Cleared';
+                  customsColor = '#4CAF50';
+                } else if (hasDeclared) {
+                  customsStatus = 'Declared';
+                  customsColor = '#2196F3';
+                } else if (hasPermit) {
+                  customsStatus = 'Ready to Declare';
+                  customsColor = '#9c27b0';
+                }
+                
+                return {
+                  id: shipment.shipmentId,
+                  shipmentId: shipment.shipmentId,
+                  contractId: shipment.contractId,
+                  buyer: contract?.buyerName || shipment.buyerId,
+                  destination: contract?.buyerCountry || 'Unknown',
+                  quantity: shipment.quantity || 0,
+                  qualityStatus,
+                  qualityColor,
+                  permitStatus,
+                  permitColor,
+                  customsStatus,
+                  customsColor,
+                  hasPermit,
+                  hasDeclared,
+                  isCleared,
+                  shipment,
+                  contract,
+                };
+              })}
+              columns={[
+                {
+                  field: 'shipmentId',
+                  headerName: 'Shipment ID',
+                  width: 180,
+                  renderCell: (params) => (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <LocalShipping fontSize="small" sx={{ color: BRAND_COLOR }} />
+                      <Typography variant="body2" fontWeight={600}>{params.value}</Typography>
+                    </Box>
+                  ),
+                },
+                {
+                  field: 'contractId',
+                  headerName: 'Contract',
+                  width: 160,
+                  renderCell: (params) => (
+                    <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>{params.value}</Typography>
+                  ),
+                },
+                {
+                  field: 'buyer',
+                  headerName: 'Buyer',
+                  width: 160,
+                },
+                {
+                  field: 'destination',
+                  headerName: 'Destination',
+                  width: 140,
+                },
+                {
+                  field: 'quantity',
+                  headerName: 'Quantity (kg)',
+                  width: 120,
+                  valueFormatter: (params) => params.value ? Number(params.value).toLocaleString() : '0',
+                },
+                {
+                  field: 'qualityStatus',
+                  headerName: 'Quality Inspection',
+                  width: 150,
+                  renderCell: (params) => (
+                    <Chip
+                      label={params.value}
+                      sx={{
+                        bgcolor: `${params.row.qualityColor}15`,
+                        color: params.row.qualityColor,
+                        border: `1px solid ${params.row.qualityColor}`,
+                        fontWeight: 600,
+                        fontSize: '0.75rem',
+                      }}
+                      size="small"
+                    />
+                  ),
+                },
+                {
+                  field: 'permitStatus',
+                  headerName: 'Export Permit',
+                  width: 140,
+                  renderCell: (params) => (
+                    <Chip
+                      label={params.value}
+                      sx={{
+                        bgcolor: `${params.row.permitColor}15`,
+                        color: params.row.permitColor,
+                        border: `1px solid ${params.row.permitColor}`,
+                        fontWeight: 600,
+                        fontSize: '0.75rem',
+                      }}
+                      size="small"
+                    />
+                  ),
+                },
+                {
+                  field: 'customsStatus',
+                  headerName: 'Customs Status',
+                  width: 160,
+                  renderCell: (params) => (
+                    <Chip
+                      label={params.value}
+                      sx={{
+                        bgcolor: `${params.row.customsColor}15`,
+                        color: params.row.customsColor,
+                        border: `1px solid ${params.row.customsColor}`,
+                        fontWeight: 600,
+                        fontSize: '0.75rem',
+                      }}
+                      size="small"
+                    />
+                  ),
+                },
+                {
+                  field: 'actions',
+                  headerName: 'Actions',
+                  width: 160,
+                  sortable: false,
+                  renderCell: (params) => (
+                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                      {params.row.hasPermit && !params.row.hasDeclared && !params.row.isCleared ? (
+                        <Tooltip title="Submit customs declaration with required documents">
+                          <Button
+                            variant="contained"
+                            size="small"
+                            startIcon={<Upload />}
+                            onClick={() => {
+                              setSelectedShipmentForCustoms(params.row.shipment);
+                              setCustomsForm({
+                                hsCode: '090111',
+                                portOfExit: 'Djibouti Port',
+                                customsValue: ((params.row.quantity || 0) * (params.row.contract?.pricePerKg || 9.25)).toFixed(2),
+                                additionalNotes: '',
+                                eudrCompliant: true,
+                              });
+                              setCustomsDeclarationDialogOpen(true);
+                            }}
+                            sx={{
+                              backgroundColor: '#9c27b0',
+                              '&:hover': { backgroundColor: '#7b1fa2' },
+                              textTransform: 'none',
+                              fontWeight: 600,
+                              fontSize: '0.8rem',
+                            }}
+                          >
+                            Declare
+                          </Button>
+                        </Tooltip>
+                      ) : params.row.hasDeclared && !params.row.isCleared ? (
+                        <Tooltip title="Declaration submitted, awaiting customs officer review">
+                          <Chip
+                            label="Declared"
+                            size="small"
+                            sx={{ bgcolor: '#2196F315', color: '#2196F3', fontWeight: 600, cursor: 'help' }}
+                          />
+                        </Tooltip>
+                      ) : !params.row.hasPermit && !params.row.isCleared ? (
+                        <Tooltip title="Waiting for quality inspection and export permit from ECTA">
+                          <Chip
+                            label="Waiting"
+                            size="small"
+                            sx={{ bgcolor: '#FF980015', color: '#FF9800', fontWeight: 600, cursor: 'help' }}
+                          />
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="Customs cleared and in transit">
+                          <Chip
+                            label="Cleared"
+                            size="small"
+                            color="success"
+                            icon={<CheckCircle />}
+                          />
+                        </Tooltip>
+                      )}
+                    </Box>
+                  ),
+                },
+              ]}
+              initialState={{
+                pagination: {
+                  paginationModel: { page: 0, pageSize: 10 },
+                },
+                sorting: {
+                  sortModel: [{ field: 'customsStatus', sort: 'asc' }],
+                },
+              }}
+              pageSizeOptions={[5, 10, 25]}
+              autoHeight
+              disableRowSelectionOnClick
+              sx={{
+                '& .MuiDataGrid-cell:focus': {
+                  outline: 'none',
+                },
+                '& .MuiDataGrid-row:hover': {
+                  backgroundColor: '#f5f5f5',
+                },
+              }}
+            />
+          </Card>
+
+          {shipments.length === 0 && (
+            <Alert severity="info" sx={{ mt: 3 }}>
+              <Typography variant="body2">
+                <strong>No shipments available.</strong> Create a shipment for your approved contract to start the customs clearance process.
+              </Typography>
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                <strong>Workflow:</strong> Create Shipment → Quality Inspection (ECTA) → Export Permit (ECTA) → Customs Declaration (You) → Clearance (Customs)
+              </Typography>
+            </Alert>
+          )}
+        </Box>
+      </TabPanel>
+
+      <TabPanel value={tabValue} index={5}>
         {/* LC & Payments (SWIFT Messages) Tab */}
         <SWIFTMessagesViewWrapper 
           lcStatuses={lcStatuses}
@@ -3729,7 +4136,7 @@ const ExporterPortal: React.FC = () => {
         />
       </TabPanel>
 
-      <TabPanel value={tabValue} index={5}>
+      <TabPanel value={tabValue} index={6}>
         {/* Reports Tab */}
         <Grid container spacing={3}>
           <Grid item xs={12}>
@@ -3872,7 +4279,7 @@ const ExporterPortal: React.FC = () => {
         </Grid>
       </TabPanel>
 
-      <TabPanel value={tabValue} index={6}>
+      <TabPanel value={tabValue} index={7}>
         {/* Audit Trail Tab */}
         <AuditTrailTable
           title="Exporter Portal - Complete Transaction History"
@@ -4051,136 +4458,258 @@ This contract is registered with ECTA and approved by NBE.
       onClose={() => {
         setCustomsDeclarationDialogOpen(false);
         setSelectedShipmentForCustoms(null);
+        setCustomsDocuments([]);
       }}
       maxWidth="md"
       fullWidth
     >
       <DialogTitle>
         <Box display="flex" alignItems="center" gap={1}>
-          <Assignment />
+          <Description sx={{ color: '#2196F3' }} />
           <Typography variant="h6">
-            🛃 Submit Customs Declaration
+            Submit Customs Declaration
           </Typography>
         </Box>
       </DialogTitle>
       <DialogContent>
         {selectedShipmentForCustoms && (
           <>
-            <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
-              <Typography variant="body2" fontWeight="bold" gutterBottom>
-                Ethiopian Customs Commission (ECC) — Export Declaration
-              </Typography>
-              <Typography variant="body2">
-                You are now at <strong>Step 9 of 11</strong> in the export process.
-                <br />
-                Shipment: <strong>{selectedShipmentForCustoms.shipmentId}</strong> • Quantity: <strong>{selectedShipmentForCustoms.quantity ? Number(selectedShipmentForCustoms.quantity).toLocaleString() : '0'} kg</strong>
-              </Typography>
-            </Alert>
+            {/* Previous Steps Summary - Professional Form View */}
+            <Paper elevation={3} sx={{ p: 3, mb: 3, bgcolor: '#f0f7ff', border: '2px solid #2196F3' }}>
+              {(() => {
+                const contract = contracts.find(c => c.contractId === selectedShipmentForCustoms.contractId);
+                return (
+                  <Grid container spacing={3}>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Contract ID"
+                        value={contract?.contractId || 'N/A'}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Destination"
+                        value={contract?.buyerCountry || 'N/A'}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Coffee Type"
+                        value={contract?.coffeeType || selectedShipmentForCustoms.grade || 'N/A'}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Quantity (kg)"
+                        value={contract?.quantity ? Number(contract.quantity).toLocaleString() : (selectedShipmentForCustoms.quantity ? Number(selectedShipmentForCustoms.quantity).toLocaleString() : '0')}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Price per Kg"
+                        value={`$${contract?.pricePerKg || '9.25'}/kg (${contract?.currency || 'USD'})`}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Payment Method"
+                        value="LC"
+                        disabled
+                        size="small"
+                        helperText="Letter of Credit"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Incoterm"
+                        value="FOB"
+                        disabled
+                        size="small"
+                        helperText="Free on Board"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Contract Status"
+                        value="Approved"
+                        disabled
+                        size="small"
+                        InputProps={{
+                          startAdornment: <CheckCircle fontSize="small" sx={{ color: '#4CAF50', mr: 1 }} />
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Shipment ID"
+                        value={selectedShipmentForCustoms.shipmentId}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Origin"
+                        value="Yirgacheffe"
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Grade"
+                        value={selectedShipmentForCustoms.grade || 'Grade 1'}
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="ICO Number"
+                        value="ET-2105-34593"
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Channel"
+                        value="Direct Export"
+                        disabled
+                        size="small"
+                      />
+                    </Grid>
+                  </Grid>
+                );
+              })()}
+            </Paper>
 
             <Alert severity="warning" sx={{ mb: 3 }}>
               <Typography variant="body2" fontWeight="bold" gutterBottom>
-                📋 Required Documents Checklist
+                Required Documents Checklist
               </Typography>
-              <Box component="ul" sx={{ m: 0, pl: 3 }}>
-                <Typography component="li" variant="body2">✅ Commercial Invoice (showing FOB value, buyer details)</Typography>
-                <Typography component="li" variant="body2">✅ Packing List (container/bag details, weight)</Typography>
-                <Typography component="li" variant="body2">✅ ECTA Export Permit (issued after quality approval)</Typography>
-                <Typography component="li" variant="body2">✅ ICO Certificate of Origin (for ICO-certified coffee)</Typography>
-                <Typography component="li" variant="body2">✅ Bill of Lading or Waybill (if already issued)</Typography>
-                <Typography component="li" variant="body2">✅ Phytosanitary Certificate (plant health clearance)</Typography>
-                <Typography component="li" variant="body2">✅ EUDR Due Diligence Statement (for EU destinations only)</Typography>
-              </Box>
+              <Grid container spacing={1}>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="body2">Commercial Invoice (showing FOB value, buyer details)</Typography>
+                  <Typography variant="body2">Packing List (container/bag details, weight)</Typography>
+                  <Typography variant="body2">ECTA Export Permit (issued after quality approval)</Typography>
+                  <Typography variant="body2">ICO Certificate of Origin (for ICO-certified coffee)</Typography>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="body2">Bill of Lading or Waybill (if already issued)</Typography>
+                  <Typography variant="body2">Phytosanitary Certificate (plant health clearance)</Typography>
+                  <Typography variant="body2">EUDR Due Diligence Statement (for EU destinations only)</Typography>
+                </Grid>
+              </Grid>
               <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                ⚠️ All documents must be uploaded to the system before final submission
+                All documents must be uploaded to the system before final submission
               </Typography>
             </Alert>
 
-            <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>
-              Declaration Details
-            </Typography>
-
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="HS Code"
-                  value={customsForm.hsCode}
-                  onChange={(e) => setCustomsForm({ ...customsForm, hsCode: e.target.value })}
-                  helperText="Coffee, not roasted, not decaffeinated"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Customs Value (USD)"
-                  type="number"
-                  value={customsForm.customsValue || (selectedShipmentForCustoms.quantity * 9.25).toFixed(2)}
-                  onChange={(e) => setCustomsForm({ ...customsForm, customsValue: e.target.value })}
-                  helperText="FOB value from contract"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Port of Exit"
-                  value={customsForm.portOfExit}
-                  onChange={(e) => setCustomsForm({ ...customsForm, portOfExit: e.target.value })}
-                  helperText="Primary exit point for Ethiopian coffee"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Customs Officer (Auto-assigned)"
-                  value="Officer Alemayehu T. (ECC)"
-                  disabled
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch 
-                      checked={customsForm.eudrCompliant}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
-                        setCustomsForm({ ...customsForm, eudrCompliant: e.target.checked })
-                      }
-                    />
-                  }
-                  label="🇪🇺 EUDR Enhanced Verification Required (for EU destinations)"
-                />
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
-                  Enhanced due diligence for deforestation-free coffee — GPS farm coordinates and traceability verified
-                </Typography>
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  multiline
-                  rows={3}
-                  label="Additional Notes"
-                  value={customsForm.additionalNotes}
-                  onChange={(e) => setCustomsForm({ ...customsForm, additionalNotes: e.target.value })}
-                  placeholder="Any special instructions or remarks for customs..."
-                  helperText="Optional information for customs officers"
-                />
-              </Grid>
-            </Grid>
-
-            <Alert severity="success" sx={{ mt: 3 }}>
-              <Typography variant="body2">
-                <strong>What happens after submission:</strong>
-                <br />
-                1. ECC customs officer reviews declaration & supporting documents
-                <br />
-                2. Physical inspection scheduled (if required based on risk assessment)
-                <br />
-                3. EUDR compliance verified (for EU destinations)
-                <br />
-                4. Customs clearance issued (typically 1-3 days)
-                <br />
-                5. You can then proceed to book shipping and arrange container loading
+            {/* Document Upload Section */}
+            <Paper elevation={2} sx={{ p: 3, mb: 3, bgcolor: '#f9f9f9' }}>
+              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Upload />
+                Upload Supporting Documents
               </Typography>
-            </Alert>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Upload all required documents listed above. Accepted formats: PDF, JPG, PNG (max 10MB per file)
+              </Typography>
+              
+              <Button
+                variant="outlined"
+                component="label"
+                startIcon={<AttachFile />}
+                sx={{ mb: 2 }}
+              >
+                Choose Files
+                <input
+                  type="file"
+                  hidden
+                  multiple
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    const newDocs = files.map(file => ({
+                      name: file.name,
+                      size: file.size,
+                      type: file.type,
+                      file: file,
+                      uploadedAt: new Date().toISOString(),
+                    }));
+                    setCustomsDocuments([...customsDocuments, ...newDocs]);
+                  }}
+                />
+              </Button>
+
+              {customsDocuments.length > 0 && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
+                    Uploaded Documents ({customsDocuments.length}):
+                  </Typography>
+                  {customsDocuments.map((doc, index) => (
+                    <Box
+                      key={index}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        p: 1.5,
+                        mb: 1,
+                        bgcolor: 'white',
+                        borderRadius: 1,
+                        border: '1px solid #e0e0e0',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Description color="primary" />
+                        <Box>
+                          <Typography variant="body2" fontWeight={600}>
+                            {doc.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {(doc.size / 1024).toFixed(1)} KB
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() => {
+                          setCustomsDocuments(customsDocuments.filter((_, i) => i !== index));
+                        }}
+                      >
+                        <Delete />
+                      </IconButton>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Paper>
           </>
         )}
       </DialogContent>
@@ -4188,6 +4717,7 @@ This contract is registered with ECTA and approved by NBE.
         <Button onClick={() => {
           setCustomsDeclarationDialogOpen(false);
           setSelectedShipmentForCustoms(null);
+          setCustomsDocuments([]);
         }}>
           Cancel
         </Button>
