@@ -79,20 +79,32 @@ echo ""
 echo "Distributing TLS certificates..."
 ORDERER_TLS="blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
 
+# Copy orderer TLS cert to all peers (in mounted directory for persistence)
 for peer in peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et; do
-    docker exec $peer mkdir -p /var/hyperledger/orderer-tls 2>/dev/null || true
-    docker cp "$ORDERER_TLS" $peer:/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem 2>/dev/null || true
+    cat "$ORDERER_TLS" | docker exec -i $peer bash -c "mkdir -p /etc/hyperledger/fabric/orderer-tls && cat > /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem"
 done
 
+# Copy peer TLS certs to all peers (in mounted directory for persistence)
 for org in ecta ecx banks nbe customs shipping; do
     PEER_TLS="blockchain/organizations/peerOrganizations/${org}.cecbs.et/peers/peer0.${org}.cecbs.et/tls/ca.crt"
+    if [ ! -f "$PEER_TLS" ]; then
+        echo "⚠️  Warning: TLS cert not found: $PEER_TLS"
+        continue
+    fi
     for target_peer in peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et; do
-        docker exec $target_peer mkdir -p /var/hyperledger/peer-tls 2>/dev/null || true
-        docker cp "$PEER_TLS" $target_peer:/var/hyperledger/peer-tls/tlsca.${org}.cecbs.et-cert.pem 2>/dev/null || true
+        cat "$PEER_TLS" | docker exec -i $target_peer bash -c "mkdir -p /etc/hyperledger/fabric/peer-tls && cat > /etc/hyperledger/fabric/peer-tls/tlsca.${org}.cecbs.et-cert.pem"
     done
 done
 
 echo "✅ TLS certificates distributed"
+
+# Verify TLS certs were copied (use sh -c to avoid Git Bash path mangling)
+echo "Verifying TLS certificates..."
+if docker exec peer0.ecta.cecbs.et sh -c 'test -f /etc/hyperledger/fabric/peer-tls/tlsca.ecta.cecbs.et-cert.pem'; then
+    echo "✅ TLS certs verified"
+else
+    echo "⚠️  TLS cert verification failed"
+fi
 
 # Install on all peers
 echo ""
@@ -150,7 +162,7 @@ for org in ecta ecx banks nbe customs shipping; do
         peer lifecycle chaincode approveformyorg \
             -o orderer.cecbs.et:7050 \
             --ordererTLSHostnameOverride orderer.cecbs.et \
-            --tls --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
+            --tls --cafile /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem \
             --channelID $CHANNEL \
             --name $CC_NAME \
             --version $CC_VERSION \
@@ -173,7 +185,7 @@ peer lifecycle chaincode checkcommitreadiness \
     --version $CC_VERSION \
     --sequence $CC_SEQUENCE \
     --tls \
-    --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
+    --cafile /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem \
     --output json
 "
 
@@ -190,17 +202,17 @@ export CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
 peer lifecycle chaincode commit \
     -o orderer.cecbs.et:7050 \
     --ordererTLSHostnameOverride orderer.cecbs.et \
-    --tls --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
+    --tls --cafile /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem \
     --channelID $CHANNEL \
     --name $CC_NAME \
     --version $CC_VERSION \
     --sequence $CC_SEQUENCE \
-    --peerAddresses peer0.ecta.cecbs.et:7051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.ecta.cecbs.et-cert.pem \
-    --peerAddresses peer0.ecx.cecbs.et:8051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.ecx.cecbs.et-cert.pem \
-    --peerAddresses peer0.banks.cecbs.et:9051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.banks.cecbs.et-cert.pem \
-    --peerAddresses peer0.nbe.cecbs.et:10051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.nbe.cecbs.et-cert.pem \
-    --peerAddresses peer0.customs.cecbs.et:11051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.customs.cecbs.et-cert.pem \
-    --peerAddresses peer0.shipping.cecbs.et:12051 --tlsRootCertFiles /var/hyperledger/peer-tls/tlsca.shipping.cecbs.et-cert.pem
+    --peerAddresses peer0.ecta.cecbs.et:7051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.ecta.cecbs.et-cert.pem \
+    --peerAddresses peer0.ecx.cecbs.et:8051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.ecx.cecbs.et-cert.pem \
+    --peerAddresses peer0.banks.cecbs.et:9051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.banks.cecbs.et-cert.pem \
+    --peerAddresses peer0.nbe.cecbs.et:10051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.nbe.cecbs.et-cert.pem \
+    --peerAddresses peer0.customs.cecbs.et:11051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.customs.cecbs.et-cert.pem \
+    --peerAddresses peer0.shipping.cecbs.et:12051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.shipping.cecbs.et-cert.pem
 "
 
 echo ""

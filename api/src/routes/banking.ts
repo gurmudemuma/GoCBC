@@ -3,6 +3,7 @@
 
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
+import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
@@ -11,6 +12,7 @@ import { body, param } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const signatureService = BlockchainSignatureService.getInstance();
 
 /**
  * @swagger
@@ -216,6 +218,101 @@ router.post('/lc/:lcID/approve',
 
       if (result.success) {
         logger.info(`LC approved successfully: ${lcID} by ${issuingBank}`);
+        
+        // ✅ SIGN LC DOCUMENTS - Add cryptographic signature with bank officer's identity
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const { DocumentSignatureService } = await import('../services/documentSignatureService');
+          const db = DatabaseService.getInstance();
+          
+          // Get all LC-related documents
+          const lcDocuments = await db.all(
+            `SELECT document_id, file_path, file_hash, mime_type, file_name 
+             FROM documents 
+             WHERE entity_type = 'LC' 
+               AND entity_id = $1 
+               AND status = 'active'`,
+            [lcID]
+          );
+          
+          // Sign each document with bank officer's cryptographic identity
+          for (const doc of lcDocuments) {
+            const signatureId = `SIG-${doc.document_id}-${user.org}-${Date.now()}`;
+            const timestamp = new Date().toISOString();
+            
+            // Add visual signature stamp to PDF (if applicable)
+            const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+            let visualSignatureAdded = false;
+            
+            if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+              try {
+                await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+                  signer: user.username || user.sub || 'Bank Officer',
+                  organization: user.org || issuingBank,
+                  timestamp,
+                  signatureType: 'APPROVE',
+                  role: user.role || 'Bank Officer',
+                  transactionId: signatureId,
+                });
+                visualSignatureAdded = true;
+                logger.info(`✅ Visual signature added to LC document: ${doc.document_id}`);
+              } catch (pdfError) {
+                logger.warn(`Failed to add visual signature to PDF ${doc.document_id}:`, pdfError);
+              }
+            }
+            
+            // Store cryptographic signature in database
+            await db.run(
+              `INSERT INTO document_signatures (
+                signature_id, document_id, signer_id, signer_org, signature_type,
+                certificate_id, remarks, blockchain_tx_id, visual_signature_added
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [
+                signatureId,
+                doc.document_id,
+                user.username || user.sub,
+                user.org || issuingBank,
+                'APPROVE',
+                user.sub || null, // X.509 certificate ID
+                `Letter of Credit ${lcID} approved by ${issuingBank}`,
+                result.txId || null,
+                visualSignatureAdded
+              ]
+            );
+            
+            // Sign document on blockchain
+            try {
+              if (fabricService.isConnected()) {
+                const blockchainSigResult = await fabricService.signDocument(
+                  doc.document_id,
+                  doc.file_hash,
+                  'APPROVE',
+                  `LC ${lcID} approved by ${issuingBank}`
+                );
+                
+                if (blockchainSigResult.success && blockchainSigResult.txId) {
+                  await db.run(
+                    'UPDATE document_signatures SET blockchain_tx_id = $1 WHERE signature_id = $2',
+                    [blockchainSigResult.txId, signatureId]
+                  );
+                  logger.info(`✅ Blockchain signature recorded for LC document: ${doc.document_id}`);
+                }
+              }
+            } catch (blockchainSigError) {
+              logger.warn(`Blockchain document signature failed for ${doc.document_id}:`, blockchainSigError);
+            }
+            
+            logger.info(`✅ LC document signed by ${user.username} (${user.org}): ${doc.document_id}`);
+          }
+          
+          if (lcDocuments.length > 0) {
+            logger.info(`✅ Signed ${lcDocuments.length} LC document(s) with bank officer's cryptographic identity`);
+          }
+        } catch (signError) {
+          logger.error('Failed to sign LC documents:', signError);
+          // Don't fail the LC approval if document signing fails
+        }
+        
         res.json({
           success: true,
           data: result.data,
@@ -473,6 +570,61 @@ router.post('/lc/issue',
 
       logger.info('[BANKING] LC issued successfully:', _lcId);
       
+      // ✅ AUTO-CREATE FOREX REQUEST ON BLOCKCHAIN immediately after LC issuance
+      // This ensures complete audit trail from the moment LC is created
+      try {
+        // Use LC ID in forex ID for easy matching: FOREX_LC-CONTRACT123-456_REQUEST
+        const forexId = `FOREX_${_lcId}_REQUEST`;
+        logger.info(`[BANKING] Auto-creating forex request on blockchain: ${forexId}`);
+        
+        const forexResult = await fabricService.invokeChaincode('RequestForex', [
+          forexId,
+          _contractId || '',
+          _exporterId || '',
+          Number(amount).toString(),
+          currency || 'USD',
+        ]);
+        
+        if (forexResult.success) {
+          logger.info(`✅ Forex request auto-created on blockchain: ${forexId} for LC ${_lcId}`);
+          
+          // Record blockchain signature
+          try {
+            const user = (req as any).user;
+            await signatureService.recordSignature({
+              entityType: 'FOREX_ALLOCATION',
+              entityId: forexId,
+              actionType: 'REQUEST',
+              signerUsername: user?.username || 'bank',
+              signerOrg: user?.org || 'BanksMSP',
+              signerRole: user?.role || 'BANKS',
+              blockchainTxId: forexResult.txId,
+              blockchainTimestamp: new Date(),
+              chaincodeName: 'coffee',
+              chaincodeFunction: 'RequestForex',
+              transactionArgs: [forexId, _contractId || '', _exporterId || '', Number(amount).toString(), currency || 'USD'],
+              metadata: {
+                lcId: _lcId,
+                contractId: _contractId,
+                exporterId: _exporterId,
+                amount: Number(amount),
+                currency: currency || 'USD',
+                autoCreated: true,
+                createdBy: 'LC_ISSUANCE',
+                status: 'REQUESTED'  // Mark as REQUESTED when created
+              }
+            });
+          } catch (sigError) {
+            logger.warn('Failed to record forex signature:', sigError);
+          }
+        } else {
+          logger.warn(`⚠️ Forex auto-request failed for LC ${_lcId}: ${forexResult.error}`);
+        }
+      } catch (forexErr: any) {
+        logger.warn(`⚠️ Forex auto-request error for LC ${_lcId}:`, forexErr);
+        // Non-fatal — LC issuance already succeeded
+      }
+      
       res.status(201).json({
         success: true,
         message: 'LC issued successfully',
@@ -530,7 +682,8 @@ router.post('/lc/:lcID/issue',
           const lcData = await fabricService.getLC(lcID);
           if (lcData.success && lcData.data) {
             const lc = lcData.data;
-            const forexId = `FOREX_${lcID}_${Date.now()}`; // Create unique forex ID with LC reference
+            // Use LC ID in forex ID for easy matching: FOREX_LC-CONTRACT123-456_REQUEST
+            const forexId = `FOREX_${lcID}_REQUEST`;
             
             // RequestForex takes 5 parameters: forexID, contractID, exporterID, amount, currency
             // NOTE: LC ID is NOT part of RequestForex parameters (linked during allocation)

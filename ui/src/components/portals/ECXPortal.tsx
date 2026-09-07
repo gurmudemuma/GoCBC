@@ -25,6 +25,7 @@ import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
+import { BlockchainBadge } from '@/components/blockchain';
 
 
 interface CoffeeLot {
@@ -895,6 +896,16 @@ const ECXPortal: React.FC = () => {
         <DialogTitle>Coffee Lot Details — {selectedLot?.ecxLotNumber}</DialogTitle>
         <DialogContent>
           {selectedLot && (
+            <>
+              {/* BLOCKCHAIN PROOF BADGE */}
+              <BlockchainBadge
+                entityId={selectedLot.lotId || selectedLot.ecxLotNumber}
+                entityType="COFFEE_LOT"
+                chaincode="coffee"
+                channel="coffeechannel"
+                compact
+              />
+
             <Grid container spacing={2} sx={{ pt: 1 }}>
               <Grid item xs={12}><Chip label={selectedLot.status} color={statusColor(selectedLot.status) as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} /></Grid>
               <Grid item xs={6}><Typography variant="caption" color="textSecondary">ECX Lot Number</Typography><Typography fontWeight={600}>{selectedLot.ecxLotNumber}</Typography></Grid>
@@ -917,6 +928,7 @@ const ECXPortal: React.FC = () => {
               {selectedLot.assignmentDate && <Grid item xs={4}><Typography variant="caption" color="textSecondary">Assigned</Typography><Typography variant="caption">{formatDate(selectedLot.assignmentDate)}</Typography></Grid>}
               {selectedLot.releaseDate && <Grid item xs={4}><Typography variant="caption" color="textSecondary">Released</Typography><Typography variant="caption">{formatDate(selectedLot.releaseDate)}</Typography></Grid>}
             </Grid>
+            </>
           )}
         </DialogContent>
         <DialogActions>

@@ -34,6 +34,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api.config';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 
 dayjs.extend(relativeTime);
 
@@ -472,6 +473,83 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
                     </Timeline.Item>
                   ))}
               </Timeline>
+            </TabPane>
+
+            <TabPane tab="📄 Documents & Signatures" key="documents">
+              <Alert
+                message="Document Blockchain Verification"
+                description="All documents related to this LC are cryptographically signed and verified on the blockchain."
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+              <BlockchainSignatureVerification
+                entityType="LC"
+                entityId={selectedLC.lcId}
+              />
+            </TabPane>
+
+            <TabPane tab="🔐 Blockchain Verification" key="blockchain">
+              <Alert
+                message="Blockchain-Verified Signatures"
+                description="All documents and actions in this LC are cryptographically signed and stored on the immutable Hyperledger Fabric blockchain. This provides tamper-proof audit trail and non-repudiation."
+                type="success"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '4px',
+                marginBottom: '16px'
+              }}>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>🔗 Blockchain Network:</strong> Hyperledger Fabric
+                </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>📜 Channel:</strong> coffeechannel
+                </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>🏢 Consortium Members:</strong> NBE, Banks, ECTA, ECX, Customs, Shipping
+                </div>
+                <div>
+                  <strong>📋 LC ID on Blockchain:</strong> 
+                  <code style={{ 
+                    marginLeft: '8px', 
+                    padding: '2px 6px', 
+                    backgroundColor: '#fff',
+                    borderRadius: '2px',
+                    fontFamily: 'monospace'
+                  }}>
+                    {selectedLC.lcId}
+                  </code>
+                </div>
+              </div>
+              
+              {/* Note about signature verification */}
+              <Alert
+                message="Document Signature Verification"
+                description={
+                  <div>
+                    To view cryptographic signatures for documents attached to this LC:
+                    <ol style={{ marginTop: '8px', marginBottom: 0 }}>
+                      <li>Go to the <strong>Documents</strong> tab above</li>
+                      <li>Click <strong>View Document</strong> for any document</li>
+                      <li>Check the <strong>Blockchain Signatures</strong> section</li>
+                    </ol>
+                    Each signature includes:
+                    <ul style={{ marginTop: '8px', marginBottom: 0 }}>
+                      <li>✅ X.509 Certificate Details (Organization, Common Name, Serial Number)</li>
+                      <li>✅ Blockchain Transaction ID (immutable proof)</li>
+                      <li>✅ Cryptographic Fingerprint (SHA-256 hash)</li>
+                      <li>✅ Timestamp & Signer Identity</li>
+                    </ul>
+                  </div>
+                }
+                type="info"
+                showIcon
+                style={{ marginTop: 16 }}
+              />
             </TabPane>
           </Tabs>
         )}

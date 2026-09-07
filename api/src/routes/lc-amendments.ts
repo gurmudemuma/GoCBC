@@ -78,6 +78,30 @@ router.post('/:lcId/discrepancies',
         [lcId, document, issue]
       );
 
+      // ✅ Record LC discrepancy on blockchain
+      try {
+        const auditService = require('../services/auditService').default;
+        const user = (req as any).user;
+        await auditService.recordAudit({
+          entityType: 'LC_DISCREPANCY',
+          entityId: `${lcId}_${Date.now()}`,
+          actionType: 'REPORT',
+          actionBy: user?.username || 'bank',
+          organizationMSP: 'BanksMSP',
+          details: {
+            lcId,
+            document,
+            issue,
+            status: 'OPEN',
+            reportedDate: new Date().toISOString()
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ LC discrepancy recorded on blockchain for LC: ${lcId}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record LC discrepancy on blockchain (non-fatal):`, blockchainErr);
+      }
+
       res.json({
         success: true,
         data: { lcId, document, issue, status: 'OPEN' },

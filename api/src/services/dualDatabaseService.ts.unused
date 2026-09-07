@@ -1,0 +1,470 @@
+/**
+ * Dual Database Service
+ * Ensures synchronization between PostgreSQL and Blockchain
+ * 
+ * Design Pattern: Dual Write with Eventual Consistency
+ * - Write to PostgreSQL (source of truth for operational data)
+ * - Write to Blockchain (immutable audit trail)
+ * - Read from both sources and merge for comprehensive view
+ */
+
+import { pool } from '../config/database';
+import { FabricService } from './fabricService';
+import logger from '../utils/logger';
+
+export interface SyncOptions {
+  writeToPostgres?: boolean;
+  writeToBlockchain?: boolean;
+  failOnBlockchainError?: boolean;
+  retryOnFailure?: boolean;
+}
+
+export class DualDatabaseService {
+  /**
+   * Sync customs clearance to both databases
+   */
+  static async syncCustomsClearance(data: {
+    clearanceId: string;
+    shipmentId: string;
+    clearanceNumber: string;
+    declarationNumber: string;
+    status: string;
+    clearedBy: string;
+    clearedDate: string;
+    customsValueUSD: number;
+    quantity: number;
+    currency: string;
+    dutyAmount: number;
+    taxAmount: number;
+    exitPoint?: string;
+    transportMode?: string;
+    remarks?: string;
+  }, options: SyncOptions = {}): Promise<{ pgSuccess: boolean; blockchainSuccess: boolean; errors: string[] }> {
+    
+    const { 
+      writeToPostgres = true, 
+      writeToBlockchain = true,
+      failOnBlockchainError = false 
+    } = options;
+    
+    const errors: string[] = [];
+    let pgSuccess = false;
+    let blockchainSuccess = false;
+
+    // 1. Write to PostgreSQL
+    if (writeToPostgres) {
+      try {
+        await pool.query(
+          `INSERT INTO customs_clearances (
+            clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date,
+            duty_amount, tax_amount, exit_point, remarks
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (clearance_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            cleared_by = EXCLUDED.cleared_by,
+            cleared_date = EXCLUDED.cleared_date,
+            duty_amount = EXCLUDED.duty_amount,
+            tax_amount = EXCLUDED.tax_amount,
+            updated_at = NOW()`,
+          [
+            data.clearanceId,
+            data.shipmentId,
+            data.clearanceNumber,
+            data.status,
+            data.clearedBy,
+            data.clearedDate,
+            data.dutyAmount,
+            data.taxAmount,
+            data.exitPoint,
+            data.remarks
+          ]
+        );
+        logger.info(`[DUAL-DB] ✅ Clearance ${data.clearanceId} written to PostgreSQL`);
+        pgSuccess = true;
+      } catch (error: any) {
+        logger.error(`[DUAL-DB] ❌ PostgreSQL write failed:`, error.message);
+        errors.push(`PostgreSQL: ${error.message}`);
+      }
+    }
+
+    // 2. Write to Blockchain
+    if (writeToBlockchain && pgSuccess) {
+      try {
+        const fabricService = new FabricService();
+        const fabricService = new FabricService(); await fabricService.connectAsOrg('CustomsMSP');
+        
+        // Update shipment status
+        const statusResult = const fabricService = new FabricService(); await fabricService.invokeChaincode('UpdateShipmentStatus', [
+          data.shipmentId,
+          'CUSTOMS_CLEARED'
+        ]);
+
+        if (!statusResult.success) {
+          throw new Error(statusResult.error || 'Failed to update status');
+        }
+
+        // Store clearance details as metadata
+        const metadataResult = const fabricService = new FabricService(); await fabricService.invokeChaincode('UpdateShipmentMetadata', [
+          data.shipmentId,
+          JSON.stringify({
+            customsClearance: {
+              clearanceId: data.clearanceId,
+              clearanceNumber: data.clearanceNumber,
+              declarationNumber: data.declarationNumber,
+              status: data.status,
+              clearedBy: data.clearedBy,
+              clearedDate: data.clearedDate,
+              customsValueUSD: data.customsValueUSD,
+              quantity: data.quantity,
+              currency: data.currency,
+              dutyAmount: data.dutyAmount,
+              taxAmount: data.taxAmount,
+              totalFees: data.dutyAmount + data.taxAmount,
+              exitPoint: data.exitPoint,
+              transportMode: data.transportMode,
+              remarks: data.remarks,
+              syncedAt: new Date().toISOString()
+            }
+          })
+        ]);
+
+        if (metadataResult.success) {
+          logger.info(`[DUAL-DB] ✅ Clearance ${data.clearanceId} written to Blockchain`);
+          blockchainSuccess = true;
+        } else {
+          throw new Error(metadataResult.error || 'Failed to write metadata');
+        }
+      } catch (error: any) {
+        logger.error(`[DUAL-DB] ❌ Blockchain write failed:`, error.message);
+        errors.push(`Blockchain: ${error.message}`);
+        
+        if (failOnBlockchainError) {
+          // Rollback PostgreSQL if blockchain fails
+          try {
+            await pool.query(
+              `DELETE FROM customs_clearances WHERE clearance_id = $1`,
+              [data.clearanceId]
+            );
+            logger.warn(`[DUAL-DB] ⚠️ Rolled back PostgreSQL write`);
+            pgSuccess = false;
+          } catch (rollbackError: any) {
+            logger.error(`[DUAL-DB] ❌ Rollback failed:`, rollbackError.message);
+          }
+        }
+      }
+    }
+
+    return { pgSuccess, blockchainSuccess, errors };
+  }
+
+  /**
+   * Sync payment/LC data to both databases
+   */
+  static async syncPayment(data: {
+    paymentId: string;
+    contractId: string;
+    lcNumber?: string;
+    amount: number;
+    currency: string;
+    status: string;
+    payerBank: string;
+    beneficiaryBank: string;
+    paymentDate?: string;
+  }, options: SyncOptions = {}): Promise<{ pgSuccess: boolean; blockchainSuccess: boolean; errors: string[] }> {
+    
+    const errors: string[] = [];
+    let pgSuccess = false;
+    let blockchainSuccess = false;
+
+    // Write to PostgreSQL (payments table)
+    try {
+      await pool.query(
+        `INSERT INTO payments (
+          payment_id, contract_id, lc_number, amount, currency, status,
+          payer_bank, beneficiary_bank, payment_date, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        ON CONFLICT (payment_id) DO UPDATE SET
+          status = EXCLUDED.status,
+          payment_date = EXCLUDED.payment_date,
+          updated_at = NOW()`,
+        [
+          data.paymentId,
+          data.contractId,
+          data.lcNumber,
+          data.amount,
+          data.currency,
+          data.status,
+          data.payerBank,
+          data.beneficiaryBank,
+          data.paymentDate
+        ]
+      );
+      logger.info(`[DUAL-DB] ✅ Payment ${data.paymentId} written to PostgreSQL`);
+      pgSuccess = true;
+    } catch (error: any) {
+      logger.error(`[DUAL-DB] ❌ Payment PostgreSQL write failed:`, error.message);
+      errors.push(`PostgreSQL: ${error.message}`);
+    }
+
+    // Write to Blockchain
+    if (pgSuccess && options.writeToBlockchain !== false) {
+      try {
+        const fabricService = new FabricService(); await fabricService.connectAsOrg('BanksMSP');
+        
+        const result = const fabricService = new FabricService(); await fabricService.invokeChaincode('RecordPayment', [
+          data.contractId,
+          data.paymentId,
+          data.amount.toString(),
+          data.currency,
+          data.payerBank,
+          data.beneficiaryBank,
+          data.lcNumber || '',
+          new Date().toISOString()
+        ]);
+
+        if (result.success) {
+          logger.info(`[DUAL-DB] ✅ Payment ${data.paymentId} written to Blockchain`);
+          blockchainSuccess = true;
+        } else {
+          throw new Error(result.error || 'Failed to record payment');
+        }
+      } catch (error: any) {
+        logger.error(`[DUAL-DB] ❌ Payment Blockchain write failed:`, error.message);
+        errors.push(`Blockchain: ${error.message}`);
+      }
+    }
+
+    return { pgSuccess, blockchainSuccess, errors };
+  }
+
+  /**
+   * Sync quality inspection data
+   */
+  static async syncQualityInspection(data: {
+    inspectionId: string;
+    shipmentId: string;
+    exporterId: string;
+    coffeeType: string;
+    quantity: number;
+    grade: string;
+    passed: boolean;
+    certificationNumber?: string;
+    inspectionDate: string;
+    inspectedBy: string;
+    remarks?: string;
+  }, options: SyncOptions = {}): Promise<{ pgSuccess: boolean; blockchainSuccess: boolean; errors: string[] }> {
+    
+    const errors: string[] = [];
+    let pgSuccess = false;
+    let blockchainSuccess = false;
+
+    // Write to PostgreSQL
+    try {
+      await pool.query(
+        `INSERT INTO quality_inspections (
+          inspection_id, shipment_id, exporter_id, coffee_type, quantity,
+          grade, passed, certification_number, inspection_date, remarks, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (inspection_id) DO UPDATE SET
+          grade = EXCLUDED.grade,
+          passed = EXCLUDED.passed,
+          status = EXCLUDED.status,
+          updated_at = NOW()`,
+        [
+          data.inspectionId,
+          data.shipmentId,
+          data.exporterId,
+          data.coffeeType,
+          data.quantity,
+          data.grade,
+          data.passed,
+          data.certificationNumber,
+          data.inspectionDate,
+          data.remarks,
+          data.passed ? 'passed' : 'failed'
+        ]
+      );
+      logger.info(`[DUAL-DB] ✅ Inspection ${data.inspectionId} written to PostgreSQL`);
+      pgSuccess = true;
+    } catch (error: any) {
+      logger.error(`[DUAL-DB] ❌ Inspection PostgreSQL write failed:`, error.message);
+      errors.push(`PostgreSQL: ${error.message}`);
+    }
+
+    // Write to Blockchain
+    if (pgSuccess && options.writeToBlockchain !== false) {
+      try {
+        const fabricService = new FabricService(); await fabricService.connectAsOrg('ECTAMSP');
+        
+        const result = const fabricService = new FabricService(); await fabricService.invokeChaincode('RecordQualityInspection', [
+          data.shipmentId,
+          data.inspectionId,
+          data.grade,
+          data.passed.toString(),
+          data.certificationNumber || '',
+          data.inspectedBy,
+          data.inspectionDate
+        ]);
+
+        if (result.success) {
+          logger.info(`[DUAL-DB] ✅ Inspection ${data.inspectionId} written to Blockchain`);
+          blockchainSuccess = true;
+        } else {
+          throw new Error(result.error || 'Failed to record inspection');
+        }
+      } catch (error: any) {
+        logger.error(`[DUAL-DB] ❌ Inspection Blockchain write failed:`, error.message);
+        errors.push(`Blockchain: ${error.message}`);
+      }
+    }
+
+    return { pgSuccess, blockchainSuccess, errors };
+  }
+
+  /**
+   * Read from both databases and merge results
+   */
+  static async readShipmentComprehensive(shipmentId: string): Promise<{
+    shipment: any;
+    clearance: any;
+    declaration: any;
+    payments: any[];
+    inspections: any[];
+    sources: { blockchain: boolean; postgres: boolean };
+  }> {
+    const result: any = {
+      shipment: null,
+      clearance: null,
+      declaration: null,
+      payments: [],
+      inspections: [],
+      sources: { blockchain: false, postgres: false }
+    };
+
+    // Read from Blockchain
+    try {
+      const blockchainData = const fabricService = new FabricService(); await fabricService.queryChaincode('ReadShipment', [shipmentId]);
+      if (blockchainData.success && blockchainData.data) {
+        result.shipment = blockchainData.data;
+        result.sources.blockchain = true;
+        logger.info(`[DUAL-DB] ✅ Read shipment from Blockchain`);
+      }
+    } catch (error: any) {
+      logger.warn(`[DUAL-DB] ⚠️ Could not read from Blockchain:`, error.message);
+    }
+
+    // Read from PostgreSQL
+    try {
+      // Clearance with declaration (JOINED)
+      const clearanceData = await pool.query(
+        `SELECT 
+          cc.*,
+          cd.declaration_number,
+          cd.customs_value_usd,
+          cd.quantity,
+          cd.currency,
+          cd.hs_code
+        FROM customs_clearances cc
+        LEFT JOIN customs_declarations cd ON cc.shipment_id = cd.shipment_id
+        WHERE cc.shipment_id = $1`,
+        [shipmentId]
+      );
+
+      if (clearanceData) {
+        result.clearance = clearanceData;
+        result.sources.postgres = true;
+      }
+
+      // Get full declaration
+      const declarationData = await pool.query(
+        `SELECT * FROM customs_declarations WHERE shipment_id = $1`,
+        [shipmentId]
+      );
+      if (declarationData) {
+        result.declaration = declarationData;
+      }
+
+      // Get payments
+      const paymentsData = await pool.query(
+        `SELECT * FROM payments WHERE shipment_id = $1 OR contract_id IN (
+          SELECT contract_id FROM shipments WHERE shipment_id = $1
+        )`,
+        [shipmentId]
+      );
+      result.payments = paymentsData || [];
+
+      // Get inspections
+      const inspectionsData = await pool.query(
+        `SELECT * FROM quality_inspections WHERE shipment_id = $1`,
+        [shipmentId]
+      );
+      result.inspections = inspectionsData || [];
+
+      logger.info(`[DUAL-DB] ✅ Read from PostgreSQL`);
+    } catch (error: any) {
+      logger.warn(`[DUAL-DB] ⚠️ Could not read from PostgreSQL:`, error.message);
+    }
+
+    return result;
+  }
+
+  /**
+   * Backfill: Sync existing PostgreSQL data to Blockchain
+   */
+  static async backfillToBlockchain(entityType: 'clearances' | 'payments' | 'inspections'): Promise<{
+    total: number;
+    synced: number;
+    failed: number;
+    errors: string[];
+  }> {
+    const result = { total: 0, synced: 0, failed: 0, errors: [] as string[] };
+
+    try {
+      if (entityType === 'clearances') {
+        const clearances = await pool.query(
+          `SELECT cc.*, cd.customs_value_usd, cd.quantity, cd.currency, cd.declaration_number
+           FROM customs_clearances cc
+           LEFT JOIN customs_declarations cd ON cc.shipment_id = cd.shipment_id`
+        );
+
+        result.total = clearances.length;
+
+        for (const clearance of clearances) {
+          const syncResult = await this.syncCustomsClearance({
+            clearanceId: clearance.clearance_id,
+            shipmentId: clearance.shipment_id,
+            clearanceNumber: clearance.clearance_number,
+            declarationNumber: clearance.declaration_number,
+            status: clearance.status,
+            clearedBy: clearance.cleared_by,
+            clearedDate: clearance.cleared_date,
+            customsValueUSD: parseFloat(clearance.customs_value_usd || 0),
+            quantity: parseFloat(clearance.quantity || 0),
+            currency: clearance.currency || 'USD',
+            dutyAmount: parseFloat(clearance.duty_amount || 0),
+            taxAmount: parseFloat(clearance.tax_amount || 0),
+            exitPoint: clearance.exit_point,
+            remarks: clearance.remarks
+          }, { writeToPostgres: false, writeToBlockchain: true });
+
+          if (syncResult.blockchainSuccess) {
+            result.synced++;
+          } else {
+            result.failed++;
+            result.errors.push(...syncResult.errors);
+          }
+        }
+      }
+      // Add similar logic for payments and inspections
+
+      logger.info(`[DUAL-DB] Backfill complete: ${result.synced}/${result.total} synced, ${result.failed} failed`);
+    } catch (error: any) {
+      logger.error(`[DUAL-DB] Backfill error:`, error.message);
+      result.errors.push(error.message);
+    }
+
+    return result;
+  }
+}
+
+export const dualDbService = DualDatabaseService;

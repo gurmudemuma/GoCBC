@@ -3,6 +3,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { viewDocument, downloadDocument } from '@/utils/documentHelpers';
+import SignatureStatusBadge from '@/components/documents/SignatureStatusBadge';
 import {
   Box,
   Grid,
@@ -70,6 +72,7 @@ import {
 import AuditTrailViewer from './AuditTrailViewer';
 import AuditTrailTable from './AuditTrailTable';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
+import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
@@ -101,6 +104,9 @@ import {
 import UserManagement from '@/components/admin/UserManagement';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
+import { DocumentManagementPanel } from '@/components/documents';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
+import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 
 
 // Status types for chips
@@ -184,6 +190,7 @@ const ECTAPortal: React.FC = () => {
   const [allExporters, setAllExporters] = useState<Exporter[]>([]);
   const [shipments, setShipments] = useState<CoffeeShipment[]>([]);
   const [allShipments, setAllShipments] = useState<CoffeeShipment[]>([]);
+  const [deliveredShipments, setDeliveredShipments] = useState<CoffeeShipment[]>([]);
   const [inspectionRecords, setInspectionRecords] = useState<any[]>([]);
   const [allInspectionRecords, setAllInspectionRecords] = useState<any[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
@@ -345,71 +352,11 @@ const ECTAPortal: React.FC = () => {
   }, [contractDetailsDialogOpen, contractApprovalDialogOpen, selectedContract]);
 
   // Helper function to view document with proper authentication
-  const handleViewDocument = async (documentId: string) => {
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-      showError('Authentication Required', 'Please log in to view documents', 'You need to be logged in to access documents');
-      return;
-    }
-
+  const handleViewDocument = (documentId: string) => {
     try {
-      // First check if document exists
-      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
-      const checkUrl = `${apiBaseUrl}/documents/${documentId}`;
-      
-      const checkResponse = await fetch(checkUrl, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      
-      if (!checkResponse.ok) {
-        if (checkResponse.status === 404) {
-          showError('Document Not Found', 'This document does not exist or was never uploaded', 'The document may have been deleted or the upload may have failed');
-          return;
-        }
-        throw new Error(`HTTP ${checkResponse.status}: ${checkResponse.statusText}`);
-      }
-
-      const checkData = await checkResponse.json();
-      if (!checkData.success || !checkData.data) {
-        showError('Document Not Found', 'This document does not exist in the system', documentId);
-        return;
-      }
-
-      // Construct proper API URL for download
-      const url = `${apiBaseUrl}/documents/${documentId}/download?inline=true`;
-      
-      // Open in new window with authentication
-      const newWindow = window.open('', '_blank');
-      if (newWindow) {
-        // Create a form to POST the auth token (more secure than query params)
-        // But since our API uses Bearer token, we'll fetch and display
-        fetch(url, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          }
-        })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-          return response.blob();
-        })
-        .then(blob => {
-          const blobUrl = URL.createObjectURL(blob);
-          newWindow.location.href = blobUrl;
-          // Clean up blob URL after a delay to allow browser to load it
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-        })
-        .catch(error => {
-          newWindow.close();
-          console.error('[ECTA] Document view error:', error);
-          showError('Document View Failed', `Could not open document: ${error.message}`, 'Please try again or contact support if the issue persists');
-        });
-      } else {
-        showError('Popup Blocked', 'Please allow popups for this site to view documents', 'Check your browser settings');
-      }
+      viewDocument(documentId);
     } catch (error: any) {
-      console.error('Error viewing document:', error);
+      console.error('[ECTA] Error viewing document:', error);
       showError('View Failed', 'Failed to view document', error.message);
     }
   };
@@ -450,6 +397,7 @@ const ECTAPortal: React.FC = () => {
       { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
       { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
       { index: 7, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer'] },
+      { index: 8, label: 'Post-Delivery Audits', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
     ];
     
     // Super Admin sees all tabs
@@ -521,6 +469,14 @@ const ECTAPortal: React.FC = () => {
         console.log(`[ECTA] Filtered ${ectaRelevantShipments.length}/${shipmentsRes.data.length} shipments needing ECTA action`);
         setShipments(ectaRelevantShipments);
         setAllShipments(ectaRelevantShipments);
+        
+        // Filter delivered shipments for post-delivery audits
+        const delivered = shipmentsRes.data.filter((s: any) => {
+          const status = s.Status || s.status || s.shipmentStatus || '';
+          return status === 'DELIVERED' || status === 'COMPLETED';
+        });
+        console.log(`[ECTA] Found ${delivered.length} delivered shipments for post-delivery audit`);
+        setDeliveredShipments(delivered);
       }
       
       // Load contracts
@@ -1936,6 +1892,7 @@ The exporter can reapply once all requirements are met.`,
                   return expiryDate <= threeMonthsFromNow;
                 }).length})` :
                 tab.index === 5 ? tab.label :
+                tab.index === 8 ? `${tab.label} (${deliveredShipments.length})` :
                 tab.label
               }
             />
@@ -3054,6 +3011,65 @@ The exporter can reapply once all requirements are met.`,
             </Grid>
           </Grid>
         </TabPanel>
+
+        <TabPanel value={tabValue} index={8}>
+          {/* Post-Delivery Audits Tab */}
+          <Box>
+            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>
+              📋 Post-Delivery Final Audits
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Review and complete final audits for delivered shipments requiring ECTA sign-off.
+            </Typography>
+            
+            {deliveredShipments.length === 0 ? (
+              <Alert severity="info">
+                No delivered shipments pending audit at this time.
+              </Alert>
+            ) : (
+              <Grid container spacing={3}>
+                {deliveredShipments.map((shipment: any) => {
+                  const shipmentId = shipment.shipmentId || shipment.shipmentID;
+                  const contractId = shipment.contractId || shipment.contractID;
+                  const contract = allContracts.find(c => c.contractId === contractId || c.contractID === contractId);
+                  return (
+                    <Grid item xs={12} key={shipmentId}>
+                      <Card sx={{ boxShadow: 3 }}>
+                        <CardContent>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                            <Box>
+                              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                                {shipmentId}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Contract: {contractId} | Exporter: {contract?.exporterId || 'N/A'}
+                              </Typography>
+                            </Box>
+                            <Chip 
+                              label="Delivered" 
+                              color="success" 
+                              icon={<CheckCircle />}
+                            />
+                          </Box>
+                          
+                          <Divider sx={{ my: 2 }} />
+                          
+                          <PostDeliveryWorkflowPanel
+                            shipmentId={shipmentId}
+                            userRole="ECTA"
+                            onRefresh={() => {
+                              loadData();
+                            }}
+                          />
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+          </Box>
+        </TabPanel>
       </Box>
 
       {/* Register Exporter Dialog */}
@@ -3263,70 +3279,38 @@ The exporter can reapply once all requirements are met.`,
                 <Divider sx={{ mb: 2 }} />
               </Grid>
               <Grid item xs={12}>
-                {(() => {
-                  try {
-                    const documents = selectedApplication.documents 
-                      ? (typeof selectedApplication.documents === 'string' 
-                        ? JSON.parse(selectedApplication.documents) 
-                        : selectedApplication.documents)
-                      : [];
-                    
-                    return documents.length > 0 ? (
-                      <List>
-                        {documents.map((doc: any, index: number) => (
-                          <ListItem key={index}>
-                            <ListItemIcon>
-                              <Description color="primary" />
-                            </ListItemIcon>
-                            <ListItemText
-                              primary={doc.fileName || `Document ${index + 1}`}
-                              secondary={
-                                <Box component="span" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
-                                  {doc.category && <Chip label={doc.category} size="small" />}
-                                  {doc.hash && <Typography component="span" variant="caption">Hash: {doc.hash.slice(0, 16)}...</Typography>}
-                                  {doc.ipfsCID && <Typography component="span" variant="caption">IPFS: {doc.ipfsCID.slice(0, 12)}...</Typography>}
-                                </Box>
-                              }
-                            />
-                            <Button
-                              size="small"
-                              startIcon={<Visibility />}
-                              onClick={async () => {
-                                try {
-                                  const response = await api.get(`/documents/${doc.documentId}/download`, {
-                                    responseType: 'blob'
-                                  });
-                                  const url = window.URL.createObjectURL(new Blob([response.data]));
-                                  const link = document.createElement('a');
-                                  link.href = url;
-                                  link.setAttribute('download', doc.fileName || 'document');
-                                  document.body.appendChild(link);
-                                  link.click();
-                                  link.remove();
-                                } catch (err) {
-                                  console.error('Failed to download document:', err);
-                                  alert('Failed to download document');
-                                }
-                              }}
-                            >
-                              View
-                            </Button>
-                          </ListItem>
-                        ))}
-                      </List>
-                    ) : (
-                      <Alert severity="warning">
-                        No documents uploaded. Applicant may need to provide supporting documents before approval.
-                      </Alert>
-                    );
-                  } catch (error) {
-                    return (
-                      <Alert severity="error">
-                        Error loading documents: {error instanceof Error ? error.message : 'Unknown error'}
-                      </Alert>
-                    );
-                  }
-                })()}
+                {/* Document Management Panel for Application Review */}
+                <DocumentManagementPanel
+                  entityType="EXPORTER_APPLICATION"
+                  entityId={selectedApplication.application_id}
+                  title="Application Documents"
+                  allowUpload={false}
+                  allowSign={true}
+                  allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
+                  defaultSignatureType="VERIFY"
+                  showSignatureTracker={true}
+                  requiredDocuments={[
+                    'TRADE_LICENSE',
+                    'TAX_CLEARANCE',
+                    'BUSINESS_REGISTRATION',
+                    'ECTA_MEMBERSHIP_CERTIFICATE'
+                  ]}
+                  onDocumentSigned={(docId, data) => {
+                    console.log('Application document signed:', docId, data);
+                    // Reload application data after signature
+                    loadData();
+                  }}
+                />
+              </Grid>
+
+              {/* Blockchain Verification */}
+              <Grid item xs={12}>
+                <Box sx={{ mt: 2 }}>
+                  <BlockchainSignatureVerification
+                    entityType="EXPORTER_APPLICATION"
+                    entityId={selectedApplication.application_id}
+                  />
+                </Box>
               </Grid>
             </Grid>
           )}
@@ -3955,6 +3939,24 @@ The exporter can reapply once all requirements are met.`,
                   </TableContainer>
                 )}
               </Paper>
+
+              {/* Blockchain Verification Section */}
+              <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+                <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  🔐 Blockchain Verification
+                </Typography>
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Hyperledger Fabric Blockchain:</strong> This contract and all related documents are 
+                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
+                    are verified against X.509 certificates and blockchain transaction records.
+                  </Typography>
+                </Alert>
+                <BlockchainSignatureVerification
+                  entityType="CONTRACT"
+                  entityId={selectedContract.contractID || selectedContract.contractId}
+                />
+              </Paper>
             </Box>
           )}
         </DialogContent>
@@ -4061,6 +4063,7 @@ The exporter can reapply once all requirements are met.`,
                           <TableCell>Filename</TableCell>
                           <TableCell>Uploaded</TableCell>
                           <TableCell>Status</TableCell>
+                          <TableCell>Signature</TableCell>
                           <TableCell align="right">Action</TableCell>
                         </TableRow>
                       </TableHead>
@@ -4075,6 +4078,13 @@ The exporter can reapply once all requirements are met.`,
                                 size="small" 
                                 label={doc.verification_status || 'Pending'} 
                                 color={doc.verification_status === 'verified' ? 'success' : 'default'}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <SignatureStatusBadge 
+                                documentId={doc.document_id}
+                                size="small"
+                                showDetails={true}
                               />
                             </TableCell>
                             <TableCell align="right">

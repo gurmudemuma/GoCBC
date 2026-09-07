@@ -760,6 +760,112 @@ router.post('/:contractID/approve',
         // Update status with cascading effects
         await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'APPROVED');
         
+        // ✅ SIGN CONTRACT DOCUMENTS - Add cryptographic signature with approver's identity
+        // Process all documents in parallel for performance
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const { DocumentSignatureService } = await import('../services/documentSignatureService');
+          const db = DatabaseService.getInstance();
+          
+          // Get all CONTRACT_SIGNED documents for this contract
+          const contractDocuments = await db.all(
+            `SELECT document_id, file_path, file_hash, mime_type, file_name 
+             FROM documents 
+             WHERE UPPER(entity_type) = 'CONTRACT' 
+               AND entity_id = $1 
+               AND document_type = 'CONTRACT_SIGNED'
+               AND status = 'active'`,
+            [contractID]
+          );
+          
+          if (contractDocuments.length > 0) {
+            logger.info(`📝 Signing ${contractDocuments.length} contract document(s) with ${user.username}'s cryptographic identity...`);
+            
+            // ✅ PARALLEL PROCESSING: Sign all documents simultaneously for speed
+            const signingPromises = contractDocuments.map(async (doc) => {
+              try {
+                const signatureId = `SIG-${doc.document_id}-${user.org || 'ECTA'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const timestamp = new Date().toISOString();
+                
+                // Add visual signature stamp to PDF (if applicable)
+                const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+                let visualSignatureAdded = false;
+                
+                if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+                  try {
+                    await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+                      signer: user.username || user.sub || 'ECTA Officer',
+                      organization: user.org || 'ECTAMSP',
+                      timestamp,
+                      signatureType: 'APPROVE',
+                      role: user.role || 'ECTA',
+                      transactionId: signatureId,
+                    });
+                    visualSignatureAdded = true;
+                    logger.info(`✅ Visual signature added to: ${doc.document_id}`);
+                  } catch (pdfError) {
+                    logger.warn(`⚠️  Failed to add visual signature to ${doc.document_id}:`, pdfError);
+                  }
+                }
+                
+                // Store cryptographic signature in database
+                await db.run(
+                  `INSERT INTO document_signatures (
+                    signature_id, document_id, signer_id, signer_org, signature_type,
+                    certificate_id, remarks, blockchain_tx_id, visual_signature_added
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                  [
+                    signatureId,
+                    doc.document_id,
+                    user.username || user.sub,
+                    user.org || 'ECTAMSP',
+                    'APPROVE',
+                    user.sub || null, // X.509 certificate ID
+                    `Contract ${contractID} approved by ECTA for export compliance`,
+                    result.txId || null,
+                    visualSignatureAdded
+                  ]
+                );
+                
+                // Sign document on blockchain with X.509 certificate (optional - best effort)
+                if (fabricService.isConnected()) {
+                  try {
+                    const blockchainSigResult = await fabricService.signDocument(
+                      doc.document_id,
+                      doc.file_hash,
+                      'APPROVE',
+                      `Contract ${contractID} approved for export`
+                    );
+                    
+                    if (blockchainSigResult.success && blockchainSigResult.txId) {
+                      await db.run(
+                        'UPDATE document_signatures SET blockchain_tx_id = $1 WHERE signature_id = $2',
+                        [blockchainSigResult.txId, signatureId]
+                      );
+                    }
+                  } catch (blockchainSigError) {
+                    logger.warn(`⚠️  Blockchain signature skipped for ${doc.document_id}`);
+                  }
+                }
+                
+                return { success: true, documentId: doc.document_id };
+              } catch (docError) {
+                logger.error(`❌ Failed to sign document ${doc.document_id}:`, docError);
+                return { success: false, documentId: doc.document_id, error: docError };
+              }
+            });
+            
+            // Wait for all signatures to complete
+            const results = await Promise.allSettled(signingPromises);
+            const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+            
+            logger.info(`✅ Signed ${successCount}/${contractDocuments.length} contract documents with ${user.username}'s cryptographic identity`);
+          }
+        } catch (signError) {
+          logger.error('Failed to sign contract documents:', signError);
+          // Don't fail the contract approval if document signing fails
+        }
+        
         // ✅ LOG TO AUDIT TRAIL - Contract Approved
         try {
           const { DatabaseService } = await import('../services/databaseService');

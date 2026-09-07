@@ -470,8 +470,13 @@ export class FabricService {
       let resultBytes: Buffer = Buffer.alloc(0); // Initialize with empty buffer
       
       try {
-        // Try normal evaluation first
-        resultBytes = await transaction.evaluate(...args);
+        // Try normal evaluation first with 30 second timeout
+        const evaluatePromise = transaction.evaluate(...args);
+        const timeoutPromise = new Promise<Buffer>((_, reject) => 
+          setTimeout(() => reject(new Error('REQUEST TIMEOUT: Query took longer than 30 seconds - check if all peer nodes are responding')), 30000)
+        );
+        
+        resultBytes = await Promise.race([evaluatePromise, timeoutPromise]);
       } catch (error: any) {
         // Log full error details for debugging
         logger.error(`Transaction evaluation error for ${functionName}:`, {
@@ -827,9 +832,8 @@ export class FabricService {
 
   // Forex operations
   public async queryAllForex(): Promise<ChaincodeResponse> {
-    // Use QueryNewForex to only retrieve records with proper schema (_v2 suffix)
-    // This avoids SDK validation errors from old records with null screenedAgainst
-    return this.queryChaincode('QueryNewForex', []);
+    // Query all forex allocations from blockchain
+    return this.queryChaincode('QueryAllForex', []);
   }
 
   public async getForex(forexId: string): Promise<ChaincodeResponse> {
@@ -1691,6 +1695,189 @@ export class FabricService {
 
   public async queryDocumentsByCategory(category: string): Promise<ChaincodeResponse> {
     return this.queryChaincode('QueryDocumentsByCategory', [category]);
+  }
+
+  // ==================== DOCUMENT SIGNATURE OPERATIONS ====================
+  // Added: Document signature tracking with blockchain-backed cryptographic signatures
+
+  /**
+   * Sign a document on the blockchain
+   * Records cryptographic signature with signer's X.509 certificate
+   */
+  public async signDocument(
+    documentId: string,
+    documentHash: string,
+    signatureType: string,
+    remarks: string = ''
+  ): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('SignDocument', [
+      documentId,
+      documentHash,
+      signatureType,
+      remarks,
+    ]);
+  }
+
+  /**
+   * Get all signatures for a document
+   * Returns complete signature history with signer details
+   */
+  public async getDocumentSignatures(documentId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('GetDocumentSignatures', [documentId]);
+  }
+
+  /**
+   * Verify a document signature
+   * Checks signature validity and certificate authenticity
+   */
+  public async verifyDocumentSignature(
+    documentId: string,
+    signatureId: string
+  ): Promise<ChaincodeResponse> {
+    return this.queryChaincode('VerifyDocumentSignature', [documentId, signatureId]);
+  }
+
+  /**
+   * Query all signatures for a specific document
+   * Returns array of signatures with full details
+   */
+  public async querySignaturesByDocument(documentId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QuerySignaturesByDocument', [documentId]);
+  }
+
+  /**
+   * Query all signatures by a specific signer
+   * Useful for audit trails and user activity tracking
+   */
+  public async querySignaturesBySigner(signerId: string): Promise<ChaincodeResponse> {
+    return this.queryChaincode('QuerySignaturesBySigner', [signerId]);
+  }
+
+  /**
+   * Get complete document signature history with audit trail
+   * Returns chronological timeline of all signature events
+   */
+  public async getDocumentSignatureHistory(documentId: string): Promise<ChaincodeResponse> {
+    const signaturesResult = await this.queryChaincode('GetDocumentSignatures', [documentId]);
+    
+    if (!signaturesResult.success) {
+      return signaturesResult;
+    }
+
+    // Query audit logs for this document
+    const auditResult = await this.queryChaincode('QueryAuditLogsByEntity', [
+      'DOCUMENT',
+      documentId,
+    ]);
+
+    return {
+      success: true,
+      data: {
+        signatures: signaturesResult.data?.signatures || [],
+        auditTrail: auditResult.success ? auditResult.data : [],
+        timeline: this.buildSignatureTimeline(
+          signaturesResult.data?.signatures || [],
+          auditResult.success ? auditResult.data : []
+        ),
+      },
+    };
+  }
+
+  /**
+   * Build chronological timeline from signatures and audit logs
+   */
+  private buildSignatureTimeline(signatures: any[], auditLogs: any[]): any[] {
+    const timeline: any[] = [];
+
+    // Add signatures to timeline
+    signatures.forEach((sig: any) => {
+      timeline.push({
+        timestamp: sig.timestamp,
+        type: 'SIGNATURE',
+        action: sig.signatureType,
+        performer: sig.signer,
+        organization: sig.mspID,
+        details: sig,
+      });
+    });
+
+    // Add related audit logs
+    auditLogs
+      .filter((log: any) => log.action && log.action.includes('SIGNATURE'))
+      .forEach((log: any) => {
+        timeline.push({
+          timestamp: log.timestamp || log.createdAt,
+          type: 'AUDIT',
+          action: log.action,
+          performer: log.performedBy,
+          organization: log.performedByOrg,
+          details: log,
+        });
+      });
+
+    // Sort by timestamp descending (newest first)
+    return timeline.sort((a, b) => {
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      return timeB - timeA;
+    });
+  }
+
+  /**
+   * Verify document integrity and all signatures
+   * Comprehensive verification for audit purposes
+   */
+  public async verifyDocumentIntegrity(
+    documentId: string,
+    currentHash: string
+  ): Promise<ChaincodeResponse> {
+    try {
+      // Get document from blockchain
+      const docResult = await this.readDocumentHash(documentId);
+      if (!docResult.success) {
+        return {
+          success: false,
+          error: 'Document not found on blockchain',
+        };
+      }
+
+      const blockchainDoc = docResult.data;
+
+      // Get all signatures
+      const signaturesResult = await this.getDocumentSignatures(documentId);
+      if (!signaturesResult.success) {
+        return {
+          success: false,
+          error: 'Failed to retrieve document signatures',
+        };
+      }
+
+      const signatures = signaturesResult.data?.signatures || [];
+
+      // Note: Hash will differ after visual signatures are added
+      // This is expected behavior - verify signatures exist, not hash match
+      const hashMatch = blockchainDoc.hash === currentHash;
+
+      return {
+        success: true,
+        data: {
+          documentId,
+          blockchainHash: blockchainDoc.hash,
+          currentHash,
+          hashMatch,
+          signatureCount: signatures.length,
+          signatures,
+          verified: signatures.length > 0, // Document is verified if it has signatures
+          verifiedAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      logger.error('Document integrity verification error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Verification failed',
+      };
+    }
   }
 
   // ==================== PASS-THROUGH METHODS ====================

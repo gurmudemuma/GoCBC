@@ -58,6 +58,10 @@ import AuditTrailTable from './AuditTrailTable';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
+import { DocumentManagementPanel } from '@/components/documents';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
+import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
+import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
@@ -149,8 +153,10 @@ const NBEPortal: React.FC = () => {
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [allContracts, setAllContracts] = useState<SalesContract[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
+  const [deliveredShipments, setDeliveredShipments] = useState<any[]>([]);
   const [allForexAllocations, setAllForexAllocations] = useState<ForexAllocation[]>([]);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
+  const [swiftMessages, setSwiftMessages] = useState<any[]>([]);
   const [bankingMetrics, setBankingMetrics] = useState<BankingMetrics>({
     totalExports: 0,
     forexVolume: 0,
@@ -223,24 +229,33 @@ const NBEPortal: React.FC = () => {
       try {
         const forexRes = await api.get('/forex');
         if (forexRes.data.success) {
-          const forexData = (forexRes.data.data || []).map((forex: any) => ({
-            forexId: forex.ForexID || forex.forexId || '',
-            contractId: forex.ContractID || forex.contractId || '',
-            exporterId: forex.ExporterID || forex.exporterId || '',
-            requestedAmount: parseFloat(forex.RequestedAmount || forex.requestedAmount || '0'),
-            allocatedAmount: parseFloat(forex.AllocatedAmount || forex.allocatedAmount || '0'),
-            currency: forex.Currency || forex.currency || 'USD',
-            exchangeRate: parseFloat(forex.ExchangeRate || forex.exchangeRate || '0'),
-            officialRate: parseFloat(forex.OfficialRate || forex.officialRate || '115.50'),
-            retentionRate: parseFloat(forex.RetentionRate || forex.retentionRate || '40'),
-            status: forex.Status || forex.status || 'REQUESTED',
-            requestDate: forex.RequestDate || forex.requestDate || new Date().toISOString(),
-            approvalDate: forex.ApprovalDate || forex.approvalDate,
-            allocationDate: forex.AllocationDate || forex.allocationDate,
-            expiryDate: forex.ExpiryDate || forex.expiryDate || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString(),
-            nbeOfficer: forex.NBEOfficer || forex.nbeOfficer,
-            nbeApprovalRef: forex.NBEApprovalRef || forex.nbeApprovalRef,
-          }));
+          const forexData = (forexRes.data.data || []).map((forex: any) => {
+            const status = forex.Status || forex.status || 'REQUESTED';
+            const isAllocated = status === 'ALLOCATED' || status === 'APPROVED';
+            
+            return {
+              forexId: forex.ForexID || forex.forexId || '',
+              contractId: forex.ContractID || forex.contractId || '',
+              exporterId: forex.ExporterID || forex.exporterId || '',
+              lcId: forex.LCID || forex.lcId || '',
+              requestedAmount: parseFloat(forex.RequestedAmount || forex.requestedAmount || '0'),
+              allocatedAmount: parseFloat(forex.AllocatedAmount || forex.allocatedAmount || '0'),
+              currency: forex.Currency || forex.currency || 'USD',
+              // Only use actual exchange rate if allocated, otherwise 0
+              exchangeRate: isAllocated ? parseFloat(forex.ExchangeRate || forex.exchangeRate || '0') : 0,
+              officialRate: parseFloat(forex.OfficialRate || forex.officialRate || '0'),
+              // Only use actual retention rate if allocated, otherwise 0
+              retentionRate: isAllocated ? parseFloat(forex.RetentionRate || forex.retentionRate || '0') : 0,
+              status: status,
+              requestDate: forex.RequestDate || forex.requestDate || new Date().toISOString(),
+              approvalDate: forex.ApprovalDate || forex.approvalDate || null,
+              allocationDate: forex.AllocationDate || forex.allocationDate || null,
+              // Only set expiry date if allocated
+              expiryDate: isAllocated ? (forex.ExpiryDate || forex.expiryDate || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString()) : null,
+              nbeOfficer: forex.NBEOfficer || forex.nbeOfficer || null,
+              nbeApprovalRef: forex.NBEApprovalRef || forex.nbeApprovalRef || null,
+            };
+          });
           setForexAllocations(forexData);
           setAllForexAllocations(forexData);
           console.log(`Loaded ${forexData.length} forex allocations from API`);
@@ -273,6 +288,19 @@ const NBEPortal: React.FC = () => {
       // Calculate banking metrics
       try {
         const metricsRes = await api.getBankingMetrics();
+
+      // Load SWIFT messages from API
+      try {
+        const swiftRes = await api.get('/swift/messages');
+        if (swiftRes.data.success) {
+          const swiftData = swiftRes.data.data || [];
+          setSwiftMessages(swiftData);
+          console.log(`Loaded ${swiftData.length} SWIFT messages from API`);
+        }
+      } catch (error) {
+        console.warn('Could not load SWIFT messages:', error);
+        setSwiftMessages([]);
+      }
         if (metricsRes.success && metricsRes.data) {
           setBankingMetrics(metricsRes.data);
           console.log('Loaded banking metrics from analytics API:', metricsRes.data);
@@ -295,6 +323,25 @@ const NBEPortal: React.FC = () => {
           avgProcessingTime: 2.3
         };
         setBankingMetrics(fallbackMetrics);
+      }
+
+      // Load delivered shipments for forex repatriation tracking
+      try {
+        const token = localStorage.getItem('authToken');
+        const shipmentsResponse = await apiFetch('/shipments?status=DELIVERED', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const shipmentsResult = await shipmentsResponse.json();
+        if (shipmentsResult.success && shipmentsResult.data) {
+          const delivered = shipmentsResult.data.filter((s: any) => {
+            const status = s.Status || s.status || s.shipmentStatus || '';
+            return status === 'DELIVERED' || status === 'COMPLETED';
+          });
+          setDeliveredShipments(delivered);
+          console.log(`[NBE] ✅ Delivered shipments for forex repatriation: ${delivered.length}`);
+        }
+      } catch (err) {
+        console.warn('[NBE] Could not load delivered shipments:', err);
       }
 
     } catch (error) {
@@ -658,6 +705,7 @@ const NBEPortal: React.FC = () => {
       { index: 4, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
       { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
       { index: 6, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
+      { index: 7, label: 'Forex Repatriation', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Settlement Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -773,6 +821,20 @@ const NBEPortal: React.FC = () => {
 
   const forexColumns: GridColDef[] = [
     { field: 'forexId', headerName: 'Forex ID', width: 150 },
+    { 
+      field: 'lcId', 
+      headerName: 'LC Reference', 
+      width: 180,
+      renderCell: (params) => {
+        if (!params.value || params.value === '') {
+          if (params.row.status === 'REQUESTED') {
+            return <Typography variant="body2" sx={{ color: 'warning.main', fontStyle: 'italic' }}>Pending Allocation</Typography>;
+          }
+          return <Typography variant="body2" color="text.secondary">-</Typography>;
+        }
+        return params.value;
+      }
+    },
     { field: 'contractId', headerName: 'Contract ID', width: 150 },
     { field: 'exporterId', headerName: 'Exporter', width: 130 },
     {
@@ -796,13 +858,23 @@ const NBEPortal: React.FC = () => {
       field: 'exchangeRate', 
       headerName: 'Rate (ETB)', 
       width: 110,
-      renderCell: (params) => params.value > 0 ? params.value.toFixed(2) : '-',
+      renderCell: (params) => {
+        if (params.row.status === 'REQUESTED' || params.value === 0) {
+          return <Typography variant="body2" color="text.secondary">Pending</Typography>;
+        }
+        return params.value.toFixed(2);
+      },
     },
     {
       field: 'retentionRate',
       headerName: 'Retention',
       width: 100,
-      renderCell: (params) => `${params.value}%`,
+      renderCell: (params) => {
+        if (params.row.status === 'REQUESTED' || params.value === 0) {
+          return <Typography variant="body2" color="text.secondary">-</Typography>;
+        }
+        return `${params.value}%`;
+      },
     },
     {
       field: 'status',
@@ -900,7 +972,7 @@ const NBEPortal: React.FC = () => {
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {(() => {
           const currentRate = exchangeRates.length > 0 ? exchangeRates[0].midRate : 57.5;
-          const swiftMessages: any[] = []; // Placeholder for SWIFT messages
+          // Use actual SWIFT messages from state instead of empty array
           const kpis = tabValue === 0 ? [
             { icon: <Assignment />, label: 'Bank Allocations', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50' },
             { icon: <CheckCircle />, label: 'Approved', value: stats.approved, color: BRAND_COLOR },
@@ -1382,6 +1454,7 @@ const NBEPortal: React.FC = () => {
                 label={
                   tab.index === 0 ? `${tab.label} (${forexAllocations.length})` :
                   tab.index === 1 ? `${tab.label} (${exchangeRates.length})` :
+                  tab.index === 7 ? `${tab.label} (${deliveredShipments.length})` :
                   tab.label
                 } 
                 icon={tab.icon} 
@@ -1689,6 +1762,66 @@ const NBEPortal: React.FC = () => {
             maxHeight={700}
           />
         </TabPanel>
+
+        <TabPanel value={tabValue} index={7}>
+          {/* Forex Repatriation Tab */}
+          <Box>
+            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>
+              💵 Forex Repatriation Tracking
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Monitor forex repatriation for delivered shipments per NBE regulations (30% retention requirement).
+            </Typography>
+            
+            {deliveredShipments.length === 0 ? (
+              <Alert severity="info">
+                No delivered shipments requiring forex repatriation tracking at this time.
+              </Alert>
+            ) : (
+              <Grid container spacing={3}>
+                {deliveredShipments.map((shipment: any) => {
+                  const shipmentId = shipment.shipmentId || shipment.shipmentID;
+                  const contractId = shipment.contractId || shipment.contractID;
+                  const contract = allContracts.find(c => c.contractId === contractId);
+                  
+                  return (
+                    <Grid item xs={12} key={shipmentId}>
+                      <Card sx={{ boxShadow: 3 }}>
+                        <CardContent>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                            <Box>
+                              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                                {shipmentId}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Contract: {contractId} | Exporter: {contract?.exporterId || 'N/A'} | Value: ${contract?.totalValue?.toLocaleString() || 'N/A'}
+                              </Typography>
+                            </Box>
+                            <Chip 
+                              label="Delivered" 
+                              color="success" 
+                              icon={<CheckCircle />}
+                            />
+                          </Box>
+                          
+                          <Divider sx={{ my: 2 }} />
+                          
+                          <PostDeliveryWorkflowPanel
+                            shipmentId={shipmentId}
+                            userRole="NBE"
+                            onRefresh={() => {
+                              loadData();
+                            }}
+                          />
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+          </Box>
+        </TabPanel>
       </Card>
 
       {/* Approval result notification */}
@@ -1848,6 +1981,15 @@ const NBEPortal: React.FC = () => {
         <DialogContent>
           {selectedContract && (
             <Box sx={{ pt: 2 }}>
+              {/* BLOCKCHAIN PROOF BADGE */}
+              <BlockchainBadge
+                entityId={selectedContract.contractId}
+                entityType="CONTRACT"
+                chaincode="coffee"
+                channel="coffeechannel"
+                compact
+              />
+
               <Grid container spacing={3}>
                 {/* Basic Information */}
                 <Grid item xs={12}>
@@ -2010,6 +2152,23 @@ const NBEPortal: React.FC = () => {
                   </Grid>
                 )}
               </Grid>
+
+              {/* Blockchain Verification Section */}
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="h6" gutterBottom>🔐 Blockchain Verification</Typography>
+                <Divider sx={{ mb: 2 }} />
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Hyperledger Fabric Blockchain:</strong> This contract and all related documents are 
+                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
+                    are verified against X.509 certificates and blockchain transaction records.
+                  </Typography>
+                </Alert>
+                <BlockchainSignatureVerification
+                  entityType="CONTRACT"
+                  entityId={selectedContract.contractId}
+                />
+              </Box>
             </Box>
           )}
         </DialogContent>
@@ -2154,6 +2313,44 @@ const NBEPortal: React.FC = () => {
                     </Box>
                   </Grid>
                 )}
+                
+                {/* Forex Documents Management */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 2 }} />
+                  <DocumentManagementPanel
+                    entityType="FOREX"
+                    entityId={selectedForex.forexId}
+                    title="Forex Application Documents"
+                    allowUpload={false}
+                    allowSign={true}
+                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
+                    defaultSignatureType="VERIFY"
+                    showSignatureTracker={true}
+                    requiredDocuments={[
+                      'CONTRACT_COPY',
+                      'BANK_GUARANTEE',
+                      'FOREX_APPLICATION_FORM',
+                      'LC_COPY'
+                    ]}
+                    onDocumentSigned={(docId, data) => {
+                      console.log('Forex document signed:', docId, data);
+                      if (data.signatureType === 'APPROVE') {
+                        // Auto-refresh forex data
+                        loadData();
+                      }
+                    }}
+                  />
+                </Grid>
+
+                {/* Blockchain Verification */}
+                <Grid item xs={12}>
+                  <Box sx={{ mt: 2 }}>
+                    <BlockchainSignatureVerification
+                      entityType="FOREX_ALLOCATION"
+                      entityId={selectedForex.forexId}
+                    />
+                  </Box>
+                </Grid>
               </Grid>
             </Box>
           )}

@@ -255,6 +255,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             return true;
           })
           .map(lc => {
+          // Find the contract this LC is linked to
+          const linkedContract = contracts.find(c => c.contractId === lc.contractId);
+          
           return {
             ...lc,
             id: lc.lcId,
@@ -264,6 +267,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             status: lc.status,
             currentStep: getCurrentStep(lc.status, 'LC'),
             isContract: false, // This is an LC, not a contract
+            contractData: linkedContract, // Link to contract for buyer info
           };
         });
         
@@ -611,8 +615,11 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                       )}
                       {selectedPaymentMethod === 'LC' && !payment.isContract && (
                         <TableCell>
-                          <Typography variant="body2" sx={{ color: CBE_COLORS.gray, fontStyle: 'italic' }}>
-                            —
+                          <Typography variant="body2" sx={{ 
+                            color: payment.contractData?.buyerName ? CBE_COLORS.black : CBE_COLORS.gray, 
+                            fontStyle: payment.contractData?.buyerName ? 'normal' : 'italic' 
+                          }}>
+                            {payment.contractData?.buyerName || '—'}
                           </Typography>
                         </TableCell>
                       )}

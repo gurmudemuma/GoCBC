@@ -45,11 +45,9 @@ router.post('/:shipmentID/start',
       const result = await fabricService.invokeChaincode('StartLandTransport', [
         shipmentID,
         transportCompany,
-        truckPlateNumber,
+        truckPlateNumber, // maps to truckPlate parameter
         driverName,
-        driverPhone || '',
         sealNumber,
-        departureTime || new Date().toISOString(),
       ]);
 
       if (result.success) {

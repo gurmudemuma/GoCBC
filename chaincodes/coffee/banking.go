@@ -517,7 +517,7 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 
 	validStatuses := map[string]bool{
 		"REQUESTED": true, "APPROVED": true, "ISSUED": true,
-		"UTILIZED": true, "EXPIRED": true,
+		"FOREX_ALLOCATED": true, "UTILIZED": true, "PAYMENT_RELEASED": true, "SETTLED": true, "EXPIRED": true,
 	}
 	if !validStatuses[newStatus] {
 		return fmt.Errorf("invalid status: %s", newStatus)
@@ -862,9 +862,10 @@ func (c *CoffeeContract) ExamineLCDocuments(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("failed to unmarshal LC: %w", err)
 	}
 
-	// Only ISSUED LCs can have documents examined
-	if lc.Status != "ISSUED" {
-		return fmt.Errorf("LC must be in ISSUED status for document examination (current: %s)", lc.Status)
+	// Only ISSUED or FOREX_ALLOCATED LCs can have documents examined
+	// (FOREX_ALLOCATED is set after forex allocation; LC is still eligible for examination)
+	if lc.Status != "ISSUED" && lc.Status != "FOREX_ALLOCATED" {
+		return fmt.Errorf("LC must be in ISSUED or FOREX_ALLOCATED status for document examination (current: %s)", lc.Status)
 	}
 
 	// Update LC with examination results - move to UTILIZED if compliant
@@ -872,9 +873,8 @@ func (c *CoffeeContract) ExamineLCDocuments(ctx contractapi.TransactionContextIn
 		lc.Status = "UTILIZED" // Documents verified, ready for payment
 		fmt.Printf("ExamineLCDocuments: Documents COMPLIANT for LC %s, status set to UTILIZED\n", lcID)
 	} else {
-		// Keep as ISSUED if discrepant, exporter must resubmit
-		// lc.Status remains "ISSUED"
-		fmt.Printf("ExamineLCDocuments: Documents DISCREPANT for LC %s: %s (status remains ISSUED)\n", lcID, discrepancies)
+		// Keep current status (ISSUED or FOREX_ALLOCATED) if discrepant, exporter must resubmit
+		fmt.Printf("ExamineLCDocuments: Documents DISCREPANT for LC %s: %s (status remains %s)\n", lcID, discrepancies, lc.Status)
 	}
 
 	lc.UpdatedAt = time.Now()
@@ -954,8 +954,9 @@ func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("payment amount (%.2f) exceeds LC amount (%.2f)", paymentAmount, lc.Amount)
 	}
 
-	// LC status remains UTILIZED (no change needed - already utilized when documents verified)
-	// lc.Status = "UTILIZED" (already set)
+	// Documents were verified (UTILIZED); releasing payment moves LC to PAYMENT_RELEASED
+	// so the Settlements tab / KPIs can pick it up. Settlement will later move it to SETTLED.
+	lc.Status = "PAYMENT_RELEASED"
 	lc.UtilizationDate = paymentDate
 	lc.UpdatedAt = time.Now()
 
@@ -969,9 +970,63 @@ func (c *CoffeeContract) ReleaseLCPayment(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("failed to update LC: %w", err)
 	}
 
+	// BRIDGE: Create a Payment entity so the Payment lifecycle (SettlePayment) can
+	// later cascade this LC to SETTLED. PaymentID is deterministic: "PAY_<lcID>".
+	paymentID := "PAY_" + lcID
+	existingPayment, getErr := ctx.GetStub().GetState("PAYMENT_" + paymentID)
+	if getErr == nil && existingPayment == nil {
+		txTimestamp, tsErr := ctx.GetStub().GetTxTimestamp()
+		var txTime time.Time
+		if tsErr == nil {
+			txTime = time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+		} else {
+			txTime = time.Now()
+		}
+
+		// Fetch exporter MSP for initiator field
+		initiatorMSP, _ := ctx.GetClientIdentity().GetMSPID()
+		initiatorID, idErr := ctx.GetClientIdentity().GetID()
+		if idErr != nil {
+			initiatorID = initiatorMSP
+		}
+
+		payment := PaymentSettlement{
+			PaymentID:          paymentID,
+			ContractID:         lc.ContractID,
+			ExporterID:         lc.ExporterID,
+			LCID:               lcID,
+			Amount:             paymentAmount,
+			Currency:           currency,
+			ReceivingBank:      lc.AdvisingBank,
+			PayingBank:         payingBank,
+			BeneficiaryName:    lc.Beneficiary,
+			PaymentMethod:      "LC",
+			Status:             "VERIFIED", // Documents already verified (LC was UTILIZED)
+			PaymentDate:        paymentDate,
+			Documents:          lc.Documents,
+			InitiatedBy:        initiatorID,
+			DocumentsHeldBy:    "EXPORTER_BANK",
+			RiskProfile:        "LOW",
+			BankGuarantee:      true,
+			UCP600Compliance:   true,
+			CreatedAt:          txTime,
+			UpdatedAt:          txTime,
+		}
+
+		paymentJSON, marshalErr := json.Marshal(payment)
+		if marshalErr == nil {
+			if putErr := ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON); putErr != nil {
+				log.Printf("WARNING: ReleaseLCPayment failed to create Payment entity: %v", putErr)
+			} else {
+				fmt.Printf("ReleaseLCPayment: Created Payment entity %s linked to LC %s\n", paymentID, lcID)
+			}
+		}
+	}
+
 	// Emit payment event
 	eventPayload := map[string]interface{}{
 		"lcID":        lcID,
+		"paymentID":   paymentID,
 		"amount":      paymentAmount,
 		"currency":    currency,
 		"paymentDate": paymentDate,

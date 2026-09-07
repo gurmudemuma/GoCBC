@@ -3,56 +3,110 @@
 
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { dedupeById, isValidForex } from '../utils/dataFilters';
+import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const postgresDb = DatabaseService.getInstance();
+const signatureService = BlockchainSignatureService.getInstance();
 
 // ==================== FOREX ALLOCATION ROUTES ====================
 
       // GET /api/v1/forex — all forex allocations
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const result = await fabricService.queryAllForex();
-    if (result.success) {
-      const normalizedForex = (result.data || []).map((fx: any) => ({
-        forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
-        contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
-        exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
-        lcId: fx?.lcId || fx?.LCID || fx?.lcID || '', // ✅ Add LCID field mapping
-        amount: fx?.amount ?? fx?.Amount ?? 0,
-        currency: fx?.currency || fx?.Currency || 'USD',
-        status: fx?.status || fx?.Status || 'REQUESTED',
-        requestedAmount: fx?.requestedAmount ?? fx?.RequestedAmount ?? 0, // ✅ Add requestedAmount field
-        allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
-        exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
-        retention: fx?.retention ?? fx?.Retention ?? 0,
-        retentionRate: fx?.retentionRate ?? fx?.RetentionRate ?? 0, // ✅ Add retentionRate field
-        expiryDate: fx?.expiryDate || fx?.ExpiryDate || fx?.expiry_date || null,
-        requestDate: fx?.requestDate || fx?.RequestDate || fx?.request_date || null,
-        allocationDate: fx?.allocationDate || fx?.AllocationDate || fx?.allocation_date || null,
-        utilizationDate: fx?.utilizationDate || fx?.UtilizationDate || fx?.utilization_date || null,
-        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NBEApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
-        nbeOfficer: fx?.nbeOfficer || fx?.NBEOfficer || '',
-      }));
+    let blockchainForex: any[] = [];
+    let postgresForex: any[] = [];
 
-      const validForex = dedupeById(normalizedForex.filter(isValidForex), (fx: any) => fx.forexId);
-      res.json({ success: true, data: validForex, timestamp: new Date().toISOString() });
-    } else {
-      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    // Fetch from BLOCKCHAIN (Hyperledger Fabric)
+    try {
+      const result = await fabricService.queryAllForex();
+      if (result.success) {
+        blockchainForex = result.data || [];
+        logger.info(`✅ Found ${blockchainForex.length} forex allocations from blockchain`);
+      }
+    } catch (err) {
+      logger.warn('Could not fetch forex from blockchain:', err);
     }
+
+    // Fetch from POSTGRESQL
+    try {
+      const pgResult = await postgresDb.all('SELECT * FROM forex_allocations ORDER BY created_at DESC', []);
+      postgresForex = pgResult || [];
+      logger.info(`✅ Found ${postgresForex.length} forex allocations from PostgreSQL`);
+    } catch (err) {
+      logger.warn('Could not fetch forex from PostgreSQL:', err);
+    }
+
+    // Combine and normalize
+    const allForex = [...blockchainForex, ...postgresForex];
+    const normalizedForex = allForex.map((fx: any) => ({
+      forexId: fx?.forexId || fx?.ForexID || fx?.id || fx?.forex_id || '',
+      contractId: fx?.contractId || fx?.ContractID || fx?.contractID || fx?.contract_id || '',
+      exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || fx?.exporter_id || '',
+      lcId: fx?.lcId || fx?.LCID || fx?.lcID || fx?.lc_id || '',
+      amount: fx?.amount ?? fx?.Amount ?? 0,
+      currency: fx?.currency || fx?.Currency || 'USD',
+      status: fx?.status || fx?.Status || 'REQUESTED',
+      requestedAmount: fx?.requestedAmount ?? fx?.RequestedAmount ?? fx?.requested_amount ?? 0,
+      allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? fx?.allocated_amount ?? 0,
+      exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? fx?.exchange_rate ?? 0,
+      retention: fx?.retention ?? fx?.Retention ?? 0,
+      retentionRate: fx?.retentionRate ?? fx?.RetentionRate ?? fx?.retention_rate ?? 0,
+      expiryDate: fx?.expiryDate || fx?.ExpiryDate || fx?.expiry_date || null,
+      requestDate: fx?.requestDate || fx?.RequestDate || fx?.request_date || fx?.created_at || null,
+      allocationDate: fx?.allocationDate || fx?.AllocationDate || fx?.allocation_date || null,
+      utilizationDate: fx?.utilizationDate || fx?.UtilizationDate || fx?.utilization_date || null,
+      nbeApprovalRef: fx?.nbeApprovalRef || fx?.NBEApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || fx?.nbe_approval_ref || '',
+      nbeOfficer: fx?.nbeOfficer || fx?.NBEOfficer || fx?.nbe_officer || '',
+    }));
+
+    // Deduplicate by forexId
+    const uniqueForex = dedupeById(normalizedForex, (fx: any) => fx.forexId);
+    
+    logger.info(`✅ Total unique forex allocations: ${uniqueForex.length} (Blockchain: ${blockchainForex.length}, PostgreSQL: ${postgresForex.length})`);
+    
+    res.json({ 
+      success: true, 
+      data: uniqueForex,
+      sources: {
+        blockchain: blockchainForex.length,
+        postgres: postgresForex.length,
+        total: uniqueForex.length
+      },
+      timestamp: new Date().toISOString() 
+    });
   } catch (error: any) {
     logger.error('Error fetching forex allocations:', error);
     res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
   }
 });
 
-// GET /api/v1/forex/:forexId — single forex record
-router.get('/:forexId', authMiddleware, async (req, res) => {
+// ==================== EXCHANGE RATES ROUTES (MUST BE BEFORE :forexId) ====================
+
+// GET /api/v1/forex/rates — get all exchange rates
+router.get('/rates', authMiddleware, async (req, res) => {
   try {
-    const result = await fabricService.getForex(req.params.forexId);
+    const result = await fabricService.queryChaincode('QueryAllExchangeRates', []);
+    if (result.success) {
+      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+    } else {
+      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+    }
+  } catch (error: any) {
+    logger.error('Error fetching exchange rates:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// GET /api/v1/forex/rates/:currency — get specific currency rate
+router.get('/rates/:currency', authMiddleware, async (req, res) => {
+  try {
+    const result = await fabricService.queryChaincode('QueryExchangeRate', [req.params.currency]);
     if (result.success) {
       res.json({ success: true, data: result.data, timestamp: new Date().toISOString() });
     } else {
@@ -60,6 +114,59 @@ router.get('/:forexId', authMiddleware, async (req, res) => {
     }
   } catch (error: any) {
     res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// POST /api/v1/forex/rates — create/update exchange rate (NBE only)
+router.post('/rates', authMiddleware, async (req, res) => {
+  try {
+    const { currency, buyingRate, sellingRate } = req.body;
+    if (!currency || !buyingRate || !sellingRate) {
+      return res.status(400).json({ 
+        success: false, 
+        error: { code: 'MISSING_FIELDS', message: 'currency, buyingRate, and sellingRate are required' } 
+      });
+    }
+
+    // Connect as NBE
+    await fabricService.connectAsOrg('NBEMSP');
+
+    const user = (req as any).user;
+    const setBy = user?.sub || user?.userId || 'NBE_SYSTEM';
+    const rateId = `RATE${Date.now()}${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+    // SetExchangeRate(rateID, currency, buyingRate, sellingRate, setBy)
+    const result = await fabricService.invokeChaincode('SetExchangeRate', [
+      rateId,
+      currency,
+      buyingRate.toString(),
+      sellingRate.toString(),
+      setBy,
+    ]);
+
+    if (result.success) {
+      const midRate = (parseFloat(buyingRate) + parseFloat(sellingRate)) / 2;
+      logger.info(`✅ Exchange rate set: ${currency} = ${buyingRate}/${sellingRate} ETB by ${setBy}`);
+      res.status(201).json({ 
+        success: true, 
+        data: { rateId, currency, buyingRate, sellingRate, midRate, setBy },
+        txId: result.txId, 
+        timestamp: new Date().toISOString() 
+      });
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        error: { code: 'RATE_CREATE_FAILED', message: result.error }, 
+        timestamp: new Date().toISOString() 
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error setting exchange rate:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: { code: 'INTERNAL_ERROR', message: error.message }, 
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 
@@ -126,6 +233,34 @@ router.post('/request', authMiddleware, async (req, res) => {
         
         if (result.success) {
           logger.info(`✅ Forex request created: ${forexId} with auto-mapped data (attempt ${attempt})`);
+          
+          // ✅ Record blockchain signature for this transaction
+          try {
+            const user = (req as any).user;
+            await signatureService.recordSignature({
+              entityType: 'FOREX_ALLOCATION',
+              entityId: forexId,
+              actionType: 'REQUEST',
+              signerUsername: user?.username || user?.sub || 'exporter',
+              signerOrg: user?.org || user?.organization || 'ExportersMSP',
+              signerRole: user?.role || 'exporter',
+              blockchainTxId: result.txId,
+              blockchainTimestamp: new Date(),
+              chaincodeName: 'coffee',
+              chaincodeFunction: 'RequestForex',
+              transactionArgs: [forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency],
+              metadata: {
+                contractId,
+                exporterId: finalExporterId,
+                amount: finalAmount,
+                currency: finalCurrency,
+                autoMapped: true
+              }
+            });
+          } catch (sigError) {
+            logger.error('Failed to record blockchain signature:', sigError);
+            // Don't fail the request if signature recording fails
+          }
           
           // Wait for transaction to propagate to all peers before responding
           // This prevents the next operation (AllocateForex) from failing
@@ -255,6 +390,41 @@ router.post('/allocate', authMiddleware, async (req, res) => {
         if (result.success) {
           logger.info(`✅ Forex allocated: ${forexId} by ${finalOfficer} with auto-mapped data (attempt ${attempt})`);
           
+          // ✅ Record blockchain signature for allocation
+          try {
+            const user = (req as any).user;
+            await signatureService.recordSignature({
+              entityType: 'FOREX_ALLOCATION',
+              entityId: forexId,
+              actionType: 'ALLOCATE',
+              signerUsername: user?.username || user?.sub || finalOfficer,
+              signerOrg: user?.org || user?.organization || 'BanksMSP',
+              signerRole: user?.role || 'bank_officer',
+              blockchainTxId: result.txId,
+              blockchainTimestamp: new Date(),
+              chaincodeName: 'coffee',
+              chaincodeFunction: 'AllocateForex',
+              transactionArgs: [
+                forexId, lcId, finalAmount.toString(), finalExchangeRate.toString(),
+                finalRetentionRate.toString(), finalOfficer, finalApprovalRef, finalExpiryDate
+              ],
+              metadata: {
+                forexId,
+                lcId,
+                amount: finalAmount,
+                exchangeRate: finalExchangeRate,
+                retentionRate: finalRetentionRate,
+                officer: finalOfficer,
+                approvalRef: finalApprovalRef,
+                expiryDate: finalExpiryDate,
+                autoMapped: true
+              }
+            });
+          } catch (sigError) {
+            logger.error('Failed to record blockchain signature:', sigError);
+            // Don't fail the request if signature recording fails
+          }
+          
           // Wait for transaction to propagate before responding
           await new Promise(resolve => setTimeout(resolve, 5000));
           
@@ -325,6 +495,30 @@ router.post('/utilize', authMiddleware, async (req, res) => {
     const { forexId, utilizedAmount } = req.body;
     const result = await fabricService.invokeChaincode('UtilizeForex', [forexId, utilizedAmount.toString()]);
     if (result.success) {
+      // ✅ Record blockchain signature for utilization
+      try {
+        const user = (req as any).user;
+        await signatureService.recordSignature({
+          entityType: 'FOREX_ALLOCATION',
+          entityId: forexId,
+          actionType: 'UTILIZE',
+          signerUsername: user?.username || user?.sub || 'exporter',
+          signerOrg: user?.org || user?.organization || 'ExportersMSP',
+          signerRole: user?.role || 'exporter',
+          blockchainTxId: result.txId,
+          blockchainTimestamp: new Date(),
+          chaincodeName: 'coffee',
+          chaincodeFunction: 'UtilizeForex',
+          transactionArgs: [forexId, utilizedAmount.toString()],
+          metadata: {
+            forexId,
+            utilizedAmount
+          }
+        });
+      } catch (sigError) {
+        logger.error('Failed to record blockchain signature:', sigError);
+      }
+      
       res.json({ success: true, txId: result.txId, timestamp: new Date().toISOString() });
     } else {
       res.status(400).json({ success: false, error: { code: 'UTILIZE_FAILED', message: result.error }, timestamp: new Date().toISOString() });
@@ -334,27 +528,12 @@ router.post('/utilize', authMiddleware, async (req, res) => {
   }
 });
 
-// ==================== EXCHANGE RATES ROUTES ====================
+// ==================== SINGLE FOREX RECORD (MUST BE LAST) ====================
 
-// GET /api/v1/forex/rates — get all exchange rates
-router.get('/rates', authMiddleware, async (req, res) => {
+// GET /api/v1/forex/:forexId — single forex record
+router.get('/:forexId', authMiddleware, async (req, res) => {
   try {
-    const result = await fabricService.queryChaincode('QueryAllExchangeRates', []);
-    if (result.success) {
-      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
-    } else {
-      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
-    }
-  } catch (error: any) {
-    logger.error('Error fetching exchange rates:', error);
-    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
-  }
-});
-
-// GET /api/v1/forex/rates/:currency — get specific currency rate
-router.get('/rates/:currency', authMiddleware, async (req, res) => {
-  try {
-    const result = await fabricService.queryChaincode('QueryExchangeRate', [req.params.currency]);
+    const result = await fabricService.getForex(req.params.forexId);
     if (result.success) {
       res.json({ success: true, data: result.data, timestamp: new Date().toISOString() });
     } else {
@@ -362,59 +541,6 @@ router.get('/rates/:currency', authMiddleware, async (req, res) => {
     }
   } catch (error: any) {
     res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
-  }
-});
-
-// POST /api/v1/forex/rates — create/update exchange rate (NBE only)
-router.post('/rates', authMiddleware, async (req, res) => {
-  try {
-    const { currency, buyingRate, sellingRate } = req.body;
-    if (!currency || !buyingRate || !sellingRate) {
-      return res.status(400).json({ 
-        success: false, 
-        error: { code: 'MISSING_FIELDS', message: 'currency, buyingRate, and sellingRate are required' } 
-      });
-    }
-
-    // Connect as NBE
-    await fabricService.connectAsOrg('NBEMSP');
-
-    const user = (req as any).user;
-    const setBy = user?.sub || user?.userId || 'NBE_SYSTEM';
-    const rateId = `RATE${Date.now()}${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-    // SetExchangeRate(rateID, currency, buyingRate, sellingRate, setBy)
-    const result = await fabricService.invokeChaincode('SetExchangeRate', [
-      rateId,
-      currency,
-      buyingRate.toString(),
-      sellingRate.toString(),
-      setBy,
-    ]);
-
-    if (result.success) {
-      const midRate = (parseFloat(buyingRate) + parseFloat(sellingRate)) / 2;
-      logger.info(`✅ Exchange rate set: ${currency} = ${buyingRate}/${sellingRate} ETB by ${setBy}`);
-      res.status(201).json({ 
-        success: true, 
-        data: { rateId, currency, buyingRate, sellingRate, midRate, setBy },
-        txId: result.txId, 
-        timestamp: new Date().toISOString() 
-      });
-    } else {
-      res.status(400).json({ 
-        success: false, 
-        error: { code: 'RATE_CREATE_FAILED', message: result.error }, 
-        timestamp: new Date().toISOString() 
-      });
-    }
-  } catch (error: any) {
-    logger.error('Error setting exchange rate:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: { code: 'INTERNAL_ERROR', message: error.message }, 
-      timestamp: new Date().toISOString() 
-    });
   }
 });
 

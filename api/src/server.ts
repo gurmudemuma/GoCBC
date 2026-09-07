@@ -33,6 +33,7 @@ import 'reflect-metadata';
 
 import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
+import { auditCaptureMiddleware } from './middleware/auditCapture';
 import { FabricService } from './services/fabricService';
 import { DatabaseService } from './services/databaseService';
 import { WebSocketService } from './services/websocketService';
@@ -70,6 +71,8 @@ import eudrRoutes from './routes/eudr';
 import courierRoutes from './routes/courier';
 import statusRoutes from './routes/status';
 import notificationsRoutes from './routes/notifications';
+import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
+import blockchainSignaturesRoutes from './routes/blockchain-signatures';
 
 // Load environment variables
 dotenv.config();
@@ -171,6 +174,9 @@ class CECBSServer {
   private setupRoutes(): void {
     const apiV1 = express.Router();
 
+    // Apply audit capture middleware to all API routes
+    apiV1.use(auditCaptureMiddleware);
+
     // Public routes (no authentication required)
     apiV1.use('/auth', authRoutes);
     
@@ -235,6 +241,12 @@ class CECBSServer {
 
     // V3.0 Notifications & Multi-channel Communication
     apiV1.use('/notifications', authMiddleware, notificationsRoutes); // Notifications, SMS, Webhooks
+
+    // V3.1 Post-Delivery Workflow Management
+    apiV1.use('/post-delivery', authMiddleware, postDeliveryWorkflowRoutes); // Payment, Forex, LC, Audit, Closure
+
+    // V3.2 Blockchain Signatures - Cryptographic proof for all entities (public endpoint)
+    apiV1.use('/blockchain-signatures', blockchainSignaturesRoutes); // Entity-level blockchain signatures - public transparency
 
     this.app.use('/api/v1', apiV1);
 

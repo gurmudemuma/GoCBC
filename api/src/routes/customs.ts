@@ -116,6 +116,29 @@ router.post('/risk-assessment',
          riskLevel, inspectionRequired || false, user.username]
       );
 
+      // ✅ Record risk assessment on blockchain
+      try {
+        const auditService = require('../services/auditService').default;
+        await auditService.recordAudit({
+          entityType: 'CUSTOMS_RISK_ASSESSMENT',
+          entityId: assessmentID,
+          actionType: 'ASSESS',
+          actionBy: user.username,
+          organizationMSP: 'CustomsMSP',
+          details: {
+            shipmentID,
+            exporterID,
+            riskLevel,
+            riskFactors,
+            inspectionRequired: inspectionRequired || false
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Risk assessment recorded on blockchain: ${assessmentID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record risk assessment on blockchain (non-fatal):`, blockchainErr);
+      }
+
       res.json({
         success: true,
         data: { assessmentID, riskLevel },
@@ -149,6 +172,28 @@ router.post('/clearance',
          clearedBy || null, clearedDate || null]
       );
 
+      // ✅ Record clearance on blockchain
+      try {
+        const auditService = require('../services/auditService').default;
+        const user = (req as any).user;
+        await auditService.recordAudit({
+          entityType: 'CUSTOMS_CLEARANCE',
+          entityId: clearanceID,
+          actionType: 'CREATE',
+          actionBy: user?.username || clearedBy || 'customs',
+          organizationMSP: 'CustomsMSP',
+          details: {
+            shipmentID,
+            clearanceNumber,
+            status: status || 'pending'
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Customs clearance recorded on blockchain: ${clearanceID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record clearance on blockchain (non-fatal):`, blockchainErr);
+      }
+
       res.json({
         success: true,
         data: { clearanceID, clearanceNumber, status },
@@ -170,20 +215,37 @@ router.get('/clearances',
   async (req: Request, res: Response) => {
     try {
       const { status } = req.query;
-      let query = 'SELECT * FROM customs_clearances WHERE 1=1';
+      
+      // JOIN customs_clearances with customs_declarations to get complete data
+      let query = `
+        SELECT 
+          cc.*,
+          cd.declaration_number,
+          cd.customs_value_usd,
+          cd.quantity,
+          cd.currency,
+          cd.hs_code,
+          cd.destination,
+          cd.port_of_exit,
+          cd.declaration_type,
+          cd.eudr_compliant
+        FROM customs_clearances cc
+        LEFT JOIN customs_declarations cd ON cc.shipment_id = cd.shipment_id
+        WHERE 1=1
+      `;
       const params: any[] = [];
       
       if (status) {
-        query += ' AND status = $1';
+        query += ' AND cc.status = $1';
         params.push(status);
       }
       
-      query += ' ORDER BY created_at DESC';
+      query += ' ORDER BY cc.created_at DESC';
       const clearances = await postgresDb.all(query, params);
 
       res.json({ 
         success: true, 
-        data: clearances,  // Return array directly, not nested in object
+        data: clearances,  // Return array with joined declaration data
         timestamp: new Date().toISOString() 
       });
     } catch (error: any) {
@@ -437,6 +499,34 @@ router.post('/declaration/submit',
         ]
       );
 
+      // ✅ Record customs declaration on blockchain
+      try {
+        const auditService = require('../services/auditService').default;
+        await auditService.recordAudit({
+          entityType: 'CUSTOMS_DECLARATION',
+          entityId: declarationID,
+          actionType: 'SUBMIT',
+          actionBy: exporterID,
+          organizationMSP: 'CustomsMSP',
+          details: {
+            shipmentID,
+            exporterID,
+            declarationType: declarationType || 'STANDARD',
+            hsCode: hsCode || '090111',
+            quantity: quantity || 0,
+            customsValueUSD: value || 0,
+            currency: currency || 'USD',
+            destination: destination || 'Unknown',
+            portOfExit: portOfExit || 'Djibouti Port',
+            eudrCompliant: eudrCompliant || false
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record declaration on blockchain (non-fatal):`, blockchainErr);
+      }
+
       logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
 
       res.json({
@@ -670,21 +760,50 @@ router.post('/declaration/:declarationId/clear',
         });
       }
 
-      // Store clearance record
+      // Store clearance record with duty and tax amounts
       const clearanceID = clearanceNumber || `CLR-${Date.now()}`;
       await postgresDb.run(
         `INSERT INTO customs_clearances (
-          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date,
+          duty_amount, tax_amount, exit_point, remarks
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           clearanceID, 
           declaration.shipment_id, 
           clearanceNumber, 
           'CLEARED',
           clearedBy || user.username, 
-          clearanceDate || new Date().toISOString()
+          clearanceDate || new Date().toISOString(),
+          exportDuty || 0,
+          vatAmount || 0,
+          exitPoint || null,
+          clearanceRemarks || null
         ]
       );
+
+      // ✅ Record clearance on blockchain
+      try {
+        const auditService = require('../services/auditService').default;
+        await auditService.recordAudit({
+          entityType: 'CUSTOMS_CLEARANCE',
+          entityId: clearanceID,
+          actionType: 'CLEAR',
+          actionBy: user.username,
+          organizationMSP: 'CustomsMSP',
+          details: {
+            declarationId,
+            shipmentID: declaration.shipment_id,
+            clearanceNumber,
+            exportDuty: exportDuty || 0,
+            vatAmount: vatAmount || 0,
+            exitPoint: exitPoint || null
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Customs clearance recorded on blockchain: ${clearanceID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record clearance on blockchain (non-fatal):`, blockchainErr);
+      }
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully with clearance ${clearanceNumber}`);
 
@@ -716,6 +835,53 @@ router.post('/declaration/:declarationId/clear',
             
             if (result.success) {
               logger.info(`[CUSTOMS] ✅ Shipment ${declaration.shipment_id} status updated to CUSTOMS_CLEARED on blockchain`);
+              
+              // Also record the full clearance details to blockchain for audit
+              try {
+                // Get full declaration data
+                const fullDeclaration = await postgresDb.get(
+                  `SELECT * FROM customs_declarations WHERE declaration_number = $1`,
+                  [declarationId]
+                );
+                
+                const clearanceData = {
+                  clearanceID,
+                  clearanceNumber: clearanceNumber || clearanceID,
+                  declarationNumber: declarationId,
+                  shipmentID: declaration.shipment_id,
+                  status: 'CLEARED',
+                  clearedBy: clearedBy || user.username,
+                  clearedDate: clearanceDate || new Date().toISOString(),
+                  customsValueUSD: fullDeclaration?.customs_value_usd || 0,
+                  quantity: fullDeclaration?.quantity || 0,
+                  currency: fullDeclaration?.currency || 'USD',
+                  dutyAmount: exportDuty || 0,
+                  taxAmount: vatAmount || 0,
+                  totalFees: (exportDuty || 0) + (vatAmount || 0),
+                  exitPoint: exitPoint || null,
+                  transportMode: transportMode || null,
+                  finalDestinationPort: finalDestinationPort || null,
+                  remarks: clearanceRemarks || null,
+                  timestamp: new Date().toISOString()
+                };
+                
+                // Store clearance details on blockchain using a metadata update
+                const metadataResult = await fabricService.invokeChaincode('UpdateShipmentMetadata', [
+                  declaration.shipment_id,
+                  JSON.stringify({
+                    customsClearance: clearanceData
+                  })
+                ]);
+                
+                if (metadataResult.success) {
+                  logger.info(`[CUSTOMS] ✅ Clearance details recorded to blockchain`);
+                } else {
+                  logger.warn(`[CUSTOMS] ⚠️ Could not record clearance details to blockchain:`, metadataResult.error);
+                }
+              } catch (metadataError: any) {
+                logger.warn(`[CUSTOMS] ⚠️ Exception recording clearance details:`, metadataError.message);
+                // Continue - main status update succeeded
+              }
               
               // Verify the update worked
               const verifyCheck = await fabricService.queryChaincode('ReadShipment', [declaration.shipment_id]);

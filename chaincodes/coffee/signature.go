@@ -540,4 +540,334 @@ func CalculateDataHash(data interface{}) (string, error) {
 	hash := sha256.Sum256(dataJSON)
 	return hex.EncodeToString(hash[:]), nil
 }
+
+// ==================== DOCUMENT SIGNATURE FUNCTIONS ====================
+
+// DocumentSignature captures cryptographic signature of a document
+type DocumentSignature struct {
+	SignatureID      string    `json:"signatureId"`
+	DocumentID       string    `json:"documentId"`
+	DocumentHash     string    `json:"documentHash"`
+	SignerMSPID      string    `json:"signerMspId"`
+	SignerCertHash   string    `json:"signerCertHash"`
+	SignerCommonName string    `json:"signerCommonName"`
+	SignerRole       string    `json:"signerRole"`
+	SignerEmail      string    `json:"signerEmail"`
+	SignatureType    string    `json:"signatureType"` // UPLOAD, VERIFY, APPROVE, REJECT
+	SignatureData    string    `json:"signatureData"` // Cryptographic signature
+	SignedAt         time.Time `json:"signedAt"`
+	Reason           string    `json:"reason"`
+	IPFSHash         string    `json:"ipfsHash"`
+	BlockNumber      uint64    `json:"blockNumber"`
+	TransactionID    string    `json:"transactionId"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+// DocumentWithSignatures aggregates all signatures for a document
+type DocumentWithSignatures struct {
+	DocumentID       string               `json:"documentId"`
+	DocumentType     string               `json:"documentType"`
+	FileName         string               `json:"fileName"`
+	FileHash         string               `json:"fileHash"`
+	EntityType       string               `json:"entityType"`
+	EntityID         string               `json:"entityId"`
+	UploadedBy       string               `json:"uploadedBy"`
+	UploadedAt       time.Time            `json:"uploadedAt"`
+	Signatures       []DocumentSignature  `json:"signatures"`
+	SignatureStatus  string               `json:"signatureStatus"` // UNSIGNED, PARTIAL, FULLY_SIGNED
+	RequiredSigners  []string             `json:"requiredSigners"`
+	CurrentSigners   []string             `json:"currentSigners"`
+	FinalizedAt      time.Time            `json:"finalizedAt"`
+	CreatedAt        time.Time            `json:"createdAt"`
+	UpdatedAt        time.Time            `json:"updatedAt"`
+}
+
+// SignDocument - Sign a document with X.509 certificate (blockchain-backed)
+func (c *CoffeeContract) SignDocument(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	documentHash string,
+	signatureType string,
+	reason string,
+) error {
+
+	// ✅ STEP 1: Capture signer's identity (X.509 certificate)
+	signerMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get signer MSP ID: %w", err)
+	}
+
+	signerCert, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("failed to get signer certificate: %w", err)
+	}
+
+	// Calculate certificate hash
+	certHash := sha256.Sum256([]byte(signerCert))
+	signerCertHash := hex.EncodeToString(certHash[:])
+
+	// Get common name from certificate
+	cert, err := ctx.GetClientIdentity().GetX509Certificate()
+	if err != nil {
+		return fmt.Errorf("failed to get X.509 certificate: %w", err)
+	}
+	signerCommonName := cert.Subject.CommonName
+
+	// Get optional attributes
+	signerRole, _, _ := ctx.GetClientIdentity().GetAttributeValue("role")
+	signerEmail, _, _ := ctx.GetClientIdentity().GetAttributeValue("email")
+
+	// ✅ STEP 2: Get blockchain transaction details
+	txID := ctx.GetStub().GetTxID()
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %w", err)
+	}
+	signedAt := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Generate signature ID
+	signatureID := fmt.Sprintf("SIG_%s_%s_%d", documentID, signerMSPID, signedAt.Unix())
+
+	// ✅ STEP 3: Create cryptographic signature
+	signatureData := fmt.Sprintf("%s:%s:%s:%s", documentID, documentHash, signerCertHash, signedAt.Format(time.RFC3339))
+	sigHash := sha256.Sum256([]byte(signatureData))
+	cryptoSignature := hex.EncodeToString(sigHash[:])
+
+	// ✅ STEP 4: Create signature record
+	signature := DocumentSignature{
+		SignatureID:      signatureID,
+		DocumentID:       documentID,
+		DocumentHash:     documentHash,
+		SignerMSPID:      signerMSPID,
+		SignerCertHash:   signerCertHash,
+		SignerCommonName: signerCommonName,
+		SignerRole:       signerRole,
+		SignerEmail:      signerEmail,
+		SignatureType:    signatureType,
+		SignatureData:    cryptoSignature,
+		SignedAt:         signedAt,
+		Reason:           reason,
+		TransactionID:    txID,
+		CreatedAt:        signedAt,
+	}
+
+	// ✅ STEP 5: Store signature on blockchain
+	signatureJSON, err := json.Marshal(signature)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signature: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(signatureID, signatureJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store signature: %w", err)
+	}
+
+	// ✅ STEP 6: Update document's signature list
+	docKey := "DOCSIGS_" + documentID
+	docSigJSON, _ := ctx.GetStub().GetState(docKey)
+
+	var docWithSigs DocumentWithSignatures
+	if docSigJSON != nil {
+		json.Unmarshal(docSigJSON, &docWithSigs)
+	} else {
+		docWithSigs = DocumentWithSignatures{
+			DocumentID:      documentID,
+			FileHash:        documentHash,
+			Signatures:      []DocumentSignature{},
+			CurrentSigners:  []string{},
+			RequiredSigners: []string{},
+			CreatedAt:       signedAt,
+		}
+	}
+
+	// Add signature
+	docWithSigs.Signatures = append(docWithSigs.Signatures, signature)
+	
+	// Add to current signers if not already present
+	alreadySigned := false
+	for _, signer := range docWithSigs.CurrentSigners {
+		if signer == signerMSPID {
+			alreadySigned = true
+			break
+		}
+	}
+	if !alreadySigned {
+		docWithSigs.CurrentSigners = append(docWithSigs.CurrentSigners, signerMSPID)
+	}
+
+	// Check if fully signed
+	if len(docWithSigs.RequiredSigners) > 0 && len(docWithSigs.CurrentSigners) >= len(docWithSigs.RequiredSigners) {
+		docWithSigs.SignatureStatus = "FULLY_SIGNED"
+		docWithSigs.FinalizedAt = signedAt
+	} else if len(docWithSigs.Signatures) > 0 {
+		docWithSigs.SignatureStatus = "PARTIAL"
+	} else {
+		docWithSigs.SignatureStatus = "UNSIGNED"
+	}
+	
+	docWithSigs.UpdatedAt = signedAt
+
+	// Save updated document
+	updatedJSON, err := json.Marshal(docWithSigs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal document signatures: %w", err)
+	}
+	
+	err = ctx.GetStub().PutState(docKey, updatedJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store document signatures: %w", err)
+	}
+
+	// ✅ STEP 7: Emit signature event
+	eventPayload := map[string]interface{}{
+		"signatureId":   signatureID,
+		"documentId":    documentID,
+		"signer":        signerCommonName,
+		"signerOrg":     signerMSPID,
+		"signatureType": signatureType,
+		"timestamp":     signedAt.Format(time.RFC3339),
+		"txId":          txID,
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("DocumentSigned", eventJSON)
+
+	return nil
+}
+
+// GetDocumentSignatures - Get all signatures for a document
+func (c *CoffeeContract) GetDocumentSignatures(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+) (*DocumentWithSignatures, error) {
+
+	docKey := "DOCSIGS_" + documentID
+	docSigJSON, err := ctx.GetStub().GetState(docKey)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read signatures: %w", err)
+	}
+
+	if docSigJSON == nil {
+		// Return empty signature list
+		return &DocumentWithSignatures{
+			DocumentID:      documentID,
+			Signatures:      []DocumentSignature{},
+			SignatureStatus: "UNSIGNED",
+			CurrentSigners:  []string{},
+			RequiredSigners: []string{},
+		}, nil
+	}
+
+	var docWithSigs DocumentWithSignatures
+	err = json.Unmarshal(docSigJSON, &docWithSigs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal signatures: %w", err)
+	}
+
+	return &docWithSigs, nil
+}
+
+// VerifyDocumentSignature - Verify a signature is valid
+func (c *CoffeeContract) VerifyDocumentSignature(
+	ctx contractapi.TransactionContextInterface,
+	signatureID string,
+) (bool, error) {
+
+	sigJSON, err := ctx.GetStub().GetState(signatureID)
+	if err != nil || sigJSON == nil {
+		return false, fmt.Errorf("signature not found")
+	}
+
+	var signature DocumentSignature
+	err = json.Unmarshal(sigJSON, &signature)
+	if err != nil {
+		return false, fmt.Errorf("failed to unmarshal signature: %w", err)
+	}
+
+	// Recalculate signature
+	signatureData := fmt.Sprintf("%s:%s:%s:%s",
+		signature.DocumentID,
+		signature.DocumentHash,
+		signature.SignerCertHash,
+		signature.SignedAt.Format(time.RFC3339))
+	sigHash := sha256.Sum256([]byte(signatureData))
+	expectedSignature := hex.EncodeToString(sigHash[:])
+
+	// Compare
+	if signature.SignatureData == expectedSignature {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("signature verification failed: hash mismatch")
+}
+
+// QuerySignaturesByDocument - Get all signatures for a specific document
+func (c *CoffeeContract) QuerySignaturesByDocument(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+) ([]*DocumentSignature, error) {
+
+	// Query by key prefix
+	startKey := "SIG_" + documentID + "_"
+	endKey := "SIG_" + documentID + "_~"
+
+	resultsIterator, err := ctx.GetStub().GetStateByRange(startKey, endKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query signatures: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var signatures []*DocumentSignature
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var signature DocumentSignature
+		err = json.Unmarshal(queryResponse.Value, &signature)
+		if err != nil {
+			continue // Skip invalid signatures
+		}
+		signatures = append(signatures, &signature)
+	}
+
+	return signatures, nil
+}
+
+// QuerySignaturesBySigner - Get all signatures by a specific signer
+func (c *CoffeeContract) QuerySignaturesBySigner(
+	ctx contractapi.TransactionContextInterface,
+	certHash string,
+) ([]*DocumentSignature, error) {
+
+	// Query all signatures
+	resultsIterator, err := ctx.GetStub().GetStateByRange("SIG_", "SIG_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query signatures: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var signatures []*DocumentSignature
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var signature DocumentSignature
+		err = json.Unmarshal(queryResponse.Value, &signature)
+		if err != nil {
+			continue // Skip invalid signatures
+		}
+
+		// Filter by certificate hash
+		if signature.SignerCertHash == certHash {
+			signatures = append(signatures, &signature)
+		}
+	}
+
+	return signatures, nil
+}
+
 // Updated Wed, Aug 12, 2026 11:23:30 AM

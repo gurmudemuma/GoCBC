@@ -250,14 +250,19 @@ func (c *CoffeeContract) InitiatePayment(ctx contractapi.TransactionContextInter
 	// Method-specific prerequisite checks
 	switch paymentMethod {
 	case "LC":
-		// LC method REQUIRES issued LC
+		// LC method REQUIRES an LC that is active enough for payment processing.
+		// Accept ISSUED, FOREX_ALLOCATED, or UTILIZED — reject pre-issuance states.
 		if !lcExists {
 			return fmt.Errorf("InitiatePayment: payment method LC requires valid Letter of Credit (LC ID: %s not found)", lcID)
 		}
-		if lc.Status != "ISSUED" {
-			return fmt.Errorf("InitiatePayment: payment method LC requires LC to be ISSUED (current status: %s)", lc.Status)
+		switch lc.Status {
+		case "ISSUED", "FOREX_ALLOCATED", "UTILIZED":
+			fmt.Printf("✓ LC prerequisite validated: LC %s is %s\n", lcID, lc.Status)
+		case "REQUESTED", "APPROVED":
+			return fmt.Errorf("InitiatePayment: payment method LC requires LC to be at least ISSUED (current status: %s)", lc.Status)
+		default:
+			return fmt.Errorf("InitiatePayment: payment method LC not allowed for LC in status %s", lc.Status)
 		}
-		fmt.Printf("✓ LC prerequisite validated: LC %s is ISSUED\n", lcID)
 
 	case "CAD":
 		// CAD requires completed shipment with B/L
@@ -767,6 +772,32 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 	err = ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON)
 	if err != nil {
 		return err
+	}
+
+	// CASCADE: If this payment is tied to an LC, move the LC to SETTLED.
+	// Only applies to LC payments (CAD/ADVANCE/CONSIGNMENT have empty LCID).
+	if payment.LCID != "" {
+		lcJSON, lcErr := ctx.GetStub().GetState("LC_" + payment.LCID)
+		if lcErr == nil && lcJSON != nil {
+			var lc LetterOfCredit
+			if json.Unmarshal(lcJSON, &lc) == nil {
+				// Only advance LC to SETTLED if it was PAYMENT_RELEASED (the expected pre-settlement state)
+				if lc.Status == "PAYMENT_RELEASED" {
+					lc.Status = "SETTLED"
+					lc.UpdatedAt = txTime
+					lcJSON, lcErr = json.Marshal(lc)
+					if lcErr == nil {
+						if putErr := ctx.GetStub().PutState("LC_"+payment.LCID, lcJSON); putErr != nil {
+							log.Printf("WARNING: SettlePayment failed to update LC %s to SETTLED: %v", payment.LCID, putErr)
+						} else {
+							fmt.Printf("SettlePayment: LC %s advanced to SETTLED\n", payment.LCID)
+						}
+					}
+				} else {
+					fmt.Printf("SettlePayment: LC %s not in PAYMENT_RELEASED (current: %s); skipping LC cascade\n", payment.LCID, lc.Status)
+				}
+			}
+		}
 	}
 
 	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL

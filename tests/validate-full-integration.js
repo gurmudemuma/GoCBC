@@ -281,8 +281,8 @@ async function runValidation() {
     log('Components Verified:', 'yellow');
     log('  • UI (React/Next.js) ✅', 'yellow');
     log('  • API (Node.js/Express) ✅', 'yellow');
-    log('  • Database (SQLite) ✅', 'yellow');
-    log('  • Blockchain (Hyperledger Fabric) ✅', 'yellow');
+    log('  • Database (PostgreSQL) ✅', 'yellow');
+    log('  • Blockchain (Hyperledger Fabric + CouchDB) ✅', 'yellow');
     log('  • Payment Methods (5/5) ✅', 'yellow');
     log('  • Test Coverage (Complete) ✅\n', 'yellow');
     process.exit(0);

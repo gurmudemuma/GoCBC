@@ -12,9 +12,9 @@ ADD COLUMN IF NOT EXISTS additional_notes TEXT,
 ADD COLUMN IF NOT EXISTS customs_officer VARCHAR(100),
 ADD COLUMN IF NOT EXISTS inspection_required BOOLEAN DEFAULT true;
 
--- Rename clearance_status to status for consistency
+-- Add status column if it doesn't exist (covers both new tables and renamed columns)
 ALTER TABLE customs_declarations 
-RENAME COLUMN clearance_status TO status;
+ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
 
 -- Add updated_at column
 ALTER TABLE customs_declarations 

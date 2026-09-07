@@ -982,58 +982,93 @@ router.put('/:paymentID/confirm',
  *       500:
  *         description: Internal server error
  */
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { shipmentID, status, dateFrom, dateTo } = req.query;
+    const { shipmentID, status, dateFrom, dateTo, exporterID } = req.query;
 
-    logger.info('[PAYMENT] Fetching payments with filters:', { shipmentID, status, dateFrom, dateTo });
+    logger.info('[PAYMENT] Fetching payments with filters:', { shipmentID, status, dateFrom, dateTo, exporterID });
 
-    let result;
-    if (shipmentID) {
-      result = await fabricService.queryChaincode('GetPaymentsByShipment', [shipmentID as string]);
-    } else {
-      result = await fabricService.queryChaincode('QueryAllPayments', []);
+    let blockchainPayments: any[] = [];
+    let postgresPayments: any[] = [];
+
+    // Fetch from BLOCKCHAIN (Hyperledger Fabric)
+    try {
+      let result;
+      if (shipmentID) {
+        result = await fabricService.queryChaincode('GetPaymentsByShipment', [shipmentID as string]);
+      } else {
+        result = await fabricService.queryChaincode('QueryAllPayments', []);
+      }
+
+      if (result.success) {
+        blockchainPayments = result.data || [];
+        logger.info(`✅ Found ${blockchainPayments.length} payments on blockchain`);
+      }
+    } catch (err) {
+      logger.warn('Could not fetch payments from blockchain:', err);
     }
 
-    if (result.success) {
-      let payments = result.data || [];
+    // Fetch from POSTGRESQL
+    try {
+      let query = 'SELECT * FROM payments WHERE 1=1';
+      const params: any[] = [];
 
-      // Apply additional filters
+      if (exporterID) {
+        query += ' AND exporter_id = $' + (params.length + 1);
+        params.push(exporterID);
+      }
+      if (shipmentID) {
+        query += ' AND shipment_id = $' + (params.length + 1);
+        params.push(shipmentID);
+      }
       if (status) {
-        payments = payments.filter((payment: any) => payment.status === status);
-      }
-      if (dateFrom || dateTo) {
-        payments = payments.filter((payment: any) => {
-          const paymentDate = new Date(payment.paymentDate || payment.timestamp);
-          if (dateFrom && paymentDate < new Date(dateFrom as string)) return false;
-          if (dateTo && paymentDate > new Date(dateTo as string)) return false;
-          return true;
-        });
+        query += ' AND status = $' + (params.length + 1);
+        params.push(status);
       }
 
-      res.json({
-        success: true,
-        data: payments,
-        count: payments.length,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: result.error || 'Failed to retrieve payments',
-        },
-        timestamp: new Date().toISOString(),
+      query += ' ORDER BY payment_date DESC';
+      const pgResult = await postgresDb.all(query, params);
+      postgresPayments = pgResult || [];
+      logger.info(`✅ Found ${postgresPayments.length} payments in PostgreSQL`);
+    } catch (err) {
+      logger.warn('Could not fetch payments from PostgreSQL:', err);
+    }
+
+    // Combine and deduplicate by payment_id
+    const allPayments = [...blockchainPayments, ...postgresPayments];
+    const uniquePayments = Array.from(
+      new Map(allPayments.map(p => [p.paymentID || p.payment_id || p.id, p])).values()
+    );
+
+    // Apply date filters if needed
+    let filteredPayments = uniquePayments;
+    if (dateFrom || dateTo) {
+      filteredPayments = uniquePayments.filter((payment: any) => {
+        const paymentDate = new Date(payment.paymentDate || payment.payment_date || payment.timestamp);
+        if (dateFrom && paymentDate < new Date(dateFrom as string)) return false;
+        if (dateTo && paymentDate > new Date(dateTo as string)) return false;
+        return true;
       });
     }
-  } catch (error) {
+
+    res.json({
+      success: true,
+      data: filteredPayments,
+      count: filteredPayments.length,
+      sources: {
+        blockchain: blockchainPayments.length,
+        postgres: postgresPayments.length,
+        total: filteredPayments.length
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
     logger.error('[PAYMENT] Error retrieving payments:', error);
     res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
+        message: error.message || 'Internal server error',
       },
       timestamp: new Date().toISOString(),
     });
@@ -1441,6 +1476,32 @@ router.post('/',
         [paymentID, lcNumber || null, contractID, exporterID, amount, currency, paymentMethod, paymentDate]
       );
 
+      // ✅ Record payment on blockchain (this is payment confirmation/record, different from InitiatePayment)
+      try {
+        const auditService = require('../services/auditService').default;
+        const user = (req as any).user;
+        await auditService.recordAudit({
+          entityType: 'PAYMENT_RECORD',
+          entityId: paymentID,
+          actionType: 'RECORD',
+          actionBy: user?.username || exporterID,
+          organizationMSP: 'BanksMSP',
+          details: {
+            lcNumber,
+            contractID,
+            exporterID,
+            amount,
+            currency,
+            paymentMethod,
+            paymentDate
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Payment record recorded on blockchain: ${paymentID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record payment on blockchain (non-fatal):`, blockchainErr);
+      }
+
       res.json({
         success: true,
         data: { paymentID, amount, currency },
@@ -1457,34 +1518,6 @@ router.post('/',
   }
 );
 
-// Duplicate route removed - consolidated into single GET /:paymentID above
-
-// GET /payments - List payments with filtering
-router.get('/',
-  authMiddleware,
-  async (req: Request, res: Response) => {
-    try {
-      const { exporterID } = req.query;
-      let query = 'SELECT * FROM payments WHERE 1=1';
-      const params: any[] = [];
-
-      if (exporterID) {
-        query += ' AND exporter_id = $1';
-        params.push(exporterID);
-      }
-
-      query += ' ORDER BY payment_date DESC';
-      const payments = await postgresDb.all(query, params);
-
-      res.json({ success: true, data: { payments }, timestamp: new Date().toISOString() });
-    } catch (error: any) {
-      res.status(500).json({
-        success: false,
-        error: { code: 'SERVER_ERROR', message: error.message },
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-);
+// Duplicate route removed - consolidated into single GET / above that queries BOTH databases
 
 export default router;

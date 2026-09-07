@@ -222,6 +222,35 @@ router.post('/exporter-applications',
       
       logger.info(`✅ Application submitted: ID=${applicationId}, Database ID=${numericId}, Username=${credentials.username}`);
       
+      // ✅ Step 2.5: Record application submission on blockchain as audit trail
+      try {
+        const auditService = require('../services/auditService').default;
+        await auditService.recordAudit({
+          entityType: 'EXPORTER_APPLICATION',
+          entityId: applicationId,
+          actionType: 'SUBMIT',
+          actionBy: applicationData.email,
+          organizationMSP: 'ECTAMSP',  // Applications reviewed by ECTA
+          details: {
+            companyName: applicationData.companyName,
+            tinNumber: applicationData.tinNumber,
+            businessLicense: applicationData.businessLicenseNumber,
+            exporterType: applicationData.exporterType || 'company',
+            capitalRequirement: applicationData.capitalRequirement,
+            professionalTaster: applicationData.professionalTaster,
+            email: applicationData.email,
+            phone: applicationData.phone,
+            city: applicationData.city,
+            submittedAt
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Application submission recorded on blockchain: ${applicationId}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record application on blockchain (non-fatal):`, blockchainErr);
+        // Non-fatal - application submission succeeds even if blockchain audit fails
+      }
+      
       // Step 3: Send credentials email immediately (non-blocking - don't fail if email fails)
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       emailService.sendApplicationSubmissionEmail({
@@ -354,12 +383,14 @@ router.post('/exporter-applications/:applicationId/approve',
       logger.info(`✅ Converted temporary account to full exporter account: ${exporterId}`);
       
       // Step 4: Update application with license details
+      // ✅ Save to BOTH license_number AND ecta_license_number for compatibility
       await postgresDb.run(
         `UPDATE exporter_applications 
          SET status = $1, 
              approved_at = $2, 
              exporter_id = $3,
              license_number = $4,
+             ecta_license_number = $4,
              license_issued_date = $5,
              license_expiry_date = $6,
              digital_signature = $7,
@@ -2321,3 +2352,135 @@ router.get('/licenses/:licenseNumber/verify',
 );
 
 export default router;
+
+
+// GET /:exporterId/historical-performance - Get exporter's historical performance for LC approval
+router.get('/:exporterId/historical-performance', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { exporterId } = req.params;
+    
+    logger.info(`📊 Fetching historical performance for exporter: ${exporterId}`);
+
+    // Query contracts from blockchain
+    const contractsResult = await fabricService.queryChaincode('QueryContractsByExporter', [exporterId]);
+    const contracts = contractsResult.success && contractsResult.data ? contractsResult.data : [];
+
+    // Query shipments from blockchain
+    const shipmentsResult = await fabricService.queryChaincode('QueryShipmentsByExporter', [exporterId]);
+    const shipments = shipmentsResult.success && shipmentsResult.data ? shipmentsResult.data : [];
+
+    // Query payments from database
+    const paymentsQuery = await postgresDb.query(
+      'SELECT * FROM payments WHERE exporter_id = $1',
+      [exporterId]
+    );
+    const payments = paymentsQuery.rows || [];
+
+    // Calculate metrics
+    const totalContracts = contracts.length;
+    const completedContracts = contracts.filter((c: any) => 
+      c.contractStatus === 'COMPLETED' || c.ContractStatus === 'COMPLETED'
+    ).length;
+
+    const totalShipments = shipments.length;
+    const onTimeShipments = shipments.filter((s: any) => {
+      const estimatedArrival = s.estimatedArrivalDate || s.EstimatedArrivalDate;
+      const actualArrival = s.actualArrivalDate || s.ActualArrivalDate;
+      if (!estimatedArrival || !actualArrival) return false;
+      return new Date(actualArrival) <= new Date(estimatedArrival);
+    }).length;
+
+    const totalPayments = payments.length;
+    const successfulPayments = payments.filter((p: any) => 
+      p.status === 'COMPLETED' || p.status === 'SETTLED'
+    ).length;
+
+    const totalValueExported = contracts.reduce((sum: number, c: any) => {
+      const value = c.totalValue || c.TotalValue || 0;
+      return sum + parseFloat(value.toString());
+    }, 0);
+
+    const averageContractValue = totalContracts > 0 ? totalValueExported / totalContracts : 0;
+
+    // Calculate compliance score (based on contract success, on-time delivery, payment success)
+    const contractSuccessRate = totalContracts > 0 ? (completedContracts / totalContracts) * 100 : 0;
+    const onTimeRate = totalShipments > 0 ? (onTimeShipments / totalShipments) * 100 : 0;
+    const paymentSuccessRate = totalPayments > 0 ? (successfulPayments / totalPayments) * 100 : 0;
+    const complianceScore = Math.round((contractSuccessRate + onTimeRate + paymentSuccessRate) / 3);
+
+    // Get last shipment date
+    const lastShipment = shipments.sort((a: any, b: any) => {
+      const dateA = a.shippedDate || a.ShippedDate || a.createdAt || a.CreatedAt;
+      const dateB = b.shippedDate || b.ShippedDate || b.createdAt || b.CreatedAt;
+      return new Date(dateB).getTime() - new Date(dateA).getTime();
+    })[0];
+    const lastShipmentDate = lastShipment ? 
+      (lastShipment.shippedDate || lastShipment.ShippedDate || lastShipment.createdAt || lastShipment.CreatedAt) 
+      : null;
+
+    // Get recent contracts (last 5)
+    const recentContracts = contracts
+      .sort((a: any, b: any) => {
+        const dateA = a.registrationDate || a.RegistrationDate || a.createdAt || a.CreatedAt;
+        const dateB = b.registrationDate || b.RegistrationDate || b.createdAt || b.CreatedAt;
+        return new Date(dateB).getTime() - new Date(dateA).getTime();
+      })
+      .slice(0, 5)
+      .map((c: any) => ({
+        contractId: c.contractID || c.contractId,
+        buyerCountry: c.buyerCountry || c.BuyerCountry,
+        totalValue: c.totalValue || c.TotalValue || 0,
+        status: c.contractStatus || c.ContractStatus || 'UNKNOWN',
+        completedDate: c.completedDate || c.CompletedDate || null
+      }));
+
+    // Get recent shipments (last 5)
+    const recentShipments = shipments
+      .sort((a: any, b: any) => {
+        const dateA = a.shippedDate || a.ShippedDate || a.createdAt || a.CreatedAt;
+        const dateB = b.shippedDate || b.ShippedDate || b.createdAt || b.CreatedAt;
+        return new Date(dateB).getTime() - new Date(dateA).getTime();
+      })
+      .slice(0, 5)
+      .map((s: any) => ({
+        shipmentId: s.shipmentID || s.shipmentId,
+        destination: s.destinationPort || s.DestinationPort || s.destination || s.Destination,
+        status: s.status || s.Status || 'UNKNOWN',
+        deliveryDate: s.actualArrivalDate || s.ActualArrivalDate || null
+      }));
+
+    const historicalData = {
+      exporterId,
+      exporterName: exporterId, // Could query from exporter table if needed
+      totalContracts,
+      completedContracts,
+      totalShipments,
+      onTimeShipments,
+      totalPayments,
+      successfulPayments,
+      totalValueExported,
+      averageContractValue,
+      complianceScore,
+      lastShipmentDate,
+      recentContracts,
+      recentShipments
+    };
+
+    logger.info(`✅ Historical performance calculated: ${totalContracts} contracts, ${totalShipments} shipments, ${complianceScore}% compliance`);
+
+    res.json({
+      success: true,
+      data: historicalData
+    });
+
+  } catch (error: any) {
+    logger.error('❌ Error fetching historical performance:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to fetch historical performance',
+        details: error.message
+      }
+    });
+  }
+});

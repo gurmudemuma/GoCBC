@@ -378,8 +378,8 @@ create_channel() {
 deploy_chaincode() {
     print_header "Deploying Coffee Chaincode"
     
-    # Use the working deployment script
-    local deploy_script="$PROJECT_ROOT/scripts/deploy-chaincode-complete.sh"
+    # Use the working deployment script (in root directory)
+    local deploy_script="$PROJECT_ROOT/deploy-chaincode.sh"
     
     if [ ! -f "$deploy_script" ]; then
         print_error "Deployment script not found: $deploy_script"
@@ -387,10 +387,10 @@ deploy_chaincode() {
         return 1
     fi
     
-    print_step "Running proven deployment script: deploy-chaincode-complete.sh"
+    print_step "Running chaincode deployment script..."
     
     if bash "$deploy_script"; then
-        print_success "Chaincode deployed successfully using complete deployment script"
+        print_success "Chaincode deployed successfully"
         return 0
     else
         print_warning "Chaincode deployment had issues (see output above)"
@@ -402,6 +402,74 @@ show_container_status() {
     print_header "Container Status"
     print_step "Running containers:"
     docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+# ============================================================================
+# DATABASE MIGRATION FUNCTIONS
+# ============================================================================
+
+run_database_migrations() {
+    print_header "Running Database Migrations"
+    
+    # Check if PostgreSQL is ready
+    if ! test_port $POSTGRES_PORT; then
+        print_error "PostgreSQL is not running on port $POSTGRES_PORT"
+        print_info "Start PostgreSQL first or wait for it to be ready"
+        return 1
+    fi
+    
+    print_success "PostgreSQL is ready"
+    
+    # Check if migration script exists
+    local migration_script="$PROJECT_ROOT/scripts/migrate-db-pg.js"
+    
+    if [ ! -f "$migration_script" ]; then
+        print_warning "Migration script not found: $migration_script"
+        print_info "Skipping database migrations"
+        return 0
+    fi
+    
+    # Check if script dependencies are installed
+    if [ ! -d "$PROJECT_ROOT/scripts/node_modules" ]; then
+        print_step "Installing script dependencies..."
+        cd "$PROJECT_ROOT/scripts"
+        if npm install --silent 2>/dev/null; then
+            print_success "Script dependencies installed"
+        else
+            print_warning "Failed to install script dependencies, skipping migrations"
+            cd "$PROJECT_ROOT"
+            return 0
+        fi
+        cd "$PROJECT_ROOT"
+    fi
+    
+    # Run migrations
+    print_step "Running database migrations..."
+    cd "$PROJECT_ROOT/scripts"
+    
+    if node migrate-db-pg.js 2>&1 | tee /tmp/cecbs-migration.log; then
+        print_success "Database migrations completed successfully"
+        
+        # Check if admin user exists, create if not
+        print_step "Checking for admin user..."
+        if node check-admin-role-pg.js 2>&1 | grep -q "Admin user found"; then
+            print_success "Admin user exists"
+        else
+            print_warning "Admin user not found, creating..."
+            if node add-admin-user-pg.js 2>&1 | grep -q "created successfully"; then
+                print_success "Admin user created (username: admin, password: admin123)"
+            else
+                print_warning "Could not create admin user automatically"
+                print_info "Run manually: cd scripts && node add-admin-user-pg.js"
+            fi
+        fi
+    else
+        print_warning "Database migrations had issues (see /tmp/cecbs-migration.log)"
+        print_info "System will continue, but some features may not work"
+        print_info "Fix manually: cd scripts && node migrate-db-pg.js"
+    fi
+    
+    cd "$PROJECT_ROOT"
 }
 
 # ============================================================================
@@ -464,25 +532,31 @@ test_connections() {
     
     print_header "Testing Connections"
     
-    # Test Frontend
+    # Test Frontend on multiple ports (Next.js may move to alternate ports)
     print_step "Testing Frontend UI..."
-    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$UI_PORT" | grep -q "200"; then
-        print_success "Frontend UI is responding"
-    else
-        print_warning "Frontend UI is not responding"
+    local ui_found=false
+    for port in $UI_PORT 3001 3002 3003; do
+        if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port" 2>/dev/null | grep -qE "200|404"; then
+            print_success "Frontend UI is responding on port $port"
+            ui_found=true
+            break
+        fi
+    done
+    if [ "$ui_found" = false ]; then
+        print_warning "Frontend UI is not responding (check logs: tail -f logs/ui.log)"
     fi
     
     # Test API Health
     print_step "Testing Backend API..."
-    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$API_PORT/api/health" | grep -q "200"; then
+    if curl -s "http://localhost:$API_PORT/health" 2>/dev/null | grep -q '"status":"healthy"'; then
         print_success "Backend API is responding"
     else
-        print_warning "Backend API is not responding"
+        print_warning "Backend API is not responding (check logs: tail -f logs/api.log)"
     fi
     
-    # Test API Docs
+    # Test API Docs  
     print_step "Testing API Docs..."
-    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$API_PORT/api-docs" | grep -q "200"; then
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$API_PORT/api-docs" 2>/dev/null | grep -qE "200|301"; then
         print_success "API Docs are accessible"
     else
         print_warning "API Docs are not responding"
@@ -512,7 +586,7 @@ show_summary() {
         echo -e "  ${GREEN}✓ Chaincode:${RESET}       Deployed and operational"
     else
         echo -e "  ${YELLOW}⚠ Chaincode:${RESET}       Deployment had issues (check logs)"
-        echo -e "    ${CYAN}Manual fix:${RESET}        ./scripts/deploy-chaincode.sh"
+        echo -e "    ${CYAN}Manual fix:${RESET}        ./deploy-chaincode.sh"
     fi
     echo ""
     
@@ -528,7 +602,7 @@ show_summary() {
     echo -e "${BOLD}${GREEN}Useful Commands:${RESET}"
     echo -e "  ${CYAN}View containers:${RESET}      docker ps"
     echo -e "  ${CYAN}View logs:${RESET}            docker-compose -f $DOCKER_COMPOSE_FILE logs -f"
-    echo -e "  ${CYAN}Deploy chaincode:${RESET}     ./scripts/deploy-chaincode.sh"
+    echo -e "  ${CYAN}Deploy chaincode:${RESET}     ./deploy-chaincode.sh"
     echo -e "  ${CYAN}Stop system:${RESET}          ./stop-all.sh"
     echo -e "  ${CYAN}API logs:${RESET}             tail -f /tmp/cecbs-api.log"
     echo -e "  ${CYAN}UI logs:${RESET}              tail -f /tmp/cecbs-ui.log"
@@ -536,7 +610,7 @@ show_summary() {
     
     if [ "$chaincode_deployed" != "0" ]; then
         echo -e "${YELLOW}⚠ Note: Some blockchain features may not work until chaincode is deployed.${RESET}"
-        echo -e "${YELLOW}  Run: ./scripts/deploy-chaincode.sh${RESET}"
+        echo -e "${YELLOW}  Run: ./deploy-chaincode.sh${RESET}"
         echo ""
     fi
     
@@ -578,6 +652,9 @@ main() {
     install_dependencies
     build_typescript
     start_fabric_network
+    
+    # Run database migrations (automatic)
+    run_database_migrations
     
     # Create channel before deploying chaincode
     create_channel

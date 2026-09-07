@@ -2,6 +2,7 @@
 // Customs Portal - Export Declaration & Clearance Management
 
 import React, { useState, useEffect } from 'react';
+import { viewDocument, downloadDocument } from '@/utils/documentHelpers';
 import {
   Box,
   Grid,
@@ -75,6 +76,9 @@ import { CustomsClearedShipments } from './CustomsClearedShipments';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import UserManagement from '@/components/admin/UserManagement';
+import { DocumentManagementPanel } from '@/components/documents';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
+import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 
 
 // Status types for chips
@@ -91,7 +95,7 @@ interface CustomsDeclaration {
   currency: string;
   destination: string;
   transportMode?: 'SEA' | 'AIR';
-  status: 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | 'CLEARED' | 'HELD' | 'REJECTED';
+  status: 'DRAFT' | 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | 'CLEARED' | 'HELD' | 'REJECTED';
   submissionDate: string;
   clearanceDate?: string;
   customsOfficer: string;
@@ -728,12 +732,7 @@ ${solution}`);
       return;
     }
     
-    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-    const token = localStorage.getItem('authToken');
-    // Open document in new tab instead of iframe to avoid CSP issues
-    const viewUrl = `${apiBaseUrl}/api/v1/documents/${documentId}/view?token=${token}`;
-    console.log('[CUSTOMS] Opening document in new tab:', viewUrl);
-    window.open(viewUrl, '_blank');
+    viewDocument(documentId);
   };
   
   // Fetch documents when detail dialog opens
@@ -1308,7 +1307,8 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
         },
         body: JSON.stringify({
           clearanceNumber: uniqueClearanceNumber,
-          dutiesAmount: clearanceForm.customsDuties,
+          exportDuty: parseFloat(clearanceForm.customsDuties) || 0,
+          vatAmount: parseFloat(clearanceForm.vatAmount) || 0,
           clearanceType: clearanceForm.clearanceType,
           clearedBy: clearanceForm.clearedBy,
           exitPoint: clearanceForm.exitPoint,
@@ -1344,6 +1344,7 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
           clearedBy: 'OFFICER_ALEMAYEHU',
           clearanceType: 'FULL',
           customsDuties: '0',
+          vatAmount: '0',
           exitPoint: 'DJIBOUTI',
           validityPeriod: '30',
           clearanceRemarks: '',
@@ -1926,12 +1927,13 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
     // A declaration in UNDER_REVIEW has passed through SUBMITTED and UNDER_INSPECTION
     // A declaration in CLEARED has passed through all previous stages
     
-    const statusHierarchy = {
+    const statusHierarchy: Record<string, number> = {
       'SUBMITTED': 1,
       'UNDER_INSPECTION': 2,
       'UNDER_REVIEW': 3,
       'CLEARED': 4,
       'REJECTED': 4, // Same level as cleared (terminal state)
+      'HELD': 3, // Same level as under review
     };
     
     // Count declarations that have reached or passed each stage
@@ -2125,7 +2127,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => d.status !== 'DRAFT')}
+              rows={declarations.filter(d => d.status && d.status !== 'DRAFT')}
               columns={getSmartColumns('SUBMITTED', 'Inspection Scheduled')}
               getRowId={(row) => row.declarationId}
               loading={loading}
@@ -2495,7 +2497,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const docId = doc.document_id || doc.id;
-                                window.open(`/api/v1/documents/${docId}/download`, '_blank');
+                                downloadDocument(docId);
                               }}
                             >
                               <Download fontSize="small" />
@@ -2527,6 +2529,25 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                 >
                   Download All Documents as ZIP
                 </Button>
+              </Paper>
+
+              {/* Blockchain Verification Section */}
+              <Paper elevation={0} sx={{ p: 2.5, mt: 3, bgcolor: '#f0f9ff', border: '1px solid #e0e0e0' }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: '#0F47AF', display: 'flex', alignItems: 'center', gap: 1 }}>
+                  🔐 Blockchain Verification
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Hyperledger Fabric Blockchain:</strong> This customs declaration and all related documents are 
+                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
+                    are verified against X.509 certificates and blockchain transaction records.
+                  </Typography>
+                </Alert>
+                <BlockchainSignatureVerification
+                  entityType="CUSTOMS_DECLARATION"
+                  entityId={selectedDeclaration?.declarationId || ''}
+                />
               </Paper>
             </Box>
           )}
@@ -2964,6 +2985,22 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     InputProps={{
                       startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>,
                       sx: clearanceAutoData.customsDuties !== '0' ? { bgcolor: 'success.50' } : {}
+                    }}
+                  />
+                </Grid>
+
+                {/* VAT Amount */}
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    required
+                    type="number"
+                    label="VAT Amount (ETB)"
+                    value={clearanceForm.vatAmount}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, vatAmount: e.target.value })}
+                    helperText={`Value Added Tax (typically 15% for domestic sales, 0% for exports)`}
+                    InputProps={{
+                      startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>,
                     }}
                   />
                 </Grid>

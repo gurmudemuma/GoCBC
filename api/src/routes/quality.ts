@@ -98,6 +98,29 @@ router.post('/inspections',
          quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'pending']
       );
 
+      // ✅ Record inspection request on blockchain as audit trail
+      try {
+        const auditService = require('../services/auditService').default;
+        await auditService.recordAudit({
+          entityType: 'QUALITY_INSPECTION',
+          entityId: inspectionID,
+          actionType: 'REQUEST',
+          actionBy: exporterID,
+          organizationMSP: 'ECTAMSP',
+          details: {
+            shipmentId: shipmentID,
+            contractId: contractID,
+            coffeeType,
+            quantity,
+            requestedDate: requestedDate || new Date().toISOString()
+          },
+          timestamp: new Date()
+        });
+        logger.info(`✅ Inspection request recorded on blockchain: ${inspectionID}`);
+      } catch (blockchainErr) {
+        logger.warn(`⚠️ Failed to record inspection on blockchain (non-fatal):`, blockchainErr);
+      }
+
       logger.info(`Quality inspection requested: ${inspectionID}`);
 
       res.json({
@@ -346,6 +369,101 @@ router.post('/inspections/:inspectionID/approve',
       );
 
       logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNo}`);
+
+      // ✅ SIGN INSPECTION DOCUMENTS - Add cryptographic signature with approver's identity
+      const user = (req as any).user;
+      try {
+        const { DocumentSignatureService } = await import('../services/documentSignatureService');
+        const FabricService = (await import('../services/fabricService')).default;
+        const fabricService = FabricService.getInstance();
+        
+        // Get all inspection documents (quality reports, certificates, etc.)
+        const inspectionDocuments = await postgresDb.all(
+          `SELECT document_id, file_path, file_hash, mime_type, file_name 
+           FROM documents 
+           WHERE entity_type IN ('INSPECTION', 'QUALITY') 
+             AND entity_id = $1 
+             AND status = 'active'`,
+          [inspectionID]
+        );
+        
+        // Sign each document with ECTA Quality Director's cryptographic identity
+        for (const doc of inspectionDocuments) {
+          const signatureId = `SIG-${doc.document_id}-${user.org || 'ECTA'}-${Date.now()}`;
+          const timestamp = new Date().toISOString();
+          
+          // Add visual signature stamp to PDF (if applicable)
+          const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+          let visualSignatureAdded = false;
+          
+          if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+            try {
+              await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+                signer: user.username || approvedBy || 'ECTA Quality Director',
+                organization: user.org || 'ECTAMSP',
+                timestamp,
+                signatureType: 'APPROVE',
+                role: user.role || 'Quality Director',
+                transactionId: signatureId,
+              });
+              visualSignatureAdded = true;
+              logger.info(`✅ Visual signature added to inspection document: ${doc.document_id}`);
+            } catch (pdfError) {
+              logger.warn(`Failed to add visual signature to PDF ${doc.document_id}:`, pdfError);
+            }
+          }
+          
+          // Store cryptographic signature in database
+          await postgresDb.run(
+            `INSERT INTO document_signatures (
+              signature_id, document_id, signer_id, signer_org, signature_type,
+              certificate_id, remarks, blockchain_tx_id, visual_signature_added
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              signatureId,
+              doc.document_id,
+              user.username || approvedBy || 'quality_director',
+              user.org || 'ECTAMSP',
+              'APPROVE',
+              user.sub || null, // X.509 certificate ID
+              `Quality inspection ${inspectionID} approved - Certificate: ${certificateNo}`,
+              null,
+              visualSignatureAdded
+            ]
+          );
+          
+          // Sign document on blockchain
+          try {
+            if (fabricService.isConnected()) {
+              const blockchainSigResult = await fabricService.signDocument(
+                doc.document_id,
+                doc.file_hash,
+                'APPROVE',
+                `Quality inspection ${inspectionID} approved`
+              );
+              
+              if (blockchainSigResult.success && blockchainSigResult.txId) {
+                await postgresDb.run(
+                  'UPDATE document_signatures SET blockchain_tx_id = $1 WHERE signature_id = $2',
+                  [blockchainSigResult.txId, signatureId]
+                );
+                logger.info(`✅ Blockchain signature recorded for document: ${doc.document_id}`);
+              }
+            }
+          } catch (blockchainSigError) {
+            logger.warn(`Blockchain document signature failed for ${doc.document_id}:`, blockchainSigError);
+          }
+          
+          logger.info(`✅ Document signed by ${user.username} (${user.org}): ${doc.document_id}`);
+        }
+        
+        if (inspectionDocuments.length > 0) {
+          logger.info(`✅ Signed ${inspectionDocuments.length} inspection document(s) with approver's cryptographic identity`);
+        }
+      } catch (signError) {
+        logger.error('Failed to sign inspection documents:', signError);
+        // Don't fail the approval if document signing fails
+      }
 
       res.json({
         success: true,

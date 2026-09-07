@@ -410,13 +410,25 @@ async function getEntityHistoryViaService(fabricService: FabricService, entityTy
     }
 
     // Process each history entry
+    // Safely parse a value that may already be an object or a JSON string
+    const safeParse = (raw: any): any => {
+      if (raw === null || raw === undefined) return {};
+      if (typeof raw === 'object') return raw;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    };
+
     const auditLogs = history.map((entry: any, index: number) => {
-      const value = entry.Value ? JSON.parse(entry.Value) : {};
+      const value = safeParse(entry.Value);
       const txInfo = parseTransaction(entry.TxId ? { transactionId: entry.TxId, timestamp: entry.Timestamp, ...entry } : {});
       
       // Extract status change
-      const statusBefore = index > 0 && history[index - 1]?.Value 
-        ? JSON.parse(history[index - 1].Value).Status || JSON.parse(history[index - 1].Value).status || 'UNKNOWN'
+      const previousParsed = index > 0 ? safeParse(history[index - 1]?.Value) : null;
+      const statusBefore = previousParsed
+        ? (previousParsed.Status || previousParsed.status || 'UNKNOWN')
         : 'INITIAL';
       const statusAfter = value.Status || value.status || 'UNKNOWN';
       
@@ -431,8 +443,8 @@ async function getEntityHistoryViaService(fabricService: FabricService, entityTy
       
       // Calculate field changes
       const changes: any[] = [];
-      if (index > 0 && history[index - 1]?.Value) {
-        const previousValue = JSON.parse(history[index - 1].Value);
+      if (index > 0 && history[index - 1]?.Value !== undefined && history[index - 1]?.Value !== null) {
+        const previousValue = safeParse(history[index - 1].Value);
         Object.keys(value).forEach(key => {
           if (value[key] !== previousValue[key] && key !== 'UpdatedAt' && key !== 'updatedAt') {
             changes.push({

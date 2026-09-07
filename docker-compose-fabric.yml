@@ -416,7 +416,7 @@ services:
     image: coffee-chaincode:latest
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_1.66:f938231d1aef100b64b904191074e7b9cbd2c54b927e81d4f86b9a7bd92725c3
+      - CORE_CHAINCODE_ID_NAME=coffee_1.77:2463d3d44f56e2ba841aaa356167077c7f02b3d890977690d269416536111049
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
     ports:
       - "9999:9999"

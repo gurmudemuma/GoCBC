@@ -625,6 +625,82 @@ function Show-ContainerStatus {
 }
 
 # ============================================================================
+# DATABASE MIGRATION FUNCTIONS
+# ============================================================================
+
+function Run-DatabaseMigrations {
+    Write-Header "Running Database Migrations"
+    
+    # Check if PostgreSQL is ready
+    if (-not (Test-Port -Port $POSTGRES_PORT)) {
+        Write-Error-Custom "PostgreSQL is not running on port $POSTGRES_PORT"
+        Write-Info "Start PostgreSQL first or wait for it to be ready"
+        return $false
+    }
+    
+    Write-Success "PostgreSQL is ready"
+    
+    # Check if migration script exists
+    $migrationScript = Join-Path $PROJECT_ROOT "scripts\migrate-db-pg.js"
+    
+    if (-not (Test-Path $migrationScript)) {
+        Write-Warning "Migration script not found: $migrationScript"
+        Write-Info "Skipping database migrations"
+        return $true
+    }
+    
+    # Check if script dependencies are installed
+    $scriptsNodeModules = Join-Path $PROJECT_ROOT "scripts\node_modules"
+    if (-not (Test-Path $scriptsNodeModules)) {
+        Write-Step "Installing script dependencies..."
+        Push-Location (Join-Path $PROJECT_ROOT "scripts")
+        try {
+            npm install --silent | Out-Null
+            Write-Success "Script dependencies installed"
+        } catch {
+            Write-Warning "Failed to install script dependencies, skipping migrations"
+            Pop-Location
+            return $true
+        }
+        Pop-Location
+    }
+    
+    # Run migrations
+    Write-Step "Running database migrations..."
+    Push-Location (Join-Path $PROJECT_ROOT "scripts")
+    
+    try {
+        node migrate-db-pg.js | Tee-Object -FilePath "$env:TEMP\cecbs-migration.log"
+        Write-Success "Database migrations completed successfully"
+        
+        # Check if admin user exists, create if not
+        Write-Step "Checking for admin user..."
+        $adminCheck = node check-admin-role-pg.js 2>&1 | Out-String
+        
+        if ($adminCheck -match "Admin user found") {
+            Write-Success "Admin user exists"
+        } else {
+            Write-Warning "Admin user not found, creating..."
+            $adminCreate = node add-admin-user-pg.js 2>&1 | Out-String
+            
+            if ($adminCreate -match "created successfully") {
+                Write-Success "Admin user created (username: admin, password: admin123)"
+            } else {
+                Write-Warning "Could not create admin user automatically"
+                Write-Info "Run manually: cd scripts; node add-admin-user-pg.js"
+            }
+        }
+    } catch {
+        Write-Warning "Database migrations had issues (see $env:TEMP\cecbs-migration.log)"
+        Write-Info "System will continue, but some features may not work"
+        Write-Info "Fix manually: cd scripts; node migrate-db-pg.js"
+    }
+    
+    Pop-Location
+    return $true
+}
+
+# ============================================================================
 # API & UI STARTUP FUNCTIONS
 # ============================================================================
 
@@ -911,6 +987,9 @@ try {
     Install-Dependencies
     Build-TypeScript
     Start-FabricNetwork
+    
+    # Run database migrations (automatic)
+    Run-DatabaseMigrations
     
     # Deploy chaincode after network is up
     $chaincodeDeployed = Deploy-Chaincode

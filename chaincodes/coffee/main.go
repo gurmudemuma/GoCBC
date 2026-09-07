@@ -1509,6 +1509,101 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
 }
 
+// UpdateShipmentContract - Link shipment to sales contract (backfill operation)
+func (c *CoffeeContract) UpdateShipmentContract(ctx contractapi.TransactionContextInterface,
+	shipmentID, contractID string) error {
+
+	// VALIDATION: IDs
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("UpdateShipmentContract: %w", err)
+	}
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("UpdateShipmentContract: %w", err)
+	}
+
+	// Read shipment
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentContract: shipment not found: %w", err)
+	}
+
+	// Verify contract exists
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentContract: contract not found: %w", err)
+	}
+
+	// Validate contract belongs to same exporter
+	if contract.ExporterID != shipment.ExporterID {
+		return fmt.Errorf("UpdateShipmentContract: contract exporter (%s) does not match shipment exporter (%s)",
+			contract.ExporterID, shipment.ExporterID)
+	}
+
+	// Use transaction timestamp for deterministic behavior
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update contract linkage
+	shipment.ContractID = contractID
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentContract: failed to marshal shipment: %w", err)
+	}
+
+	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+}
+
+// UpdateShipmentBuyer - Admin function to correct buyer ID in shipment (data correction)
+func (c *CoffeeContract) UpdateShipmentBuyer(ctx contractapi.TransactionContextInterface,
+	shipmentID, newBuyerID string) error {
+
+	// VALIDATION: IDs
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("UpdateShipmentBuyer: %w", err)
+	}
+	if err := ValidateID(newBuyerID, "newBuyerID"); err != nil {
+		return fmt.Errorf("UpdateShipmentBuyer: %w", err)
+	}
+
+	// Read shipment
+	shipment, err := c.ReadShipment(ctx, shipmentID)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentBuyer: shipment not found: %w", err)
+	}
+
+	// Use transaction timestamp for deterministic behavior
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update buyer ID
+	oldBuyerID := shipment.BuyerID
+	shipment.BuyerID = newBuyerID
+	shipment.UpdatedAt = timestamp
+
+	shipmentJSON, err := json.Marshal(shipment)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentBuyer: failed to marshal shipment: %w", err)
+	}
+
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return fmt.Errorf("UpdateShipmentBuyer: failed to save shipment: %w", err)
+	}
+
+	fmt.Printf("UpdateShipmentBuyer: Shipment %s buyer updated from %s to %s\n", 
+		shipmentID, oldBuyerID, newBuyerID)
+
+	return nil
+}
+
 // RecordBillOfLading - Shipping company records Bill of Lading details (Sea Freight)
 func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextInterface,
 	shipmentID, billOfLadingNo, vesselName, departurePort, destinationPort,

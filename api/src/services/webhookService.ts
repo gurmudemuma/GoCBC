@@ -50,7 +50,7 @@ export class WebhookService {
         this.webhooks.set(wh.id, {
           url: wh.url,
           secret: wh.secret,
-          events: JSON.parse(wh.events || '[]'),
+          events: typeof wh.events === 'string' ? JSON.parse(wh.events) : wh.events || [],
           active: wh.active,
           retryAttempts: wh.retry_attempts || 3,
           timeout: wh.timeout || 10000

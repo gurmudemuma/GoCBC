@@ -94,6 +94,11 @@ import { PaymentMethodTab } from './PaymentMethodTab';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
+import { DocumentManagementPanel } from '@/components/documents';
+import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
+import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend';
+import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 interface SalesContract {
   contractId: string;
@@ -174,6 +179,7 @@ const BanksPortal: React.FC = () => {
   const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
   const [exportPermits, setExportPermits] = useState<any[]>([]);
+  const [deliveredShipments, setDeliveredShipments] = useState<any[]>([]);
   const [documentaryCollections, setDocumentaryCollections] = useState<any[]>([]);
   const [advancePayments, setAdvancePayments] = useState<any[]>([]);
   const [consignments, setConsignments] = useState<any[]>([]);
@@ -203,7 +209,9 @@ const BanksPortal: React.FC = () => {
   const [paymentReleaseOpen, setPaymentReleaseOpen] = useState(false);
   const [lcAmendmentOpen, setLcAmendmentOpen] = useState(false);
   const [forexDetailsOpen, setForexDetailsOpen] = useState(false);
+  const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false);
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
+  const [selectedPaymentForDetails, setSelectedPaymentForDetails] = useState<any | null>(null);
   const [allocationDialogOpen, setAllocationDialogOpen] = useState(false);
   const [allocationForm, setAllocationForm] = useState({
     forexId: '',
@@ -362,6 +370,7 @@ const BanksPortal: React.FC = () => {
       { index: 5, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
       { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
       { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
+      { index: 8, label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, icon: <CheckCircle />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -535,10 +544,9 @@ const BanksPortal: React.FC = () => {
           console.log(`[BANKS] ✅ Letters of Credit loaded: ${allLCs.length}`);
           console.log(`[BANKS] ℹ️  State should now have ${allLCs.length} LCs for Tab 0 KPI card`);
           
-          // Filter LCs for Document Examination (LCs with documents attached, status: ISSUED)
-          // Note: After fix, document submission doesn't change LC status, so we need to check if documents exist
+          // Filter LCs for Document Examination (LCs with documents attached, status: ISSUED or FOREX_ALLOCATED)
           const forExamination = allLCs.filter((lc: any) => 
-            lc.status === 'ISSUED' && lc.documents && lc.documents.length > 0
+            (lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED') && lc.documents && lc.documents.length > 0
           );
           setLcsForExamination(forExamination);
           console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length} (Tab 3 KPI)`);
@@ -615,8 +623,8 @@ const BanksPortal: React.FC = () => {
                 requestedAmount: Number(lc.amount || 0),
                 allocatedAmount: lc.status === 'FOREX_ALLOCATED' ? Number(lc.amount || 0) : 0,
                 currency: lc.currency || 'USD',
-                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? 115.5 : 0,
-                retentionRate: 40,
+                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? (lc.exchangeRate || 115.5) : 0,
+                retentionRate: lc.status === 'FOREX_ALLOCATED' ? (lc.retentionRate || 40) : 0,
                 status: forexStatus,
                 expiryDate: lc.expiryDate || '',
               };
@@ -759,6 +767,24 @@ const BanksPortal: React.FC = () => {
         }
       } catch (err) {
         console.warn('[BANKS] Could not load SWIFT messages:', err);
+      }
+
+      // Load delivered shipments for LC settlement tracking
+      try {
+        const shipmentsResponse = await apiFetch('/shipments?status=DELIVERED', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const shipmentsResult = await shipmentsResponse.json();
+        if (shipmentsResult.success && shipmentsResult.data) {
+          const delivered = shipmentsResult.data.filter((s: any) => {
+            const status = s.Status || s.status || s.shipmentStatus || '';
+            return status === 'DELIVERED' || status === 'COMPLETED';
+          });
+          setDeliveredShipments(delivered);
+          console.log(`[BANKS] ✅ Delivered shipments for LC settlement: ${delivered.length}`);
+        }
+      } catch (err) {
+        console.warn('[BANKS] Could not load delivered shipments:', err);
       }
       
     } catch (error) {
@@ -1302,9 +1328,9 @@ const BanksPortal: React.FC = () => {
 
       if (requestResult.success) {
         showSuccess(
-          'Letter of Credit Requested',
-          `LC ${lcId} has been created with status REQUESTED`,
-          `Next Steps:\n1. Review the LC request in the table below\n2. Click "Approve Request" to approve the LC\n3. After approval, click "Issue LC" to send MT700 message\n4. Bank then allocates forex for this LC`
+          'Letter of Credit Request Received',
+          `LC ${lcId} has been requested by exporter and is awaiting bank review`,
+          `Next Steps:\n1. Review the LC request details in the table below\n2. Click "Approve Request" to approve the LC\n3. After approval, click "Issue LC" to send MT700 SWIFT message to buyer's bank\n4. Bank then allocates forex for this LC\n\nNote: In the updated workflow, exporters initiate LC requests, and banks review and approve them.`
         );
         handleCloseDialog();
         loadBankingData();
@@ -1729,8 +1755,8 @@ const BanksPortal: React.FC = () => {
         forexId: forex.forexId,
         lcId: forex.lcId || '',
         amount: forex.requestedAmount || forex.allocatedAmount || 0,
-        exchangeRate: forex.exchangeRate || 115.5,
-        retentionRate: forex.retentionRate || 40,
+        exchangeRate: forex.exchangeRate || 0,
+        retentionRate: forex.retentionRate || 0,
         officer: forex.officer || 'Bank Officer',
         approvalRef: `BANK-${Date.now()}`,
         expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
@@ -2390,6 +2416,47 @@ const BanksPortal: React.FC = () => {
                 color: '#ff9800',
                 subtitle: 'Participants',
                 description: 'Organizations involved in transactions.',
+                clickable: false,
+              },
+            ] : activeTab === 8 ? [
+              // Tab 8: LC Settlements KPIs
+              { 
+                icon: <CheckCircle />, 
+                label: 'Delivered Shipments', 
+                value: deliveredShipments.length, 
+                color: '#4caf50',
+                subtitle: 'Ready for Settlement',
+                description: 'Shipments requiring LC settlement.',
+                clickable: false,
+              },
+              { 
+                icon: <Payment />, 
+                label: 'Pending Settlement', 
+                value: deliveredShipments.filter((s: any) => {
+                  // Count shipments where LC not yet settled
+                  return true; // This will be filtered by PostDeliveryWorkflowPanel
+                }).length, 
+                color: '#ff9800',
+                subtitle: 'Awaiting Processing',
+                description: 'LCs pending settlement.',
+                clickable: false,
+              },
+              { 
+                icon: <AccountBalance />, 
+                label: 'Active LCs', 
+                value: letterOfCredits.filter(lc => ['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED', 'PAYMENT_RELEASED'].includes(lc.status)).length, 
+                color: '#9b30b7',
+                subtitle: 'In Progress',
+                description: 'Active Letters of Credit.',
+                clickable: false,
+              },
+              { 
+                icon: <AttachMoney />, 
+                label: 'Completed Settlements', 
+                value: letterOfCredits.filter(lc => lc.status === 'SETTLED').length,
+                color: '#2196f3',
+                subtitle: 'Finalized',
+                description: 'Settlements completed.',
                 clickable: false,
               },
             ] : [
@@ -3074,8 +3141,8 @@ const BanksPortal: React.FC = () => {
                                   forexId: forex.forexId,
                                   lcId: forex.lcId || '',
                                   amount: forex.requestedAmount || forex.allocatedAmount || 0,
-                                  exchangeRate: forex.exchangeRate || 115.5,
-                                  retentionRate: forex.retentionRate || 40,
+                                  exchangeRate: forex.exchangeRate || 0,
+                                  retentionRate: forex.retentionRate || 0,
                                   officer: user?.username || user?.fullName || 'Bank Officer',
                                   approvalRef: `BANK-${Date.now()}`,
                                   expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
@@ -3219,6 +3286,14 @@ const BanksPortal: React.FC = () => {
               <Alert severity="info" sx={{ mt: 2 }}>
                 This contract has been approved by ECTA. You can now issue a Letter of Credit for this contract.
               </Alert>
+
+              {/* Blockchain Verification */}
+              <Box sx={{ mt: 3 }}>
+                <BlockchainSignatureVerification
+                  entityType="CONTRACT"
+                  entityId={selectedContract.contractId || ''}
+                />
+              </Box>
             </Box>
           )}
         </DialogContent>
@@ -3588,37 +3663,70 @@ const BanksPortal: React.FC = () => {
                 {/* Exchange Rate */}
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="text.secondary">Exchange Rate</Typography>
-                  <Typography variant="h6" fontWeight={600}>
-                    {(selectedForex.exchangeRate || 115.5).toFixed(2)} ETB/USD
-                  </Typography>
-                  {selectedForex.status === 'REQUESTED' && (
-                    <Typography variant="caption" color="text.secondary">Default NBE rate</Typography>
+                  {selectedForex.status === 'REQUESTED' || selectedForex.exchangeRate === 0 ? (
+                    <Typography variant="h6" fontWeight={600} color="warning.main">
+                      Pending Allocation
+                    </Typography>
+                  ) : (
+                    <Typography variant="h6" fontWeight={600}>
+                      {selectedForex.exchangeRate.toFixed(2)} ETB/USD
+                    </Typography>
                   )}
                 </Grid>
 
-                {/* USD Retention (40%) */}
+                {/* USD Retention */}
                 <Grid item xs={12} md={6}>
                   <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
-                    <Typography variant="body2" color="text.secondary">40% USD Retention</Typography>
-                    <Typography variant="h5" fontWeight={700} color="#1976d2">
-                      ${((selectedForex.status === 'REQUESTED' ? (selectedForex.requestedAmount || 0) : (selectedForex.allocatedAmount || 0)) * 0.4).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                    <Typography variant="body2" color="text.secondary">
+                      {selectedForex.retentionRate}% USD Retention
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {selectedForex.status === 'REQUESTED' ? 'Will be retained in USD account' : 'Retained in USD account'}
-                    </Typography>
+                    {selectedForex.status === 'REQUESTED' || selectedForex.retentionRate === 0 ? (
+                      <>
+                        <Typography variant="h5" fontWeight={700} color="warning.main">
+                          Pending Allocation
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Retention rate will be set by bank (typically 40-50%)
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <Typography variant="h5" fontWeight={700} color="#1976d2">
+                          ${((selectedForex.allocatedAmount || 0) * selectedForex.retentionRate / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Retained in USD account
+                        </Typography>
+                      </>
+                    )}
                   </Paper>
                 </Grid>
 
-                {/* ETB Conversion (60%) */}
+                {/* ETB Conversion */}
                 <Grid item xs={12} md={6}>
                   <Paper sx={{ p: 2, bgcolor: '#f5f5f5', border: '1px solid #e0e0e0' }}>
-                    <Typography variant="body2" color="text.secondary">60% ETB Conversion</Typography>
-                    <Typography variant="h5" fontWeight={700} color="#2e7d32">
-                      {((selectedForex.status === 'REQUESTED' ? (selectedForex.requestedAmount || 0) : (selectedForex.allocatedAmount || 0)) * 0.6 * (selectedForex.exchangeRate || 115.5)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                    <Typography variant="body2" color="text.secondary">
+                      {100 - selectedForex.retentionRate}% ETB Conversion
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {selectedForex.status === 'REQUESTED' ? 'Will be converted to Ethiopian Birr' : 'Converted to Ethiopian Birr'}
-                    </Typography>
+                    {selectedForex.status === 'REQUESTED' || selectedForex.exchangeRate === 0 ? (
+                      <>
+                        <Typography variant="h5" fontWeight={700} color="warning.main">
+                          Pending Allocation
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Conversion amount will be calculated upon allocation
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <Typography variant="h5" fontWeight={700} color="#2e7d32">
+                          {((selectedForex.allocatedAmount || 0) * (100 - selectedForex.retentionRate) / 100 * selectedForex.exchangeRate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Converted to Ethiopian Birr
+                        </Typography>
+                      </>
+                    )}
                   </Paper>
                 </Grid>
 
@@ -3665,6 +3773,15 @@ const BanksPortal: React.FC = () => {
                   </Grid>
                 )}
               </Grid>
+
+              {/* Blockchain Verification Section */}
+              {/* Blockchain Verification - Component handles all messaging */}
+              <Box sx={{ mt: 3 }}>
+                <BlockchainSignatureVerification
+                  entityType="FOREX_ALLOCATION"
+                  entityId={selectedForex.forexId || ''}
+                />
+              </Box>
             </Box>
           )}
         </DialogContent>
@@ -3685,6 +3802,193 @@ const BanksPortal: React.FC = () => {
               Confirm
             </Button>
           )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Payment Details Dialog */}
+      <Dialog open={paymentDetailsOpen} onClose={() => setPaymentDetailsOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Payment sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Payment Details
+        </DialogTitle>
+        <DialogContent>
+          {selectedPaymentForDetails && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={3}>
+                {/* Payment ID & Contract Reference */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Payment ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedPaymentForDetails.paymentId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Contract ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedPaymentForDetails.contractId || 'N/A'}</Typography>
+                </Grid>
+
+                {/* Exporter & Status */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Exporter ID</Typography>
+                  <Typography variant="body1">{selectedPaymentForDetails.exporterId || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Status</Typography>
+                  <StatusChip 
+                    label={selectedPaymentForDetails.status || 'PENDING'} 
+                    status={selectedPaymentForDetails.status} 
+                  />
+                </Grid>
+
+                {/* Divider */}
+                <Grid item xs={12}>
+                  <Divider />
+                  <Typography variant="subtitle2" sx={{ mt: 2, mb: 1, color: '#9b30b7' }}>
+                    Payment Information
+                  </Typography>
+                </Grid>
+
+                {/* Amount */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">Amount</Typography>
+                  <Typography variant="h6" color="primary" fontWeight={700}>
+                    {(selectedPaymentForDetails.currency || 'USD')} {(selectedPaymentForDetails.amount || 0).toLocaleString()}
+                  </Typography>
+                </Grid>
+
+                {/* Credit Advice Number */}
+                {selectedPaymentForDetails.creditAdviceNumber && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">Credit Advice Number</Typography>
+                    <Typography variant="body1" fontWeight={600} sx={{ fontFamily: 'monospace' }}>
+                      {selectedPaymentForDetails.creditAdviceNumber}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {/* SWIFT Reference */}
+                {selectedPaymentForDetails.swiftReference && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">SWIFT Reference</Typography>
+                    <Typography variant="body1" fontWeight={600} sx={{ fontFamily: 'monospace' }}>
+                      {selectedPaymentForDetails.swiftReference}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {/* Divider */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 1 }} />
+                  <Typography variant="subtitle2" sx={{ mb: 1, color: '#9b30b7' }}>
+                    Banking Details
+                  </Typography>
+                </Grid>
+
+                {/* Receiving Bank */}
+                {selectedPaymentForDetails.receivingBank && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">Receiving Bank</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedPaymentForDetails.receivingBank}</Typography>
+                    {selectedPaymentForDetails.receivingBankBIC && (
+                      <Typography variant="caption" color="text.secondary">
+                        BIC: {selectedPaymentForDetails.receivingBankBIC}
+                      </Typography>
+                    )}
+                  </Grid>
+                )}
+
+                {/* Paying Bank */}
+                {selectedPaymentForDetails.payingBank && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">Paying Bank</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedPaymentForDetails.payingBank}</Typography>
+                    {selectedPaymentForDetails.payingBankBIC && (
+                      <Typography variant="caption" color="text.secondary">
+                        BIC: {selectedPaymentForDetails.payingBankBIC}
+                      </Typography>
+                    )}
+                  </Grid>
+                )}
+
+                {/* Beneficiary */}
+                {selectedPaymentForDetails.beneficiaryName && (
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="text.secondary">Beneficiary</Typography>
+                    <Typography variant="body1" fontWeight={600}>{selectedPaymentForDetails.beneficiaryName}</Typography>
+                    {selectedPaymentForDetails.beneficiaryAccount && (
+                      <Typography variant="caption" color="text.secondary">
+                        Account: {selectedPaymentForDetails.beneficiaryAccount}
+                      </Typography>
+                    )}
+                  </Grid>
+                )}
+
+                {/* Dates */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 1 }} />
+                </Grid>
+                
+                {selectedPaymentForDetails.receivedDate && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">Received Date</Typography>
+                    <Typography variant="body1" fontWeight={600}>
+                      {new Date(selectedPaymentForDetails.receivedDate).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      })}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {selectedPaymentForDetails.settlementDate && (
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">Settlement Date</Typography>
+                    <Typography variant="body1" fontWeight={600}>
+                      {new Date(selectedPaymentForDetails.settlementDate).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      })}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {/* Remarks */}
+                {selectedPaymentForDetails.remarks && (
+                  <Grid item xs={12}>
+                    <Alert severity="info">
+                      <Typography variant="body2">
+                        <strong>Remarks:</strong> {selectedPaymentForDetails.remarks}
+                      </Typography>
+                    </Alert>
+                  </Grid>
+                )}
+              </Grid>
+
+              {/* Blockchain Verification - Component handles all messaging */}
+              <Box sx={{ mt: 3 }}>
+                <BlockchainSignatureVerification
+                  entityType="PAYMENT"
+                  entityId={selectedPaymentForDetails.paymentId || ''}
+                />
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Assignment />}
+            onClick={() => {
+              setAuditEntityType('PAYMENT');
+              setAuditEntityId(selectedPaymentForDetails?.paymentId || '');
+              setShowAuditTrail(true);
+            }}
+            sx={{ textTransform: 'none', mr: 'auto' }}
+          >
+            View Audit Trail
+          </Button>
+          <Button onClick={() => setPaymentDetailsOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
 
@@ -3850,6 +4154,17 @@ const BanksPortal: React.FC = () => {
                   </Paper>
                 </Grid>
 
+                {/* Exporter Historical Trend - Show before approval */}
+                {selectedLC.status === 'REQUESTED' && selectedLC.exporterId && (
+                  <Grid item xs={12}>
+                    <Divider sx={{ my: 2 }} />
+                    <ExporterHistoricalTrend
+                      exporterId={selectedLC.exporterId}
+                      contractId={selectedLC.contractId}
+                    />
+                  </Grid>
+                )}
+
                 {/* Workflow Status */}
                 <Grid item xs={12}>
                   <Alert severity={selectedLC.status === 'ISSUED' ? 'success' : 'info'}>
@@ -3870,6 +4185,37 @@ const BanksPortal: React.FC = () => {
                   </Alert>
                 </Grid>
 
+                {/* LC Documents Management */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 2 }} />
+                  <DocumentManagementPanel
+                    entityType="LC"
+                    entityId={selectedLC.lcId}
+                    title="LC Documents"
+                    allowUpload={selectedLC.status === 'ISSUED'}
+                    allowSign={true}
+                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
+                    defaultSignatureType="VERIFY"
+                    showSignatureTracker={true}
+                    requiredDocuments={[
+                      'COMMERCIAL_INVOICE',
+                      'PACKING_LIST',
+                      'BILL_OF_LADING',
+                      'CERTIFICATE_OF_ORIGIN',
+                      'INSURANCE_CERTIFICATE',
+                      'QUALITY_CERTIFICATE'
+                    ]}
+                    onDocumentSigned={(docId, data) => {
+                      console.log('LC document signed:', docId, data);
+                      loadBankingData();
+                    }}
+                    onDocumentUploaded={(doc) => {
+                      console.log('LC document uploaded:', doc);
+                      loadBankingData();
+                    }}
+                  />
+                </Grid>
+
                 {/* Next Steps */}
                 {selectedLC.status === 'ISSUED' && (
                   <Grid item xs={12}>
@@ -3888,6 +4234,18 @@ const BanksPortal: React.FC = () => {
                     </Paper>
                   </Grid>
                 )}
+
+                {/* Blockchain Verification - Component handles all messaging */}
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    🔐 Cryptographic Signatures & Blockchain Verification
+                  </Typography>
+                  <BlockchainSignatureVerification
+                    entityType="LETTER_OF_CREDIT"
+                    entityId={selectedLC.lcId}
+                  />
+                </Grid>
               </Grid>
             </Box>
           )}
@@ -4906,6 +5264,66 @@ const BanksPortal: React.FC = () => {
           showStats={false}
           maxHeight={700}
         />
+      )}
+
+      {/* Tab 8: LC Settlements */}
+      {activeTab === 8 && (
+        <Box>
+          <Typography variant="h5" gutterBottom sx={{ color: '#9b30b7', fontWeight: 700 }}>
+            💰 LC Settlement Tracking
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Track LC settlement and payment processing for delivered shipments.
+          </Typography>
+          
+          {deliveredShipments.length === 0 ? (
+            <Alert severity="info">
+              No delivered shipments requiring LC settlement at this time.
+            </Alert>
+          ) : (
+            <Grid container spacing={3}>
+              {deliveredShipments.map((shipment: any) => {
+                const shipmentId = shipment.shipmentId || shipment.shipmentID;
+                const contractId = shipment.contractId || shipment.contractID;
+                const lc = letterOfCredits.find(l => l.contractId === contractId);
+                
+                return (
+                  <Grid item xs={12} key={shipmentId}>
+                    <Card sx={{ boxShadow: 3 }}>
+                      <CardContent>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                          <Box>
+                            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                              {shipmentId}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Contract: {contractId} {lc && `| LC: ${lc.lcId}`}
+                            </Typography>
+                          </Box>
+                          <Chip 
+                            label="Delivered" 
+                            color="success" 
+                            icon={<CheckCircle />}
+                          />
+                        </Box>
+                        
+                        <Divider sx={{ my: 2 }} />
+                        
+                        <PostDeliveryWorkflowPanel
+                          shipmentId={shipmentId}
+                          userRole="BANK"
+                          onRefresh={() => {
+                            loadBankingData();
+                          }}
+                        />
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+        </Box>
       )}
 
       {/* Audit Trail Viewer */}

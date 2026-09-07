@@ -43,18 +43,17 @@ export const StatusTransitions = {
     SETTLED: [],
   },
 
-  // Letter of Credit Status Flow
+  // Letter of Credit Status Flow (matches chaincode: banking.go + forex.go)
+  // Request → Approve → Issue → (Forex Allocate) → Examine → Release Payment → Settle
   LC: {
     REQUESTED: ['APPROVED', 'REJECTED'],
-    APPROVED: ['ISSUED'],
-    ISSUED: ['SHIPPED', 'AMENDED', 'EXPIRED'],
-    AMENDED: ['SHIPPED', 'EXPIRED'],
-    SHIPPED: ['DOCUMENTS_PRESENTED'],
-    DOCUMENTS_PRESENTED: ['DOCUMENTS_ACCEPTED', 'DISCREPANCY_NOTED'],
-    DOCUMENTS_ACCEPTED: ['PAYMENT_RELEASED'],
-    DISCREPANCY_NOTED: ['DOCUMENTS_ACCEPTED', 'REJECTED'],
-    PAYMENT_RELEASED: ['UTILIZED'],
-    UTILIZED: [],
+    APPROVED: ['ISSUED', 'EXPIRED'],
+    ISSUED: ['FOREX_ALLOCATED', 'UTILIZED', 'AMENDED', 'EXPIRED'], // UTILIZED = examine without forex path
+    FOREX_ALLOCATED: ['UTILIZED', 'EXPIRED'],                      // UTILIZED set by ExamineLCDocuments
+    AMENDED: ['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED', 'EXPIRED'],
+    UTILIZED: ['PAYMENT_RELEASED'],                                // set by ReleaseLCPayment
+    PAYMENT_RELEASED: ['SETTLED'],                                 // set by final settlement
+    SETTLED: [],
     REJECTED: [],
     EXPIRED: [],
   },
@@ -159,7 +158,7 @@ export const RelatedStatusUpdates = {
 
   // When forex is allocated
   FOREX_ALLOCATED: [
-    { entity: 'LC', field: 'contractId', statusField: 'status', newStatus: 'FOREX_BACKED' },
+    { entity: 'LC', field: 'contractId', statusField: 'status', newStatus: 'FOREX_ALLOCATED' },
   ],
 
   // When LC is issued
@@ -194,8 +193,8 @@ export const RelatedStatusUpdates = {
 
   // When payment is settled
   PAYMENT_SETTLED: [
-    { entity: 'LC', field: 'lcId', statusField: 'status', newStatus: 'UTILIZED' },
-    { entity: 'FOREX', field: 'forexId', statusField: 'status', newStatus: 'UTILIZED' },
+    { entity: 'LC', field: 'lcId', statusField: 'status', newStatus: 'SETTLED' },
+    { entity: 'FOREX', field: 'forexId', statusField: 'status', newStatus: 'SETTLED' },
     { entity: 'CONTRACT', field: 'contractId', statusField: 'paymentStatus', newStatus: 'SETTLED' },
   ],
 
@@ -255,6 +254,23 @@ export class StatusManager {
   }
 
   /**
+   * Convert entity type to proper chaincode function name
+   * SHIPMENT -> UpdateShipmentStatus
+   * LC -> UpdateLCStatus
+   * APPLICATION -> UpdateApplicationStatus
+   */
+  private getUpdateFunctionName(entityType: string): string {
+    // Special cases
+    if (entityType === 'LC') {
+      return 'UpdateLCStatus';
+    }
+    
+    // Convert SHIPMENT -> Shipment, CONTRACT -> Contract, etc.
+    const entityName = entityType.charAt(0).toUpperCase() + entityType.slice(1).toLowerCase();
+    return `Update${entityName}Status`;
+  }
+
+  /**
    * Update entity status with validation
    */
   async updateEntityStatus(
@@ -273,9 +289,13 @@ export class StatusManager {
     }
 
     try {
+      // Convert entity type to proper function name
+      // SHIPMENT -> Shipment, LC -> LC, etc.
+      const functionName = this.getUpdateFunctionName(entityType);
+      
       // Update the entity on blockchain
       const result = await this.fabricService.invokeChaincode(
-        `Update${entityType}Status`,
+        functionName,
         [entityId, newStatus, JSON.stringify(updateData || {})]
       );
 
@@ -327,8 +347,9 @@ export class StatusManager {
             const relatedEntityId = entity[update.field];
             
             if (relatedEntityId) {
+              const updateFunctionName = this.getUpdateFunctionName(update.entity);
               await this.fabricService.invokeChaincode(
-                `Update${update.entity}Status`,
+                updateFunctionName,
                 [relatedEntityId, update.newStatus]
               );
 
