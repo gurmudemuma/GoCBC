@@ -986,64 +986,84 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
   try {
     const { shipmentID, status, dateFrom, dateTo, exporterID } = req.query;
 
-    logger.info('[PAYMENT] Fetching payments with filters:', { shipmentID, status, dateFrom, dateTo, exporterID });
+    logger.info('[PAYMENT] 🔗 Fetching payments DIRECTLY from Hyperledger Fabric blockchain');
+    logger.info('[PAYMENT] Filters:', { shipmentID, status, dateFrom, dateTo, exporterID });
 
-    let blockchainPayments: any[] = [];
-    let postgresPayments: any[] = [];
-
-    // Fetch from BLOCKCHAIN (Hyperledger Fabric)
-    try {
-      let result;
-      if (shipmentID) {
-        result = await fabricService.queryChaincode('GetPaymentsByShipment', [shipmentID as string]);
-      } else {
-        result = await fabricService.queryChaincode('QueryAllPayments', []);
-      }
-
-      if (result.success) {
-        blockchainPayments = result.data || [];
-        logger.info(`✅ Found ${blockchainPayments.length} payments on blockchain`);
-      }
-    } catch (err) {
-      logger.warn('Could not fetch payments from blockchain:', err);
+    // Query blockchain directly - NO PostgreSQL fallback
+    let result;
+    if (shipmentID) {
+      result = await fabricService.queryChaincode('GetPaymentsByShipment', [shipmentID as string]);
+    } else {
+      result = await fabricService.queryChaincode('QueryAllPayments', []);
     }
 
-    // Fetch from POSTGRESQL
-    try {
-      let query = 'SELECT * FROM payments WHERE 1=1';
-      const params: any[] = [];
-
-      if (exporterID) {
-        query += ' AND exporter_id = $' + (params.length + 1);
-        params.push(exporterID);
-      }
-      if (shipmentID) {
-        query += ' AND shipment_id = $' + (params.length + 1);
-        params.push(shipmentID);
-      }
-      if (status) {
-        query += ' AND status = $' + (params.length + 1);
-        params.push(status);
-      }
-
-      query += ' ORDER BY payment_date DESC';
-      const pgResult = await postgresDb.all(query, params);
-      postgresPayments = pgResult || [];
-      logger.info(`✅ Found ${postgresPayments.length} payments in PostgreSQL`);
-    } catch (err) {
-      logger.warn('Could not fetch payments from PostgreSQL:', err);
+    if (!result.success) {
+      logger.error(`[PAYMENT] ❌ Blockchain query failed: ${result.error}`);
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'BLOCKCHAIN_QUERY_FAILED',
+          message: result.error || 'Failed to query blockchain'
+        },
+        source: 'blockchain',
+        timestamp: new Date().toISOString()
+      });
     }
 
-    // Combine and deduplicate by payment_id
-    const allPayments = [...blockchainPayments, ...postgresPayments];
-    const uniquePayments = Array.from(
-      new Map(allPayments.map(p => [p.paymentID || p.payment_id || p.id, p])).values()
-    );
+    let payments = result.data || [];
+    logger.info(`[PAYMENT] ✅ Found ${payments.length} payments on blockchain (PURE BLOCKCHAIN, NO CACHE)`);
 
-    // Apply date filters if needed
-    let filteredPayments = uniquePayments;
+    // ✅ ENRICH with buyer data from PostgreSQL
+    try {
+      const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+      // Payments link to shipments which link to contracts, so enrich via shipments
+      const enrichedPayments: any[] = [];
+      for (const payment of payments) {
+        const shipmentId = payment.shipmentId || payment.ShipmentID || payment.shipment_id;
+        if (shipmentId) {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          const buyerData = await db.get(`
+            SELECT sc.buyer_name, sc.buyer_country
+            FROM shipments s
+            LEFT JOIN sales_contracts sc ON s.contract_id = sc.contract_id
+            WHERE s.shipment_id = ?
+          `, [shipmentId]);
+          
+          if (buyerData) {
+            enrichedPayments.push({
+              ...payment,
+              buyerName: buyerData.buyer_name,
+              buyerCountry: buyerData.buyer_country,
+            });
+          } else {
+            enrichedPayments.push(payment);
+          }
+        } else {
+          enrichedPayments.push(payment);
+        }
+      }
+      payments = enrichedPayments;
+      logger.info(`[PAYMENT] ✅ Enriched ${payments.length} payments with buyer data`);
+    } catch (enrichError) {
+      logger.warn('[PAYMENT] ⚠️  Could not enrich payments with buyer data:', enrichError);
+    }
+
+    // Apply blockchain-side filters (status, exporter, dates)
+    if (status) {
+      payments = payments.filter((p: any) => 
+        (p.status || p.Status) === status
+      );
+    }
+
+    if (exporterID) {
+      payments = payments.filter((p: any) => 
+        (p.exporterId || p.ExporterID || p.exporter_id) === exporterID
+      );
+    }
+
     if (dateFrom || dateTo) {
-      filteredPayments = uniquePayments.filter((payment: any) => {
+      payments = payments.filter((payment: any) => {
         const paymentDate = new Date(payment.paymentDate || payment.payment_date || payment.timestamp);
         if (dateFrom && paymentDate < new Date(dateFrom as string)) return false;
         if (dateTo && paymentDate > new Date(dateTo as string)) return false;
@@ -1053,13 +1073,11 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: filteredPayments,
-      count: filteredPayments.length,
-      sources: {
-        blockchain: blockchainPayments.length,
-        postgres: postgresPayments.length,
-        total: filteredPayments.length
-      },
+      data: payments,
+      count: payments.length,
+      source: 'blockchain', // ALWAYS blockchain
+      blockchainPowered: true,
+      enriched: true, // ✅ Flag showing data is enriched with PostgreSQL
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {

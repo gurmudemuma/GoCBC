@@ -140,6 +140,12 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
   onPageChange,
   onRowsPerPageChange,
 }) => {
+  // 🔇 Logging Control - Set to true to enable verbose logs
+  const DEV_LOGGING = false;
+  const devLog = (...args: any[]) => {
+    if (DEV_LOGGING) console.log(...args);
+  };
+
   const [showWorkflow, setShowWorkflow] = useState(false);
   
   // Local pagination state (fallback if props not provided)
@@ -172,16 +178,21 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
 
   // Get payments for selected method - FILTER TO ONLY SHOW ITEMS AWAITING BANK ACTION
   const getPaymentsForMethod = () => {
+    // Safety: Filter out null/undefined values from input arrays
+    const safeForexAllocations = (forexAllocations || []).filter(f => f !== null && f !== undefined);
+    const safeLetterOfCredits = (letterOfCredits || []).filter(lc => lc !== null && lc !== undefined);
+    const safeContracts = (contracts || []).filter(c => c !== null && c !== undefined);
+    
     let allPayments: any[] = [];
     
     switch (selectedPaymentMethod) {
       case 'LC':
         // FOR LC: Show approved contracts awaiting LC issuance + existing LCs
         // First, add approved contracts as "pending LC requests" - but only if no LC exists yet
-        const pendingLCRequests = contracts
+        const pendingLCRequests = safeContracts
           .filter(contract => {
             // Only show contract if NO LC exists for it yet
-            const lcExists = letterOfCredits.some(lc => lc.contractId === contract.contractId);
+            const lcExists = safeLetterOfCredits.some(lc => lc.contractId === contract.contractId);
             return !lcExists;
           })
           .map(contract => ({
@@ -190,6 +201,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             amount: contract.totalValue,
             currency: contract.currency,
             exporter: contract.exporterId,
+            buyerName: contract.buyerName || contract.BuyerName || '', // ✅ ADD BUYER NAME FROM CONTRACT
             status: 'AWAITING_LC', // Custom status for contracts pending LC
             currentStep: -1, // Not in workflow yet
             isContract: true, // Flag to identify this as a contract, not an LC
@@ -198,17 +210,17 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
         
         // Then, add existing LCs - but exclude LCs that belong in Forex tab
         // LCs with forex allocations (any status) stay in Forex Allocations tab
-        console.log('[PAYMENT METHODS] Available forex allocations:', forexAllocations.map(f => ({ forexId: f.forexId, lcId: f.lcId, status: f.status })));
+        devLog('[PAYMENT METHODS] Available forex allocations:', safeForexAllocations.map(f => ({ forexId: f.forexId, lcId: f.lcId, status: f.status })));
         
-        const existingLCs = letterOfCredits
+        const existingLCs = safeLetterOfCredits
           .filter(lc => {
-            console.log(`[PAYMENT METHODS] Checking LC ${lc.lcId}, status: ${lc.status}`);
+            devLog(`[PAYMENT METHODS] Checking LC ${lc.lcId}, status: ${lc.status}`);
             
             // ✅ CRITICAL: Exclude LCs with forex-related statuses
             // These statuses indicate the LC is in the forex allocation workflow
             const forexRelatedStatuses = ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED', 'FOREX_REQUESTED'];
             if (forexRelatedStatuses.includes(lc.status)) {
-              console.log(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - status is ${lc.status} (forex-related)`);
+              devLog(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - status is ${lc.status} (forex-related)`);
               return false;
             }
             
@@ -217,12 +229,15 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             // 1. Exact lcId match
             // 2. forexId pattern match (e.g., FOREX_LC1787055024941_timestamp)
             // 3. contractId + exporterId match (for forex without lcId populated yet)
-            const hasForex = forexAllocations.some(f => {
+            const hasForex = safeForexAllocations.some(f => {
+              // Safety check: ensure f is not null
+              if (!f) return false;
+              
               // Exact lcId match
               const lcIdMatch = f.lcId && lc.lcId && (
                 f.lcId === lc.lcId || 
-                f.lcId?.toLowerCase() === lc.lcId?.toLowerCase() ||
-                f.lcId.replace(/\s/g, '') === lc.lcId.replace(/\s/g, '')
+                (f.lcId?.toLowerCase && lc.lcId?.toLowerCase && f.lcId.toLowerCase() === lc.lcId.toLowerCase()) ||
+                (f.lcId?.replace && lc.lcId?.replace && f.lcId.replace(/\s/g, '') === lc.lcId.replace(/\s/g, ''))
               );
               
               // forexId pattern match (forexId contains LC ID, e.g., FOREX_LC1787055024941_12345)
@@ -235,7 +250,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
               const match = lcIdMatch || forexIdMatch || metadataMatch;
               
               if (match) {
-                console.log(`[PAYMENT METHODS] Found matching forex for ${lc.lcId}:`, {
+                devLog(`[PAYMENT METHODS] Found matching forex for ${lc.lcId}:`, {
                   forexId: f.forexId,
                   lcId: f.lcId || '(not set)',
                   status: f.status,
@@ -246,11 +261,11 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             });
             
             if (hasForex) {
-              console.log(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - has forex allocation record`);
+              devLog(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - has forex allocation record`);
               return false;
             }
             
-            console.log(`[PAYMENT METHODS] ✅ Including ${lc.lcId} in Payment Methods`);
+            devLog(`[PAYMENT METHODS] ✅ Including ${lc.lcId} in Payment Methods`);
             // Include all other LCs in Payment Methods workflow
             return true;
           })
@@ -264,6 +279,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             amount: lc.amount,
             currency: lc.currency,
             exporter: lc.exporterId,
+            buyerName: lc.buyerName || linkedContract?.buyerName || '', // ✅ ADD BUYER NAME
             status: lc.status,
             currentStep: getCurrentStep(lc.status, 'LC'),
             isContract: false, // This is an LC, not a contract
@@ -616,10 +632,10 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                       {selectedPaymentMethod === 'LC' && !payment.isContract && (
                         <TableCell>
                           <Typography variant="body2" sx={{ 
-                            color: payment.contractData?.buyerName ? CBE_COLORS.black : CBE_COLORS.gray, 
-                            fontStyle: payment.contractData?.buyerName ? 'normal' : 'italic' 
+                            color: (payment.buyerName || payment.contractData?.buyerName) ? CBE_COLORS.black : CBE_COLORS.gray, 
+                            fontStyle: (payment.buyerName || payment.contractData?.buyerName) ? 'normal' : 'italic' 
                           }}>
-                            {payment.contractData?.buyerName || '—'}
+                            {payment.buyerName || payment.contractData?.buyerName || '—'}
                           </Typography>
                         </TableCell>
                       )}

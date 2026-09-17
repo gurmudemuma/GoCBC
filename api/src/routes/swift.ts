@@ -840,7 +840,17 @@ router.get('/messages',
           (direction as string) || 'ALL',
         ]);
       } else {
-        result = await fabricService.queryChaincode('QueryAllSWIFTMessages', []);
+        // Use CouchDB direct query (instant, no Fabric SDK timeout)
+        const { CouchDBDirectService } = require('../services/couchDBDirectService');
+        const couchDBService = new CouchDBDirectService();
+        try {
+          const messages = await couchDBService.queryAllSWIFTMessages();
+          result = { success: true, data: messages };
+          logger.info(`[SWIFT] ✅ Fetched ${messages.length} SWIFT messages from CouchDB (direct query)`);
+        } catch (couchErr) {
+          logger.warn('[SWIFT] CouchDB direct query failed, trying Fabric SDK...', couchErr);
+          result = await fabricService.queryChaincode('QueryAllSWIFTMessages', []);
+        }
       }
 
       if (result.success) {

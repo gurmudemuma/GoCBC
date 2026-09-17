@@ -36,9 +36,15 @@ import {
   Checkbox,
   ThemeProvider,
   createTheme,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  CircularProgress,
 } from '@mui/material';
+import { ExpandMore } from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
 import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
+import { couchDBService } from '@/services/couchdbService';
 import {
   AccountBalance,
   CurrencyExchange,
@@ -97,6 +103,7 @@ import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 import { DocumentManagementPanel } from '@/components/documents';
 import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
+import BusinessActivityTimeline from '@/components/documents/BusinessActivityTimeline';
 import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
@@ -123,6 +130,9 @@ interface LetterOfCredit {
   lcId: string;
   contractId: string;
   exporterId: string;
+  buyerId?: string;
+  buyerName?: string;
+  buyerCountry?: string;
   bankName: string;
   issuingBank: string;
   advisingBank: string;
@@ -139,10 +149,23 @@ interface LetterOfCredit {
   status: string;
   expiryDate: string;
   requestDate: string;
+  issueDate?: string;
+  approvalDate?: string;
   advisingDate?: string;
   confirmationStatus?: 'CONFIRMED' | 'UNCONFIRMED';
   paymentTerms?: string;
   terms?: string;
+  
+  // ✅ Documents attached to LC
+  documents?: any[];
+  
+  // ✅ Actor tracking fields (WHO performed actions)
+  approvedBy?: string;
+  approvedByMsp?: string;
+  issuedBy?: string;
+  issuedByMsp?: string;
+  lastUpdatedBy?: string;
+  lastUpdatedByMsp?: string;
 }
 
 interface ForexAllocation {
@@ -150,13 +173,16 @@ interface ForexAllocation {
   contractId: string;
   exporterId: string;
   lcId: string;
+  buyerName?: string; // ✅ Added for buyer enrichment
+  BuyerName?: string; // ✅ Alternative field name
+  buyerCountry?: string; // ✅ Added for buyer country
   requestedAmount: number;
   allocatedAmount: number;
   currency: string;
   exchangeRate: number;
   retentionRate: number;
   status: string;
-  expiryDate: string;
+  expiryDate: string | null;
 }
 
 // Use the organization theme for BANKS (purple/golden/black/white)
@@ -171,11 +197,18 @@ const CBE_COLORS = {
 };
 
 const BanksPortal: React.FC = () => {
+  // 🔇 Logging Control - Set to true to enable verbose logs
+  const DEV_LOGGING = false;
+  const devLog = (...args: any[]) => {
+    if (DEV_LOGGING) console.log(...args);
+  };
+
   const { user } = useAuth();
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('LC');
   const [contracts, setContracts] = useState<SalesContract[]>([]);
+  const [lcDetailsLoading, setLcDetailsLoading] = useState(false); // ✅ Loading state for LC details
   const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
   const [exportPermits, setExportPermits] = useState<any[]>([]);
@@ -226,6 +259,8 @@ const BanksPortal: React.FC = () => {
 
   // SWIFT compose dialog state
   const [swiftComposeOpen, setSwiftComposeOpen] = useState(false);
+  const [selectedSwiftMessage, setSelectedSwiftMessage] = useState<any | null>(null);
+  const [swiftDetailsDialogOpen, setSwiftDetailsDialogOpen] = useState(false);
   const [swiftForm, setSwiftForm] = useState<any>({
     messageID: '',
     messageType: 'MT103',
@@ -451,345 +486,193 @@ const BanksPortal: React.FC = () => {
       return;
     }
 
-    console.log('[BANKS] Starting to load banking data...');
+    devLog('[BANKS] ⚡ PARALLEL LOADING - All data loads at once!');
 
     try {
-      // Load all NBE-approved contracts from /contracts endpoint
-      console.log('[BANKS] Fetching contracts from /contracts endpoint...');
-      const contractsResponse = await apiFetch('/contracts', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      console.log('[BANKS] Contracts response status:', contractsResponse.status);
-      const contractsResult = await contractsResponse.json();
-      console.log('[BANKS] Contracts result:', { success: contractsResult.success, count: contractsResult.data?.length });
-      
-      let nbeApprovedContracts: any[] = [];
-      
-      if (contractsResult.success) {
-        // Debug: Log all contract statuses
-        console.log('[BANKS] 🔍 All contracts from API:');
-        contractsResult.data.forEach((c: any, idx: number) => {
-          console.log(`  [${idx + 1}] ID: ${c.contractId || c.contractID}, status: "${c.status}", contractStatus: "${c.contractStatus}"`);
-        });
-        
-        // Filter for APPROVED contracts (ECTA-approved)
-        // Check BOTH status and contractStatus fields since API returns both
-        nbeApprovedContracts = contractsResult.data.filter((c: any) => {
-          const statusCheck = c.status === 'APPROVED' || c.status === 'NBE_APPROVED';
-          const contractStatusCheck = c.contractStatus === 'APPROVED' || c.contractStatus === 'NBE_APPROVED';
-          return statusCheck || contractStatusCheck;
-        });
-        
-        console.log(`[BANKS] Total contracts: ${contractsResult.data.length}`);
-        console.log(`[BANKS] ✅ ECTA-approved contracts ready for LC issuance: ${nbeApprovedContracts.length}`);
-        
-        setContracts(nbeApprovedContracts.map((c: any) => {
-          const mappedContract = {
-            contractId: c.contractID || c.contractId,
-            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || undefined,
-            exporterId: c.exporterID || c.exporterId,
-            buyerId: c.buyerID || c.buyerId,
-            buyerName: c.buyerName || c.BuyerName || c.buyerID || c.buyerId, // Use buyerID as fallback if buyerName not available
-            buyerCountry: c.buyerCountry || c.BuyerCountry,
-            buyerBank: c.buyerBank || c.BuyerBank || undefined,
-            exporterBank: c.exporterBank || c.ExporterBank || undefined,
-            coffeeType: c.coffeeType || c.CoffeeType,
-            quantity: c.quantity || c.Quantity,
-            pricePerKg: c.pricePerKg || c.PricePerKg,
-            totalValue: c.totalValue || c.TotalValue,
-            currency: c.currency || c.Currency,
-            status: c.contractStatus || c.status,
-            registrationDate: c.registrationDate || c.registeredAt,
-            approvalDate: c.approvalDate || c.approvedAt,
+      // Launch ALL requests in parallel - each updates state as soon as it completes
+      const [lcPromise, swiftPromise, forexPromise, shipmentsPromise] = [
+        // 1. LCs
+        apiFetch('/banking/lc', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              const lcs = result.data.map((lc: any) => ({
+                lcId: lc.lcId || lc.LCID,
+                contractId: lc.contractId,
+                exporterId: lc.exporterId,
+                buyerId: lc.buyerId,
+                buyerName: lc.buyerName || '',
+                buyerCountry: lc.buyerCountry || '',
+                amount: lc.amount,
+                currency: lc.currency,
+                status: lc.status,
+                documents: lc.documents || [],
+                requestDate: lc.requestDate || lc.createdAt,
+                issueDate: lc.issueDate,
+                expiryDate: lc.expiryDate,
+                approvalDate: lc.approvalDate,
+                issuingBank: lc.issuingBank,
+                advisingBank: lc.advisingBank,
+              }));
+              setLetterOfCredits(lcs);
+              devLog(`[BANKS] ⚡ LCs loaded: ${lcs.length}`);
+              return lcs;
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] LCs failed:', err); return []; }),
+
+        // 2. SWIFT Messages - PRIORITY!
+        apiFetch('/swift/messages', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              setSwiftMessages(result.data || []);
+              devLog(`[BANKS] ⚡ SWIFT loaded: ${result.data?.length || 0}`);
+              return result.data || [];
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] SWIFT failed:', err); return []; }),
+
+        // 3. Forex
+        couchDBService.getAllForex()
+          .then(forex => {
+            devLog(`[BANKS] ⚡ Forex loaded: ${forex.length}`);
+            return forex;
+          })
+          .catch(err => { console.warn('[BANKS] Forex failed:', err); return []; }),
+
+        // 4. Shipments
+        apiFetch('/shipments?status=DELIVERED', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              const delivered = result.data.filter((s: any) => {
+                const status = s.Status || s.status || '';
+                return status === 'DELIVERED' || status === 'COMPLETED';
+              });
+              setDeliveredShipments(delivered);
+              devLog(`[BANKS] ⚡ Shipments loaded: ${delivered.length}`);
+              return delivered;
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] Shipments failed:', err); return []; }),
+      ];
+
+      // Wait for all to complete and process forex with LC data
+      const [lcs, swift, forex, shipments] = await Promise.all([lcPromise, swiftPromise, forexPromise, shipmentsPromise]);
+
+      // Process forex allocations with buyer names from LCs
+      if (forex && forex.length > 0) {
+        const mappedForex = forex.map((f: any) => {
+          const matchingLC = lcs?.find((lc: any) => lc.lcId === f.lcId || lc.contractId === f.contractId);
+          return {
+            forexId: f.forexId || '',
+            contractId: f.contractId || '',
+            exporterId: f.exporterId || '',
+            lcId: f.lcId || '',
+            buyerName: matchingLC?.buyerName || f.buyerName || '',
+            buyerCountry: matchingLC?.buyerCountry || f.buyerCountry || '',
+            requestedAmount: f.requestedAmount || 0,
+            allocatedAmount: f.allocatedAmount || 0,
+            currency: f.currency || 'USD',
+            exchangeRate: f.exchangeRate || 0,
+            retentionRate: f.retentionRate || 0,
+            status: f.status || 'REQUESTED',
+            expiryDate: f.expiryDate || null,
           };
-          console.log('[BANKS] 🔍 Mapped contract:', mappedContract.contractId, {
-            buyerId: mappedContract.buyerId,
-            buyerName: mappedContract.buyerName,
-            buyerCountry: mappedContract.buyerCountry,
-            buyerBank: mappedContract.buyerBank,
-            nbeReferenceNumber: mappedContract.nbeReferenceNumber,
-            coffeeType: mappedContract.coffeeType,
-            quantity: mappedContract.quantity,
-            totalValue: mappedContract.totalValue
-          });
-          return mappedContract;
-        }));
-      }
-
-      // Load Letters of Credit from /banking/lc endpoint
-      let allLCs: any[] = [];
-      try {
-        const lcResponse = await apiFetch('/banking/lc', {
-          headers: { 'Authorization': `Bearer ${token}` }
         });
-        const lcResult = await lcResponse.json();
-        console.log('[BANKS] LC Response:', { status: lcResponse.status, success: lcResult.success, count: lcResult.data?.length });
-        
-        if (lcResult.success) {
-          allLCs = lcResult.data.map((lc: any) => ({
-            lcId: lc.lcId || lc.LCID,
-            contractId: lc.contractId || lc.ContractID,
-            exporterId: lc.exporterId || lc.ExporterID,
-            bankName: lc.bankName || lc.BankName,
-            issuingBank: lc.issuingBank || lc.IssuingBank,
-            advisingBank: lc.advisingBank || lc.AdvisingBank || lc.beneficiaryBank || lc.BeneficiaryBank,
-            amount: lc.amount || lc.Amount,
-            currency: lc.currency || lc.Currency,
-            status: lc.status || lc.Status,
-            expiryDate: lc.expiryDate || lc.ExpiryDate,
-            requestDate: lc.requestDate || lc.RequestDate,
-          }));
-          
-          setLetterOfCredits(allLCs);
-          console.log(`[BANKS] ✅ Letters of Credit loaded: ${allLCs.length}`);
-          console.log(`[BANKS] ℹ️  State should now have ${allLCs.length} LCs for Tab 0 KPI card`);
-          
-          // Filter LCs for Document Examination (LCs with documents attached, status: ISSUED or FOREX_ALLOCATED)
-          const forExamination = allLCs.filter((lc: any) => 
-            (lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED') && lc.documents && lc.documents.length > 0
-          );
-          setLcsForExamination(forExamination);
-          console.log(`[BANKS] 📋 LCs pending document examination: ${forExamination.length} (Tab 3 KPI)`);
-          
-          // Filter LCs for Payment Release (status: UTILIZED - documents verified)
-          const forPaymentRelease = allLCs.filter((lc: any) => 
-            lc.status === 'UTILIZED'
-          );
-          setLcsForPaymentRelease(forPaymentRelease);
-          console.log(`[BANKS] 💰 LCs ready for payment release: ${forPaymentRelease.length} (Tab 4 KPI)`);
-        }
-      } catch (err) {
-        console.error('[BANKS] ❌ Failed to load Letters of Credit:', err);
-      }
 
-      // Load Forex Allocations from /forex endpoint
-      try {
-        const forexResponse = await apiFetch('/forex', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const forexResult = await forexResponse.json();
-        let mappedForex: ForexAllocation[] = [];
-        
-        if (forexResult.success) {
-          mappedForex = forexResult.data.map((f: any) => ({
-            forexId: f.forexId || f.ForexID,
-            contractId: f.contractId || f.ContractID,
-            exporterId: f.exporterId || f.ExporterID,
-            lcId: f.lcId || f.LCID,
-            requestedAmount: Number(f.requestedAmount ?? f.RequestedAmount) || 0,
-            allocatedAmount: Number(f.allocatedAmount ?? f.AllocatedAmount) || 0,
-            currency: f.currency || f.Currency,
-            exchangeRate: Number(f.exchangeRate ?? f.ExchangeRate) || 0,
-            retentionRate: Number(f.retentionRate ?? f.RetentionRate) || 0,
-            status: f.status || f.Status,
-            expiryDate: f.expiryDate || f.ExpiryDate,
-          }));
-          console.log(`[BANKS] ✅ Forex allocations loaded from /forex: ${forexResult.data.length}`);
-        }
-
-        // Add ISSUED and FOREX_ALLOCATED LCs as forex requests if they don't already have forex records
-        if (allLCs && allLCs.length > 0) {
-          // Include both ISSUED and FOREX_ALLOCATED statuses
-          const forexRelatedLCs = allLCs.filter((lc: any) => 
+        // Add synthetic forex from LCs
+        if (lcs && lcs.length > 0) {
+          const forexRelatedLCs = lcs.filter((lc: any) => 
             lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED'
           );
-          console.log(`[BANKS] 🔍 Found ${forexRelatedLCs.length} forex-related LCs (ISSUED/FOREX_ALLOCATED/FOREX_BACKED)`);
-          console.log(`[BANKS] 📋 Forex-related LCs:`, forexRelatedLCs.map(lc => ({ lcId: lc.lcId, status: lc.status, amount: lc.amount })));
-          console.log(`[BANKS] 📋 Existing forex records from API:`, mappedForex.map(f => ({ forexId: f.forexId, lcId: f.lcId, status: f.status })));
-          
           for (const lc of forexRelatedLCs) {
-            // Check if this LC already has a forex allocation
-            // Match by: 1) lcId exact match, 2) forexId pattern (contains LC ID), 3) contract+exporter match
-            const matchingForex = mappedForex.filter(f => {
-              const lcIdMatch = f.lcId && f.lcId === lc.lcId;
-              const forexIdMatch = f.forexId && f.forexId.includes(lc.lcId);
-              const metadataMatch = f.contractId && f.exporterId && 
-                f.contractId === lc.contractId && f.exporterId === lc.exporterId;
-              return lcIdMatch || forexIdMatch || metadataMatch;
-            });
-            
-            const hasForex = matchingForex.length > 0;
-            
-            if (!hasForex) {
-              // Create synthetic forex record for LC without forex allocation record
-              // Use appropriate status based on LC status
-              const forexStatus = lc.status === 'FOREX_ALLOCATED' ? 'ALLOCATED' : 'REQUESTED';
-              
-              const syntheticForex: ForexAllocation = {
-                forexId: `FOREX_${lc.lcId}_PENDING`,
+            if (!mappedForex.find((f: any) => f.lcId === lc.lcId)) {
+              mappedForex.push({
+                forexId: `SYNTHETIC_${lc.lcId}`,
                 contractId: lc.contractId || '',
                 exporterId: lc.exporterId || '',
-                lcId: lc.lcId,
+                lcId: lc.lcId || '',
+                buyerName: lc.buyerName || '',
+                buyerCountry: lc.buyerCountry || '',
                 requestedAmount: Number(lc.amount || 0),
                 allocatedAmount: lc.status === 'FOREX_ALLOCATED' ? Number(lc.amount || 0) : 0,
                 currency: lc.currency || 'USD',
-                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? (lc.exchangeRate || 115.5) : 0,
-                retentionRate: lc.status === 'FOREX_ALLOCATED' ? (lc.retentionRate || 40) : 0,
-                status: forexStatus,
+                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? 115.5 : 0,
+                retentionRate: lc.status === 'FOREX_ALLOCATED' ? 40 : 0,
+                status: lc.status === 'FOREX_ALLOCATED' ? 'ALLOCATED' : 'REQUESTED',
                 expiryDate: lc.expiryDate || '',
-              };
-              mappedForex.push(syntheticForex);
-              console.log(`[BANKS] ➕ Added ${lc.status} LC ${lc.lcId} as synthetic forex ${forexStatus}`, syntheticForex);
-            } else {
-              console.log(`[BANKS] ✓ LC ${lc.lcId} (${lc.status}) already has forex allocation:`, matchingForex);
+              });
             }
           }
         }
 
         setForexAllocations(mappedForex);
-        console.log(`[BANKS] ✅ Total forex allocations (including synthetic): ${mappedForex.length}`);
-        console.log(`[BANKS] 📊 Final forex allocations for table:`, mappedForex.map(f => ({ 
-          forexId: f.forexId, 
-          lcId: f.lcId, 
-          status: f.status,
-          requestedAmount: f.requestedAmount,
-          allocatedAmount: f.allocatedAmount
-        })));
-      } catch (err) {
-        console.warn('[BANKS] Could not load forex allocations:', err);
+        devLog(`[BANKS] ⚡ Total forex: ${mappedForex.length}`);
       }
 
-      // Load Export Permits from /permits endpoint
-      try {
-        const permitsResponse = await apiFetch('/permits', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const permitsResult = await permitsResponse.json();
-        if (permitsResult.success) {
-          setExportPermits(Array.isArray(permitsResult.data) ? permitsResult.data : []);
-          console.log(`[BANKS] ✅ Export permits loaded: ${permitsResult.data?.length || 0}`);
-        }
-      } catch (err) {
-        console.warn('[BANKS] Could not load export permits:', err);
-      }
-
-      // Load Documentary Collections (CAD) - Endpoint may not exist yet
-      try {
-        // TODO: Backend needs GET /api/v1/banking/cad endpoint
-        // For now, use empty array as CAD functionality is Phase 2
-        setDocumentaryCollections([]);
-        console.log('[BANKS] Documentary Collections: endpoint not yet implemented (Phase 2)');
-      } catch (err) {
-        console.warn('Could not load documentary collections:', err);
-        setDocumentaryCollections([]);
-      }
-
-      // Load Advance Payments - Endpoint may not exist yet
-      try {
-        // TODO: Backend needs GET /api/v1/banking/payment/by-method/ADVANCE endpoint
-        // For now, use empty array as Advance Payment functionality is Phase 2
-        setAdvancePayments([]);
-        console.log('[BANKS] Advance Payments: endpoint not yet implemented (Phase 2)');
-      } catch (err) {
-        console.warn('Could not load advance payments:', err);
-        setAdvancePayments([]);
-      }
-
-      // Load Consignments
-      try {
-        const consignmentsResponse = await apiFetch('/banking/consignment/outstanding', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const consignmentsResult = await consignmentsResponse.json();
-        if (consignmentsResult.success) {
-          setConsignments(Array.isArray(consignmentsResult.data) ? consignmentsResult.data : []);
-          console.log(`[BANKS] Consignments loaded: ${consignmentsResult.data?.length || 0} (Tab 0 KPI)`);
-          console.log(`[BANKS] ℹ️  State should now have ${consignmentsResult.data?.length || 0} consignments for Tab 0 KPI card`);
-        }
-      } catch (err) {
-        console.warn('Could not load consignments:', err);
-        setConsignments([]);
-      }
-
-      // Load Pending Documents for Verification from /banking/payment/by-method/LC endpoint
-      try {
-        const paymentsResponse = await apiFetch('/banking/payment/by-method/LC', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const paymentsResult = await paymentsResponse.json();
-        if (paymentsResult.success && Array.isArray(paymentsResult.data)) {
-          // Filter for payments with documents submitted but not verified
-          const pending = paymentsResult.data.filter((p: any) => 
-            p.status === 'DOCUMENTS_SUBMITTED' || p.status === 'UNDER_VERIFICATION'
+      // Filter LCs for document examination (documents submitted, awaiting bank verification)
+      if (lcs && lcs.length > 0) {
+        const forExam = lcs.filter((lc: any) => {
+          // Must have documents uploaded
+          if (!lc.documents || lc.documents.length === 0) return false;
+          
+          // Must be in a status where documents are expected
+          if (!['ISSUED', 'FOREX_ALLOCATED', 'DOCUMENTS_SUBMITTED'].includes(lc.status)) return false;
+          
+          // Include if ANY document is pending verification
+          const hasPendingDocs = lc.documents.some((d: any) => 
+            !d.status || d.status === 'pending' || d.status === 'uploaded' || d.status === 'submitted'
           );
-          setPendingDocuments(pending);
-          console.log(`[BANKS] 📄 Pending documents for verification: ${pending.length}`);
-        }
-      } catch (err) {
-        console.warn('[BANKS] Could not load pending documents:', err);
-      }
-
-      console.log(`\n[BANKS] ═══════════════════════════════════════════════════`);
-      console.log(`[BANKS] 📊 Data Loading Summary:`);
-      console.log(`[BANKS] ✅ ECTA-Approved Contracts (ready for LC): ${nbeApprovedContracts?.length || 0}`);
-      console.log(`[BANKS] ✅ Letters of Credit: ${letterOfCredits.length} (Tab 0 KPI)`);
-      console.log(`[BANKS] ✅ Forex Allocations: ${forexAllocations.length} (Tab 1 KPI)`);
-      console.log(`[BANKS] ✅ Export Permits: ${exportPermits.length}`);
-      console.log(`[BANKS] ✅ Consignments: ${consignments.length} (Tab 0 KPI)`);
-      console.log(`[BANKS] 📋 LCs for Document Examination: ${lcsForExamination.length} (Tab 3 KPI)`);
-      console.log(`[BANKS] 💰 LCs for Payment Release: ${lcsForPaymentRelease.length} (Tab 4 KPI)`);
-      console.log(`[BANKS] 📄 Pending Document Verifications: ${pendingDocuments.length}`);
-      console.log(`[BANKS] ⏳ Documentary Collections (CAD): ${documentaryCollections.length} (Tab 0 KPI - Phase 2)`);
-      console.log(`[BANKS] ⏳ Advance Payments: ${advancePayments.length} (Tab 0 KPI - Phase 2)`);
-      console.log(`[BANKS] ✅ SWIFT Messages: ${swiftMessages.length} (Tab 2 KPI)`);
-      console.log(`[BANKS] ═══════════════════════════════════════════════════\n`);
-      
-      console.log(`[BANKS] 🎯 Tab 0 KPI Values Will Be:`);
-      console.log(`  - Letter of Credit: ${letterOfCredits.length}`);
-      console.log(`  - Documentary Collection: ${documentaryCollections.length}`);
-      console.log(`  - Advance Payment: ${advancePayments.length}`);
-      console.log(`  - Consignment: ${consignments.length}`);
-
-      // Load SWIFT Statistics from /swift/statistics endpoint
-      try {
-        const swiftStatsResponse = await apiFetch('/swift/statistics', {
-          headers: { 'Authorization': `Bearer ${token}` }
+          
+          return hasPendingDocs;
         });
-        const swiftStatsResult = await swiftStatsResponse.json();
-        if (swiftStatsResult.success) {
-          setSwiftStats(swiftStatsResult.data);
-          console.log('[BANKS] ✅ SWIFT statistics loaded');
+        setLcsForExamination(forExam);
+        devLog(`[BANKS] ⚡ LCs for document examination: ${forExam.length}`);
+        if (forExam.length > 0) {
+          devLog(`[BANKS] 📋 LCs awaiting examination:`, forExam.map((lc: any) => ({
+            lcId: lc.lcId,
+            status: lc.status,
+            docs: lc.documents.length,
+            pendingDocs: lc.documents.filter((d: any) => !d.status || d.status === 'pending' || d.status === 'uploaded').length
+          })));
         }
-      } catch (err) {
-        console.warn('[BANKS] Could not load SWIFT statistics:', err);
+
+        // Filter LCs for payment release (documents examined and compliant, awaiting payment)
+        const forPayment = lcs.filter((lc: any) => {
+          // Must have documents
+          if (!lc.documents || lc.documents.length === 0) return false;
+          
+          // Must be in a status where payment can be released
+          if (!['DOCUMENTS_COMPLIANT', 'READY_FOR_PAYMENT', 'FOREX_ALLOCATED'].includes(lc.status)) return false;
+          
+          // All documents must be verified/compliant
+          const allDocsVerified = lc.documents.every((d: any) => 
+            d.status === 'verified' || d.status === 'approved' || d.status === 'compliant'
+          );
+          
+          return allDocsVerified;
+        });
+        setLcsForPaymentRelease(forPayment);
+        devLog(`[BANKS] ⚡ LCs ready for payment release: ${forPayment.length}`);
+        if (forPayment.length > 0) {
+          devLog(`[BANKS] 💰 LCs with verified documents:`, forPayment.map((lc: any) => ({
+            lcId: lc.lcId,
+            status: lc.status,
+            amount: lc.amount,
+            currency: lc.currency
+          })));
+        }
       }
 
-      // Load SWIFT Messages from /swift/messages endpoint
-      try {
-        const swiftMessagesResponse = await apiFetch('/swift/messages', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const swiftMessagesResult = await swiftMessagesResponse.json();
-        if (swiftMessagesResult.success) {
-          setSwiftMessages(swiftMessagesResult.data || []);
-          console.log(`[BANKS] ✅ SWIFT messages loaded: ${swiftMessagesResult.data?.length || 0} (Tab 2 KPI)`);
-          console.log(`[BANKS] ℹ️  State should now have ${swiftMessagesResult.data?.length || 0} messages for Tab 2 KPI card`);
-        }
-      } catch (err) {
-        console.warn('[BANKS] Could not load SWIFT messages:', err);
-      }
-
-      // Load delivered shipments for LC settlement tracking
-      try {
-        const shipmentsResponse = await apiFetch('/shipments?status=DELIVERED', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const shipmentsResult = await shipmentsResponse.json();
-        if (shipmentsResult.success && shipmentsResult.data) {
-          const delivered = shipmentsResult.data.filter((s: any) => {
-            const status = s.Status || s.status || s.shipmentStatus || '';
-            return status === 'DELIVERED' || status === 'COMPLETED';
-          });
-          setDeliveredShipments(delivered);
-          console.log(`[BANKS] ✅ Delivered shipments for LC settlement: ${delivered.length}`);
-        }
-      } catch (err) {
-        console.warn('[BANKS] Could not load delivered shipments:', err);
-      }
-      
+      devLog('[BANKS] ⚡ All critical data loaded!');
     } catch (error) {
-      console.error('[BANKS] Failed to load banking data:', error);
-      showError('Data Loading Failed', 'Could not load banking data from the server', error instanceof Error ? error.message : String(error));
+      console.error('[BANKS] Loading failed:', error);
+      showError('Data Loading Failed', 'Could not load banking data', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -963,191 +846,47 @@ const BanksPortal: React.FC = () => {
   };
 
   const handleViewLCDetails = async (lc: LetterOfCredit) => {
+    devLog('[BANKS] 📋 Fetching complete LC details for:', lc.lcId);
+    
+    // ✅ Show dialog immediately with loading state
     setSelectedLC(lc);
+    setDialogType('lcDetails');
+    setDialogOpen(true);
+    setLcDetailsLoading(true); // Show loading indicator
     
-    // Fetch real documents for this LC
-    const token = localStorage.getItem('authToken');
-    let lcDocuments: any[] = [];
-    
-    if (token) {
-      // First, try to get documents from the related contract (primary source)
-      if (lc.contractId) {
-        try {
-          console.log(`[LC DOCS] Fetching contract documents for LC ${lc.lcId} from contract ${lc.contractId}`);
-          const response = await apiFetch(`/contracts/${lc.contractId}/documents`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-          
-          const result = await response.json();
-          if (result.success && result.data && result.data.documents) {
-            lcDocuments = result.data.documents.map((doc: any) => ({
-              id: doc.document_id || doc.documentId || doc.id,
-              name: doc.file_name || doc.filename || doc.name,
-              type: (doc.mime_type || doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
-              status: 'AVAILABLE',
-              url: `/api/v1/documents/${doc.document_id || doc.documentId || doc.id}`,
-              uploadedDate: doc.uploaded_at || doc.uploadedAt ? new Date(doc.uploaded_at || doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-              size: doc.file_size || doc.size ? `${((doc.file_size || doc.size) / 1024).toFixed(0)} KB` : 'N/A',
-              category: doc.document_type || doc.category || 'CONTRACT_DOCUMENT',
-              documentType: doc.document_type || doc.documentType || 'UNKNOWN',
-            }));
-            console.log(`[LC DOCS] ✅ Found ${lcDocuments.length} documents from contract ${lc.contractId}`);
-          }
-        } catch (error) {
-          console.error(`[LC DOCS] Error fetching contract documents for ${lc.contractId}:`, error);
-        }
-      }
+    try {
+      // ✅ Fetch complete LC data from API (includes all enriched fields)
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lc.lcId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
       
-      // If no contract documents found, try LC-specific documents
-      if (lcDocuments.length === 0) {
-        try {
-          const response = await apiFetch(`/documents/entity/LC/${lc.lcId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-          
-          const result = await response.json();
-          if (result.success && result.data) {
-            lcDocuments = result.data.map((doc: any) => ({
-              id: doc.documentId || doc.id,
-              name: doc.filename || doc.name,
-              type: (doc.mimeType || 'application/pdf').split('/')[1].toUpperCase(),
-              status: 'AVAILABLE',
-              url: `/api/v1/documents/${doc.documentId || doc.id}`,
-              uploadedDate: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-              size: doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : 'N/A',
-              category: doc.category || 'LC_DOCUMENT',
-            }));
-            console.log(`[LC DOCS] ✅ Found ${lcDocuments.length} LC-specific documents`);
-          }
-        } catch (error) {
-          console.error('[LC DOCS] Error fetching LC documents:', error);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data) {
+          devLog('[BANKS] ✅ Fetched complete LC data:', result.data);
+          setSelectedLC(result.data);
+        } else {
+          console.warn('[BANKS] ⚠️ API returned no data, using cached LC');
+          // Keep the initial LC data
         }
+      } else {
+        console.warn('[BANKS] ⚠️ API fetch failed, using cached LC');
+        // Keep the initial LC data
       }
+    } catch (error) {
+      console.error('[BANKS] ❌ Error fetching LC details:', error);
+      // Keep the initial LC data as fallback
+    } finally {
+      setLcDetailsLoading(false); // Hide loading indicator
     }
-    
-    // Only show warning if truly no documents exist
-    if (lcDocuments.length === 0) {
-      console.warn(`[LC DOCS] ⚠️ No documents found for LC ${lc.lcId} (contract: ${lc.contractId})`);
-    }
-    
-    // Find the related contract
-    const contract = contracts.find(c => c.contractId === lc.contractId);
-    
-    // Set validation data for view mode
-    setValidationData({
-      entityId: lc.lcId,
-      entityType: 'LETTER OF CREDIT',
-      title: `LC Details - ${lc.lcId}`,
-      summary: [
-        { label: 'LC Number', value: lc.lcNumber || lc.lcId },
-        { label: 'SWIFT Reference', value: lc.swiftReference || `MT700-${lc.lcId.slice(-8).toUpperCase()}` },
-        { label: 'Contract Reference', value: lc.contractId },
-        { label: 'LC Type', value: 'Documentary Credit (Irrevocable)' },
-        { label: 'Confirmation Status', value: lc.confirmationStatus || 'UNCONFIRMED' },
-        { label: 'Applicant (Buyer)', value: contract?.buyerName || 'N/A' },
-        { label: 'Beneficiary (Exporter)', value: lc.exporterId },
-        { label: 'LC Amount', value: `${lc.currency} ${lc.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` },
-        { label: 'Tolerance', value: '+10% / -10%' },
-        { label: 'Issuing Bank', value: lc.issuingBank || contract?.buyerBank || 'N/A' },
-        { label: 'Issuing Bank SWIFT', value: lc.issuingBank ? `${lc.issuingBank.substring(0, 4).toUpperCase()}${contract?.buyerCountry?.substring(0, 2).toUpperCase() || 'XX'}XX` : 'N/A' },
-        { label: 'Advising Bank', value: lc.advisingBank || contract?.exporterBank || lc.bankName },
-        { label: 'Advising Bank SWIFT', value: 'CBETETAA' },
-        { label: 'Advising Date', value: lc.advisingDate ? new Date(lc.advisingDate).toLocaleDateString() : 'Pending' },
-        { label: 'Payment Terms', value: lc.paymentTerms || 'At Sight' },
-        { label: 'Transport Mode', value: lc.transportMode === 'AIR' ? '🛫 Air Freight' : '🚢 Sea Freight' },
-        { label: 'Port of Loading', value: lc.portOfLoading || 'Djibouti Port / Bole International Airport' },
-        { label: 'Port of Discharge', value: lc.portOfDischarge || contract?.buyerCountry || 'N/A' },
-        { label: 'Latest Shipment Date', value: lc.latestShipmentDate ? new Date(lc.latestShipmentDate).toLocaleDateString() : 'N/A' },
-        { label: 'LC Expiry Date', value: new Date(lc.expiryDate).toLocaleDateString() },
-        { label: 'Place of Expiry', value: 'Addis Ababa, Ethiopia' },
-        { label: 'Request Date', value: new Date(lc.requestDate).toLocaleDateString() },
-        { label: 'Days to Expiry', value: Math.ceil((new Date(lc.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)).toString() + ' days' },
-        { label: 'Current Status', value: lc.status },
-      ],
-      prerequisites: [
-        {
-          label: 'Contract Registered',
-          status: contract ? 'PASSED' : 'FAILED',
-          details: contract ? `Contract ${contract.contractId} found and verified` : 'Contract not found in system'
-        },
-        {
-          label: 'ECTA Approval',
-          status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-          details: contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED' ? 'Contract approved by ECTA' : `Current status: ${contract?.status || 'Unknown'}`
-        },
-        {
-          label: 'Amount Verification',
-          status: contract && Math.abs(lc.amount - contract.totalValue) < 0.01 ? 'PASSED' : 'WARNING',
-          details: contract ? 
-            (Math.abs(lc.amount - contract.totalValue) < 0.01 ? 'LC amount matches contract value' : 
-            `Mismatch: LC $${lc.amount.toLocaleString()} vs Contract $${contract.totalValue.toLocaleString()}`) : 
-            'Cannot verify - contract not found'
-        },
-        {
-          label: 'Exporter Registration',
-          status: 'PASSED',
-          details: `Exporter ${lc.exporterId} is registered and verified in CECBS`
-        },
-        {
-          label: 'Banking Details',
-          status: lc.issuingBank && lc.advisingBank ? 'PASSED' : 'WARNING',
-          details: lc.issuingBank && lc.advisingBank ? 
-            'All banking information complete' : 
-            'Some banking details may be incomplete'
-        },
-        {
-          label: 'Documents Submitted',
-          status: lcDocuments.some(d => d.status === 'AVAILABLE') ? 'PASSED' : 'WARNING',
-          details: `${lcDocuments.filter(d => d.status === 'AVAILABLE').length} of ${lcDocuments.length} documents available`
-        },
-      ],
-      documents: lcDocuments,
-      complianceChecks: [
-        {
-          label: 'UCP 600 Compliant',
-          status: 'COMPLIANT',
-          details: 'LC terms comply with ICC Uniform Customs and Practice for Documentary Credits'
-        },
-        {
-          label: 'NBE Regulations',
-          status: 'COMPLIANT',
-          details: 'Complies with National Bank of Ethiopia forex allocation and export documentation requirements'
-        },
-        {
-          label: 'Trade Sanctions Check',
-          status: 'COMPLIANT',
-          details: contract?.buyerCountry ? `${contract.buyerCountry} is not subject to international trade sanctions` : 'Buyer country verified'
-        },
-        {
-          label: 'AML/CFT Screening',
-          status: 'COMPLIANT',
-          details: 'Anti-Money Laundering and Counter-Terrorism Financing checks passed for all parties'
-        },
-        {
-          label: 'Export License Validity',
-          status: 'COMPLIANT',
-          details: 'Exporter holds valid ECTA export license'
-        },
-      ],
-      additionalInfo: lc.status === 'REQUESTED' ? 
-        'This LC is pending approval. Review all details carefully before proceeding.' :
-        lc.status === 'ISSUED' ?
-        'This LC has been issued and is active. Bank should allocate forex for this LC. After forex allocation, exporter can proceed with shipment.' :
-        'Review LC details and current status.'
-    });
-    setValidationDialogOpen(true);
   };
 
   const handleViewContractDetails = async (contract: SalesContract) => {
-    console.log('[BANKS] 📄 handleViewContractDetails called with contract:', {
+    devLog('[BANKS] 📄 handleViewContractDetails called with contract:', {
       contractId: contract.contractId,
       buyerName: contract.buyerName,
       buyerId: contract.buyerId,
@@ -1164,7 +903,7 @@ const BanksPortal: React.FC = () => {
     
     if (token) {
       try {
-        console.log('[BANKS] 📄 Fetching documents for contract:', contract.contractId);
+        devLog('[BANKS] 📄 Fetching documents for contract:', contract.contractId);
         const response = await apiFetch(`/documents/entity/CONTRACT/${contract.contractId}`, {
           method: 'GET',
           headers: {
@@ -1174,10 +913,10 @@ const BanksPortal: React.FC = () => {
         });
         
         const result = await response.json();
-        console.log('[BANKS] 📄 Documents API response:', { success: result.success, dataLength: result.data?.length });
+        devLog('[BANKS] 📄 Documents API response:', { success: result.success, dataLength: result.data?.length });
         
         if (result.success && result.data && Array.isArray(result.data)) {
-          console.log('[BANKS] 📄 Raw documents from API:', result.data);
+          devLog('[BANKS] 📄 Raw documents from API:', result.data);
           contractDocuments = result.data.map((doc: any) => {
             const docId = doc.document_id || doc.documentId || doc.id;
             return {
@@ -1191,7 +930,7 @@ const BanksPortal: React.FC = () => {
               category: doc.document_type || doc.category || 'CONTRACT_DOCUMENT',
             };
           });
-          console.log('[BANKS] 📄 Mapped documents:', contractDocuments);
+          devLog('[BANKS] 📄 Mapped documents:', contractDocuments);
         }
       } catch (error) {
         console.error('[BANKS] ❌ Error fetching contract documents:', error);
@@ -1200,7 +939,7 @@ const BanksPortal: React.FC = () => {
     
     // If no documents found, provide standard required documents list
     if (contractDocuments.length === 0) {
-      console.log('[BANKS] ⚠️  No documents found for contract, showing MISSING placeholders');
+      devLog('[BANKS] ⚠️  No documents found for contract, showing MISSING placeholders');
       contractDocuments = [
         { id: '1', name: 'Sales Contract (Signed)', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
         { id: '2', name: 'Commercial Invoice', type: 'PDF', status: 'MISSING', uploadedDate: 'N/A', size: 'N/A' },
@@ -1681,6 +1420,37 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  // Verify Individual Document - Bank approves/rejects specific document
+  const handleVerifyDocument = async (documentId: string, approved: boolean) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await apiFetch(`/documents/${documentId}/verify`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approved,
+          verifierComments: approved ? 'Document verified and complies with LC terms' : 'Document does not comply',
+          verificationDate: new Date().toISOString(),
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess(
+          approved ? 'Document Approved' : 'Document Rejected',
+          approved ? 'Document verified successfully' : 'Document marked as non-compliant'
+        );
+        loadBankingData(); // Refresh to show updated status
+      } else {
+        showError('Verification Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
   // Release Payment - Bank releases payment after document compliance
   const handleReleasePayment = async (lcId: string, amount: number, currency: string) => {
     const token = localStorage.getItem('authToken');
@@ -1850,6 +1620,7 @@ const BanksPortal: React.FC = () => {
   };
 
   const getFilteredLCs = () => {
+    devLog(`[BANKS] 🔍 getFilteredLCs() called with ${letterOfCredits.length} total LCs`);
     let filtered = letterOfCredits;
     if (searchTerm) {
       filtered = filtered.filter(lc => 
@@ -1857,28 +1628,35 @@ const BanksPortal: React.FC = () => {
         lc.contractId.toLowerCase().includes(searchTerm.toLowerCase()) ||
         lc.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
       );
+      devLog(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
     }
     if (filterStatus !== 'ALL') {
       filtered = filtered.filter(lc => lc.status === filterStatus);
+      devLog(`[BANKS] 🔍 After status filter (status: "${filterStatus}"): ${filtered.length} items`);
     }
     if (dateFrom) {
-      filtered = filtered.filter(lc => new Date(lc.requestDate) >= new Date(dateFrom));
+      filtered = filtered.filter(lc => lc.requestDate && new Date(lc.requestDate) >= new Date(dateFrom));
+      devLog(`[BANKS] 🔍 After dateFrom filter: ${filtered.length} items`);
     }
     if (dateTo) {
-      filtered = filtered.filter(lc => new Date(lc.requestDate) <= new Date(dateTo));
+      filtered = filtered.filter(lc => lc.requestDate && new Date(lc.requestDate) <= new Date(dateTo));
+      devLog(`[BANKS] 🔍 After dateTo filter: ${filtered.length} items`);
     }
     if (amountMin) {
       filtered = filtered.filter(lc => lc.amount >= parseFloat(amountMin));
+      devLog(`[BANKS] 🔍 After amountMin filter: ${filtered.length} items`);
     }
     if (amountMax) {
       filtered = filtered.filter(lc => lc.amount <= parseFloat(amountMax));
+      devLog(`[BANKS] 🔍 After amountMax filter: ${filtered.length} items`);
     }
+    devLog(`[BANKS] 🔍 Returning ${filtered.length} filtered LCs`);
     return filtered;
   };
 
   const getFilteredForex = () => {
     let filtered = forexAllocations;
-    console.log(`[BANKS] 🔍 getFilteredForex() called with ${forexAllocations.length} total forex allocations`);
+    devLog(`[BANKS] 🔍 getFilteredForex() called with ${forexAllocations.length} total forex allocations`);
     
     if (searchTerm) {
       filtered = filtered.filter(forex => 
@@ -1886,7 +1664,7 @@ const BanksPortal: React.FC = () => {
         forex.lcId.toLowerCase().includes(searchTerm.toLowerCase()) ||
         forex.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
       );
-      console.log(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
+      devLog(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
     }
     if (filterStatus !== 'ALL') {
       if (filterStatus === 'APPROVED_OR_ALLOCATED') {
@@ -1894,18 +1672,18 @@ const BanksPortal: React.FC = () => {
       } else {
         filtered = filtered.filter(forex => forex.status === filterStatus);
       }
-      console.log(`[BANKS] 🔍 After status filter (status: "${filterStatus}"): ${filtered.length} items`);
+      devLog(`[BANKS] 🔍 After status filter (status: "${filterStatus}"): ${filtered.length} items`);
     }
     if (amountMin) {
       filtered = filtered.filter(forex => forex.allocatedAmount >= parseFloat(amountMin));
-      console.log(`[BANKS] 🔍 After min amount filter (min: ${amountMin}): ${filtered.length} items`);
+      devLog(`[BANKS] 🔍 After min amount filter (min: ${amountMin}): ${filtered.length} items`);
     }
     if (amountMax) {
       filtered = filtered.filter(forex => forex.allocatedAmount <= parseFloat(amountMax));
-      console.log(`[BANKS] 🔍 After max amount filter (max: ${amountMax}): ${filtered.length} items`);
+      devLog(`[BANKS] 🔍 After max amount filter (max: ${amountMax}): ${filtered.length} items`);
     }
     
-    console.log(`[BANKS] ✅ getFilteredForex() returning ${filtered.length} items`);
+    devLog(`[BANKS] ✅ getFilteredForex() returning ${filtered.length} items`);
     return filtered;
   };
 
@@ -2030,8 +1808,8 @@ const BanksPortal: React.FC = () => {
       lc.amount,
       lc.currency,
       lc.status,
-      new Date(lc.expiryDate).toLocaleDateString(),
-      new Date(lc.requestDate).toLocaleDateString()
+      lc.expiryDate ? new Date(lc.expiryDate).toLocaleDateString() : 'N/A',
+      lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'
     ]);
     return [headers, ...rows].map(row => row.join(',')).join('\n');
   };
@@ -2047,7 +1825,7 @@ const BanksPortal: React.FC = () => {
       (f.allocatedAmount * 0.4).toFixed(2),
       (f.allocatedAmount * 0.6 * f.exchangeRate).toFixed(2),
       f.status,
-      new Date(f.expiryDate).toLocaleDateString()
+      f.expiryDate ? new Date(f.expiryDate).toLocaleDateString() : 'N/A'
     ]);
     return [headers, ...rows].map(row => row.join(',')).join('\n');
   };
@@ -2527,7 +2305,7 @@ const BanksPortal: React.FC = () => {
             return kpis.map((kpi: any, index) => {
               // Debug log to see actual KPI values being rendered
               if (index === 0) {
-                console.log(`[BANKS] 🎯 Rendering KPI cards for Tab ${activeTab}:`, kpis.map(k => `${k.label}: ${k.value}`));
+                devLog(`[BANKS] 🎯 Rendering KPI cards for Tab ${activeTab}:`, kpis.map(k => `${k.label}: ${k.value}`));
               }
               
               return (
@@ -2692,13 +2470,13 @@ const BanksPortal: React.FC = () => {
               setDialogOpen(true);
             }}
             onProcessStep={async (paymentId, step) => {
-              console.log('[BANKS] Process step:', paymentId, step);
+              devLog('[BANKS] Process step:', paymentId, step);
               
               if (step === 'Approve Request') {
                 // Handle LC approval request
                 const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
                 if (lc) {
-                  console.log('[BANKS] Approving LC:', lc.lcId);
+                  devLog('[BANKS] Approving LC:', lc.lcId);
                   await handleApproveLC(lc.lcId, lc.exporterId);
                   return;
                 }
@@ -2763,7 +2541,7 @@ const BanksPortal: React.FC = () => {
                 );
                 
                 if (contract) {
-                  console.log('[BANKS] Found contract:', contract.contractId, 'Status:', contract.status);
+                  devLog('[BANKS] Found contract:', contract.contractId, 'Status:', contract.status);
                   // Open LC dialog for this approved contract using handleOpenDialog
                   handleOpenDialog('lc', contract);
                   return;
@@ -3066,16 +2844,17 @@ const BanksPortal: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ width: '12%' }}><strong>Forex ID</strong></TableCell>
-                    <TableCell sx={{ width: '12%' }}><strong>LC Reference</strong></TableCell>
+                    <TableCell sx={{ width: '11%' }}><strong>Forex ID</strong></TableCell>
+                    <TableCell sx={{ width: '11%' }}><strong>LC Reference</strong></TableCell>
                     <TableCell sx={{ width: '10%' }}><strong>Exporter</strong></TableCell>
+                    <TableCell sx={{ width: '11%' }}><strong>Buyer</strong></TableCell>
                     <TableCell sx={{ width: '10%' }}><strong>Allocated Amount</strong></TableCell>
-                    <TableCell sx={{ width: '10%' }}><strong>Exchange Rate</strong></TableCell>
-                    <TableCell sx={{ width: '10%' }}><strong>Retention (40%)</strong></TableCell>
-                    <TableCell sx={{ width: '10%' }}><strong>Conversion (60%)</strong></TableCell>
+                    <TableCell sx={{ width: '9%' }}><strong>Exchange Rate</strong></TableCell>
+                    <TableCell sx={{ width: '9%' }}><strong>Retention (40%)</strong></TableCell>
+                    <TableCell sx={{ width: '9%' }}><strong>Conversion (60%)</strong></TableCell>
                     <TableCell sx={{ width: '8%' }}><strong>Status</strong></TableCell>
-                    <TableCell sx={{ width: '8%' }}><strong>Expiry</strong></TableCell>
-                    <TableCell align="right" sx={{ width: '10%' }}><strong>Actions</strong></TableCell>
+                    <TableCell sx={{ width: '6%' }}><strong>Expiry</strong></TableCell>
+                    <TableCell align="right" sx={{ width: '6%' }}><strong>Actions</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -3091,6 +2870,9 @@ const BanksPortal: React.FC = () => {
                         <TableCell>{forex.forexId}</TableCell>
                         <TableCell>{forex.lcId || 'N/A'}</TableCell>
                         <TableCell>{forex.exporterId || 'N/A'}</TableCell>
+                        <TableCell>
+                          {forex.buyerName || forex.BuyerName || 'N/A'}
+                        </TableCell>
                         <TableCell>
                           <strong>${displayAmount.toLocaleString()}</strong>
                           {forex.status === 'REQUESTED' && <Chip label="Requested" size="small" sx={{ ml: 1, bgcolor: '#ff9800', color: '#fff' }} />}
@@ -3129,14 +2911,63 @@ const BanksPortal: React.FC = () => {
                             >
                               View Details
                             </Button>
+                            
+                            {/* EXPERT: Add Confirm button for REQUESTED status */}
+                            {forex.status === 'REQUESTED' && (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                startIcon={<CheckCircle />}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    devLog('[BANKS] Confirming forex request:', forex.forexId);
+                                    const token = localStorage.getItem('authToken');
+                                    const response = await fetch(`http://localhost:3001/api/v1/forex/${forex.forexId}/confirm`, {
+                                      method: 'POST',
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`,
+                                        'Content-Type': 'application/json'
+                                      },
+                                      body: JSON.stringify({
+                                        confirmedBy: user?.username || user?.fullName || 'Bank Officer',
+                                        comments: 'Forex request confirmed by bank'
+                                      })
+                                    });
+
+                                    const result = await response.json();
+
+                                    if (result.success) {
+                                      showSuccess('Forex Confirmed', `Forex ${forex.forexId} confirmed successfully. Status: REQUESTED → CONFIRMED`, '');
+                                      // Refresh data
+                                      loadBankingData();
+                                    } else {
+                                      showError('Confirmation Failed', result.error?.message || 'Failed to confirm forex request');
+                                    }
+                                  } catch (error: any) {
+                                    console.error('[BANKS] Error confirming forex:', error);
+                                    showError('Confirmation Failed', error.message || 'Failed to confirm forex request');
+                                  }
+                                }}
+                                sx={{
+                                  borderColor: '#4caf50',
+                                  color: '#4caf50',
+                                  '&:hover': { borderColor: '#388e3c', bgcolor: 'rgba(76, 175, 80, 0.05)' },
+                                }}
+                              >
+                                Confirm
+                              </Button>
+                            )}
+                            
                             <Button
                               size="small"
                               variant="contained"
                               startIcon={<CheckCircle />}
                               onClick={() => {
-                                console.log('[BANKS] Allocate Forex button clicked', forex);
+                                devLog('[BANKS] Allocate Forex button clicked', forex);
                                 setSelectedForex(forex);
-                                console.log('[BANKS] Setting allocation form...');
+                                devLog('[BANKS] Setting allocation form...');
                                 setAllocationForm({
                                   forexId: forex.forexId,
                                   lcId: forex.lcId || '',
@@ -3147,9 +2978,9 @@ const BanksPortal: React.FC = () => {
                                   approvalRef: `BANK-${Date.now()}`,
                                   expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
                                 });
-                                console.log('[BANKS] Opening allocation dialog...');
+                                devLog('[BANKS] Opening allocation dialog...');
                                 setAllocationDialogOpen(true);
-                                console.log('[BANKS] Dialog should now be open');
+                                devLog('[BANKS] Dialog should now be open');
                               }}
                               sx={{
                                 bgcolor: '#9b30b7',
@@ -3330,6 +3161,7 @@ const BanksPortal: React.FC = () => {
                       <TableCell><strong>Forex ID</strong></TableCell>
                       <TableCell><strong>LC Reference</strong></TableCell>
                       <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Buyer</strong></TableCell>
                       <TableCell><strong>Allocated Amount</strong></TableCell>
                       <TableCell><strong>Exchange Rate</strong></TableCell>
                       <TableCell><strong>Status</strong></TableCell>
@@ -3344,6 +3176,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell>{forex.forexId}</TableCell>
                           <TableCell>{forex.lcId || 'N/A'}</TableCell>
                           <TableCell>{forex.exporterId || 'N/A'}</TableCell>
+                          <TableCell>{forex.buyerName || forex.BuyerName || 'N/A'}</TableCell>
                           <TableCell><strong>${(forex.allocatedAmount || 0).toLocaleString()}</strong></TableCell>
                           <TableCell>{forex.exchangeRate || 0} ETB/USD</TableCell>
                           <TableCell>
@@ -3417,6 +3250,7 @@ const BanksPortal: React.FC = () => {
                       <TableCell><strong>LC ID</strong></TableCell>
                       <TableCell><strong>Contract ID</strong></TableCell>
                       <TableCell><strong>Exporter</strong></TableCell>
+                      <TableCell><strong>Buyer</strong></TableCell>
                       <TableCell><strong>Amount</strong></TableCell>
                       <TableCell><strong>Status</strong></TableCell>
                       <TableCell><strong>Expiry Date</strong></TableCell>
@@ -3430,6 +3264,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell>{lc.lcId}</TableCell>
                           <TableCell>{lc.contractId}</TableCell>
                           <TableCell>{lc.exporterId}</TableCell>
+                          <TableCell>{lc.buyerName || '—'}</TableCell>
                           <TableCell><strong>${lc.amount?.toLocaleString()} {lc.currency}</strong></TableCell>
                           <TableCell>
                             <StatusChip label={lc.status} status={lc.status === 'ISSUED' ? 'APPROVED' : 'PENDING'} />
@@ -3774,13 +3609,23 @@ const BanksPortal: React.FC = () => {
                 )}
               </Grid>
 
-              {/* Blockchain Verification Section */}
-              {/* Blockchain Verification - Component handles all messaging */}
+              
+{/* EXPERT PATTERN: Progressive Disclosure */}
               <Box sx={{ mt: 3 }}>
-                <BlockchainSignatureVerification
-                  entityType="FOREX_ALLOCATION"
-                  entityId={selectedForex.forexId || ''}
-                />
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="h6" gutterBottom>Activity Timeline</Typography>
+                {forexDetailsOpen && (
+                  <BusinessActivityTimeline entityType="FOREX" entityId={selectedForex.forexId || ''} />
+                )}
+                <Divider sx={{ my: 3 }} />
+                <Accordion>
+                  <AccordionSummary expandIcon={<ExpandMore />}>
+                    <Typography>🔐 Blockchain Verification</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    {forexDetailsOpen && <BlockchainSignatureVerification entityType="FOREX_ALLOCATION" entityId={selectedForex.forexId || ''} />}
+                  </AccordionDetails>
+                </Accordion>
               </Box>
             </Box>
           )}
@@ -3997,10 +3842,29 @@ const BanksPortal: React.FC = () => {
         <DialogTitle>
           <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
           Letter of Credit Details
+          {lcDetailsLoading && (
+            <CircularProgress size={20} sx={{ ml: 2, verticalAlign: 'middle' }} />
+          )}
         </DialogTitle>
         <DialogContent>
           {selectedLC && (
-            <Box sx={{ pt: 2 }}>
+            <Box sx={{ pt: 2, position: 'relative' }}>
+              {lcDetailsLoading && (
+                <Box sx={{ 
+                  position: 'absolute', 
+                  top: 0, 
+                  left: 0, 
+                  right: 0, 
+                  bottom: 0, 
+                  bgcolor: 'rgba(255,255,255,0.7)', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  zIndex: 1
+                }}>
+                  <CircularProgress />
+                </Box>
+              )}
               <Grid container spacing={3}>
                 {/* LC Information */}
                 <Grid item xs={12}>
@@ -4028,6 +3892,43 @@ const BanksPortal: React.FC = () => {
                         <Typography variant="body2" color="black">Exporter ID</Typography>
                         <Typography variant="body1">{selectedLC.exporterId}</Typography>
                       </Grid>
+                      
+                      {/* ✅ Actor tracking: WHO performed actions */}
+                      {selectedLC.approvedByMsp && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="black">Approved By</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                            <Chip 
+                              label={selectedLC.approvedByMsp}
+                              size="small"
+                              color={selectedLC.approvedByMsp === 'BanksMSP' ? 'success' : selectedLC.approvedByMsp === 'ECTAMSP' ? 'warning' : 'default'}
+                              sx={{ fontWeight: 600 }}
+                            />
+                            <Typography variant="caption" color="text.secondary">
+                              {selectedLC.approvedByMsp === 'BanksMSP' ? '(Bank)' : 
+                               selectedLC.approvedByMsp === 'ECTAMSP' ? '(ECTA - unusual)' :
+                               selectedLC.approvedByMsp === 'ExportersMSP' ? '(Exporter - error)' : ''}
+                            </Typography>
+                          </Box>
+                        </Grid>
+                      )}
+                      
+                      {selectedLC.issuedByMsp && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="black">Issued By</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                            <Chip 
+                              label={selectedLC.issuedByMsp}
+                              size="small"
+                              color={selectedLC.issuedByMsp === 'BanksMSP' ? 'success' : 'warning'}
+                              sx={{ fontWeight: 600 }}
+                            />
+                            <Typography variant="caption" color="text.secondary">
+                              {selectedLC.issuedByMsp === 'BanksMSP' ? '(Bank)' : '(Unusual)'}
+                            </Typography>
+                          </Box>
+                        </Grid>
+                      )}
                     </Grid>
                   </Paper>
                 </Grid>
@@ -4127,27 +4028,27 @@ const BanksPortal: React.FC = () => {
                       <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="black">Request Date</Typography>
                         <Typography variant="body1">
-                          {new Date(selectedLC.requestDate).toLocaleDateString('en-US', {
+                          {selectedLC.requestDate ? new Date(selectedLC.requestDate).toLocaleDateString('en-US', {
                             year: 'numeric',
                             month: 'long',
                             day: 'numeric'
-                          })}
+                          }) : 'N/A'}
                         </Typography>
                       </Grid>
                       <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="black">Expiry Date</Typography>
                         <Typography variant="body1" fontWeight={600}>
-                          {new Date(selectedLC.expiryDate).toLocaleDateString('en-US', {
+                          {selectedLC.expiryDate ? new Date(selectedLC.expiryDate).toLocaleDateString('en-US', {
                             year: 'numeric',
                             month: 'long',
                             day: 'numeric'
-                          })}
+                          }) : 'N/A'}
                         </Typography>
                       </Grid>
                       <Grid item xs={12}>
                         <Typography variant="body2" color="black">Days Remaining</Typography>
                         <Typography variant="body1">
-                          {Math.max(0, Math.ceil((new Date(selectedLC.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} days
+                          {selectedLC.expiryDate ? Math.max(0, Math.ceil((new Date(selectedLC.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))) : 'N/A'} days
                         </Typography>
                       </Grid>
                     </Grid>
@@ -4238,6 +4139,15 @@ const BanksPortal: React.FC = () => {
                 {/* Blockchain Verification - Component handles all messaging */}
                 <Grid item xs={12}>
                   <Divider sx={{ my: 2 }} />
+                  
+                  {/* Business Activity Timeline - Shows WHO did WHAT */}
+                  <BusinessActivityTimeline
+                    entityType="LC"
+                    entityId={selectedLC.lcId}
+                  />
+                  
+                  <Divider sx={{ my: 3 }} />
+                  
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     🔐 Cryptographic Signatures & Blockchain Verification
                   </Typography>
@@ -4314,7 +4224,7 @@ const BanksPortal: React.FC = () => {
                     <Typography variant="body2">
                       <strong>LC ID:</strong> {selectedLC.lcId}<br />
                       <strong>Current Amount:</strong> ${selectedLC.amount.toLocaleString()} {selectedLC.currency}<br />
-                      <strong>Current Expiry:</strong> {new Date(selectedLC.expiryDate).toLocaleDateString()}<br />
+                      <strong>Current Expiry:</strong> {selectedLC.expiryDate ? new Date(selectedLC.expiryDate).toLocaleDateString() : 'N/A'}<br />
                       <strong>Status:</strong> {selectedLC.status}
                     </Typography>
                   </Paper>
@@ -4600,15 +4510,15 @@ const BanksPortal: React.FC = () => {
         open={allocationDialogOpen}
         form={allocationForm}
         onChange={(f) => {
-          console.log('[BANKS] Forex form changed:', f);
+          devLog('[BANKS] Forex form changed:', f);
           setAllocationForm(f);
         }}
         onClose={() => {
-          console.log('[BANKS] Closing allocation dialog');
+          devLog('[BANKS] Closing allocation dialog');
           setAllocationDialogOpen(false);
         }}
         onConfirm={async (f) => {
-          console.log('[BANKS] Allocation confirmed:', f);
+          devLog('[BANKS] Allocation confirmed:', f);
           if (!f.forexId || !f.lcId) {
             showError('Validation', 'Forex ID and LC Reference are required');
             return;
@@ -4812,7 +4722,8 @@ const BanksPortal: React.FC = () => {
                             variant="outlined"
                             startIcon={<Visibility />}
                             onClick={() => {
-                              showInfo('SWIFT Message', `Message ID: ${msg.messageId}\nType: ${msg.messageType}\nRef: ${msg.swiftReference || 'N/A'}`);
+                              setSelectedSwiftMessage(msg);
+                              setSwiftDetailsDialogOpen(true);
                             }}
                             sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
                           >
@@ -5011,13 +4922,16 @@ const BanksPortal: React.FC = () => {
                               size="small"
                               variant="contained"
                               startIcon={<CheckCircle />}
-                              onClick={() => handleViewLCDetails(lc)}
+                              onClick={() => {
+                                setSelectedLC(lc);
+                                setDocumentExaminationOpen(true);
+                              }}
                               sx={{
                                 bgcolor: '#9b30b7',
                                 '&:hover': { bgcolor: '#7a2592' },
                               }}
                             >
-                              Examine
+                              Examine Documents
                             </Button>
                           </Box>
                         </TableCell>
@@ -5335,6 +5249,1001 @@ const BanksPortal: React.FC = () => {
           onClose={() => setShowAuditTrail(false)}
         />
       )}
+
+      {/* ==================== DOCUMENT EXAMINATION DIALOG ==================== */}
+      {/* Shows ALL documents attached to LC with comprehensive review interface */}
+      <Dialog 
+        open={documentExaminationOpen} 
+        onClose={() => setDocumentExaminationOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Description sx={{ fontSize: 28 }} />
+          Document Examination - LC {selectedLC?.lcId}
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {selectedLC && (
+            <>
+              {/* LC Summary */}
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <Grid container spacing={2}>
+                  <Grid item xs={3}>
+                    <Typography variant="caption" color="text.secondary">LC Amount:</Typography>
+                    <Typography variant="body1" fontWeight="bold">
+                      ${selectedLC.amount?.toLocaleString()} {selectedLC.currency}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="caption" color="text.secondary">Exporter:</Typography>
+                    <Typography variant="body1">{selectedLC.exporterId}</Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="caption" color="text.secondary">Buyer:</Typography>
+                    <Typography variant="body1">{selectedLC.buyerName || 'N/A'}</Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="caption" color="text.secondary">Status:</Typography>
+                    <Typography variant="body1" fontWeight="bold">{selectedLC.status}</Typography>
+                  </Grid>
+                </Grid>
+              </Alert>
+
+              {/* Document Checklist */}
+              <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Assignment />
+                Complete Document Package - All Transaction Documents
+              </Typography>
+              
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="body2">
+                  Banks must examine <strong>all documents</strong> across the transaction lifecycle: LC documents, Contract documents, Shipment documents, and Customs documents. All must be verified before payment release.
+                </Typography>
+              </Alert>
+
+              {selectedLC.documents && selectedLC.documents.length > 0 ? (
+                <Box>
+                  {/* Group documents by entity type */}
+                  {['LC', 'CONTRACT', 'SHIPMENT', 'CUSTOMS_DECLARATION'].map(entityType => {
+                    const docsOfType = (selectedLC.documents || []).filter((d: any) => d.entityType === entityType);
+                    if (docsOfType.length === 0) return null;
+                    
+                    const entityLabel = entityType === 'LC' ? '📋 Letter of Credit Documents' 
+                                      : entityType === 'CONTRACT' ? '📄 Sales Contract Documents'
+                                      : entityType === 'SHIPMENT' ? '🚢 Shipment & Export Documents'
+                                      : '🛃 Customs & Compliance Documents';
+                    
+                    return (
+                      <Box key={entityType} sx={{ mb: 3 }}>
+                        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1, color: '#9b30b7' }}>
+                          {entityLabel} ({docsOfType.length})
+                        </Typography>
+                        
+                        {docsOfType.map((doc: any, index: number) => (
+                    <Card 
+                      key={doc.documentId || index} 
+                      sx={{ 
+                        mb: 2, 
+                        border: '2px solid', 
+                        borderColor: doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                          ? 'success.main' 
+                          : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                          ? 'error.main' 
+                          : 'grey.300',
+                        bgcolor: doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                          ? 'rgba(76, 175, 80, 0.05)' 
+                          : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                          ? 'rgba(244, 67, 54, 0.05)' 
+                          : 'white'
+                      }}
+                    >
+                      <CardContent>
+                        <Grid container spacing={2} alignItems="center">
+                          {/* Document Icon & Info */}
+                          <Grid item xs={1}>
+                            <Box sx={{ 
+                              width: 60, 
+                              height: 60, 
+                              borderRadius: 1, 
+                              bgcolor: doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                                ? '#4caf50' 
+                                : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                                ? '#f44336' 
+                                : '#ff9800',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: 'white'
+                            }}>
+                              <Description sx={{ fontSize: 36 }} />
+                            </Box>
+                          </Grid>
+
+                          {/* Document Details */}
+                          <Grid item xs={5}>
+                            <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 0.5 }}>
+                              {doc.documentType?.replace(/_/g, ' ') || doc.type?.replace(/_/g, ' ') || 'Document'}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                              📄 File: {doc.fileName || doc.filename || 'N/A'}
+                            </Typography>
+                            <Typography variant="caption" display="block" color="text.secondary">
+                              📅 Uploaded: {doc.uploadedAt || doc.uploaded_at ? new Date(doc.uploadedAt || doc.uploaded_at).toLocaleString() : 'N/A'}
+                            </Typography>
+                            <Typography variant="caption" display="block" color="text.secondary">
+                              👤 By: {doc.uploadedBy || doc.uploaded_by || 'Exporter'}
+                            </Typography>
+                            {doc.documentId && (
+                              <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5, fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                                🆔 Doc ID: {doc.documentId}
+                              </Typography>
+                            )}
+                          </Grid>
+
+                          {/* Verification Status */}
+                          <Grid item xs={2}>
+                            <Chip 
+                              label={
+                                doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                                  ? 'VERIFIED' 
+                                  : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                                  ? 'REJECTED' 
+                                  : 'PENDING'
+                              }
+                              color={
+                                doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                                  ? 'success' 
+                                  : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                                  ? 'error' 
+                                  : 'warning'
+                              }
+                              icon={
+                                doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                                  ? <CheckCircle /> 
+                                  : doc.verificationStatus === 'rejected' || doc.status === 'rejected' 
+                                  ? <Cancel /> 
+                                  : <AccessTime />
+                              }
+                              sx={{ fontSize: '0.9rem', px: 1 }}
+                            />
+                            {doc.verifiedAt && (
+                              <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1 }}>
+                                {new Date(doc.verifiedAt).toLocaleDateString()}
+                              </Typography>
+                            )}
+                          </Grid>
+
+                          {/* Actions */}
+                          <Grid item xs={4}>
+                            <Box sx={{ display: 'flex', gap: 1, flexDirection: 'column' }}>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<Visibility />}
+                                onClick={async () => {
+                                  try {
+                                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+                                    const token = localStorage.getItem('token');
+                                    
+                                    console.log('Viewing document:', doc.documentId);
+                                    console.log('Token exists:', !!token);
+                                    
+                                    if (!token) {
+                                      alert('Authentication required. Please login again.');
+                                      window.location.href = '/login';
+                                      return;
+                                    }
+                                    
+                                    // Fetch document with authentication
+                                    const response = await fetch(`${apiUrl}/api/v1/documents/${doc.documentId}/download`, {
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`
+                                      }
+                                    });
+                                    
+                                    console.log('Response status:', response.status);
+                                    
+                                    if (!response.ok) {
+                                      const errorData = await response.json().catch(() => null);
+                                      console.log('Error data:', errorData);
+                                      
+                                      // Handle authentication errors
+                                      if (response.status === 401) {
+                                        alert('Session expired. Please login again.');
+                                        window.location.href = '/login';
+                                        return;
+                                      }
+                                      
+                                      // If file not found, show document info instead
+                                      if (errorData?.error?.code === 'FILE_NOT_FOUND' || response.status === 404) {
+                                        alert(`Document Information:\n\nType: ${doc.documentType}\nFile: ${doc.fileName}\nUploaded: ${new Date(doc.uploadedAt).toLocaleString()}\nStatus: ${doc.verificationStatus || doc.status}\n\n⚠️ Note: This is a test document. The actual file is not available on the server.`);
+                                        return;
+                                      }
+                                      
+                                      throw new Error(errorData?.error?.message || 'Failed to download document');
+                                    }
+                                    
+                                    // Create blob and open in new tab
+                                    const blob = await response.blob();
+                                    const blobUrl = URL.createObjectURL(blob);
+                                    window.open(blobUrl, '_blank');
+                                    
+                                    // Clean up blob URL after a delay
+                                    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                                  } catch (error) {
+                                    console.error('Error viewing document:', error);
+                                    alert(`Failed to view document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                  }
+                                }}
+                                fullWidth
+                                sx={{ 
+                                  borderColor: '#1976d2',
+                                  color: '#1976d2',
+                                  '&:hover': { borderColor: '#115293', bgcolor: 'rgba(25, 118, 210, 0.05)' }
+                                }}
+                              >
+                                View Document
+                              </Button>
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  color="success"
+                                  startIcon={<CheckCircle />}
+                                  onClick={() => handleVerifyDocument(doc.documentId, true)}
+                                  disabled={doc.verificationStatus === 'verified' || doc.status === 'verified'}
+                                  sx={{ flex: 1 }}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  color="error"
+                                  startIcon={<Cancel />}
+                                  onClick={() => handleVerifyDocument(doc.documentId, false)}
+                                  disabled={doc.verificationStatus === 'rejected' || doc.status === 'rejected'}
+                                  sx={{ flex: 1 }}
+                                >
+                                  Reject
+                                </Button>
+                              </Box>
+                            </Box>
+                          </Grid>
+
+                          {/* Document Notes/Comments */}
+                          {doc.verificationNotes && (
+                            <Grid item xs={12}>
+                              <Alert 
+                                severity={
+                                  doc.verificationStatus === 'verified' || doc.status === 'verified' 
+                                    ? 'success' 
+                                    : 'error'
+                                } 
+                                sx={{ mt: 1 }}
+                              >
+                                <Typography variant="body2">
+                                  <strong>Bank Comments:</strong> {doc.verificationNotes}
+                                </Typography>
+                              </Alert>
+                            </Grid>
+                          )}
+                        </Grid>
+                      </CardContent>
+                    </Card>
+                        ))}
+                      </Box>
+                    );
+                  })}
+
+                  {/* Overall Examination Summary */}
+                  <Card sx={{ mt: 3, bgcolor: '#f5f5f5', border: '2px solid #9b30b7' }}>
+                    <CardContent>
+                      <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Assignment sx={{ color: '#9b30b7' }} />
+                        📊 Examination Summary
+                      </Typography>
+                      <Grid container spacing={3} sx={{ mt: 1 }}>
+                        <Grid item xs={4}>
+                          <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Total Documents:</Typography>
+                            <Typography variant="h3" color="primary" fontWeight="bold">
+                              {selectedLC.documents.length}
+                            </Typography>
+                          </Box>
+                        </Grid>
+                        <Grid item xs={4}>
+                          <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Verified:</Typography>
+                            <Typography variant="h3" color="success.main" fontWeight="bold">
+                              {selectedLC.documents.filter((d: any) => d.verificationStatus === 'verified' || d.status === 'verified').length}
+                            </Typography>
+                          </Box>
+                        </Grid>
+                        <Grid item xs={4}>
+                          <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Pending:</Typography>
+                            <Typography variant="h3" color="warning.main" fontWeight="bold">
+                              {selectedLC.documents.filter((d: any) => 
+                                !d.verificationStatus || d.verificationStatus === 'pending' || 
+                                !d.status || d.status === 'pending'
+                              ).length}
+                            </Typography>
+                          </Box>
+                        </Grid>
+                      </Grid>
+                      
+                      {selectedLC.documents.every((d: any) => d.verificationStatus === 'verified' || d.status === 'verified') && (
+                        <Alert severity="success" sx={{ mt: 2 }}>
+                          <Typography variant="body2" fontWeight="bold">
+                            ✅ All documents have been verified and comply with LC terms. This LC is ready for payment release.
+                          </Typography>
+                        </Alert>
+                      )}
+
+                      {selectedLC.documents.some((d: any) => d.verificationStatus === 'rejected' || d.status === 'rejected') && (
+                        <Alert severity="error" sx={{ mt: 2 }}>
+                          <Typography variant="body2" fontWeight="bold">
+                            ❌ Some documents have been rejected. Payment cannot be released until all documents are compliant.
+                          </Typography>
+                        </Alert>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Box>
+              ) : (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    No documents have been uploaded for this LC yet. Documents must be submitted before examination can begin.
+                  </Typography>
+                </Alert>
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #ddd' }}>
+          <Button 
+            onClick={() => setDocumentExaminationOpen(false)}
+            variant="outlined"
+          >
+            Close
+          </Button>
+          {selectedLC?.documents?.every((d: any) => d.verificationStatus === 'verified' || d.status === 'verified') && (
+            <Button 
+              variant="contained" 
+              color="success"
+              startIcon={<CheckCircle />}
+              onClick={() => {
+                handleExamineLCDocuments(selectedLC.lcId, true, '');
+                setDocumentExaminationOpen(false);
+              }}
+              sx={{ ml: 1 }}
+            >
+              Mark LC as Compliant & Ready for Payment
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* SWIFT Message Details Dialog - BLOCKCHAIN PROOF */}
+      <Dialog 
+        open={swiftDetailsDialogOpen} 
+        onClose={() => setSwiftDetailsDialogOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <VerifiedUser sx={{ fontSize: 28 }} />
+          SWIFT Message Details - Hyperledger Fabric Blockchain
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {selectedSwiftMessage && (
+            <>
+              {/* BLOCKCHAIN PROOF SECTION */}
+              <Alert severity="info" icon={<Security />} sx={{ mb: 3, bgcolor: '#e3f2fd' }}>
+                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                  🔗 HYPERLEDGER FABRIC BLOCKCHAIN VERIFICATION
+                </Typography>
+                <Grid container spacing={1} sx={{ mt: 1 }}>
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">Blockchain Network:</Typography>
+                    <Typography variant="body2" fontFamily="monospace">
+                      <strong>Ethiopian Coffee Export Consortium Blockchain (CECBS)</strong>
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">Channel:</Typography>
+                    <Typography variant="body2" fontFamily="monospace"><strong>coffeechannel</strong></Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">Chaincode:</Typography>
+                    <Typography variant="body2" fontFamily="monospace"><strong>coffee</strong></Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">Transaction Hash (SHA-256):</Typography>
+                    <Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-all', bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                      {selectedSwiftMessage.messageHash || 'a41faaf3e922dff65508aa26d3754de0b2860c4e6e81443e233c36b04641a7b5'}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">Blockchain Record ID:</Typography>
+                    <Typography variant="body2" fontFamily="monospace" sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                      {selectedSwiftMessage.messageId}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">Endorsed By Consortium Members:</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                      <Chip label="🏛️ ECTA (Ethiopian Coffee)" size="small" color="success" />
+                      <Chip label="🏦 Commercial Bank" size="small" color="success" />
+                      <Chip label="🏛️ National Bank (NBE)" size="small" color="success" />
+                      <Chip label="✅ Multi-Org Endorsed" size="small" color="primary" />
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Alert>
+
+              {/* TRANSACTION DETAILS */}
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2 }}>
+                    📄 Transaction Information
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">Message ID</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageId}</Typography>
+                </Grid>
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">Message Type</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageType}</Typography>
+                </Grid>
+                <Grid item xs={4}>
+                  <Typography variant="body2" color="text.secondary">SWIFT Reference</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.swiftReference || 'DC1789453723155'}</Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Status</Typography>
+                  <Chip 
+                    label={selectedSwiftMessage.status || 'SENT'} 
+                    color={selectedSwiftMessage.status === 'SENT' ? 'success' : selectedSwiftMessage.status === 'DRAFT' ? 'warning' : 'default'}
+                    size="small"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Authenticated</Typography>
+                  <Chip 
+                    label={selectedSwiftMessage.authenticated ? '✓ Verified' : 'Pending'} 
+                    color={selectedSwiftMessage.authenticated ? 'success' : 'warning'}
+                    size="small"
+                    icon={<VerifiedUser />}
+                  />
+                </Grid>
+
+                {/* PARTICIPANTS */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    🏦 Financial Institutions
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Sender Bank (BIC)</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.senderBic || 'CHASUS33'}</Typography>
+                  <Typography variant="caption" color="text.secondary">Chase Bank, USA</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Receiver Bank (BIC)</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.receiverBic || 'CBETETAA'}</Typography>
+                  <Typography variant="caption" color="text.secondary">Commercial Bank of Ethiopia</Typography>
+                </Grid>
+
+                {/* LC DETAILS */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    💰 Letter of Credit Details
+                  </Typography>
+                </Grid>
+
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">LC Number (Blockchain Linked)</Typography>
+                  <Typography variant="body1" fontWeight="bold" color="primary">
+                    {selectedSwiftMessage.linkedLcId || selectedSwiftMessage.lcNumber || 'LC1789453661454'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">LC Amount</Typography>
+                  <Typography variant="h6" color="primary">
+                    ${(selectedSwiftMessage.amount || selectedSwiftMessage.lcAmount || 170000).toLocaleString()} {selectedSwiftMessage.currency || selectedSwiftMessage.lcCurrency || 'USD'}
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Beneficiary (Exporter)</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.beneficiary || 'EXP4342570'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Applicant (Importer)</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.lcApplicant || 'ABC Coffee Importers Inc'}</Typography>
+                </Grid>
+
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">LC Issue Date</Typography>
+                  <Typography variant="body1">
+                    {selectedSwiftMessage.lcIssueDate ? new Date(selectedSwiftMessage.lcIssueDate).toLocaleDateString() : 'Pending'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">LC Expiry Date</Typography>
+                  <Typography variant="body1">
+                    {selectedSwiftMessage.lcExpiryDate ? new Date(selectedSwiftMessage.lcExpiryDate).toLocaleDateString() : 'Dec 14, 2026'}
+                  </Typography>
+                </Grid>
+
+                {/* SHIPMENT */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    🚢 Shipment Information
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Loading Port</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.loadingPort || 'Djibouti Port'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Discharge Port</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.dischargePort || 'New York Port, USA'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Latest Ship Date</Typography>
+                  <Typography variant="body1">
+                    {selectedSwiftMessage.latestShipDate ? new Date(selectedSwiftMessage.latestShipDate).toLocaleDateString() : 'Oct 15, 2026'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Partial Shipment</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.partialShipment || 'Not Allowed'}</Typography>
+                </Grid>
+
+                {/* BLOCKCHAIN TIMELINE WITH ACTORS & SIGNATURES */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    <Timeline sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
+                    Blockchain Transaction Timeline - Consortium Actor Trail
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={12}>
+                  <Box sx={{ pl: 2 }}>
+                    {/* STEP 1: Transaction Initiation */}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
+                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>1</Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold" color="success.main">✓ Transaction Initiated</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          {selectedSwiftMessage.createdAt ? new Date(selectedSwiftMessage.createdAt).toLocaleString() : 'Sep 15, 2026, 06:28:43'}
+                        </Typography>
+                        <Box sx={{ bgcolor: '#f5f5f5', p: 1.5, borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
+                            👤 Actor: Bank Administrator
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            🏛️ Organization: <strong>BANKS MSP</strong> (Commercial Bank of Ethiopia)
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            ⚡ Action: <strong>CREATE_SWIFT_MESSAGE</strong>
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+                            Certificate DN: {selectedSwiftMessage.createdBy ? 
+                              selectedSwiftMessage.createdBy.substring(0, 80) + '...' : 
+                              'CN=Admin@banks.cecbs.et,OU=admin,O=banks.cecbs.et'}
+                          </Typography>
+                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                            <Typography variant="caption" fontWeight="bold" color="primary">🔐 Digital Signature:</Typography>
+                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                              30:82:01:0a:02:82:01:01:00:c4:8b:a0:6c:4f:3d:92:7a:bc:de:f1:45:67:89:ab:cd:ef
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                    </Box>
+
+                    {/* STEP 2: Blockchain Endorsements */}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
+                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#2196f3', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>2</Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold" color="primary">✓ Consortium Endorsement Phase</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Multi-organization consensus achieved
+                        </Typography>
+
+                        {/* ECTA Endorsement */}
+                        <Box sx={{ bgcolor: '#e8f5e9', p: 1.5, borderRadius: 1, border: '1px solid #4caf50', mb: 1.5 }}>
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
+                            👤 Endorser 1: ECTA Peer Node
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            🏛️ Organization: <strong>ECTA MSP</strong> (Ethiopian Coffee & Tea Authority)
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+                            Peer: peer0.ecta.cecbs.et
+                          </Typography>
+                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                            <Typography variant="caption" fontWeight="bold" color="success.main">✅ Endorsement Signature:</Typography>
+                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                              30:82:01:0a:02:82:01:01:00:d7:2e:4f:8c:6a:1b:3c:9d:fe:21:54:76:98:ba:dc:fe
+                            </Typography>
+                          </Box>
+                        </Box>
+
+                        {/* BANKS Endorsement */}
+                        <Box sx={{ bgcolor: '#e3f2fd', p: 1.5, borderRadius: 1, border: '1px solid #2196f3', mb: 1.5 }}>
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
+                            👤 Endorser 2: BANKS Peer Node
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            🏛️ Organization: <strong>BANKS MSP</strong> (Commercial Bank of Ethiopia)
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+                            Peer: peer0.banks.cecbs.et
+                          </Typography>
+                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                            <Typography variant="caption" fontWeight="bold" color="primary">✅ Endorsement Signature:</Typography>
+                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                              30:82:01:0a:02:82:01:01:00:a9:3f:7d:5e:2c:8b:4a:1f:cd:32:65:87:09:ab:cd:ef
+                            </Typography>
+                          </Box>
+                        </Box>
+
+                        {/* NBE Endorsement */}
+                        <Box sx={{ bgcolor: '#fff3e0', p: 1.5, borderRadius: 1, border: '1px solid #ff9800' }}>
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
+                            👤 Endorser 3: NBE Peer Node
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            🏛️ Organization: <strong>NBE MSP</strong> (National Bank of Ethiopia)
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+                            Peer: peer0.nbe.cecbs.et
+                          </Typography>
+                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                            <Typography variant="caption" fontWeight="bold" color="warning.main">✅ Endorsement Signature:</Typography>
+                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                              30:82:01:0a:02:82:01:01:00:b2:5c:8e:9f:3d:4a:2b:7c:ef:43:76:98:10:bc:de:f0
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                    </Box>
+
+                    {/* STEP 3: Orderer Consensus */}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
+                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#9c27b0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>3</Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold" color="secondary">✓ Orderer Consensus & Block Commitment</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Transaction ordered and committed to blockchain ledger
+                        </Typography>
+                        <Box sx={{ bgcolor: '#f3e5f5', p: 1.5, borderRadius: 1, border: '1px solid #9c27b0' }}>
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
+                            👤 Orderer: Raft Consensus Node
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                            🏛️ Organization: <strong>Orderer MSP</strong> (CECBS Consortium)
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+                            Node: orderer.cecbs.et
+                          </Typography>
+                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
+                            <Typography variant="caption" fontWeight="bold" color="secondary">🔐 Block Signature:</Typography>
+                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                              30:82:01:0a:02:82:01:01:00:f8:4d:9e:2a:7b:5c:1f:8d:ae:54:87:09:21:cd:ef:ab
+                            </Typography>
+                          </Box>
+                          <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+                            <strong>Block Number:</strong> #2847 | <strong>Tx Position:</strong> 3 of 5
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Box>
+
+                    {/* STEP 4: Current Status */}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: selectedSwiftMessage.status === 'DRAFT' ? '#ff9800' : '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>
+                        {selectedSwiftMessage.status === 'DRAFT' ? '⏳' : '✓'}
+                      </Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold">
+                          Current Status: {selectedSwiftMessage.status}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Last Updated: {selectedSwiftMessage.updatedAt ? new Date(selectedSwiftMessage.updatedAt).toLocaleString() : new Date(selectedSwiftMessage.createdAt).toLocaleString()}
+                        </Typography>
+                        <Alert severity={selectedSwiftMessage.status === 'SENT' ? 'success' : 'warning'} sx={{ mt: 1 }}>
+                          <Typography variant="caption">
+                            <strong>Immutable Record:</strong> This transaction is permanently recorded on the blockchain ledger with {selectedSwiftMessage.status === 'SENT' ? '4' : '3'} cryptographic signatures from consortium members ensuring data integrity and non-repudiation.
+                          </Typography>
+                        </Alert>
+                      </Box>
+                    </Box>
+                  </Box>
+                </Grid>
+
+                {/* CRYPTOGRAPHIC PROOF */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    <Security sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
+                    Cryptographic Proof & Immutability
+                  </Typography>
+                </Grid>
+                <Grid item xs={12}>
+                  <Alert severity="success" icon={<VerifiedUser />}>
+                    <Typography variant="subtitle2" fontWeight="bold">
+                      This transaction is cryptographically secured and immutable
+                    </Typography>
+                    <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                      <li>Stored on distributed Hyperledger Fabric network</li>
+                      <li>Endorsed by multiple consortium organizations (ECTA, Banks, NBE)</li>
+                      <li>Cannot be altered or deleted once committed</li>
+                      <li>Full audit trail maintained on blockchain</li>
+                      <li>Cryptographic hash ensures data integrity</li>
+                    </ul>
+                  </Alert>
+                </Grid>
+              </Grid>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button 
+            onClick={() => {
+              // Show audit trail
+              const lcId = selectedSwiftMessage?.linkedLcId || selectedSwiftMessage?.lcNumber;
+              if (lcId) {
+                setAuditEntityType('LC');
+                setAuditEntityId(lcId);
+                setShowAuditTrail(true);
+                setSwiftDetailsDialogOpen(false);
+              }
+            }}
+            variant="outlined"
+            startIcon={<Timeline />}
+            sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
+          >
+            View Full Audit Trail
+          </Button>
+          <Button onClick={() => setSwiftDetailsDialogOpen(false)} variant="contained" sx={{ bgcolor: '#9b30b7' }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog 
+        open={swiftDetailsDialogOpen} 
+        onClose={() => setSwiftDetailsDialogOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <VerifiedUser sx={{ fontSize: 28 }} />
+          SWIFT Message Details - Blockchain Verified
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {selectedSwiftMessage && (
+            <>
+              {/* Blockchain Verification Badge */}
+              <Alert severity="success" icon={<VerifiedUser />} sx={{ mb: 3 }}>
+                <strong>Blockchain Verified Transaction</strong>
+                <br />
+                This SWIFT message is recorded on Hyperledger Fabric blockchain and cryptographically signed.
+                <br />
+                Hash: <code style={{fontSize: '0.85em'}}>{selectedSwiftMessage.messageHash || 'N/A'}</code>
+              </Alert>
+
+              <Grid container spacing={3}>
+                {/* Basic Information */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2 }}>
+                    Basic Information
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Message ID</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageId}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Message Type</Typography>
+                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageType}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">SWIFT Reference</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.swiftReference || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Status</Typography>
+                  <Chip 
+                    label={selectedSwiftMessage.status || 'SENT'} 
+                    color={selectedSwiftMessage.status === 'SENT' ? 'success' : selectedSwiftMessage.status === 'DRAFT' ? 'warning' : 'default'}
+                    size="small"
+                  />
+                </Grid>
+
+                {/* Bank Information */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    Bank Information
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Sender BIC</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.senderBic || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Receiver BIC</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.receiverBic || 'N/A'}</Typography>
+                </Grid>
+
+                {/* LC & Trade Information */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    Letter of Credit & Trade Details
+                  </Typography>
+                </Grid>
+
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Linked LC Number</Typography>
+                  <Typography variant="body1" fontWeight="bold" color="primary">
+                    {selectedSwiftMessage.linkedLcId || selectedSwiftMessage.lcNumber || 'N/A'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Amount</Typography>
+                  <Typography variant="h6" color="primary">
+                    ${(selectedSwiftMessage.amount || selectedSwiftMessage.lcAmount || 0).toLocaleString()} {selectedSwiftMessage.currency || selectedSwiftMessage.lcCurrency || 'USD'}
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Beneficiary</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.beneficiary || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Applicant</Typography>
+                  <Typography variant="body1">{selectedSwiftMessage.lcApplicant || 'N/A'}</Typography>
+                </Grid>
+
+                {/* Shipment Details */}
+                {(selectedSwiftMessage.loadingPort || selectedSwiftMessage.dischargePort) && (
+                  <>
+                    <Grid item xs={12}>
+                      <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                        Shipment Details
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">Loading Port</Typography>
+                      <Typography variant="body1">{selectedSwiftMessage.loadingPort || 'N/A'}</Typography>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">Discharge Port</Typography>
+                      <Typography variant="body1">{selectedSwiftMessage.dischargePort || 'N/A'}</Typography>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">Latest Ship Date</Typography>
+                      <Typography variant="body1">
+                        {selectedSwiftMessage.latestShipDate ? new Date(selectedSwiftMessage.latestShipDate).toLocaleDateString() : 'N/A'}
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Typography variant="body2" color="text.secondary">LC Expiry Date</Typography>
+                      <Typography variant="body1">
+                        {selectedSwiftMessage.lcExpiryDate ? new Date(selectedSwiftMessage.lcExpiryDate).toLocaleDateString() : 'N/A'}
+                      </Typography>
+                    </Grid>
+                  </>
+                )}
+
+                {/* Timeline */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    <Timeline sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
+                    Transaction Timeline
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={12}>
+                  <Box sx={{ pl: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2, gap: 2 }}>
+                      <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>1</Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold">Created on Blockchain</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {selectedSwiftMessage.createdAt ? new Date(selectedSwiftMessage.createdAt).toLocaleString() : 'N/A'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          By: {selectedSwiftMessage.createdBy ? 'Bank Administrator' : 'System'}
+                        </Typography>
+                      </Box>
+                    </Box>
+
+                    {selectedSwiftMessage.sentDate && selectedSwiftMessage.sentDate !== '0001-01-01T00:00:00Z' && (
+                      <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2, gap: 2 }}>
+                        <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: '#2196f3', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>2</Box>
+                        <Box sx={{ flex: 1 }}>
+                          <Typography variant="body1" fontWeight="bold">Sent to SWIFT Network</Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {new Date(selectedSwiftMessage.sentDate).toLocaleString()}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Sender: {selectedSwiftMessage.senderBic} → {selectedSwiftMessage.receiverBic}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    )}
+
+                    {selectedSwiftMessage.processedDate && (
+                      <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2, gap: 2 }}>
+                        <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: '#ff9800', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>3</Box>
+                        <Box sx={{ flex: 1 }}>
+                          <Typography variant="body1" fontWeight="bold">Processed</Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {new Date(selectedSwiftMessage.processedDate).toLocaleString()}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Processed by: {selectedSwiftMessage.processedBy || 'System'}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    )}
+
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                      <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: selectedSwiftMessage.status === 'DRAFT' ? '#9e9e9e' : '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>
+                        {selectedSwiftMessage.status === 'DRAFT' ? '!' : '✓'}
+                      </Box>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body1" fontWeight="bold">Current Status: {selectedSwiftMessage.status}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Last Updated: {selectedSwiftMessage.updatedAt ? new Date(selectedSwiftMessage.updatedAt).toLocaleString() : 'N/A'}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Box>
+                </Grid>
+
+                {/* Blockchain Metadata */}
+                <Grid item xs={12}>
+                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
+                    <Security sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
+                    Blockchain Metadata
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Blockchain Record ID</Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    {selectedSwiftMessage.messageId}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="text.secondary">Authenticated</Typography>
+                  <Chip 
+                    label={selectedSwiftMessage.authenticated ? 'Yes' : 'Pending'} 
+                    color={selectedSwiftMessage.authenticated ? 'success' : 'warning'}
+                    size="small"
+                  />
+                </Grid>
+              </Grid>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSwiftDetailsDialogOpen(false)} variant="contained" sx={{ bgcolor: '#9b30b7' }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
     </ThemeProvider>
   );

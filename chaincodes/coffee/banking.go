@@ -558,12 +558,40 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 	lc.LastUpdatedByMSP = updaterMSP   // ✅ Record updater's MSP
 	lc.UpdatedAt = txTime
 
+	previousStatus := lc.Status
+	
 	lcJSON, err = json.Marshal(lc)
 	if err != nil {
 		return fmt.Errorf("failed to marshal LC: %v", err)
 	}
 
-	return ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save LC: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: previousStatus, NewValue: newStatus, DataType: "string"},
+		{FieldName: "lastUpdatedBy", OldValue: "", NewValue: updaterID, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE monitors LC lifecycle
+		UCP600Check:    true, // UCP 600 rules apply
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("LC status updated by %s from %s to %s", updaterMSP, previousStatus, newStatus),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "UPDATE", "LC", lcID, previousStatus, newStatus, changes,
+		fmt.Sprintf("LC status updated to %s by %s", newStatus, updaterMSP), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // AmendLC - Amend Letter of Credit (amount, expiry date, terms)
@@ -669,6 +697,27 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 
 	auditJSON, _ := json.Marshal(auditEntry)
 	fmt.Printf("LC Amendment: %s\n", string(auditJSON))
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "amendmentCount", OldValue: fmt.Sprintf("%d", lc.AmendmentCount-1), NewValue: fmt.Sprintf("%d", lc.AmendmentCount), DataType: "number"},
+		{FieldName: "changes", OldValue: "", NewValue: changesDescription, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true,
+		UCP600Check:    true, // UCP 600 Article 10 governs amendments
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("LC amendment #%d: %s", lc.AmendmentCount, amendmentReason),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "AMEND", "LC", lcID, "ISSUED", "ISSUED", changes,
+		fmt.Sprintf("LC amended by %s: %s", amendedBy, amendmentReason), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
 
 	return nil
 }
@@ -681,10 +730,62 @@ func (c *CoffeeContract) QueryLCsByExporter(ctx contractapi.TransactionContextIn
 	return c.queryLCs(ctx, queryString)
 }
 
-// QueryAllLCs - Get all Letters of Credit
+// QueryAllLCs - Get all Letters of Credit (optimized with CouchDB selector)
 func (c *CoffeeContract) QueryAllLCs(ctx contractapi.TransactionContextInterface) ([]*LetterOfCredit, error) {
-	// Use GetStateByRange to get all LC records
-	resultsIterator, err := ctx.GetStub().GetStateByRange("LC_", "LC_~")
+	// Use CouchDB rich query to filter only actual LC documents (not audit logs)
+	// This is much faster than GetStateByRange which iterates through all keys
+	queryString := `{
+		"selector": {
+			"$and": [
+				{"lcId": {"$exists": true}},
+				{"_id": {"$regex": "^LC_LC"}}
+			]
+		},
+		"limit": 1000
+	}`
+	
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		// Fallback to GetStateByRange if rich query fails
+		return c.queryLCsByRange(ctx)
+	}
+	defer resultsIterator.Close()
+
+	var lcs []*LetterOfCredit
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var lc LetterOfCredit
+		err = json.Unmarshal(queryResponse.Value, &lc)
+		if err != nil {
+			continue // Skip invalid documents
+		}
+		
+		// Ensure Amendments is never nil (backward compatibility)
+		if lc.Amendments == nil {
+			lc.Amendments = []LCAmendment{}
+		}
+		// Ensure Discrepancies is never nil
+		if lc.Discrepancies == nil {
+			lc.Discrepancies = []LCDiscrepancy{}
+		}
+		// Ensure Documents is never nil (backward compatibility)
+		if lc.Documents == nil {
+			lc.Documents = []string{}
+		}
+		
+		lcs = append(lcs, &lc)
+	}
+
+	return lcs, nil
+}
+
+// queryLCsByRange - Fallback method using GetStateByRange
+func (c *CoffeeContract) queryLCsByRange(ctx contractapi.TransactionContextInterface) ([]*LetterOfCredit, error) {
+	resultsIterator, err := ctx.GetStub().GetStateByRange("LC_LC", "LC_LC~")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all LCs: %v", err)
 	}
@@ -700,18 +801,16 @@ func (c *CoffeeContract) QueryAllLCs(ctx contractapi.TransactionContextInterface
 		var lc LetterOfCredit
 		err = json.Unmarshal(queryResponse.Value, &lc)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
+			continue
 		}
 		
-		// Ensure Amendments is never nil (backward compatibility)
+		// Ensure arrays are never nil
 		if lc.Amendments == nil {
 			lc.Amendments = []LCAmendment{}
 		}
-		// Ensure Discrepancies is never nil
 		if lc.Discrepancies == nil {
 			lc.Discrepancies = []LCDiscrepancy{}
 		}
-		// Ensure Documents is never nil (backward compatibility)
 		if lc.Documents == nil {
 			lc.Documents = []string{}
 		}

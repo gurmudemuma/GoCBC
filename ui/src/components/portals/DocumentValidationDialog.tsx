@@ -39,6 +39,7 @@ import {
   AttachFile,
   Close,
 } from '@mui/icons-material';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 
 interface Document {
   id: string;
@@ -230,6 +231,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
             <Tab label="Prerequisites" />
             <Tab label={`Documents (${data.documents.length})`} />
             {data.complianceChecks && <Tab label="Compliance" />}
+            <Tab label="Blockchain" />
           </Tabs>
         </Box>
 
@@ -574,6 +576,14 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
             )}
           </TabPanel>
         )}
+
+        {/* Blockchain Tab */}
+        <TabPanel value={tabValue} index={data.complianceChecks ? 3 : 2}>
+          <BlockchainSignatureVerification
+            entityType={data.entityType}
+            entityId={data.entityId}
+          />
+        </TabPanel>
 
         {/* Additional Information */}
         {data.additionalInfo && (

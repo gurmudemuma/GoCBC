@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -192,7 +193,35 @@ func (c *CoffeeContract) IssueConsignmentPermit(ctx contractapi.TransactionConte
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ConsignmentPermitIssued", eventJSON)
 
-	return ctx.GetStub().PutState("CONSIGN_"+consignmentID, consignmentJSON)
+	err = ctx.GetStub().PutState("CONSIGN_"+consignmentID, consignmentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save consignment: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "permitAmount", OldValue: "", NewValue: permitAmountStr, DataType: "float"},
+		{FieldName: "commodityType", OldValue: "", NewValue: commodityType, DataType: "string"},
+		{FieldName: "destination", OldValue: "", NewValue: destination, DataType: "string"},
+		{FieldName: "permitNumber", OldValue: "", NewValue: permitNumber, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE monitors consignment exports
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Consignment permit issued by %s for %s to %s", bankBranch, commodityType, destination),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "ISSUE", "CONSIGNMENT_PERMIT", consignmentID, "", "PERMIT_ISSUED", changes,
+		fmt.Sprintf("Bank issued consignment permit for exporter %s: %s %s to %s", exporterID, permitAmountStr, currency, destination), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // RecordConsignmentShipment - Record shipment for consignment

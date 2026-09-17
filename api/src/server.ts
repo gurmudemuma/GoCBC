@@ -73,6 +73,7 @@ import statusRoutes from './routes/status';
 import notificationsRoutes from './routes/notifications';
 import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
 import blockchainSignaturesRoutes from './routes/blockchain-signatures';
+import statsRoutes from './routes/stats'; // Dual-source statistics (CouchDB + PostgreSQL)
 
 // Load environment variables
 dotenv.config();
@@ -247,6 +248,9 @@ class CECBSServer {
 
     // V3.2 Blockchain Signatures - Cryptographic proof for all entities (public endpoint)
     apiV1.use('/blockchain-signatures', blockchainSignaturesRoutes); // Entity-level blockchain signatures - public transparency
+
+    // V3.3 Dual-Source Statistics - Fetch from BOTH CouchDB and PostgreSQL
+    apiV1.use('/stats', authMiddleware, statsRoutes); // Bank portal stats from both blockchain and database
 
     this.app.use('/api/v1', apiV1);
 

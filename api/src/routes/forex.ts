@@ -16,73 +16,91 @@ const signatureService = BlockchainSignatureService.getInstance();
 
 // ==================== FOREX ALLOCATION ROUTES ====================
 
-      // GET /api/v1/forex — all forex allocations
+      // GET /api/v1/forex — all forex allocations (BLOCKCHAIN ONLY - NO CACHE)
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    let blockchainForex: any[] = [];
-    let postgresForex: any[] = [];
-
-    // Fetch from BLOCKCHAIN (Hyperledger Fabric)
-    try {
-      const result = await fabricService.queryAllForex();
-      if (result.success) {
-        blockchainForex = result.data || [];
-        logger.info(`✅ Found ${blockchainForex.length} forex allocations from blockchain`);
-      }
-    } catch (err) {
-      logger.warn('Could not fetch forex from blockchain:', err);
+    logger.info('[FOREX] 🔗 Querying all forex DIRECTLY from Hyperledger Fabric blockchain...');
+    
+    // Query blockchain directly - NO timeout, NO fallback, NO cache
+    const result = await fabricService.queryAllForex();
+    
+    if (!result.success) {
+      logger.error(`[FOREX] ❌ Blockchain query failed: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: { 
+          code: 'BLOCKCHAIN_QUERY_FAILED', 
+          message: result.error || 'Failed to query blockchain' 
+        },
+        source: 'blockchain',
+        timestamp: new Date().toISOString() 
+      });
     }
 
-    // Fetch from POSTGRESQL
+    let blockchainForex = result.data || [];
+    logger.info(`[FOREX] ✅ Retrieved ${blockchainForex.length} forex allocations from blockchain`);
+
+    // ✅ ENRICH with buyer data from PostgreSQL
     try {
-      const pgResult = await postgresDb.all('SELECT * FROM forex_allocations ORDER BY created_at DESC', []);
-      postgresForex = pgResult || [];
-      logger.info(`✅ Found ${postgresForex.length} forex allocations from PostgreSQL`);
-    } catch (err) {
-      logger.warn('Could not fetch forex from PostgreSQL:', err);
+      const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+      blockchainForex = await dataEnrichmentService.enrichForexAllocations(blockchainForex);
+      logger.info(`[FOREX] ✅ Enriched ${blockchainForex.length} forex allocations with buyer data`);
+    } catch (enrichError) {
+      logger.warn('[FOREX] ⚠️  Could not enrich forex with buyer data:', enrichError);
     }
 
-    // Combine and normalize
-    const allForex = [...blockchainForex, ...postgresForex];
-    const normalizedForex = allForex.map((fx: any) => ({
-      forexId: fx?.forexId || fx?.ForexID || fx?.id || fx?.forex_id || '',
-      contractId: fx?.contractId || fx?.ContractID || fx?.contractID || fx?.contract_id || '',
-      exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || fx?.exporter_id || '',
-      lcId: fx?.lcId || fx?.LCID || fx?.lcID || fx?.lc_id || '',
+    // Normalize blockchain data with enriched buyer info
+    const normalizedForex = blockchainForex.map((fx: any) => ({
+      forexId: String(fx?.forexId || fx?.ForexID || ''),
+      contractId: String(fx?.contractId || fx?.ContractID || ''),
+      exporterId: String(fx?.exporterId || fx?.ExporterID || ''),
+      lcId: String(fx?.lcId || fx?.LCID || fx?.lcID || ''),
+      buyerName: fx?.buyerName || fx?.BuyerName || 'Unknown Buyer', // ✅ ENRICHED or fallback
+      buyerCountry: fx?.buyerCountry || '', // ✅ ENRICHED
       amount: fx?.amount ?? fx?.Amount ?? 0,
       currency: fx?.currency || fx?.Currency || 'USD',
       status: fx?.status || fx?.Status || 'REQUESTED',
-      requestedAmount: fx?.requestedAmount ?? fx?.RequestedAmount ?? fx?.requested_amount ?? 0,
-      allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? fx?.allocated_amount ?? 0,
-      exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? fx?.exchange_rate ?? 0,
+      requestedAmount: fx?.requestedAmount ?? fx?.RequestedAmount ?? 0,
+      allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
+      exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
       retention: fx?.retention ?? fx?.Retention ?? 0,
-      retentionRate: fx?.retentionRate ?? fx?.RetentionRate ?? fx?.retention_rate ?? 0,
-      expiryDate: fx?.expiryDate || fx?.ExpiryDate || fx?.expiry_date || null,
-      requestDate: fx?.requestDate || fx?.RequestDate || fx?.request_date || fx?.created_at || null,
-      allocationDate: fx?.allocationDate || fx?.AllocationDate || fx?.allocation_date || null,
-      utilizationDate: fx?.utilizationDate || fx?.UtilizationDate || fx?.utilization_date || null,
-      nbeApprovalRef: fx?.nbeApprovalRef || fx?.NBEApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || fx?.nbe_approval_ref || '',
-      nbeOfficer: fx?.nbeOfficer || fx?.NBEOfficer || fx?.nbe_officer || '',
+      retentionRate: fx?.retentionRate ?? fx?.RetentionRate ?? 0.4,
+      expiryDate: fx?.expiryDate || fx?.ExpiryDate || null,
+      requestDate: fx?.requestDate || fx?.RequestDate || null,
+      allocationDate: fx?.allocationDate || fx?.AllocationDate || null,
+      utilizationDate: fx?.utilizationDate || fx?.UtilizationDate || null,
+      nbeApprovalRef: fx?.nbeApprovalRef || fx?.NBEApprovalRef || fx?.NbeApprovalRef || '',
+      nbeOfficer: fx?.nbeOfficer || fx?.NBEOfficer || '',
+      verifiedBy: fx?.verifiedBy || fx?.VerifiedBy || '', // Who confirmed
+      verifiedByMSP: fx?.verifiedByMSP || fx?.VerifiedByMSP || '', // Confirmer MSP
+      comments: fx?.comments || fx?.Comments || '',
     }));
 
-    // Deduplicate by forexId
-    const uniqueForex = dedupeById(normalizedForex, (fx: any) => fx.forexId);
+    // Filter valid forex (must have forexId)
+    const validForex = normalizedForex.filter((fx: any) => fx.forexId && String(fx.forexId).trim().length > 0);
+    const uniqueForex = dedupeById(validForex, (fx: any) => String(fx.forexId));
     
-    logger.info(`✅ Total unique forex allocations: ${uniqueForex.length} (Blockchain: ${blockchainForex.length}, PostgreSQL: ${postgresForex.length})`);
+    logger.info(`[FOREX] ✅ Returning ${uniqueForex.length} unique forex allocations (SOURCE: Blockchain + PostgreSQL enrichment)`);
     
     res.json({ 
       success: true, 
       data: uniqueForex,
-      sources: {
-        blockchain: blockchainForex.length,
-        postgres: postgresForex.length,
-        total: uniqueForex.length
-      },
+      source: 'blockchain', // ALWAYS blockchain
+      blockchainPowered: true, // Flag for UI to show blockchain badge
+      count: uniqueForex.length,
       timestamp: new Date().toISOString() 
     });
   } catch (error: any) {
-    logger.error('Error fetching forex allocations:', error);
-    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+    logger.error('[FOREX] ❌ Error querying blockchain:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: { 
+        code: 'BLOCKCHAIN_ERROR', 
+        message: error.message 
+      },
+      source: 'blockchain',
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 
@@ -266,6 +284,25 @@ router.post('/request', authMiddleware, async (req, res) => {
           // This prevents the next operation (AllocateForex) from failing
           await new Promise(resolve => setTimeout(resolve, 5000));
           
+          // ✅ STORE BLOCKCHAIN METADATA in PostgreSQL
+          try {
+            const db = DatabaseService.getInstance();
+            await db.run(
+              `INSERT INTO forex_allocations (
+                forex_id, contract_id, exporter_id, requested_amount, currency, status,
+                blockchain_tx_id, blockchain_timestamp, last_blockchain_sync
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+              ON CONFLICT (forex_id) DO UPDATE SET
+                blockchain_tx_id = EXCLUDED.blockchain_tx_id,
+                blockchain_timestamp = NOW(),
+                last_blockchain_sync = NOW()`,
+              [forexId, contractId, finalExporterId, finalAmount, finalCurrency, 'REQUESTED', result.txId]
+            );
+            logger.info(`✅ Stored blockchain metadata for forex ${forexId}: txId=${result.txId}`);
+          } catch (dbError) {
+            logger.error(`Failed to store blockchain metadata for ${forexId}:`, dbError);
+          }
+          
           return res.status(201).json({ 
             success: true, 
             data: { forexId },
@@ -274,7 +311,12 @@ router.post('/request', authMiddleware, async (req, res) => {
               amount: finalAmount,
               currency: finalCurrency,
             },
-            txId: result.txId, 
+            txId: result.txId,
+            blockchainProof: {
+              transactionId: result.txId,
+              timestamp: new Date().toISOString(),
+              action: 'REQUEST_FOREX'
+            },
             attempt,
             timestamp: new Date().toISOString() 
           });
@@ -321,6 +363,78 @@ router.post('/request', authMiddleware, async (req, res) => {
   } catch (error: any) {
     logger.error('Error requesting forex:', error);
     res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// POST /api/v1/forex/:forexId/confirm — NBE confirms forex request (REQUESTED → CONFIRMED)
+router.post('/:forexId/confirm', authMiddleware, async (req, res) => {
+  try {
+    const { forexId } = req.params;
+    const { confirmedBy } = req.body;
+
+    if (!forexId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: { code: 'MISSING_FIELDS', message: 'forexId is required' } 
+      });
+    }
+
+    logger.info(`[FOREX] Confirming forex request: ${forexId} by ${confirmedBy}`);
+
+    // Connect as NBE to confirm the request
+    await fabricService.connectAsOrg('NBEMSP');
+
+    // Update forex status to CONFIRMED
+    const result = await fabricService.invokeChaincode('ConfirmForex', [
+      forexId,
+      confirmedBy || 'NBE Officer',
+      new Date().toISOString()
+    ]);
+
+    if (result.success) {
+      logger.info(`[FOREX] ✅ Forex request confirmed: ${forexId}`);
+      
+      // Store confirmation in PostgreSQL
+      try {
+        await postgresDb.run(
+          `UPDATE forex_allocations 
+           SET status = 'CONFIRMED', 
+               updated_at = CURRENT_TIMESTAMP,
+               confirmed_by = $1,
+               confirmed_at = CURRENT_TIMESTAMP
+           WHERE allocation_id = $2`,
+          [confirmedBy || 'NBE Officer', forexId]
+        );
+      } catch (pgErr) {
+        logger.warn('[FOREX] Could not update PostgreSQL, but blockchain succeeded:', pgErr);
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          forexId,
+          status: 'CONFIRMED',
+          confirmedBy: confirmedBy || 'NBE Officer',
+          confirmedAt: new Date().toISOString(),
+          message: 'Forex request confirmed. Allocate button is now active.'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      logger.error(`[FOREX] ❌ Failed to confirm forex: ${result.error}`);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'BLOCKCHAIN_ERROR', message: result.error || 'Failed to confirm forex request' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('[FOREX] Error confirming forex:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: { code: 'INTERNAL_ERROR', message: error.message }, 
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 
@@ -428,6 +542,47 @@ router.post('/allocate', authMiddleware, async (req, res) => {
           // Wait for transaction to propagate before responding
           await new Promise(resolve => setTimeout(resolve, 5000));
           
+          // ✅ Sync to PostgreSQL for fast queries with blockchain metadata
+          try {
+            // Get LC and contract data to populate related fields
+            const lcData = await fabricService.getLC(lcId);
+            const contractId = lcData.success ? (lcData.data?.contractId || lcData.data?.ContractID || '') : '';
+            const exporterId = lcData.success ? (lcData.data?.exporterId || lcData.data?.ExporterID || '') : '';
+            
+            await postgresDb.run(
+              `INSERT INTO forex_allocations (
+                allocation_id, lc_number, contract_id, exporter_id, 
+                amount_usd, exchange_rate, amount_etb, allocation_date, 
+                approved_by, status, blockchain_tx_id, blockchain_timestamp, last_blockchain_sync,
+                created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), NOW(), NOW())
+              ON CONFLICT (allocation_id) DO UPDATE SET
+                lc_number = EXCLUDED.lc_number,
+                contract_id = EXCLUDED.contract_id,
+                exporter_id = EXCLUDED.exporter_id,
+                amount_usd = EXCLUDED.amount_usd,
+                exchange_rate = EXCLUDED.exchange_rate,
+                blockchain_tx_id = EXCLUDED.blockchain_tx_id,
+                blockchain_timestamp = NOW(),
+                last_blockchain_sync = NOW(),
+                amount_etb = EXCLUDED.amount_etb,
+                allocation_date = EXCLUDED.allocation_date,
+                approved_by = EXCLUDED.approved_by,
+                status = EXCLUDED.status,
+                updated_at = NOW()`,
+              [
+                forexId, lcId, contractId, exporterId,
+                finalAmount, finalExchangeRate, 
+                finalAmount * finalExchangeRate, // amount_etb
+                finalExpiryDate || new Date().toISOString(),
+                finalOfficer, 'allocated', result.txId
+              ]
+            );
+            logger.info(`✅ Forex ${forexId} synced to PostgreSQL with blockchain txId: ${result.txId}`);
+          } catch (syncErr) {
+            logger.warn(`⚠️  Failed to sync forex to PostgreSQL:`, syncErr);
+          }
+          
           return res.json({ 
             success: true, 
             data: { forexId },
@@ -439,7 +594,12 @@ router.post('/allocate', authMiddleware, async (req, res) => {
               approvalRef: finalApprovalRef,
               expiryDate: finalExpiryDate,
             },
-            txId: result.txId, 
+            txId: result.txId,
+            blockchainProof: {
+              transactionId: result.txId,
+              timestamp: new Date().toISOString(),
+              action: 'ALLOCATE_FOREX'
+            },
             attempt,
             timestamp: new Date().toISOString() 
           });

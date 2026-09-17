@@ -373,40 +373,52 @@ router.post('/',
  */
 router.get('/', async (req, res) => {
   try {
-    const { exporterID, eudrCompliant } = req.query;
-    let result;
-
+    const { exporterID, eudrCompliant, status: statusFilter } = req.query;
+    
+    // Import enrichment service
+    const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+    
+    // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
+    const { CouchDBDirectService } = require('../services/couchDBDirectService');
+    const couchDBService = new CouchDBDirectService();
+    
+    logger.info(`[SHIPMENTS] 🔗 Fetching shipments from blockchain (CouchDB direct)...`);
+    
+    let shipments = await couchDBService.queryAllShipments();
+    
+    logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from blockchain (CouchDB direct)`);
+    
+    // Apply filters
     if (exporterID) {
-      result = await fabricService.getShipmentsByExporter(exporterID as string);
-    } else if (eudrCompliant === 'true') {
-      result = await fabricService.getEUDRCompliantShipments();
-    } else {
-      result = await fabricService.getAllShipments();
+      shipments = shipments.filter((s: any) => 
+        s.exporterId === exporterID || s.ExporterID === exporterID || s.exporterID === exporterID
+      );
     }
-
-    if (result.success) {
-      const shipments = result.data || [];
-      
-      // DEBUG: Log first shipment to see what blockchain returns
-      if (shipments.length > 0) {
-        logger.info(`[SHIPMENTS] Total shipments: ${shipments.length}`);
-        logger.info('[SHIPMENTS] First shipment type:', typeof shipments[0]);
-        logger.info('[SHIPMENTS] First shipment isArray:', Array.isArray(shipments[0]));
-        logger.info('[SHIPMENTS] First shipment from blockchain:', JSON.stringify(shipments[0], null, 2));
-        logger.info('[SHIPMENTS] First shipment keys:', Object.keys(shipments[0]));
-        logger.info('[SHIPMENTS] First shipment values sample:', {
-          quantity: shipments[0].quantity,
-          grade: shipments[0].grade,
-          shipmentId: shipments[0].shipmentId
-        });
-      }
-      
-      const normalizedShipments = shipments.map((shipment: any) => ({
-        shipmentId: shipment?.shipmentId || shipment?.ShipmentID || shipment?.id || '',
-        contractId: shipment?.contractId || shipment?.ContractID || shipment?.contractID || '',
-        exporterId: shipment?.exporterId || shipment?.ExporterID || shipment?.exporterID || '',
-        buyerId: shipment?.buyerId || shipment?.BuyerID || shipment?.buyerID || '',
-        buyerName: shipment?.buyerName || shipment?.BuyerName || '',
+    
+    if (eudrCompliant === 'true') {
+      shipments = shipments.filter((s: any) => 
+        s.eudrCompliant === true || s.EUDRCompliant === true
+      );
+    }
+    
+    if (statusFilter) {
+      shipments = shipments.filter((s: any) => 
+        (s.status || s.Status || '').toUpperCase() === (statusFilter as string).toUpperCase()
+      );
+    }
+    
+    // ✅ ENRICH with buyer data from PostgreSQL
+    shipments = await dataEnrichmentService.enrichShipments(shipments);
+    
+    logger.info(`[SHIPMENTS] Returning ${shipments.length} shipments (enriched with buyer data)`);
+    
+    const normalizedShipments = shipments.map((shipment: any) => ({
+      shipmentId: shipment?.shipmentId || shipment?.ShipmentID || shipment?.id || '',
+      contractId: shipment?.contractId || shipment?.ContractID || shipment?.contractID || '',
+      exporterId: shipment?.exporterId || shipment?.ExporterID || shipment?.exporterID || '',
+      buyerId: shipment?.buyerId || shipment?.BuyerID || shipment?.buyerID || '',
+        buyerName: shipment?.buyerName || shipment?.BuyerName || '', // ✅ NOW ENRICHED
+        buyerCountry: shipment?.buyerCountry || '', // ✅ NOW ENRICHED
         origin: shipment?.origin || shipment?.Origin || '',
         destination: shipment?.destination || shipment?.Destination || '',
         quantity: shipment?.quantity ?? shipment?.Quantity ?? 0,
@@ -490,23 +502,13 @@ router.get('/', async (req, res) => {
         },
         timestamp: new Date().toISOString(),
       });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: result.error || 'Failed to retrieve shipments',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  } catch (error) {
-    logger.error('Error retrieving shipments:', error);
+  } catch (error: any) {
+    logger.error('[SHIPMENTS] Error retrieving shipments:', error);
     res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
+        message: error.message || 'Failed to retrieve shipments',
       },
       timestamp: new Date().toISOString(),
     });

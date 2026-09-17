@@ -192,6 +192,51 @@ export const hasAnyPermission = (
 };
 
 /**
+ * Middleware to require specific role(s) for access
+ * Usage: requireRole(['EXPORTER']) or requireRole(['BANKS', 'BANK_ADMIN'])
+ */
+export const requireRole = (allowedRoles: string[]) => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTHENTICATION_ERROR',
+          message: 'User not authenticated',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // ADMIN can access everything
+    if (req.user.role === 'ADMIN') {
+      logger.info(`🔓 ADMIN bypass: ${req.user.username} accessing ${req.method} ${req.path}`);
+      next();
+      return;
+    }
+
+    // Check if user's role is in allowed roles
+    const userRole = req.user.role.toUpperCase();
+    const allowed = allowedRoles.map(r => r.toUpperCase()).includes(userRole);
+
+    if (!allowed) {
+      logger.warn(`❌ RBAC: ${req.user.username} (${req.user.role}) denied access to ${req.method} ${req.path}. Required: ${allowedRoles.join(' or ')}`);
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: `Access denied. Required role: ${allowedRoles.join(' or ')}. Your role: ${req.user.role}`,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    logger.info(`✅ RBAC: ${req.user.username} (${req.user.role}) allowed access to ${req.method} ${req.path}`);
+    next();
+  };
+};
+
+/**
  * Middleware to log all access attempts for security audit
  */
 export const auditAccess = (
@@ -218,5 +263,6 @@ export default {
   hasPermission,
   hasAllPermissions,
   hasAnyPermission,
+  requireRole,
   auditAccess,
 };

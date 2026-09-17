@@ -202,8 +202,43 @@ func (c *CoffeeContract) SubmitDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
+	err = ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save declaration: %v", err)
+	}
+
 	fmt.Printf("SubmitDeclaration: Declaration created with auto-mapped data\n")
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "declarationId", OldValue: "", NewValue: declarationID, DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "exporterId", OldValue: "", NewValue: exporterID, DataType: "string"},
+		{FieldName: "lcId", OldValue: "", NewValue: lcID, DataType: "string"},
+		{FieldName: "forexId", OldValue: "", NewValue: forexID, DataType: "string"},
+		{FieldName: "quantity", OldValue: "", NewValue: quantityStr, DataType: "number"},
+		{FieldName: "totalValue", OldValue: "", NewValue: totalValueStr, DataType: "number"},
+		{FieldName: "destination", OldValue: "", NewValue: destination, DataType: "string"},
+		{FieldName: "status", OldValue: "", NewValue: "SUBMITTED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,  // ECTA permit verified
+		NBECompliance:  true,  // Forex verified
+		UCP600Check:    true,  // LC verified
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: "Customs declaration submitted by exporter. Pending customs review.",
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "SUBMIT", "DECLARATION", declarationID, "", "SUBMITTED", changes,
+		"Customs declaration submitted by exporter", compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+		// Don't fail the transaction if audit log fails
+	}
+	
+	return nil
 }
 
 // SubmitCustomsDeclaration - API-compatible wrapper for customs declaration submissions
@@ -364,7 +399,35 @@ func (c *CoffeeContract) ReviewDeclaration(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	err = ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save declaration: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "SUBMITTED", NewValue: "UNDER_INSPECTION", DataType: "string"},
+		{FieldName: "customsOfficer", OldValue: "", NewValue: customsOfficer, DataType: "string"},
+		{FieldName: "inspectionNotes", OldValue: "", NewValue: inspectionNotes, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    true,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Physical inspection started by customs officer: %s", customsOfficer),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "REVIEW", "DECLARATION", declarationID, "SUBMITTED", "UNDER_INSPECTION", changes,
+		fmt.Sprintf("Customs review started by officer %s", customsOfficer), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+		// Don't fail the transaction if audit log fails
+	}
+
+	return nil
 }
 
 // ReviewCustomsDeclaration - API-compatible wrapper for customs review workflow

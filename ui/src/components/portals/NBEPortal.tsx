@@ -49,6 +49,8 @@ import {
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+import { couchDBService } from '@/services/couchdbService';
+import { TestBlockchainButton } from '@/components/TestBlockchainButton';
 import { SalesContract } from '@/types';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
@@ -75,6 +77,7 @@ interface ForexAllocation {
   forexId: string;
   contractId: string;
   exporterId: string;
+  lcId?: string;
   requestedAmount: number;
   allocatedAmount: number;
   currency: string;
@@ -82,13 +85,16 @@ interface ForexAllocation {
   officialRate: number;
   retentionRate: number;
   transportMode?: TransportMode;
-  status: 'REQUESTED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED';
+  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED';
   requestDate: string;
-  approvalDate?: string;
-  allocationDate?: string;
-  expiryDate: string;
-  nbeOfficer?: string;
-  nbeApprovalRef?: string;
+  approvalDate?: string | null;
+  allocationDate?: string | null;
+  expiryDate?: string | null;
+  nbeOfficer?: string | null;
+  nbeApprovalRef?: string | null;
+  verifiedBy?: string | null;
+  verifiedByMsp?: string | null;
+  comments?: string | null;
 }
 
 interface ExchangeRate {
@@ -225,43 +231,49 @@ const NBEPortal: React.FC = () => {
         console.log(`Loaded ${allContracts.length} contracts from API`);
       }
 
-      // Load real forex allocations from API
+      // 🔗 Load forex allocations DIRECTLY from CouchDB blockchain
+      console.log('[NBE] 🔗 Loading forex DIRECTLY from Hyperledger Fabric CouchDB...');
       try {
-        const forexRes = await api.get('/forex');
-        if (forexRes.data.success) {
-          const forexData = (forexRes.data.data || []).map((forex: any) => {
-            const status = forex.Status || forex.status || 'REQUESTED';
-            const isAllocated = status === 'ALLOCATED' || status === 'APPROVED';
-            
-            return {
-              forexId: forex.ForexID || forex.forexId || '',
-              contractId: forex.ContractID || forex.contractId || '',
-              exporterId: forex.ExporterID || forex.exporterId || '',
-              lcId: forex.LCID || forex.lcId || '',
-              requestedAmount: parseFloat(forex.RequestedAmount || forex.requestedAmount || '0'),
-              allocatedAmount: parseFloat(forex.AllocatedAmount || forex.allocatedAmount || '0'),
-              currency: forex.Currency || forex.currency || 'USD',
-              // Only use actual exchange rate if allocated, otherwise 0
-              exchangeRate: isAllocated ? parseFloat(forex.ExchangeRate || forex.exchangeRate || '0') : 0,
-              officialRate: parseFloat(forex.OfficialRate || forex.officialRate || '0'),
-              // Only use actual retention rate if allocated, otherwise 0
-              retentionRate: isAllocated ? parseFloat(forex.RetentionRate || forex.retentionRate || '0') : 0,
-              status: status,
-              requestDate: forex.RequestDate || forex.requestDate || new Date().toISOString(),
-              approvalDate: forex.ApprovalDate || forex.approvalDate || null,
-              allocationDate: forex.AllocationDate || forex.allocationDate || null,
-              // Only set expiry date if allocated
-              expiryDate: isAllocated ? (forex.ExpiryDate || forex.expiryDate || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString()) : null,
-              nbeOfficer: forex.NBEOfficer || forex.nbeOfficer || null,
-              nbeApprovalRef: forex.NBEApprovalRef || forex.nbeApprovalRef || null,
-            };
-          });
-          setForexAllocations(forexData);
-          setAllForexAllocations(forexData);
-          console.log(`Loaded ${forexData.length} forex allocations from API`);
-        }
+        const blockchainForex = await couchDBService.getAllForex();
+        console.log(`[NBE] ✅ Loaded ${blockchainForex.length} forex from BLOCKCHAIN (no API, pure CouchDB)`);
+        
+        const forexData = blockchainForex.map((forex) => {
+          const status = forex.status || 'REQUESTED';
+          const isAllocated = status === 'ALLOCATED';
+          
+          return {
+            forexId: forex.forexId || '',
+            contractId: forex.contractId || '',
+            exporterId: forex.exporterId || '',
+            lcId: forex.lcId || '',
+            requestedAmount: forex.requestedAmount || 0,
+            allocatedAmount: forex.allocatedAmount || 0,
+            currency: forex.currency || 'USD',
+            exchangeRate: isAllocated ? (forex.exchangeRate || 0) : 0,
+            officialRate: forex.exchangeRate || 0,
+            retentionRate: isAllocated ? (forex.retentionRate || 0) : 0,
+            status: status,
+            requestDate: forex.requestDate || forex.createdAt || new Date().toISOString(),
+            approvalDate: forex.allocationDate || null,
+            allocationDate: forex.allocationDate || null,
+            expiryDate: isAllocated ? (forex.expiryDate || new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString()) : null,
+            nbeOfficer: forex.nbeOfficer || null,
+            nbeApprovalRef: forex.nbeApprovalRef || null,
+            verifiedBy: forex.verifiedBy || null,
+            verifiedByMsp: forex.verifiedByMsp || null,
+            comments: forex.comments || null,
+          };
+        });
+        
+        setForexAllocations(forexData);
+        setAllForexAllocations(forexData);
+        console.log(`[NBE] 📊 Forex by status:`, {
+          REQUESTED: forexData.filter(f => f.status === 'REQUESTED').length,
+          CONFIRMED: forexData.filter(f => f.status === 'CONFIRMED').length,
+          ALLOCATED: forexData.filter(f => f.status === 'ALLOCATED').length,
+        });
       } catch (error) {
-        console.warn('Could not load forex data, using empty array:', error);
+        console.error('[NBE] ❌ Failed to load forex from blockchain:', error);
         setForexAllocations([]);
       }
 
@@ -912,49 +924,70 @@ const NBEPortal: React.FC = () => {
             </IconButton>
           </Tooltip>
           {params.row.status === 'REQUESTED' && (
-            <>
-              <Tooltip title="Allocate Forex">
-                <IconButton 
-                  size="small"
-                  color="success"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedForex(params.row);
-                    setForexDialogOpen(true);
-                  }}
-                >
-                  <CheckCircle />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Reject Forex Request">
-                <IconButton 
-                  size="small"
-                  color="error"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const reason = prompt(
-                      `Reject Forex Request ${params.row.forexId}?\n\n` +
-                      `Reasons:\n` +
-                      `- Insufficient reserves\n` +
-                      `- Amount exceeds limits\n` +
-                      `- Contract not approved\n` +
-                      `- Missing LC documentation\n` +
-                      `- Policy restrictions\n\n` +
-                      `Enter rejection reason:`
-                    );
-                    if (reason) {
-                      alert(
-                        `Forex Request ${params.row.forexId} rejected.\n\n` +
-                        `Reason: ${reason}\n\n` +
-                        `Bank and exporter will be notified.`
-                      );
+            <Tooltip title="Confirm Forex Request">
+              <IconButton 
+                size="small"
+                sx={{ 
+                  color: '#1976d2',
+                  '&:hover': { bgcolor: 'rgba(25, 118, 210, 0.08)' }
+                }}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    // Confirm the forex request (REQUESTED → CONFIRMED)
+                    const token = localStorage.getItem('authToken');
+                    const response = await fetch(`/api/v1/forex/${params.row.forexId}/confirm`, {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify({
+                        confirmedBy: JSON.parse(localStorage.getItem('user') || '{}').username || 'NBE Officer'
+                      })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                      setApprovalNotification({
+                        open: true,
+                        success: true,
+                        message: `Forex request ${params.row.forexId} confirmed. Allocate button is now active.`
+                      });
+                      await loadData();
+                    } else {
+                      setApprovalNotification({
+                        open: true,
+                        success: false,
+                        message: result.error?.message || 'Failed to confirm forex request'
+                      });
                     }
-                  }}
-                >
-                  <Cancel />
-                </IconButton>
-              </Tooltip>
-            </>
+                  } catch (error: any) {
+                    setApprovalNotification({
+                      open: true,
+                      success: false,
+                      message: error.message || 'Failed to confirm forex request'
+                    });
+                  }
+                }}
+              >
+                <CheckCircle />
+              </IconButton>
+            </Tooltip>
+          )}
+          {params.row.status === 'CONFIRMED' && (
+            <Tooltip title="Allocate Forex">
+              <IconButton 
+                size="small"
+                color="success"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedForex(params.row);
+                  setForexDialogOpen(true);
+                }}
+              >
+                <CheckCircle />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       ),
@@ -968,6 +1001,11 @@ const NBEPortal: React.FC = () => {
         background: 'linear-gradient(135deg, #f7fbff 0%, #eef5ff 48%, #fff9ec 100%)',
       }}
     >
+      {/* Test Blockchain Button */}
+      <Box sx={{ position: 'fixed', top: 80, right: 20, zIndex: 1000 }}>
+        <TestBlockchainButton />
+      </Box>
+
       {/* Professional KPI Cards - At the very top */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {(() => {

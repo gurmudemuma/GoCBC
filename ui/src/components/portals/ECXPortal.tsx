@@ -26,6 +26,7 @@ import { apiFetch } from '@/config/api.config';
 import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { BlockchainBadge } from '@/components/blockchain';
+import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 
 
 interface CoffeeLot {
@@ -905,6 +906,14 @@ const ECXPortal: React.FC = () => {
                 channel="coffeechannel"
                 compact
               />
+
+              {/* Blockchain Verification - Component handles all messaging */}
+              <Box sx={{ mt: 3 }}>
+                <BlockchainSignatureVerification
+                  entityType="COFFEE_LOT"
+                  entityId={selectedLot.lotId || selectedLot.ecxLotNumber}
+                />
+              </Box>
 
             <Grid container spacing={2} sx={{ pt: 1 }}>
               <Grid item xs={12}><Chip label={selectedLot.status} color={statusColor(selectedLot.status) as 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'} /></Grid>

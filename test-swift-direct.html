@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html><head><title>SWIFT Test</title></head><body>
+<h2>SWIFT Messages Direct Test</h2>
+<pre id="out">Testing...</pre>
+<script>
+async function test() {
+  const out = document.getElementById('out');
+  try {
+    const login = await fetch('http://localhost:3001/api/v1/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: 'bankAdmin', password: 'password123'})
+    });
+    const loginData = await login.json();
+    const token = loginData.data.token;
+    
+    const swift = await fetch('http://localhost:3001/api/v1/swift/messages', {
+      headers: {'Authorization': 'Bearer ' + token}
+    });
+    const swiftData = await swift.json();
+    
+    out.textContent = 'Success: ' + swiftData.success + '\n';
+    out.textContent += 'Messages: ' + (swiftData.data ? swiftData.data.length : 0) + '\n\n';
+    if (swiftData.data && swiftData.data.length > 0) {
+      out.textContent += 'First message:\n' + JSON.stringify(swiftData.data[0], null, 2).substring(0, 500);
+    }
+  } catch (e) {
+    out.textContent = 'Error: ' + e.message;
+  }
+}
+test();
+</script>
+</body></html>

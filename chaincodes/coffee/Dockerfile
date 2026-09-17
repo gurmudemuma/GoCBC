@@ -1,19 +1,7 @@
-# Multi-stage build for Linux chaincode
-FROM golang:1.21-alpine AS builder
-WORKDIR /build
-# Download dependencies first (cached layer)
-COPY go.mod go.sum ./
-RUN go mod download
-# Copy source and build
-COPY *.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -o chaincode
-
-# Final stage
-FROM alpine:3.18
-RUN apk add --no-cache libc6-compat
+# Use existing coffee-chaincode image (no internet needed)
+FROM coffee-chaincode:1.85
 WORKDIR /app
-COPY --from=builder /build/chaincode /app/chaincode
-COPY connection.json /app/connection.json
+# Replace the binary with the new v1.89
+COPY coffee /app/chaincode
 RUN chmod +x /app/chaincode
-EXPOSE 9999
 CMD ["/app/chaincode"]

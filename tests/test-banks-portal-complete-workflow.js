@@ -71,9 +71,11 @@ function section(message) {
 }
 
 // HTTP request helper
-function apiRequest(method, path, data = null, token = null) {
+function apiRequest(method, path, data = null, token = null, skipApiBase = false) {
   return new Promise((resolve, reject) => {
-    const url = new URL(path, API_BASE);
+    // Construct full URL properly
+    const fullUrl = skipApiBase ? `http://localhost:3001${path}` : API_BASE + path;
+    const url = new URL(fullUrl);
     const options = {
       method,
       headers: {
@@ -118,7 +120,7 @@ async function testSystemHealth() {
   section('STEP 1: System Health Check');
   
   try {
-    const response = await apiRequest('GET', '/health');
+    const response = await apiRequest('GET', '/health', null, null, true);
     
     if (response.status === 200 && response.data.status === 'healthy') {
       pass('API is healthy');
@@ -140,14 +142,14 @@ async function loginAsBankAdmin() {
   
   try {
     const response = await apiRequest('POST', '/auth/login', {
-      username: 'bank_admin',
-      password: 'Bank@2024'
+      username: 'bankAdmin',
+      password: 'password123'
     });
     
-    if (response.status === 200 && response.data.success && response.data.token) {
-      testData.authTokens.bank = response.data.token;
+    if (response.status === 200 && response.data.success && response.data.data?.token) {
+      testData.authTokens.bank = response.data.data.token;
       pass('Bank admin logged in successfully');
-      info(`Token: ${response.data.token.substring(0, 20)}...`);
+      info(`Token: ${response.data.data.token.substring(0, 20)}...`);
       return true;
     } else {
       fail('Bank admin login failed');

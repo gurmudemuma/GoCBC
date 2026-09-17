@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -117,7 +118,38 @@ func (c *CoffeeContract) RegisterECXLot(ctx contractapi.TransactionContextInterf
 	if err != nil {
 		return fmt.Errorf("failed to marshal lot: %v", err)
 	}
-	return ctx.GetStub().PutState("ECXLOT_"+lotID, lotJSON)
+	
+	err = ctx.GetStub().PutState("ECXLOT_"+lotID, lotJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save lot: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "lotId", OldValue: "", NewValue: lotID, DataType: "string"},
+		{FieldName: "ecxLotNumber", OldValue: "", NewValue: ecxLotNumber, DataType: "string"},
+		{FieldName: "exporterId", OldValue: "", NewValue: exporterID, DataType: "string"},
+		{FieldName: "warehouseId", OldValue: "", NewValue: warehouseID, DataType: "string"},
+		{FieldName: "quantity", OldValue: "", NewValue: quantityStr, DataType: "number"},
+		{FieldName: "status", OldValue: "", NewValue: "WAREHOUSED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  true, // ECX lot registered
+		ComplianceNote: fmt.Sprintf("ECX lot warehouse receipt issued by %s", registrarMSP),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "REGISTER", "ECXLOT", lotID, "", "WAREHOUSED", changes,
+		fmt.Sprintf("ECX lot registered at warehouse %s", warehouseID), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // GradeECXLot — Step 2: ECX grader records inspection result
@@ -184,7 +216,36 @@ func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface
 	if err != nil {
 		return fmt.Errorf("failed to marshal lot: %v", err)
 	}
-	return ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	
+	err = ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	if err != nil {
+		return fmt.Errorf("failed to save lot: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "WAREHOUSED", NewValue: lot.Status, DataType: "string"},
+		{FieldName: "grade", OldValue: "", NewValue: grade, DataType: "string"},
+		{FieldName: "moistureContent", OldValue: "", NewValue: moistureStr, DataType: "number"},
+		{FieldName: "gradingOfficer", OldValue: "", NewValue: gradingOfficer, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // ECTA quality standards applied
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("ECX lot graded by %s: %s", gradingOfficer, grade),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "GRADE", "ECXLOT", lotID, "WAREHOUSED", lot.Status, changes,
+		fmt.Sprintf("ECX lot graded: %s (officer: %s)", grade, gradingOfficer), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // AssignECXLot — Step 3: Link graded lot to a sales contract
@@ -243,7 +304,35 @@ func (c *CoffeeContract) AssignECXLot(ctx contractapi.TransactionContextInterfac
 	if err != nil {
 		return fmt.Errorf("failed to marshal lot: %v", err)
 	}
-	return ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	
+	err = ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	if err != nil {
+		return fmt.Errorf("failed to save lot: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "GRADED", NewValue: "ASSIGNED", DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "pricePerKg", OldValue: "", NewValue: pricePerKgStr, DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // Contract verified
+		NBECompliance:  true, // Price meets minimum
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("ECX lot assigned to contract %s at $%.2f/kg", contractID, pricePerKg),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "ASSIGN", "ECXLOT", lotID, "GRADED", "ASSIGNED", changes,
+		fmt.Sprintf("ECX lot assigned to contract %s", contractID), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // ReleaseECXLot — Step 4: Release lot to exporter for shipping
@@ -287,7 +376,34 @@ func (c *CoffeeContract) ReleaseECXLot(ctx contractapi.TransactionContextInterfa
 	if err != nil {
 		return fmt.Errorf("failed to marshal lot: %v", err)
 	}
-	return ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	
+	err = ctx.GetStub().PutState("ECXLOT_"+lotID, updated)
+	if err != nil {
+		return fmt.Errorf("failed to save lot: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "ASSIGNED", NewValue: "RELEASED", DataType: "string"},
+		{FieldName: "releaseNote", OldValue: "", NewValue: note, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // Export permit verified
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  true,
+		ComplianceNote: "ECX lot released for export shipping",
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "RELEASE", "ECXLOT", lotID, "ASSIGNED", "RELEASED", changes,
+		fmt.Sprintf("ECX lot released for export: %s", note), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // ReadECXLot — Get a single lot

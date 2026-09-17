@@ -48,8 +48,8 @@ interface BlockchainSignature {
   signed_at: string;
   blockchainVerified: boolean;
   verificationStatus: string;
-  verificationMessage: string;
-  certificateDetails: {
+  verificationMessage?: string;
+  certificateDetails?: {
     commonName: string;
     organization: string;
     organizationalUnit: string;
@@ -59,7 +59,21 @@ interface BlockchainSignature {
     validFrom: string;
     validUntil: string;
     fingerprint: string;
-  } | null;
+  };
+  signerInfo?: {
+    name: string;
+    username: string;
+    email: string;
+    organization: string;
+    mspId: string;
+  };
+  endorsers?: Array<{
+    mspId: string;
+    endpoint: string;
+    identity: string;
+    certificateDetails?: any;
+    signerInfo?: any;
+  }>;
   blockchainData?: any;
   transactionId?: string;
   documentFileName?: string;
@@ -141,6 +155,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
 
         if (entitySigResponse.data.success && entitySigResponse.data.data.transactions) {
           // Convert blockchain transactions to signature format
+          // API now returns enhanced certificateDetails and signerInfo objects
           for (const tx of entitySigResponse.data.data.transactions) {
             entitySignatures.push({
               signature_id: tx.txId,
@@ -148,16 +163,16 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
               signer_id: 0,
               signer_org: tx.creator.mspId,
               signature_type: 'BLOCKCHAIN_TRANSACTION',
-              username: tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
-              full_name: tx.creator.identity,
-              email: '',
-              org_name: tx.creator.mspId,
+              username: tx.signerInfo?.username || tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
+              full_name: tx.signerInfo?.name || tx.creator.identity,
+              email: tx.signerInfo?.email || '',
+              org_name: tx.signerInfo?.organization || tx.creator.mspId,
               blockchain_tx_id: tx.txId,
               signed_at: tx.timestamp,
               blockchainVerified: tx.validationCode === 'VALID',
               verificationStatus: tx.validationCode === 'VALID' ? 'VERIFIED' : 'PENDING',
               verificationMessage: `${tx.chaincodeFunction} - Block #${tx.blockNumber}`,
-              certificateDetails: {
+              certificateDetails: tx.certificateDetails || {
                 commonName: tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
                 organization: tx.creator.identity.split('O=')[1]?.split(',')[0] || tx.creator.mspId,
                 organizationalUnit: tx.creator.identity.split('OU=')[1]?.split(',')[0] || 'client',
@@ -166,8 +181,16 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
                 issuer: `${tx.creator.mspId} CA`,
                 validFrom: tx.timestamp,
                 validUntil: 'N/A',
-                fingerprint: tx.blockHash || 'N/A'
+                fingerprint: tx.blockHash || tx.txId
               },
+              signerInfo: tx.signerInfo || {
+                name: tx.creator.identity,
+                username: tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
+                email: '',
+                organization: tx.creator.mspId,
+                mspId: tx.creator.mspId
+              },
+              endorsers: tx.endorsers || [], // CRITICAL: Include consortium endorsers for multi-org verification
               blockchainData: tx,
               transactionId: tx.txId,
               documentFileName: `${tx.chaincodeFunction}`,
@@ -518,6 +541,112 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
                   </TableBody>
                 </Table>
               </Box>
+
+              {/* Consortium Endorsers - Multi-Organization Consensus */}
+              {(sig as any).endorsers && (sig as any).endorsers.length > 0 ? (
+                <Box>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    🏛️ Consortium Endorsements ({(sig as any).endorsers.length} Organizations)
+                  </Typography>
+                  {(sig as any).endorsers.length >= 4 ? (
+                    <Alert severity="success" sx={{ mb: 2, fontSize: '0.85rem' }}>
+                      <Typography variant="body2">
+                        <strong>MAJORITY Consensus Achieved:</strong> This transaction was endorsed by {(sig as any).endorsers.length} peer organizations, 
+                        meeting the consortium's MAJORITY endorsement policy requirement (minimum 4 of 6 organizations). 
+                        Each endorsement represents independent validation and cryptographic approval.
+                      </Typography>
+                      <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
+                        📊 Endorsement Policy: MAJORITY (4 of 6) • ✅ Status: Valid Consensus
+                      </Typography>
+                    </Alert>
+                  ) : (sig as any).endorsers.length >= 2 ? (
+                    <Alert severity="info" sx={{ mb: 2, fontSize: '0.85rem' }}>
+                      <Typography variant="body2">
+                        <strong>Partial Consensus Data:</strong> {(sig as any).endorsers.length} endorser(s) captured. 
+                        The consortium's current endorsement policy requires MAJORITY (4 of 6 organizations) for transaction validation.
+                      </Typography>
+                    </Alert>
+                  ) : (
+                    <Alert severity="warning" sx={{ mb: 2, fontSize: '0.85rem' }}>
+                      <Typography variant="body2">
+                        <strong>Legacy Transaction:</strong> This transaction was recorded before multi-organization endorsement tracking was implemented. 
+                        Only {(sig as any).endorsers.length} endorser(s) captured. Current transactions capture endorsements from all validating organizations 
+                        (MAJORITY policy: minimum 4 of 6).
+                      </Typography>
+                    </Alert>
+                  )}
+                  
+                  {(sig as any).endorsers.map((endorser: any, idx: number) => (
+                    <Accordion key={idx} sx={{ mb: 1, backgroundColor: '#fafafa' }}>
+                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                        <Stack direction="row" spacing={2} alignItems="center">
+                          <VerifiedIcon color="success" fontSize="small" />
+                          <Box>
+                            <Typography variant="body2" fontWeight="bold">
+                              {endorser.mspId}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Peer: {endorser.certificateDetails?.commonName || 'N/A'}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                      </AccordionSummary>
+                      <AccordionDetails>
+                        {endorser.certificateDetails && (
+                          <Table size="small">
+                            <TableBody>
+                              <TableRow>
+                                <TableCell variant="head" sx={{ fontWeight: 'bold', width: '180px', fontSize: '0.85rem' }}>
+                                  Common Name (CN)
+                                </TableCell>
+                                <TableCell sx={{ fontSize: '0.85rem' }}>{endorser.certificateDetails.commonName}</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell variant="head" sx={{ fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                  Organization (O)
+                                </TableCell>
+                                <TableCell sx={{ fontSize: '0.85rem' }}>{endorser.certificateDetails.organization}</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell variant="head" sx={{ fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                  Organizational Unit (OU)
+                                </TableCell>
+                                <TableCell sx={{ fontSize: '0.85rem' }}>{endorser.certificateDetails.organizationalUnit}</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell variant="head" sx={{ fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                  Issuer CA
+                                </TableCell>
+                                <TableCell sx={{ fontSize: '0.85rem' }}>{endorser.certificateDetails.issuer}</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell variant="head" sx={{ fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                  Peer Endpoint
+                                </TableCell>
+                                <TableCell sx={{ fontSize: '0.85rem', fontFamily: 'monospace' }}>{endorser.endpoint}</TableCell>
+                              </TableRow>
+                            </TableBody>
+                          </Table>
+                        )}
+                      </AccordionDetails>
+                    </Accordion>
+                  ))}
+                </Box>
+              ) : (
+                <Box>
+                  <Divider sx={{ my: 2 }} />
+                  <Alert severity="info" sx={{ fontSize: '0.85rem' }}>
+                    <Typography variant="body2">
+                      <strong>Endorsement Policy:</strong> This consortium blockchain uses MAJORITY endorsement policy, requiring 
+                      validation from at least 4 of the 6 peer organizations for each transaction.
+                    </Typography>
+                    <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
+                      📋 Policy: MAJORITY (4/6) • Organizations: ECTA, ECX, Banks, NBE, Customs, Shipping
+                    </Typography>
+                  </Alert>
+                </Box>
+              )}
             </Stack>
           </AccordionDetails>
         </Accordion>

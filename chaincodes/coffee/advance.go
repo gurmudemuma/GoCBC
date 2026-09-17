@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -155,7 +156,35 @@ func (c *CoffeeContract) RecordAdvancePayment(ctx contractapi.TransactionContext
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("AdvancePaymentReceived", eventJSON)
 
-	return ctx.GetStub().PutState("ADVANCE_"+paymentID, paymentJSON)
+	err = ctx.GetStub().PutState("ADVANCE_"+paymentID, paymentJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save advance payment: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "amount", OldValue: "", NewValue: amountStr, DataType: "float"},
+		{FieldName: "currency", OldValue: "", NewValue: currency, DataType: "string"},
+		{FieldName: "swiftReference", OldValue: "", NewValue: swiftReference, DataType: "string"},
+		{FieldName: "creditAdviceNumber", OldValue: "", NewValue: creditAdviceNumber, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE monitors foreign payments
+		UCP600Check:    true, // Payment against documentary credit
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Advance payment received by %s from %s via SWIFT ref %s", receivingBank, payingBank, swiftReference),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "RECORD", "ADVANCE_PAYMENT", paymentID, "", "RECEIVED", changes,
+		fmt.Sprintf("Bank recorded advance payment of %s %s for exporter %s", amountStr, currency, exporterID), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // IssuePermitForAdvance - Bank issues export permit for advance payment

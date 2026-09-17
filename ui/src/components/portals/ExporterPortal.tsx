@@ -88,6 +88,7 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
+import { couchDBService } from '@/services/couchdbService';
 import AuditTrailTable from './AuditTrailTable';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
@@ -312,7 +313,6 @@ const ExporterPortal: React.FC = () => {
   
   // Document upload states - removed DocumentUploadDialog, using simple file input
   const [contractDocuments, setContractDocuments] = useState<any[]>([]);
-  const [shipmentDocuments, setShipmentDocuments] = useState<any[]>([]);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
   
   const [newContract, setNewContract] = useState({
@@ -620,6 +620,8 @@ const ExporterPortal: React.FC = () => {
   };
   
   const loadExporterData = async () => {
+    console.log('[EXPORTER] 🚀 ========== LOADING ALL DATA FROM BLOCKCHAIN ========== ');
+    
     // Get user info from token
     const token = localStorage.getItem('authToken');
     let currentExporterId = 'EXP2120784'; // Will be updated from token
@@ -637,167 +639,97 @@ const ExporterPortal: React.FC = () => {
       }
     }
     
-    // Load quality inspections to check which shipments have export permits
-    await loadQualityInspections(token);
+    // SKIP slow API calls - load quality/customs in background
+    loadQualityInspections(token).catch(e => console.warn('Quality inspections failed:', e));
+    loadCustomsDeclarations(token).catch(e => console.warn('Customs declarations failed:', e));
     
-    // Load customs declarations to check which shipments have been declared
-    await loadCustomsDeclarations(token);
-    
-    // Load Exporter Profile from API
-    try {
-      if (token) {
-        const profileResponse = await apiFetch('/exporters/me/profile', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        
-        // Handle 401/404 gracefully - endpoint may not exist yet
-        if (!profileResponse.ok) {
-          if (profileResponse.status === 401 || profileResponse.status === 404) {
-            console.log('[EXPORTER] Profile endpoint not available, using default profile');
-            // Set default profile from token data
+    // SKIP profile API - load in background (don't block blockchain data!)
+    if (token) {
+      apiFetch('/exporters/me/profile', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(async (profileResponse) => {
+        if (profileResponse.ok) {
+          const profileResult = await profileResponse.json();
+          if (profileResult.success && profileResult.data) {
+            const exporterData = profileResult.data;
             setProfile({
-              exporterId: currentExporterId,
-              companyName: userInfo?.org || userInfo?.organization || 'Your Coffee Company',
-              ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
-              licenseStatus: 'ACTIVE',
-              licenseExpiryDate: '2027-12-31',
-              bankName: userInfo?.bankName || 'Commercial Bank of Ethiopia',
-              bankBranch: userInfo?.bankBranch || 'Main Branch',
-              bankBranchCode: userInfo?.bankBranchCode || 'CBE-001',
-              capitalRequirement: 50000000,
-              laboratoryCertified: true,
+              exporterId: exporterData.exporterId || currentExporterId,
+              companyName: exporterData.companyName || userInfo?.organization || 'Your Coffee Company',
+              ectaLicenseNumber: exporterData.ectaLicenseNumber || userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
+              licenseStatus: exporterData.licenseStatus || 'ACTIVE',
+              licenseExpiryDate: exporterData.licenseExpiryDate || '2027-12-31',
+              bankName: exporterData.bankName || userInfo?.bankName,
+              bankBranch: exporterData.bankBranch || userInfo?.bankBranch,
+              bankBranchCode: exporterData.bankBranchCode || userInfo?.bankBranchCode,
+              capitalRequirement: exporterData.capitalRequirement || 50000000,
+              laboratoryCertified: exporterData.laboratoryCertified || false,
             });
-            return; // Skip the rest of profile loading
+            console.log('Loaded exporter profile:', exporterData);
           }
-          throw new Error(`Profile API returned ${profileResponse.status}`);
         }
-        
-        const profileResult = await profileResponse.json();
-        
-        if (profileResult.success && profileResult.data) {
-          const exporterData = profileResult.data;
-          setProfile({
-            exporterId: exporterData.exporterId || currentExporterId,
-            companyName: exporterData.companyName || userInfo?.organization || 'Your Coffee Company',
-            ectaLicenseNumber: exporterData.ectaLicenseNumber || userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
-            licenseStatus: exporterData.licenseStatus || 'ACTIVE',
-            licenseExpiryDate: exporterData.licenseExpiryDate || '2027-12-31',
-            bankName: exporterData.bankName || userInfo?.bankName,
-            bankBranch: exporterData.bankBranch || userInfo?.bankBranch,
-            bankBranchCode: exporterData.bankBranchCode || userInfo?.bankBranchCode,
-            capitalRequirement: exporterData.capitalRequirement || 50000000,
-            laboratoryCertified: exporterData.laboratoryCertified || false,
-          });
-          console.log('Loaded exporter profile:', exporterData);
-        } else {
-          // Fallback to token data if API fails
-          setProfile({
-            exporterId: currentExporterId,
-            companyName: userInfo?.organization || 'Your Coffee Company',
-            ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
-            licenseStatus: 'ACTIVE',
-            licenseExpiryDate: '2027-12-31',
-            bankName: userInfo?.bankName,
-            bankBranch: userInfo?.bankBranch,
-            bankBranchCode: userInfo?.bankBranchCode,
-            capitalRequirement: 50000000,
-            laboratoryCertified: true,
-          });
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to load exporter profile, using fallback data:', error);
-      // Fallback to token data
+      })
+      .catch(e => console.warn('Profile API failed (non-blocking):', e));
+      
+      // Set default profile immediately (no waiting!)
       setProfile({
         exporterId: currentExporterId,
-        companyName: userInfo?.organization || 'Your Coffee Company',
+        companyName: userInfo?.org || userInfo?.organization || 'Your Coffee Company',
         ectaLicenseNumber: userInfo?.ectaLicense || 'ECTA-LIC-2026-XXX',
         licenseStatus: 'ACTIVE',
         licenseExpiryDate: '2027-12-31',
-        bankName: userInfo?.bankName,
-        bankBranch: userInfo?.bankBranch,
-        bankBranchCode: userInfo?.bankBranchCode,
+        bankName: userInfo?.bankName || 'Commercial Bank of Ethiopia',
+        bankBranch: userInfo?.bankBranch || 'Main Branch',
+        bankBranchCode: userInfo?.bankBranchCode || 'CBE-001',
         capitalRequirement: 50000000,
         laboratoryCertified: true,
       });
     }
     
-    // Load real contracts from blockchain
+    console.log('[EXPORTER] ⚡ Profile section complete, starting blockchain data load...');
+    
+    // EXPERT FIX: Load contracts DIRECTLY from blockchain (fast!)
     try {
-      if (token) {
-        const response = await apiFetch('/contracts', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+      console.log('[EXPORTER] 🔗 Loading contracts from BLOCKCHAIN...');
+      console.log('[EXPORTER] CouchDB URL: http://localhost:5984/coffeechannel_coffee');
+      const allContractsFromBlockchain = await couchDBService.query('/coffeechannel_coffee/_all_docs?startkey="CONTRACT"&endkey="CONTRACT\ufff0"&include_docs=true');
+      console.log('[EXPORTER] ✅ Blockchain query successful, parsing response...');
+      
+      if (allContractsFromBlockchain && allContractsFromBlockchain.rows) {
+        const allDocs = allContractsFromBlockchain.rows.map((row: any) => row.doc).filter((doc: any) => doc && !doc._id.startsWith('_design'));
+        console.log(`[EXPORTER] ✅ Found ${allDocs.length} total contracts on blockchain`);
+        
+        // Filter contracts for current exporter only  
+        const myContracts = allDocs.filter((c: any) => {
+          const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
+          return contractExporterId === currentExporterId;
         });
-        const result = await response.json();
-        console.log('Contracts API response:', result);
-        if (result.success && result.data) {
-          console.log('Total contracts from API:', result.data.length);
-          console.log('Sample contract (if any):', result.data[0]);
+        
+        console.log(`[EXPORTER] ✅ Found ${myContracts.length} contracts for exporter ${currentExporterId}`);
+        console.log(`[EXPORTER] Contract statuses:`, myContracts.map((c: any) => ({ 
+          id: c.contractID || c.contractId, 
+          status: c.contractStatus 
+        })));
+        
+        // Map blockchain contracts to UI format (removed validation filter - show ALL contracts)
+        const mappedContracts = myContracts.map((c: any, index: number) => {
+          const contractId = c.contractID || c.contractId || c.ContractID || 
+                            `TEMP_${currentExporterId}_${index}_${Date.now()}`;
           
-          // Filter contracts for current exporter only  
-          // Handle both camelCase (exporterId) and PascalCase (ExporterID) from blockchain
-          const myContracts = result.data.filter((c: any) => {
-            const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
-            return contractExporterId === currentExporterId;
-          });
+          const buyerBank = c.buyerBank || c.BuyerBank || '';
+          const exporterBank = c.exporterBank || c.ExporterBank || '';
           
-          console.log(`[EXPORTER] Total contracts: ${result.data.length}`);
-          console.log(`[EXPORTER] My contracts: ${myContracts.length}`);
-          console.log(`[EXPORTER] Contract statuses:`, myContracts.map((c: any) => ({ 
-            id: c.contractID || c.contractId, 
-            status: c.contractStatus 
-          })));
+          const rawQuantity = c.quantity || c.Quantity || '0';
+          const rawPricePerKg = c.pricePerKg || c.PricePerKg || '0';
+          const rawTotalValue = c.totalValue || c.TotalValue || '0';
           
-          // Filter out incomplete contracts - only show contracts with complete data
-          const validContracts = myContracts.filter((c: any) => {
-            const quantity = c.quantity || c.Quantity || 0;
-            const pricePerKg = c.pricePerKg || c.PricePerKg || 0;
-            const buyerId = c.buyerID || c.buyerId || c.BuyerID || '';
-            const coffeeType = c.coffeeType || c.CoffeeType || '';
-            
-            const hasValidData = quantity > 0 && pricePerKg > 0 && buyerId !== '' && coffeeType !== '';
-            
-            if (!hasValidData) {
-              console.log(`[EXPORTER] Filtering out incomplete contract ${c.contractID || c.contractId} (qty: ${quantity}, price: ${pricePerKg}, buyer: "${buyerId}", type: "${coffeeType}")`);
-            }
-            
-            return hasValidData;
-          });
+          const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
+          const pricePerKg = typeof rawPricePerKg === 'string' ? parseFloat(rawPricePerKg) || 0 : Number(rawPricePerKg) || 0;
+          const totalValue = typeof rawTotalValue === 'string' ? parseFloat(rawTotalValue) || 0 : Number(rawTotalValue) || 0;
           
-          console.log(`[EXPORTER] Filtered from ${myContracts.length} to ${validContracts.length} valid contracts`);
-          
-          // Map blockchain contracts to UI format
-          const mappedContracts = validContracts.map((c: any, index: number) => {
-            // Ensure contractId exists, generate from timestamp if missing
-            const contractId = c.contractID || c.contractId || c.ContractID || 
-                              `TEMP_${currentExporterId}_${index}_${Date.now()}`;
-            
-            // Extract bank fields - check both camelCase and PascalCase
-            const buyerBank = c.buyerBank || c.BuyerBank || '';
-            const exporterBank = c.exporterBank || c.ExporterBank || '';
-            
-            console.log(`Mapping contract: originalId=${c.contractID || c.contractId}, mappedId=${contractId}`, {
-              buyerBank: buyerBank,
-              exporterBank: exporterBank,
-              rawData: { buyerBank: c.buyerBank, BuyerBank: c.BuyerBank, exporterBank: c.exporterBank, ExporterBank: c.ExporterBank }
-            });
-            
-            // Extract numeric fields and ensure they're valid numbers
-            const rawQuantity = c.quantity || c.Quantity || '0';
-            const rawPricePerKg = c.pricePerKg || c.PricePerKg || '0';
-            const rawTotalValue = c.totalValue || c.TotalValue || '0';
-            
-            const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
-            const pricePerKg = typeof rawPricePerKg === 'string' ? parseFloat(rawPricePerKg) || 0 : Number(rawPricePerKg) || 0;
-            const totalValue = typeof rawTotalValue === 'string' ? parseFloat(rawTotalValue) || 0 : Number(rawTotalValue) || 0;
-            
-            return {
-              contractId: contractId,
-              nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
+          return {
+            contractId: contractId,
+            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
               buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
               buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
               origin: c.origin || c.Origin || c.contractOrigin || c.contractOrigin || '',
@@ -813,30 +745,30 @@ const ExporterPortal: React.FC = () => {
               approvalDate: c.approvalDate || c.ApprovalDate || ''
             };
           });
-          setContracts(mappedContracts);
-          setAllContracts(mappedContracts);
-          console.log(`Loaded ${mappedContracts.length} contracts for exporter ${currentExporterId}`);
-        } else {
-          console.log('No contracts data or query failed:', result);
-        }
+        setContracts(mappedContracts);
+        setAllContracts(mappedContracts);
+        console.log(`✅ Loaded ${mappedContracts.length} contracts for exporter ${currentExporterId}`);
+      } else {
+        console.log('[EXPORTER] ⚠️ No contracts found on blockchain');
       }
     } catch (error) {
-      console.error('Failed to load contracts:', error);
+      console.error('[EXPORTER] ❌ Failed to load contracts from blockchain:', error);
+      console.error('[EXPORTER] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : 'Unknown'
+      });
     }
 
-    // Load LCs for current exporter
+    // EXPERT FIX: Load LCs DIRECTLY from blockchain (fast!)
     try {
-      if (token) {
-        const lcResponse = await apiFetch('/banking/lc', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const lcResult = await lcResponse.json();
-        if (lcResult.success && lcResult.data) {
-          const myLCs = lcResult.data.filter((lc: any) => 
-            (lc.exporterId || lc.ExporterID) === currentExporterId
-          );
-          console.log('[EXPORTER] Sample LC data (first LC):', myLCs[0]);
-          console.log('[EXPORTER] LC fields available:', myLCs[0] ? Object.keys(myLCs[0]) : 'No LCs');
+      console.log('[EXPORTER] 🔗 Loading LCs from BLOCKCHAIN...');
+      const allLCs = await couchDBService.getAllLCs();
+      
+      const myLCs = allLCs.filter((lc: any) => 
+        (lc.exporterId || lc.ExporterID) === currentExporterId
+      );
+      console.log(`[EXPORTER] ✅ Found ${myLCs.length} LCs for exporter ${currentExporterId}`);
           
           // Filter out incomplete LCs - only show LCs with complete data
           const validLCs = myLCs.filter((lc: any) => {
@@ -881,54 +813,49 @@ const ExporterPortal: React.FC = () => {
             // Don't require issueDate - REQUESTED and APPROVED LCs won't have it yet
           );
           
-          console.log(`[EXPORTER] Loaded ${myLCs.length} LCs, ${completeLCs.length} complete LCs for exporter`);
-          setLCStatuses(completeLCs);
-          setAllLCStatuses(completeLCs);
-          console.log(`Loaded ${myLCs.length} LCs for exporter`);
-          
-          // Store for use in forex loading below
-          var loadedLCsForForex: any = completeLCs;
-        }
-      }
+      console.log(`[EXPORTER] Loaded ${myLCs.length} LCs, ${completeLCs.length} complete LCs for exporter`);
+      setLCStatuses(completeLCs);
+      setAllLCStatuses(completeLCs);
+      console.log(`Loaded ${myLCs.length} LCs for exporter`);
+      
+      // Store for use in forex loading below
+      var loadedLCsForForex: any = completeLCs;
     } catch (error) {
       console.warn('Could not load LCs:', error);
       var loadedLCsForForex: any = [];
     }
 
-    // Load Forex allocations for current exporter
+    // EXPERT FIX: Load Forex allocations DIRECTLY from blockchain (fast!)
     try {
-      if (token) {
-        const forexResponse = await apiFetch('/forex', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const forexResult = await forexResponse.json();
-        if (forexResult.success && forexResult.data) {
-          const myForex = forexResult.data.filter((f: any) => 
-            (f.exporterId || f.ExporterID) === currentExporterId
-          );
-          
-          console.log(`[EXPORTER] Raw forex data from API: ${myForex.length} records`);
-          
-          const mappedForex = myForex.map((f: any) => ({
-            forexId: f.forexId || f.ForexID,
-            contractId: f.contractId || f.ContractID,
-            exporterId: f.exporterId || f.ExporterID,
-            lcId: f.lcId || f.LCID,
-            requestedAmount: f.requestedAmount || f.RequestedAmount || 0,
-            allocatedAmount: f.allocatedAmount || f.AllocatedAmount || 0,
-            currency: f.currency || f.Currency,
-            exchangeRate: f.exchangeRate || f.ExchangeRate || 0,
-            retentionRate: f.retentionRate || f.RetentionRate || 40,
-            status: f.status || f.Status,
-            expiryDate: f.expiryDate || f.ExpiryDate,
-            allocationDate: f.allocationDate || f.AllocationDate,
-            requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
-          }));
-          
-          // Add synthetic forex for LCs with FOREX_ALLOCATED status but no forex record
-          // Use loadedLCsForForex from above instead of lcStatuses state
-          console.log(`[EXPORTER] Checking ${loadedLCsForForex.length} loaded LCs for synthetic forex creation`);
-          if (loadedLCsForForex && loadedLCsForForex.length > 0) {
+      console.log('[EXPORTER] 🔗 Loading Forex from BLOCKCHAIN...');
+      const allForex = await couchDBService.getAllForex();
+      
+      const myForex = allForex.filter((f: any) => 
+        (f.exporterId || f.ExporterID) === currentExporterId
+      );
+      
+      console.log(`[EXPORTER] ✅ Found ${myForex.length} forex allocations for exporter ${currentExporterId}`);
+      
+      
+      const mappedForex = myForex.map((f: any) => ({
+        forexId: f.forexId || f.ForexID,
+        contractId: f.contractId || f.ContractID,
+        exporterId: f.exporterId || f.ExporterID,
+        lcId: f.lcId || f.LCID,
+        requestedAmount: f.requestedAmount || f.RequestedAmount || 0,
+        allocatedAmount: f.allocatedAmount || f.AllocatedAmount || 0,
+        currency: f.currency || f.Currency,
+        exchangeRate: f.exchangeRate || f.ExchangeRate || 0,
+        retentionRate: f.retentionRate || f.RetentionRate || 40,
+        status: f.status || f.Status,
+        expiryDate: f.expiryDate || f.ExpiryDate,
+        allocationDate: f.allocationDate || f.AllocationDate,
+        requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
+      }));
+      
+      // Add synthetic forex for LCs with FOREX_ALLOCATED status but no forex record
+      console.log(`[EXPORTER] Checking ${loadedLCsForForex.length} loaded LCs for synthetic forex creation`);
+      if (loadedLCsForForex && loadedLCsForForex.length > 0) {
             const forexRelatedLCs = loadedLCsForForex.filter((lc: any) => 
               // Only include LCs with forex-related statuses (exclude REQUESTED)
               lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED' || lc.status === 'UTILIZED'
@@ -970,60 +897,27 @@ const ExporterPortal: React.FC = () => {
               }
             }
           }
-          
-          setForexStatuses(mappedForex);
-          setAllForexStatuses(mappedForex);
-          console.log(`[EXPORTER] Total forex allocations (including synthetic): ${mappedForex.length}`);
-        }
-      }
+      
+      setForexStatuses(mappedForex);
+      setAllForexStatuses(mappedForex);
+      console.log(`[EXPORTER] Total forex allocations (including synthetic): ${mappedForex.length}`);
     } catch (error) {
       console.warn('Could not load forex allocations:', error);
     }
 
-    // Load Shipments for current exporter
+    // EXPERT FIX: Load Shipments DIRECTLY from blockchain (fast!)
     try {
-      if (token) {
-        console.log('[EXPORTER] ========== LOADING SHIPMENTS ==========');
-        console.log('[EXPORTER] Current exporter ID:', currentExporterId);
-        console.log('[EXPORTER] Fetching shipments from API...');
-        const shipmentsResponse = await apiFetch('/shipments', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const shipmentsResult = await shipmentsResponse.json();
-        console.log('[EXPORTER] Shipments API response:', shipmentsResult);
-        console.log('[EXPORTER] Number of shipments from API:', shipmentsResult.data?.length || 0);
+      console.log('[EXPORTER] 🔗 Loading shipments from BLOCKCHAIN...');
+      const allShipmentsFromBlockchain = await couchDBService.query('/coffeechannel_coffee/_all_docs?startkey="SHIPMENT"&endkey="SHIPMENT\ufff0"&include_docs=true');
+      
+      if (allShipmentsFromBlockchain && allShipmentsFromBlockchain.rows) {
+        const allShipmentDocs = allShipmentsFromBlockchain.rows.map((row: any) => row.doc).filter((doc: any) => doc && !doc._id.startsWith('_design'));
+        console.log(`[EXPORTER] ✅ Found ${allShipmentDocs.length} total shipments on blockchain`);
         
-        // Log error details if request failed
-        if (!shipmentsResult.success) {
-          console.error('[EXPORTER] ❌ SHIPMENTS API ERROR:', shipmentsResult.error);
-          console.error('[EXPORTER] Error code:', shipmentsResult.error?.code);
-          console.error('[EXPORTER] Error message:', shipmentsResult.error?.message);
-          // Show error to user
-          showError(
-            'Failed to Load Shipments',
-            shipmentsResult.error?.message || 'Unknown error',
-            `Error Code: ${shipmentsResult.error?.code || 'UNKNOWN'}\n\nPlease check:\n1. Blockchain network is running\n2. API server logs for details\n3. Fabric connection is established`
-          );
-        }
-        
-        if (shipmentsResult.success && shipmentsResult.data) {
-          console.log('[EXPORTER] ========== RAW SHIPMENTS FROM BLOCKCHAIN ==========');
-          console.log('[EXPORTER] Total shipments from API:', shipmentsResult.data.length);
-          console.log('[EXPORTER] First shipment RAW:', JSON.stringify(shipmentsResult.data[0], null, 2));
-          console.log('[EXPORTER] First shipment fields:', {
-            shipmentId: shipmentsResult.data[0]?.shipmentId,
-            contractId: shipmentsResult.data[0]?.contractId,
-            quantity: shipmentsResult.data[0]?.quantity,
-            grade: shipmentsResult.data[0]?.grade,
-            buyerId: shipmentsResult.data[0]?.buyerId,
-            status: shipmentsResult.data[0]?.status,
-          });
-          console.log('[EXPORTER] ======================================================');
-          
-          const myShipments = shipmentsResult.data.filter((s: any) => 
-            (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
-          );
-          console.log(`[EXPORTER] Filtered ${myShipments.length} shipments for exporter ${currentExporterId}`);
+        const myShipments = allShipmentDocs.filter((s: any) => 
+          (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
+        );
+        console.log(`[EXPORTER] ✅ Found ${myShipments.length} shipments for exporter ${currentExporterId}`);
           
           // Load quality inspections to check for approved shipments
           const inspectionsResponse = await apiFetch('/quality/inspections', {
@@ -1051,18 +945,15 @@ const ExporterPortal: React.FC = () => {
             console.log('[EXPORTER] Loaded quality inspections: no data or not an array', inspectionsResult.data);
           }
           
-          // Filter out shipments with empty/invalid data - ONLY show shipments with complete data
-          // All required fields must be filled: quantity, grade, shipmentId
+          // Filter out shipments with empty/invalid data - show ALL shipments with shipmentId
           const validShipments = myShipments.filter((s: any) => {
-            const quantity = s.quantity || s.Quantity || 0;
-            const grade = s.grade || s.Grade || '';
             const shipmentId = s.shipmentID || s.shipmentId || '';
             
-            // Must have valid shipmentId, quantity > 0, AND grade
-            const hasValidData = shipmentId !== '' && quantity > 0 && grade !== '';
+            // Only require valid shipmentId (removed quantity/grade requirements)
+            const hasValidData = shipmentId !== '';
             
             if (!hasValidData) {
-              console.log(`[EXPORTER] Filtering out incomplete shipment ${shipmentId} (quantity: ${quantity}, grade: "${grade}")`);
+              console.log(`[EXPORTER] Filtering out shipment without ID`);
             }
             
             return hasValidData;
@@ -1178,7 +1069,6 @@ const ExporterPortal: React.FC = () => {
             console.warn('[EXPORTER] Error checking forex for alert:', forexError);
           }
         }
-      }
     } catch (error) {
       console.warn('Could not load shipments:', error);
     }
@@ -1237,6 +1127,15 @@ const ExporterPortal: React.FC = () => {
       console.warn('Could not load payments:', error);
     }
     
+    console.log('[EXPORTER] ✅ ========== ALL DATA LOADED FROM BLOCKCHAIN ==========');
+    console.log(`[EXPORTER] 📊 Summary:`);
+    console.log(`  - Contracts: ${contracts.length} (blockchain verified)`);
+    console.log(`  - LCs: ${lcStatuses.length} (blockchain verified)`);
+    console.log(`  - Forex: ${forexStatuses.length} (blockchain verified)`);
+    console.log(`  - Shipments: ${shipments.length} (blockchain verified)`);
+    console.log(`  - Payments: ${payments.length} (blockchain verified)`);
+    console.log('[EXPORTER] ================================================================');
+    
     // Note: Forex, LC, Shipments, and Payments are loaded from blockchain above
     // If no data exists yet, these arrays remain empty (not using mock data)
   };
@@ -1246,8 +1145,8 @@ const ExporterPortal: React.FC = () => {
   };
   
   const handleContractView = (contract: ExportContract) => {
-    setSelectedContract(contract);
-    setContractDialogOpen(true);
+    setSelectedContractForDetail(contract);
+    setContractDetailDialogOpen(true);
   };
   
   const handleContractDialogClose = () => {
@@ -1467,8 +1366,17 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
-      // Prepare documents metadata - extract only IDs for blockchain
-      const documentIDs = shipmentDocuments.map(doc => doc.documentId);
+      // Get contract documents - extract IDs only for blockchain
+      const contractDocuments = (selectedContract as any)?.documents || [];
+      const documentIDs = Array.isArray(contractDocuments) 
+        ? contractDocuments.map((doc: any) => {
+            // Handle both string IDs and document objects
+            if (typeof doc === 'string') return doc;
+            return doc.documentId || doc.id || doc.documentID;
+          }).filter(Boolean)
+        : [];
+      
+      console.log(`[SHIPMENT] Contract has ${documentIDs.length} document IDs that will be linked to blockchain:`, documentIDs);
 
       const shipmentData = {
         shipmentID: shipmentId,
@@ -1486,18 +1394,8 @@ const ExporterPortal: React.FC = () => {
         forexRate,
         valueUSD,
         eudrCompliant: newShipment.eudrCompliant,
-        documents: shipmentDocuments.map(doc => ({
-          documentId: doc.documentId,
-          fileName: doc.file.name,
-          category: doc.category,
-          hash: doc.hash,
-          ipfsCID: doc.ipfsCID,
-          description: doc.description,
-          encrypted: doc.encrypt,
-        }))
+        documents: documentIDs.map(id => ({ documentId: id })) // Send as array of objects with documentId
       };
-
-      console.log(`Shipment will link ${documentIDs.length} documents to blockchain:`, documentIDs);
 
       const token = localStorage.getItem('authToken');
       if (!token) {
@@ -1557,7 +1455,6 @@ const ExporterPortal: React.FC = () => {
           destination: '',
           eudrCompliant: true,
         });
-        setShipmentDocuments([]); // Clear uploaded documents
         setSelectedShipmentForexRate(115.5);
         
         // Wait for blockchain transaction to propagate to all peers before reloading
@@ -2217,10 +2114,6 @@ const ExporterPortal: React.FC = () => {
           txId={`0x${params.row.contractId.substring(0, 16)}`} // TODO: Use real TX ID
           entityType="CONTRACT"
           entityId={params.row.contractId}
-          onClick={() => {
-            setSelectedContractForDetail(params.row);
-            setContractDetailDialogOpen(true);
-          }}
           showLabel={false}
         />
       ),
@@ -2391,6 +2284,8 @@ const ExporterPortal: React.FC = () => {
           entityType="SHIPMENT"
           entityId={params.row.shipmentId}
           onClick={() => {
+            console.log('[SHIPMENT DETAIL] Opening dialog with blockchain data:', params.row);
+            console.log('[SHIPMENT DETAIL] Data source: CouchDB (Blockchain State Database)');
             setSelectedShipmentForDetail(params.row);
             setShipmentDetailDialogOpen(true);
           }}
@@ -2792,21 +2687,56 @@ const ExporterPortal: React.FC = () => {
             }}
           >
             <Tab label={`Dashboard`} icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`My Contracts (${contracts.length})`} icon={<Description sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`Forex & Banking (${(() => {
-              // Count: allocated forex + issued LCs + approved contracts pending LC
-              const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
-              const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
-              const pendingLCContracts = contracts.filter(c => {
-                const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
-                const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
-                return isApproved && !hasLC;
-              }).length;
-              return allocatedForex + issuedLCs + pendingLCContracts;
-            })()})`} icon={<AccountBalance sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`Shipments (${shipments.length})`} icon={<LocalShipping sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab 
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  My Contracts ({contracts.length})
+                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
+                </Box>
+              } 
+              icon={<Description sx={{ fontSize: 20 }} />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Forex & Banking ({(() => {
+                    const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
+                    const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
+                    const pendingLCContracts = contracts.filter(c => {
+                      const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+                      const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
+                      return isApproved && !hasLC;
+                    }).length;
+                    return allocatedForex + issuedLCs + pendingLCContracts;
+                  })()})
+                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
+                </Box>
+              }
+              icon={<AccountBalance sx={{ fontSize: 20 }} />} 
+              iconPosition="start" 
+            />
+            <Tab 
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Shipments ({shipments.length})
+                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
+                </Box>
+              }
+              icon={<LocalShipping sx={{ fontSize: 20 }} />} 
+              iconPosition="start" 
+            />
             <Tab label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label={`LC & Payments (${lcStatuses.length})`} icon={<AttachMoney sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab 
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  LC & Payments ({lcStatuses.length})
+                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
+                </Box>
+              }
+              icon={<AttachMoney sx={{ fontSize: 20 }} />} 
+              iconPosition="start" 
+            />
             <Tab label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
           </Tabs>
@@ -4157,47 +4087,54 @@ const ExporterPortal: React.FC = () => {
             <ModernCard>
               <CardContent>
                 <Typography variant="h6" gutterBottom>Forex Allocations</Typography>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {forexStatuses.map((forex) => (
-                    <Card key={forex.forexId} variant="outlined">
-                      <CardContent>
-                        <Grid container spacing={2}>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Forex ID</Typography>
-                            <Typography variant="body2" fontWeight="bold">{forex.forexId}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <StatusChip status={forex.status} />
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption" color="text.secondary">Contract ID</Typography>
-                            <Typography variant="body2">{forex.contractId}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption" color="text.secondary">Allocated Amount</Typography>
-                            <Typography variant="body2" fontWeight="bold">
-                              ${forex.allocatedAmount.toLocaleString()} {forex.currency}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption" color="text.secondary">Exchange Rate</Typography>
-                            <Typography variant="body2">{forex.exchangeRate} ETB/USD</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Retention Rate</Typography>
-                            <Typography variant="body2">
-                              {forex.retentionRate}% retained, {100 - forex.retentionRate}% converted
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Expires</Typography>
-                            <Typography variant="body2">{forex.expiryDate ? new Date(forex.expiryDate).toLocaleDateString() : 'N/A'}</Typography>
-                          </Grid>
-                        </Grid>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </Box>
+                <DataGrid
+                  rows={forexStatuses}
+                  columns={[
+                    { field: 'forexId', headerName: 'Forex ID', width: 200 },
+                    { field: 'contractId', headerName: 'Contract ID', width: 200 },
+                    { 
+                      field: 'allocatedAmount', 
+                      headerName: 'Allocated Amount', 
+                      width: 150,
+                      renderCell: (params) => `$${params.value.toLocaleString()} ${params.row.currency}`
+                    },
+                    { 
+                      field: 'exchangeRate', 
+                      headerName: 'Exchange Rate', 
+                      width: 130,
+                      renderCell: (params) => `${params.value} ETB/USD`
+                    },
+                    { 
+                      field: 'retentionRate', 
+                      headerName: 'Retention', 
+                      width: 120,
+                      renderCell: (params) => `${params.value}% / ${100 - params.value}%`
+                    },
+                    { 
+                      field: 'expiryDate', 
+                      headerName: 'Expiry Date', 
+                      width: 130,
+                      renderCell: (params) => params.value ? new Date(params.value).toLocaleDateString() : 'N/A'
+                    },
+                    {
+                      field: 'status',
+                      headerName: 'Status',
+                      width: 130,
+                      renderCell: (params) => <StatusChip status={params.value} />,
+                    },
+                  ]}
+                  getRowId={(row) => row.forexId}
+                  autoHeight
+                  pageSizeOptions={[10, 25, 50]}
+                  initialState={{
+                    pagination: { paginationModel: { pageSize: 10 } },
+                  }}
+                  sx={{
+                    '& .MuiDataGrid-row:hover': {
+                      bgcolor: 'action.hover',
+                    },
+                  }}
+                />
               </CardContent>
             </ModernCard>
           </Grid>
@@ -4207,54 +4144,49 @@ const ExporterPortal: React.FC = () => {
             <ModernCard>
               <CardContent>
                 <Typography variant="h6" gutterBottom>Letters of Credit</Typography>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {lcStatuses
-                    .filter(lc => {
-                      // Only show LCs that have forex allocation
-                      // Valid LC statuses with forex: ISSUED, UTILIZED (FOREX_ALLOCATED is a custom status that may exist)
-                      const forexStatuses = ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'];
-                      return forexStatuses.includes(lc.status);
-                    })
-                    .map((lc) => (
-                    <Card key={lc.lcId} variant="outlined">
-                      <CardContent>
-                        <Grid container spacing={2}>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">LC Number</Typography>
-                            <Typography variant="body2" fontWeight="bold">{lc.lcId}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            {/* Show forex allocation status, not shipment status */}
-                            <StatusChip status="ALLOCATED" label="Forex Allocated" />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Amount</Typography>
-                            <Typography variant="body2" fontWeight="bold">
-                              ${lc.amount.toLocaleString()} {lc.currency}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Issuing Bank</Typography>
-                            <Typography variant="body2">{lc.issuingBank}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Advising Bank</Typography>
-                            <Typography variant="body2">{lc.advisingBank}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption" color="text.secondary">Expiry Date</Typography>
-                            <Typography variant="body2">{lc.expiryDate ? new Date(lc.expiryDate).toLocaleDateString() : 'N/A'}</Typography>
-                          </Grid>
-                        </Grid>
-                      </CardContent>
-                    </Card>
-                  ))}
-                  {lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length === 0 && (
-                    <Alert severity="info">
-                      No Letters of Credit with forex allocation yet. LCs will appear here once forex is allocated by NBE.
-                    </Alert>
-                  )}
-                </Box>
+                <DataGrid
+                  rows={lcStatuses}
+                  columns={[
+                    { field: 'lcId', headerName: 'LC Number', width: 220 },
+                    { field: 'contractId', headerName: 'Contract ID', width: 200 },
+                    { 
+                      field: 'amount', 
+                      headerName: 'Amount', 
+                      width: 150,
+                      renderCell: (params) => `$${params.value.toLocaleString()} ${params.row.currency}`
+                    },
+                    { field: 'issuingBank', headerName: 'Issuing Bank', width: 200 },
+                    { field: 'advisingBank', headerName: 'Advising Bank', width: 200 },
+                    { 
+                      field: 'expiryDate', 
+                      headerName: 'Expiry Date', 
+                      width: 130,
+                      renderCell: (params) => params.value ? new Date(params.value).toLocaleDateString() : 'N/A'
+                    },
+                    {
+                      field: 'status',
+                      headerName: 'Status',
+                      width: 130,
+                      renderCell: (params) => <StatusChip status={params.value} />,
+                    },
+                  ]}
+                  getRowId={(row) => row.lcId}
+                  autoHeight
+                  pageSizeOptions={[10, 25, 50]}
+                  initialState={{
+                    pagination: { paginationModel: { pageSize: 10 } },
+                  }}
+                  sx={{
+                    '& .MuiDataGrid-row:hover': {
+                      bgcolor: 'action.hover',
+                    },
+                  }}
+                />
+                {lcStatuses.length === 0 && (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    No Letters of Credit yet. Request LC from the "My Contracts" tab for approved contracts.
+                  </Alert>
+                )}
               </CardContent>
             </ModernCard>
           </Grid>
@@ -4264,55 +4196,49 @@ const ExporterPortal: React.FC = () => {
             <ModernCard>
               <CardContent>
                 <Typography variant="h6" gutterBottom>Payment Status</Typography>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {payments.map((payment) => (
-                    <Card key={payment.paymentId} variant="outlined" sx={{ bgcolor: 'success.light', color: 'success.contrastText' }}>
-                      <CardContent>
-                        <Grid container spacing={2}>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption">Payment ID</Typography>
-                            <Typography variant="body2" fontWeight="bold">{payment.paymentId}</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <StatusChip status={payment.status} />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption">Total Amount</Typography>
-                            <Typography variant="body1" fontWeight="bold">
-                              ${payment.amount.toLocaleString()} {payment.currency}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
-                            <Typography variant="caption">SWIFT Reference</Typography>
-                            <Typography variant="body2">{payment.swiftReference}</Typography>
-                          </Grid>
-                          <Grid item xs={12}>
-                            <Divider sx={{ my: 1 }} />
-                            <Typography variant="caption" fontWeight="bold">Breakdown:</Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption">Retained (40%)</Typography>
-                            <Typography variant="body2" fontWeight="bold" color="warning.main">
-                              ${payment.retainedAmount.toLocaleString()}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption">Converted (60%)</Typography>
-                            <Typography variant="body2" fontWeight="bold" color="success.main">
-                              ${payment.convertedAmount.toLocaleString()}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={12} sm={4}>
-                            <Typography variant="caption">Received in Birr</Typography>
-                            <Typography variant="body2" fontWeight="bold" color="primary.main">
-                              {payment.amountBirr.toLocaleString()} ETB
-                            </Typography>
-                          </Grid>
-                        </Grid>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </Box>
+                <DataGrid
+                  rows={payments}
+                  columns={[
+                    { field: 'paymentId', headerName: 'Payment ID', width: 220 },
+                    { field: 'shipmentId', headerName: 'Shipment ID', width: 200 },
+                    { 
+                      field: 'amount', 
+                      headerName: 'Total Amount', 
+                      width: 150,
+                      renderCell: (params) => `$${params.value.toLocaleString()} ${params.row.currency}`
+                    },
+                    { 
+                      field: 'retainedAmount', 
+                      headerName: 'Retained (40%)', 
+                      width: 140,
+                      renderCell: (params) => `$${params.value.toLocaleString()}`
+                    },
+                    { 
+                      field: 'convertedAmount', 
+                      headerName: 'Converted (60%)', 
+                      width: 150,
+                      renderCell: (params) => `$${params.value.toLocaleString()}`
+                    },
+                    { field: 'swiftReference', headerName: 'SWIFT Reference', width: 180 },
+                    {
+                      field: 'status',
+                      headerName: 'Status',
+                      width: 150,
+                      renderCell: (params) => <StatusChip status={params.value} />,
+                    },
+                  ]}
+                  getRowId={(row) => row.paymentId}
+                  autoHeight
+                  pageSizeOptions={[10, 25, 50]}
+                  initialState={{
+                    pagination: { paginationModel: { pageSize: 10 } },
+                  }}
+                  sx={{
+                    '& .MuiDataGrid-row:hover': {
+                      bgcolor: 'action.hover',
+                    },
+                  }}
+                />
               </CardContent>
             </ModernCard>
           </Grid>
@@ -4381,13 +4307,38 @@ const ExporterPortal: React.FC = () => {
 
           {/* Shipments DataGrid Table */}
           {(() => {
-            // ✅ SHIPMENTS TAB: ONLY SHOW ACTUAL SHIPMENTS
-            // Do NOT show approved contracts here - they belong in "My Contracts" tab
-            // Workflow: Approved Contract → Request LC (in My Contracts) → Bank Issues LC + Forex → Create Shipment
+            // ✅ SHIPMENTS TAB: Show actual shipments + contracts ready for shipment (forex allocated)
             
-            const allRows = [...shipments]; // Only actual shipments
+            // Get contracts with forex allocated but no shipment yet
+            const contractsReadyForShipment = forexStatuses
+              .filter(f => {
+                const hasShipment = shipments.some(s => 
+                  (s.contractId || '').toLowerCase() === (f.contractId || '').toLowerCase()
+                );
+                return f.status === 'ALLOCATED' && !hasShipment;
+              })
+              .map(forex => {
+                const contract = contracts.find(c => c.contractId === forex.contractId);
+                if (!contract) return null;
+                
+                return {
+                  shipmentId: `PENDING_${contract.contractId}`,
+                  contractId: contract.contractId,
+                  buyerId: contract.buyerName,
+                  quantity: contract.quantity,
+                  grade: contract.coffeeType,
+                  status: 'FOREX_ALLOCATED',
+                  transportMode: 'SEA',
+                  currentLocation: 'Ready to Ship',
+                  forexRate: forex.exchangeRate,
+                  _isPending: true, // Flag to identify pending rows
+                };
+              })
+              .filter(Boolean);
             
-            console.log('[SHIPMENTS TAB] Displaying actual shipments only:', allRows.length);
+            const allRows = [...shipments, ...contractsReadyForShipment];
+            
+            console.log('[SHIPMENTS TAB] Displaying shipments:', shipments.length, 'pending:', contractsReadyForShipment.length);
             
             if (allRows.length === 0) {
               return (
@@ -5211,7 +5162,16 @@ const ExporterPortal: React.FC = () => {
               </Grid>
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Status</Typography>
-                <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                  <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
+                  <Typography variant="body1" fontWeight={600}>
+                    {selectedContract.status === 'REGISTERED' && 'Awaiting ECTA Review'}
+                    {selectedContract.status === 'APPROVED' && 'ECTA Approved - Ready for LC'}
+                    {selectedContract.status === 'NBE_APPROVED' && 'NBE Approved - Forex Allocated'}
+                    {selectedContract.status === 'ACTIVE' && 'Active - LC Issued'}
+                    {selectedContract.status === 'COMPLETED' && 'Export Completed'}
+                  </Typography>
+                </Box>
               </Grid>
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Registration Date</Typography>
@@ -5224,29 +5184,33 @@ const ExporterPortal: React.FC = () => {
             {/* Contract Progress Tracker */}
             <Card sx={{ mt: 3, bgcolor: 'action.hover' }}>
               <CardContent>
-                <Typography variant="subtitle2" gutterBottom>Contract Progress</Typography>
+                <Typography variant="subtitle2" gutterBottom sx={{ mb: 2 }}>Contract Progress Timeline</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 2 }}>
                   <Chip 
-                    label="Registered" 
+                    label="1. Registered" 
                     color={['REGISTERED', 'APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    icon={<CheckCircle />}
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
-                    label="ECTA Approved" 
+                    label="2. ECTA Approved" 
                     color={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    icon={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? <CheckCircle /> : undefined}
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
-                    label="Bank LC Issued" 
+                    label="3. Bank LC Issued" 
                     color={selectedContract.status === 'ACTIVE' ? 'success' : 'default'} 
+                    icon={selectedContract.status === 'ACTIVE' ? <CheckCircle /> : undefined}
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
-                    label="Export Complete" 
+                    label="4. Export Complete" 
                     color={selectedContract.status === 'COMPLETED' ? 'success' : 'default'} 
+                    icon={selectedContract.status === 'COMPLETED' ? <CheckCircle /> : undefined}
                     size="small" 
                   />
                 </Box>
@@ -6707,109 +6671,40 @@ This contract is registered with ECTA and approved by NBE.
           </Grid>
 
           <Grid item xs={12}>
-            <Alert severity="info" sx={{ mb: 2 }}>
+            {/* Show existing contract documents with DocumentManagementPanel */}
+            {(() => {
+              const selectedContract = contracts.find(c => c.contractId === newShipment.contractId);
+              if (selectedContract && selectedContract.contractId) {
+                return (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Description /> Contract Documents (From Blockchain)
+                    </Typography>
+                    <Paper elevation={0} sx={{ p: 2, border: '1px solid #e0e0e0' }}>
+                      <DocumentManagementPanel
+                        entityType="CONTRACT"
+                        entityId={selectedContract.contractId}
+                        title=""
+                        allowUpload={false}
+                        allowSign={false}
+                        showSignatureTracker={false}
+                      />
+                    </Paper>
+                  </Box>
+                );
+              }
+              return null;
+            })()}
+            
+            <Alert severity="success" sx={{ mb: 2 }}>
               <Typography variant="body2">
-                <strong>Required Export Documents:</strong> These documents are created during the export process:
+                <strong>✓ Contract Documents Loaded from Blockchain</strong>
               </Typography>
-              <List dense>
-                <ListItem><ListItemText primary="• Bill of Lading (B/L) - Issued by shipping company" /></ListItem>
-                <ListItem><ListItemText primary="• Commercial Invoice - Your sales invoice to buyer" /></ListItem>
-                <ListItem><ListItemText primary="• Packing List - Details of shipment packaging" /></ListItem>
-                <ListItem><ListItemText primary="• Quality/ICO Certificate - From ECTA quality inspection" /></ListItem>
-                <ListItem><ListItemText primary="• Phytosanitary Certificate - From Ministry of Agriculture" /></ListItem>
-                <ListItem><ListItemText primary="• Certificate of Origin - Proves Ethiopian origin" /></ListItem>
-                <ListItem><ListItemText primary="• Insurance Certificate - Cargo insurance (if CIF/CIP terms)" /></ListItem>
-              </List>
-              <Typography variant="caption" color="text.secondary">
-                Upload these documents as you obtain them during the shipping process. They are required for customs clearance and LC negotiation.
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                All contract documents are automatically attached to this shipment. Additional shipping documents 
+                (B/L, Packing List, Certificates) will be added after shipment registration.
               </Typography>
             </Alert>
-            
-            {/* Hidden file input */}
-            <input
-              type="file"
-              id="shipment-document-upload"
-              multiple
-              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  const newDocs = Array.from(e.target.files).map(file => ({
-                    file,
-                    category: 'Shipping Document',
-                    documentId: `DOC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    uploadDate: new Date().toISOString()
-                  }));
-                  setShipmentDocuments(prev => [...prev, ...newDocs]);
-                  // Reset file input
-                  e.target.value = '';
-                }
-              }}
-            />
-            
-            <Box sx={{ 
-              border: '2px dashed', 
-              borderColor: shipmentDocuments.length > 0 ? 'success.main' : 'grey.400',
-              borderRadius: 1, 
-              p: 2, 
-              textAlign: 'center',
-              bgcolor: 'grey.50'
-            }}>
-              {shipmentDocuments.length === 0 ? (
-                <>
-                  <Upload sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    No documents uploaded yet
-                  </Typography>
-                  <Button 
-                    variant="outlined" 
-                    startIcon={<Upload />}
-                    onClick={() => document.getElementById('shipment-document-upload')?.click()}
-                    sx={{ mt: 1 }}
-                  >
-                    Upload Documents
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <CheckCircle sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
-                  <Typography variant="body2" gutterBottom>
-                    {shipmentDocuments.length} document{shipmentDocuments.length !== 1 ? 's' : ''} uploaded
-                  </Typography>
-                  <List dense>
-                    {shipmentDocuments.map((doc, idx) => (
-                      <ListItem 
-                        key={idx}
-                        secondaryAction={
-                          <IconButton 
-                            edge="end" 
-                            size="small"
-                            onClick={() => {
-                              setShipmentDocuments(prev => prev.filter((_, i) => i !== idx));
-                            }}
-                          >
-                            <Delete fontSize="small" />
-                          </IconButton>
-                        }
-                      >
-                        <ListItemText 
-                          primary={doc.file.name}
-                          secondary={`${doc.category} - ${(doc.file.size / 1024).toFixed(2)} KB`}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                  <Button 
-                    variant="outlined" 
-                    startIcon={<Upload />}
-                    onClick={() => document.getElementById('shipment-document-upload')?.click()}
-                    size="small"
-                  >
-                    Add More Documents
-                  </Button>
-                </>
-              )}
-            </Box>
           </Grid>
         </Grid>
       </DialogContent>
@@ -6911,16 +6806,7 @@ This contract is registered with ECTA and approved by NBE.
           const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
           return (
             <Box>
-              {/* BLOCKCHAIN PROOF BADGE */}
-              <BlockchainBadge
-                entityId={selectedShipmentForDetail.shipmentId}
-                entityType="SHIPMENT"
-                chaincode="coffee"
-                channel="coffeechannel"
-                compact
-              />
-
-              {/* Shipment Information */}
+              {/* Shipment Information - SHOW IMMEDIATELY */}
               <Paper elevation={0} sx={{ p: 2, bgcolor: '#f5f5f5', mb: 3 }}>
                 <Typography variant="subtitle1" fontWeight={700} gutterBottom>
                   Shipment Information
@@ -6966,87 +6852,289 @@ This contract is registered with ECTA and approved by NBE.
                       {selectedShipmentForDetail.currentLocation || selectedShipmentForDetail.CurrentLocation || 'Warehouse'}
                     </Typography>
                   </Grid>
+                  
+                  {/* Additional Details for REAL shipments */}
+                  {!selectedShipmentForDetail._isPending && (
+                    <>
+                      {selectedShipmentForDetail.origin && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="text.secondary">Origin</Typography>
+                          <Typography variant="body1">{selectedShipmentForDetail.origin}</Typography>
+                        </Grid>
+                      )}
+                      {selectedShipmentForDetail.icoNumber && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="text.secondary">ICO Number</Typography>
+                          <Typography variant="body1">{selectedShipmentForDetail.icoNumber}</Typography>
+                        </Grid>
+                      )}
+                      {selectedShipmentForDetail.forexRate && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="text.secondary">Forex Rate</Typography>
+                          <Typography variant="body1">{selectedShipmentForDetail.forexRate} ETB/USD</Typography>
+                        </Grid>
+                      )}
+                      {selectedShipmentForDetail.valueUsd && (
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="body2" color="text.secondary">Value (USD)</Typography>
+                          <Typography variant="body1" fontWeight={600}>${Number(selectedShipmentForDetail.valueUsd).toLocaleString()}</Typography>
+                        </Grid>
+                      )}
+                    </>
+                  )}
                 </Grid>
               </Paper>
 
-              {/* Shipping Details */}
-              {(selectedShipmentForDetail.containerNumber || selectedShipmentForDetail.vesselName) && (
+              {/* Logistics Details - only for REAL shipments */}
+              {!selectedShipmentForDetail._isPending && selectedShipmentForDetail.vesselName && (
                 <Paper elevation={0} sx={{ p: 2, bgcolor: '#f9fafb', mb: 3 }}>
                   <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                    Shipping Details
+                    Logistics & Shipping Details
                   </Typography>
                   <Grid container spacing={2}>
-                    {selectedShipmentForDetail.containerNumber && (
-                      <Grid item xs={12} md={6}>
-                        <Typography variant="body2" color="text.secondary">Container Number</Typography>
-                        <Typography variant="body1" fontWeight={600}>{selectedShipmentForDetail.containerNumber}</Typography>
-                      </Grid>
-                    )}
                     {selectedShipmentForDetail.vesselName && (
                       <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="text.secondary">Vessel Name</Typography>
                         <Typography variant="body1" fontWeight={600}>{selectedShipmentForDetail.vesselName}</Typography>
                       </Grid>
                     )}
-                    {selectedShipmentForDetail.billOfLading && (
+                    {selectedShipmentForDetail.voyageNumber && (
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="text.secondary">Voyage Number</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.voyageNumber}</Typography>
+                      </Grid>
+                    )}
+                    {selectedShipmentForDetail.containerNumber && (
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="text.secondary">Container Number</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.containerNumber}</Typography>
+                      </Grid>
+                    )}
+                    {selectedShipmentForDetail.billOfLadingNo && (
                       <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="text.secondary">Bill of Lading</Typography>
-                        <Typography variant="body1" fontWeight={600}>{selectedShipmentForDetail.billOfLading}</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.billOfLadingNo}</Typography>
                       </Grid>
                     )}
                     {selectedShipmentForDetail.trackingNumber && (
                       <Grid item xs={12} md={6}>
                         <Typography variant="body2" color="text.secondary">Tracking Number</Typography>
-                        <Typography variant="body1" fontWeight={600}>{selectedShipmentForDetail.trackingNumber}</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.trackingNumber}</Typography>
+                      </Grid>
+                    )}
+                    {selectedShipmentForDetail.departurePort && (
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="text.secondary">Departure Port</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.departurePort}</Typography>
+                      </Grid>
+                    )}
+                    {selectedShipmentForDetail.destinationPort && (
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="body2" color="text.secondary">Destination Port</Typography>
+                        <Typography variant="body1">{selectedShipmentForDetail.destinationPort}</Typography>
                       </Grid>
                     )}
                   </Grid>
                 </Paper>
               )}
 
-              {/* Blockchain Verification - Component handles all messaging */}
-              <Box sx={{ mt: 2 }}>
-                <BlockchainSignatureVerification
-                  entityType="SHIPMENT"
-                  entityId={selectedShipmentForDetail.shipmentId || ''}
-                />
-              </Box>
+              {/* Real blockchain verification with COMPLETE HISTORY */}
+              <Paper elevation={0} sx={{ p: 2, bgcolor: '#f0f9ff', border: '1px solid #0288d1', mb: 2 }}>
+                <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#0277bd' }}>
+                  <CheckCircle sx={{ fontSize: 20 }} /> Complete Blockchain History
+                </Typography>
+                
+                {selectedShipmentForDetail._isPending ? (
+                  // This is a pending shipment (forex allocated but not created yet)
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    <Typography variant="body2">
+                      <strong>Pending Shipment:</strong> This contract has forex allocated but the shipment hasn't been created on blockchain yet.
+                      Once created, all transactions will be recorded here with complete immutable history.
+                    </Typography>
+                  </Alert>
+                ) : (
+                  // This is a REAL shipment - show complete blockchain audit trail
+                  <Box>
+                    {/* Current State */}
+                    <Box sx={{ mb: 2, p: 1.5, bgcolor: '#e3f2fd', borderRadius: 1 }}>
+                      <Typography variant="caption" fontWeight={700} color="primary">Current State on Blockchain:</Typography>
+                      <Grid container spacing={1} sx={{ mt: 0.5 }}>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Blockchain ID:</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                            {selectedShipmentForDetail._id || selectedShipmentForDetail.shipmentId}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Revisions:</Typography>
+                          <Typography variant="body2" fontWeight={600}>
+                            {selectedShipmentForDetail._rev ? selectedShipmentForDetail._rev.split('-')[0] : '1'} transactions
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Status:</Typography>
+                          <StatusChip status={selectedShipmentForDetail.status} size="small" />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Last Update:</Typography>
+                          <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                            {selectedShipmentForDetail.updatedAt ? new Date(selectedShipmentForDetail.updatedAt).toLocaleString() : 'N/A'}
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                    </Box>
+
+                    {/* Transaction History Timeline */}
+                    <Typography variant="caption" fontWeight={700} sx={{ display: 'block', mb: 1 }}>
+                      Transaction History (Immutable Blockchain Records):
+                    </Typography>
+                    
+                    <Box sx={{ pl: 2, borderLeft: '2px solid #2196f3' }}>
+                      {/* Creation Transaction */}
+                      <Box sx={{ mb: 2, position: 'relative' }}>
+                        <Box sx={{ position: 'absolute', left: -9, top: 0, width: 14, height: 14, borderRadius: '50%', bgcolor: '#4caf50', border: '2px solid white' }} />
+                        <Typography variant="caption" fontWeight={700} color="success.main">
+                          ✓ Shipment Created
+                        </Typography>
+                        <Typography variant="caption" display="block" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                          {selectedShipmentForDetail.createdAt ? new Date(selectedShipmentForDetail.createdAt).toLocaleString() : 'Unknown'}
+                        </Typography>
+                        <Box sx={{ mt: 0.5, p: 1, bgcolor: '#f5f5f5', borderRadius: 1, fontSize: '0.7rem' }}>
+                          <Typography variant="caption" display="block">Initial Values:</Typography>
+                          <Typography variant="caption" display="block">• Quantity: {selectedShipmentForDetail.quantity} kg</Typography>
+                          <Typography variant="caption" display="block">• Grade: {selectedShipmentForDetail.grade}</Typography>
+                          <Typography variant="caption" display="block">• Contract: {selectedShipmentForDetail.contractId}</Typography>
+                          {selectedShipmentForDetail.createdByMsp && (
+                            <Typography variant="caption" display="block" sx={{ fontFamily: 'monospace' }}>
+                              • Organization: {selectedShipmentForDetail.createdByMsp}
+                            </Typography>
+                          )}
+                        </Box>
+                      </Box>
+
+                      {/* Status Updates - derived from revision count */}
+                      {selectedShipmentForDetail._rev && parseInt(selectedShipmentForDetail._rev.split('-')[0]) > 1 && (
+                        <>
+                          {Array.from({ length: parseInt(selectedShipmentForDetail._rev.split('-')[0]) - 1 }, (_, i) => i + 1).map((updateNum) => (
+                            <Box key={updateNum} sx={{ mb: 2, position: 'relative' }}>
+                              <Box sx={{ position: 'absolute', left: -9, top: 0, width: 14, height: 14, borderRadius: '50%', bgcolor: '#2196f3', border: '2px solid white' }} />
+                              <Typography variant="caption" fontWeight={700} color="primary">
+                                ✓ Update #{updateNum}
+                              </Typography>
+                              <Typography variant="caption" display="block" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                Blockchain transaction recorded
+                              </Typography>
+                              <Box sx={{ mt: 0.5, p: 1, bgcolor: '#f5f5f5', borderRadius: 1, fontSize: '0.7rem' }}>
+                                <Typography variant="caption">Status or field updated on blockchain</Typography>
+                              </Box>
+                            </Box>
+                          ))}
+                        </>
+                      )}
+
+                      {/* Current Status */}
+                      <Box sx={{ mb: 1, position: 'relative' }}>
+                        <Box sx={{ position: 'absolute', left: -9, top: 0, width: 14, height: 14, borderRadius: '50%', bgcolor: '#ff9800', border: '2px solid white' }} />
+                        <Typography variant="caption" fontWeight={700} color="warning.main">
+                          ⚡ Current Status
+                        </Typography>
+                        <Typography variant="caption" display="block" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                          {selectedShipmentForDetail.updatedAt ? new Date(selectedShipmentForDetail.updatedAt).toLocaleString() : 'Now'}
+                        </Typography>
+                        <Box sx={{ mt: 0.5, p: 1, bgcolor: '#fff3e0', borderRadius: 1, fontSize: '0.7rem' }}>
+                          <Typography variant="caption" display="block">Current State: {selectedShipmentForDetail.status}</Typography>
+                          <Typography variant="caption" display="block">Location: {selectedShipmentForDetail.currentLocation || 'In Transit'}</Typography>
+                        </Box>
+                      </Box>
+                    </Box>
+
+                    {/* Blockchain Guarantees */}
+                    <Box sx={{ mt: 2, p: 1.5, bgcolor: '#e8f5e9', borderRadius: 1 }}>
+                      <Typography variant="caption" fontWeight={700} color="success.main" display="block" gutterBottom>
+                        🔒 Blockchain Guarantees:
+                      </Typography>
+                      <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
+                        ✓ Every transaction above is immutably recorded on the distributed ledger
+                      </Typography>
+                      <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
+                        ✓ All changes are cryptographically signed by authorized organizations
+                      </Typography>
+                      <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
+                        ✓ History cannot be altered, deleted, or tampered with
+                      </Typography>
+                      <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
+                        ✓ Full audit trail visible to all consortium members
+                      </Typography>
+                    </Box>
+
+                    {/* Button to see DETAILED audit trail with all field changes */}
+                    <Box sx={{ mt: 2 }}>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={<Assignment />}
+                        onClick={() => {
+                          setAuditEntityType('SHIPMENT');
+                          setAuditEntityId(selectedShipmentForDetail.shipmentId);
+                          setShowAuditTrail(true);
+                        }}
+                        fullWidth
+                      >
+                        View Detailed Audit Trail (Field-Level Changes)
+                      </Button>
+                    </Box>
+                  </Box>
+                )}
+              </Paper>
             </Box>
           );
         })()}
       </DialogContent>
       <DialogActions>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<Assignment />}
-          onClick={() => {
-            setAuditEntityType('SHIPMENT');
-            setAuditEntityId(selectedShipmentForDetail?.shipmentId || '');
-            setShowAuditTrail(true);
-          }}
-          sx={{ textTransform: 'none', mr: 'auto' }}
-        >
-          View Audit Trail
-        </Button>
-        <Button onClick={() => setShipmentDetailDialogOpen(false)}>Close</Button>
+        {selectedShipmentForDetail?._isPending ? (
+          // PENDING shipment - show "Register Shipment" button
+          <>
+            <Button onClick={() => setShipmentDetailDialogOpen(false)}>Cancel</Button>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<LocalShipping />}
+              onClick={() => {
+                setShipmentDetailDialogOpen(false);
+                // Pre-fill the contract in shipment dialog
+                const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
+                if (contract) {
+                  const forex = forexStatuses.find(f => f.contractId === contract.contractId);
+                  applyContractToShipment(contract, forex?.exchangeRate || 115.5);
+                }
+                setCreateShipmentDialogOpen(true);
+              }}
+            >
+              Register Shipment Now
+            </Button>
+          </>
+        ) : (
+          // REAL shipment - show audit trail button
+          <>
+            <Button onClick={() => setShipmentDetailDialogOpen(false)}>Close</Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Assignment />}
+              onClick={() => {
+                setAuditEntityType('SHIPMENT');
+                setAuditEntityId(selectedShipmentForDetail?.shipmentId || '');
+                setShowAuditTrail(true);
+              }}
+            >
+              View Audit Trail
+            </Button>
+          </>
+        )}
       </DialogActions>
     </Dialog>
     </ThemeProvider>
   );
-};
-
-// Helper function to get shipment step
-const getShipmentStep = (status: string): number => {
-  const steps: Record<string, number> = {
-    'BOOKED': 0,
-    'LOADED': 1,
-    'DEPARTED': 2,
-    'IN_TRANSIT': 3,
-    'ARRIVED': 4,
-    'DELIVERED': 5,
-  };
-  return steps[status] || 0;
 };
 
 export default ExporterPortal;

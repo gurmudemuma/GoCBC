@@ -118,6 +118,7 @@ type SalesContract struct {
 	NBEReferenceNumber    string    `json:"nbeReferenceNumber"`
 	ExporterID            string    `json:"exporterId"`
 	BuyerID               string    `json:"buyerId"`
+	BuyerName             string    `json:"buyerName"`     // ✅ ADD: Buyer company name
 	BuyerCountry          string    `json:"buyerCountry"`
 	BuyerBank             string    `json:"buyerBank"`    // Issuing bank (buyer's bank)
 	ExporterBank          string    `json:"exporterBank"` // Advising/Beneficiary bank (exporter's bank)
@@ -481,6 +482,14 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		return err
 	}
 
+	// Create audit log for contract registration
+	auditErr := c.CreateAuditLog(ctx, "REGISTER", "CONTRACT", contractID, "", "REGISTERED", nil,
+		fmt.Sprintf("Contract registered by %s (MSP: %s)", creatorID, creatorMSP), ComplianceMetadata{})
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log for contract registration: %v", auditErr)
+		// Don't fail the contract registration if audit log fails
+	}
+
 	log.Printf("=== RegisterSalesContract completed successfully: %s ===", key)
 	return nil
 }
@@ -488,10 +497,10 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 // RegisterSalesContractWithPaymentMethod - Register contract with payment method specification
 // Added: Payment method support for LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
 func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.TransactionContextInterface,
-	contractID, exporterID, buyerID, buyerCountry, coffeeType, quantityStr,
+	contractID, exporterID, buyerID, buyerName, buyerCountry, coffeeType, quantityStr,
 	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, paymentMethod, documentsJSON string) error {
 
-	log.Printf("=== RegisterSalesContractWithPaymentMethod called: contractID=%s, paymentMethod=%s ===", contractID, paymentMethod)
+	log.Printf("=== RegisterSalesContractWithPaymentMethod called: contractID=%s, buyerName=%s, paymentMethod=%s ===", contractID, buyerName, paymentMethod)
 
 	// ✅ CAPTURE MSP IDENTITY of registrar
 	registrarMSP, err := ctx.GetClientIdentity().GetMSPID()
@@ -613,6 +622,7 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 		NBEReferenceNumber:    nbeReferenceNumber,
 		ExporterID:            exporterID,
 		BuyerID:               buyerID,
+		BuyerName:             buyerName,         // ✅ ADD: Store buyer name
 		BuyerCountry:          buyerCountry,
 		BuyerBank:             buyerBank,
 		ExporterBank:          exporterBank,
@@ -645,6 +655,14 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 	if err != nil {
 		log.Printf("ERROR: PutState failed for key %s: %v", key, err)
 		return err
+	}
+
+	// Create audit log for contract registration with payment method
+	auditErr := c.CreateAuditLog(ctx, "REGISTER", "CONTRACT", contractID, "", "REGISTERED", nil,
+		fmt.Sprintf("Contract registered with %s payment by %s (MSP: %s)", paymentMethod, registrarID, registrarMSP), ComplianceMetadata{})
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log for contract registration: %v", auditErr)
+		// Don't fail the contract registration if audit log fails
 	}
 
 	log.Printf("=== RegisterSalesContractWithPaymentMethod completed successfully: %s ===", key)
@@ -1444,6 +1462,34 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 	}
 
 	fmt.Printf("=== CreateShipment completed successfully with data auto-mapping ===\n")
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "shipmentId", OldValue: "", NewValue: shipmentID, DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "exporterId", OldValue: "", NewValue: mappedExporterID, DataType: "string"},
+		{FieldName: "buyerId", OldValue: "", NewValue: mappedBuyerID, DataType: "string"},
+		{FieldName: "quantity", OldValue: "", NewValue: fmt.Sprintf("%.2f", quantity), DataType: "number"},
+		{FieldName: "grade", OldValue: "", NewValue: grade, DataType: "string"},
+		{FieldName: "status", OldValue: "", NewValue: "CREATED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,  // Inspection auto-requested
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: eudrCompliant,
+		ICOCompliance:  true, // ICO number required
+		ComplianceNote: "Shipment created. ECTA quality inspection auto-requested.",
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "CREATE", "SHIPMENT", shipmentID, "", "CREATED", changes,
+		"Shipment created by exporter/shipping agent", compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+		// Don't fail the transaction if audit log fails
+	}
+	
 	return nil
 }
 
@@ -1498,6 +1544,7 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 	}
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
+	previousStatus := shipment.Status
 	shipment.Status = newStatus
 	shipment.UpdatedAt = timestamp
 
@@ -1506,7 +1553,32 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 		return err
 	}
 
-	return ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	err = ctx.GetStub().PutState("SHIPMENT_"+shipmentID, shipmentJSON)
+	if err != nil {
+		return err
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: previousStatus, NewValue: newStatus, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Shipment status updated from %s to %s", previousStatus, newStatus),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "UPDATE", "SHIPMENT", shipmentID, previousStatus, newStatus, changes,
+		fmt.Sprintf("Shipment status updated to %s", newStatus), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // UpdateShipmentContract - Link shipment to sales contract (backfill operation)
@@ -1871,10 +1943,27 @@ func (c *CoffeeContract) QueryAllExporters(ctx contractapi.TransactionContextInt
 
 func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInterface) ([]*SalesContract, error) {
 	log.Println("=== QueryAllContracts called ===")
-	resultsIterator, err := ctx.GetStub().GetStateByRange("CONTRACT_", "CONTRACT_~")
+	
+	// Use CouchDB rich query for better performance
+	queryString := `{
+		"selector": {
+			"$and": [
+				{"contractId": {"$exists": true}},
+				{"_id": {"$regex": "^CONTRACT_|^CON-|^SC"}}
+			]
+		},
+		"limit": 1000
+	}`
+	
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
-		log.Printf("ERROR: GetStateByRange failed: %v", err)
-		return nil, err
+		// Fallback to range query
+		log.Printf("Rich query failed, falling back to GetStateByRange: %v", err)
+		resultsIterator, err = ctx.GetStub().GetStateByRange("CONTRACT_", "CONTRACT_~")
+		if err != nil {
+			log.Printf("ERROR: GetStateByRange failed: %v", err)
+			return nil, err
+		}
 	}
 	defer resultsIterator.Close()
 
@@ -1893,8 +1982,8 @@ func (c *CoffeeContract) QueryAllContracts(ctx contractapi.TransactionContextInt
 		var contract SalesContract
 		err = json.Unmarshal(queryResponse.Value, &contract)
 		if err != nil {
-			log.Printf("ERROR: Failed to unmarshal contract %s: %v", queryResponse.Key, err)
-			return nil, err
+			log.Printf("WARN: Failed to unmarshal contract %s: %v - skipping", queryResponse.Key, err)
+			continue // Skip invalid documents instead of failing entire query
 		}
 		
 		// Ensure Documents is never nil (backward compatibility for contracts created before v1.15)

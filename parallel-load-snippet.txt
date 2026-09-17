@@ -1,0 +1,151 @@
+  const loadBankingData = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      console.error('[BANKS] No auth token found');
+      showError('Authentication Required', 'Please log in to access banking data', '');
+      return;
+    }
+
+    console.log('[BANKS] ⚡ PARALLEL LOADING - All data loads at once!');
+
+    try {
+      // Launch ALL requests in parallel - each updates state as soon as it completes
+      const [lcPromise, swiftPromise, forexPromise, shipmentsPromise] = [
+        // 1. LCs
+        apiFetch('/banking/lc', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              const lcs = result.data.map((lc: any) => ({
+                lcId: lc.lcId || lc.LCID,
+                contractId: lc.contractId,
+                exporterId: lc.exporterId,
+                buyerId: lc.buyerId,
+                buyerName: lc.buyerName || '',
+                buyerCountry: lc.buyerCountry || '',
+                amount: lc.amount,
+                currency: lc.currency,
+                status: lc.status,
+                documents: lc.documents || [],
+                issueDate: lc.issueDate,
+                expiryDate: lc.expiryDate,
+                issuingBank: lc.issuingBank,
+                advisingBank: lc.advisingBank,
+              }));
+              setLetterOfCredits(lcs);
+              console.log(`[BANKS] ⚡ LCs loaded: ${lcs.length}`);
+              return lcs;
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] LCs failed:', err); return []; }),
+
+        // 2. SWIFT Messages - PRIORITY!
+        apiFetch('/swift/messages', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              setSwiftMessages(result.data || []);
+              console.log(`[BANKS] ⚡ SWIFT loaded: ${result.data?.length || 0}`);
+              return result.data || [];
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] SWIFT failed:', err); return []; }),
+
+        // 3. Forex
+        couchDBService.getAllForex()
+          .then(forex => {
+            console.log(`[BANKS] ⚡ Forex loaded: ${forex.length}`);
+            return forex;
+          })
+          .catch(err => { console.warn('[BANKS] Forex failed:', err); return []; }),
+
+        // 4. Shipments
+        apiFetch('/shipments?status=DELIVERED', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              const delivered = result.data.filter((s: any) => {
+                const status = s.Status || s.status || '';
+                return status === 'DELIVERED' || status === 'COMPLETED';
+              });
+              setDeliveredShipments(delivered);
+              console.log(`[BANKS] ⚡ Shipments loaded: ${delivered.length}`);
+              return delivered;
+            }
+            return [];
+          })
+          .catch(err => { console.warn('[BANKS] Shipments failed:', err); return []; }),
+      ];
+
+      // Wait for all to complete and process forex with LC data
+      const [lcs, swift, forex, shipments] = await Promise.all([lcPromise, swiftPromise, forexPromise, shipmentsPromise]);
+
+      // Process forex allocations with buyer names from LCs
+      if (forex && forex.length > 0) {
+        const mappedForex = forex.map((f: any) => {
+          const matchingLC = lcs?.find((lc: any) => lc.lcId === f.lcId || lc.contractId === f.contractId);
+          return {
+            forexId: f.forexId || '',
+            contractId: f.contractId || '',
+            exporterId: f.exporterId || '',
+            lcId: f.lcId || '',
+            buyerName: matchingLC?.buyerName || f.buyerName || '',
+            buyerCountry: matchingLC?.buyerCountry || f.buyerCountry || '',
+            requestedAmount: f.requestedAmount || 0,
+            allocatedAmount: f.allocatedAmount || 0,
+            currency: f.currency || 'USD',
+            exchangeRate: f.exchangeRate || 0,
+            retentionRate: f.retentionRate || 0,
+            status: f.status || 'REQUESTED',
+            expiryDate: f.expiryDate || null,
+          };
+        });
+
+        // Add synthetic forex from LCs
+        if (lcs && lcs.length > 0) {
+          const forexRelatedLCs = lcs.filter((lc: any) => 
+            lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED'
+          );
+          for (const lc of forexRelatedLCs) {
+            if (!mappedForex.find((f: any) => f.lcId === lc.lcId)) {
+              mappedForex.push({
+                forexId: `SYNTHETIC_${lc.lcId}`,
+                contractId: lc.contractId || '',
+                exporterId: lc.exporterId || '',
+                lcId: lc.lcId || '',
+                buyerName: lc.buyerName || '',
+                buyerCountry: lc.buyerCountry || '',
+                requestedAmount: Number(lc.amount || 0),
+                allocatedAmount: lc.status === 'FOREX_ALLOCATED' ? Number(lc.amount || 0) : 0,
+                currency: lc.currency || 'USD',
+                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? 115.5 : 0,
+                retentionRate: lc.status === 'FOREX_ALLOCATED' ? 40 : 0,
+                status: lc.status === 'FOREX_ALLOCATED' ? 'ALLOCATED' : 'REQUESTED',
+                expiryDate: lc.expiryDate || '',
+              });
+            }
+          }
+        }
+
+        setForexAllocations(mappedForex);
+        console.log(`[BANKS] ⚡ Total forex: ${mappedForex.length}`);
+      }
+
+      // Filter LCs for document examination
+      if (lcs && lcs.length > 0) {
+        const forExam = lcs.filter((lc: any) => 
+          lc.documents && lc.documents.length > 0 && 
+          ['APPROVED', 'ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)
+        );
+        setLcsForExamination(forExam);
+        console.log(`[BANKS] ⚡ LCs for examination: ${forExam.length}`);
+      }
+
+      console.log('[BANKS] ⚡ All critical data loaded!');
+    } catch (error) {
+      console.error('[BANKS] Loading failed:', error);
+      showError('Data Loading Failed', 'Could not load banking data', error instanceof Error ? error.message : String(error));
+    }
+  };

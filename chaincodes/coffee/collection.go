@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -195,7 +196,35 @@ func (c *CoffeeContract) SendDocumentaryCollection(ctx contractapi.TransactionCo
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("CollectionSent", eventJSON)
 
-	return ctx.GetStub().PutState("COLLECTION_"+collectionID, collectionJSON)
+	err = ctx.GetStub().PutState("COLLECTION_"+collectionID, collectionJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save collection: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "amount", OldValue: "", NewValue: amountStr, DataType: "float"},
+		{FieldName: "paymentTerm", OldValue: "", NewValue: paymentTerm, DataType: "string"},
+		{FieldName: "collectingBank", OldValue: "", NewValue: collectingBank, DataType: "string"},
+		{FieldName: "documentsCount", OldValue: "", NewValue: fmt.Sprintf("%d", len(documents)), DataType: "number"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE monitors documentary collections
+		UCP600Check:    false, // URC 522 rules apply (Uniform Rules for Collections)
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Documentary collection sent by %s to %s for %s payment", remittingBank, collectingBank, paymentTerm),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "SEND", "DOCUMENTARY_COLLECTION", collectionID, "", "SENT", changes,
+		fmt.Sprintf("Bank sent documentary collection of %s %s for exporter %s to %s", amountStr, currency, exporterID, collectingBank), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // PresentDocumentaryCollection - Collecting bank presents documents to drawee

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
@@ -71,6 +72,32 @@ func (c *CoffeeContract) RegisterDocumentHash(ctx contractapi.TransactionContext
 	}
 
 	fmt.Printf("Document hash registered: %s for entity %s (%s)\n", documentID, entityID, entityType)
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	uploaderMSP, _ := ctx.GetClientIdentity().GetMSPID()
+	
+	changes := []FieldChange{
+		{FieldName: "hash", OldValue: "", NewValue: hash, DataType: "string"},
+		{FieldName: "ipfsCID", OldValue: "", NewValue: ipfsCID, DataType: "string"},
+		{FieldName: "filename", OldValue: "", NewValue: filename, DataType: "string"},
+		{FieldName: "category", OldValue: "", NewValue: category, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true, // ECTA requires document verification
+		NBECompliance:  false,
+		UCP600Check:    false,
+		EUDRCompliance: true, // EUDR requires due diligence documents
+		ICOCompliance:  true, // ICO traceability requirements
+		ComplianceNote: fmt.Sprintf("Document registered by %s for %s", uploaderMSP, entityType),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "REGISTER", "DOCUMENT", documentID, "", "REGISTERED", changes,
+		fmt.Sprintf("Document %s registered for entity %s by %s", filename, entityID, uploaderMSP), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
 	return nil
 }
 

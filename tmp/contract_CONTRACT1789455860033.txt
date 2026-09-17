@@ -1,0 +1,21 @@
+
+COFFEE EXPORT CONTRACT
+Contract ID: CONTRACT1789455860033
+Date: 2026-09-15
+
+PARTIES:
+Exporter: Ethiopian Coffee Masters Ltd (EXP4342570)
+Buyer: BUYER001, USA
+
+PRODUCT DETAILS:
+Coffee Type: Arabica Yirgacheffe
+Quantity: 20,000 kg
+Price: $8.50 per kg
+Total Value: $170,000 USD
+
+PAYMENT METHOD: Letter of Credit (LC)
+
+SIGNATURES:
+_________________________    _________________________
+Exporter                     Buyer
+    

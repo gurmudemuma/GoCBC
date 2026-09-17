@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head><title>Forex Buyer Check</title></head>
+<body>
+<h1>Forex Buyer Mapping Test</h1>
+<pre id="output">Loading...</pre>
+<script>
+async function test() {
+  const output = document.getElementById('output');
+  try {
+    // Login
+    const loginRes = await fetch('http://localhost:3001/api/v1/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: 'bankAdmin', password: 'password123'})
+    });
+    const loginData = await loginRes.json();
+    const token = loginData.data.token;
+    
+    // Get LCs
+    const lcRes = await fetch('http://localhost:3001/api/v1/banking/lc', {
+      headers: {'Authorization': 'Bearer ' + token}
+    });
+    const lcData = await lcRes.json();
+    const allLCs = lcData.data;
+    
+    output.textContent = 'LCs loaded: ' + allLCs.length + '\n\n';
+    output.textContent += 'LCs with buyer names:\n';
+    allLCs.slice(0, 5).forEach(lc => {
+      output.textContent += `  ${lc.lcId}: ${lc.buyerName || 'NO BUYER'}\n`;
+      output.textContent += `    Contract: ${lc.contractId}\n`;
+    });
+    
+    // Simulate forex mapping
+    output.textContent += '\n\nSimulating forex mapping from LCs:\n';
+    const sampleForex = {
+      forexId: 'TEST123',
+      lcId: allLCs[0].lcId,
+      contractId: allLCs[0].contractId
+    };
+    
+    const matchingLC = allLCs.find(lc => 
+      lc.lcId === sampleForex.lcId || lc.contractId === sampleForex.contractId
+    );
+    
+    output.textContent += `Sample forex: ${sampleForex.forexId}\n`;
+    output.textContent += `  LC ID: ${sampleForex.lcId}\n`;
+    output.textContent += `  Matching LC found: ${matchingLC ? 'YES' : 'NO'}\n`;
+    if (matchingLC) {
+      output.textContent += `  Buyer from LC: ${matchingLC.buyerName}\n`;
+    }
+    
+  } catch (e) {
+    output.textContent = 'Error: ' + e.message;
+  }
+}
+test();
+</script>
+</body>
+</html>

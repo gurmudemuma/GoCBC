@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test CouchDB Direct Access</title>
+</head>
+<body>
+    <h1>Test CouchDB Direct Access from Browser</h1>
+    <button onclick="testCouchDB()">Test Connection</button>
+    <pre id="output"></pre>
+
+    <script>
+        async function testCouchDB() {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing CouchDB connection...\n';
+            
+            try {
+                // Test 1: Basic connection
+                const auth = btoa('admin:adminpw');
+                const response = await fetch('http://localhost:5984/coffeechannel_coffee/_all_docs?startkey="FOREX_"&endkey="FOREX_\\ufff0"&include_docs=true', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Basic ${auth}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                output.textContent += `Response status: ${response.status}\n`;
+                
+                if (!response.ok) {
+                    output.textContent += `Error: ${response.statusText}\n`;
+                    const text = await response.text();
+                    output.textContent += `Body: ${text}\n`;
+                    return;
+                }
+                
+                const data = await response.json();
+                output.textContent += `✅ SUCCESS!\n`;
+                output.textContent += `Total rows: ${data.total_rows}\n`;
+                output.textContent += `FOREX records: ${data.rows.length}\n\n`;
+                
+                data.rows.forEach((row, i) => {
+                    const doc = row.doc;
+                    output.textContent += `${i + 1}. ${doc.forexId}\n`;
+                    output.textContent += `   Status: ${doc.status}\n`;
+                    output.textContent += `   Amount: $${doc.requestedAmount?.toLocaleString()} USD\n`;
+                    output.textContent += `   Exporter: ${doc.exporterId}\n\n`;
+                });
+                
+            } catch (error) {
+                output.textContent += `❌ ERROR: ${error.message}\n`;
+                output.textContent += `${error.stack}\n`;
+            }
+        }
+    </script>
+</body>
+</html>

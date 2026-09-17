@@ -77,6 +77,8 @@ interface AuditLog {
     complianceNote: string;
   };
   createdAt: string;
+  tampered?: boolean;
+  tamperReason?: string;
 }
 
 interface AuditTrailViewerProps {
@@ -160,6 +162,35 @@ const AuditTrailViewer: React.FC<AuditTrailViewerProps> = ({
         console.error('Error verifying audit trail:', err);
       }
     }
+  };
+
+  const getActionLabel = (actionType: string): string => {
+    const labels: { [key: string]: string } = {
+      'CREATE': 'Requested by',
+      'REQUEST': 'Requested by',
+      'APPROVE': 'Approved by',
+      'ISSUE': 'Issued by',
+      'ALLOCATE': 'Allocated by',
+      'UPDATE': 'Updated by',
+      'AMEND': 'Amended by',
+      'REJECT': 'Rejected by',
+      'CANCEL': 'Cancelled by',
+      'VERIFY': 'Verified by',
+      'SUBMIT': 'Submitted by',
+      'REVIEW': 'Reviewed by',
+      'CLEAR': 'Cleared by',
+      'RELEASE': 'Released by',
+      'UTILIZE': 'Utilized by',
+      'SETTLE': 'Settled by',
+      'COMPLETE': 'Completed by',
+      'INSPECT': 'Inspected by',
+      'CERTIFY': 'Certified by',
+      'DECLARE': 'Declared by',
+      'PICKUP': 'Picked up by',
+      'DELIVER': 'Delivered by',
+      'SHIP': 'Shipped by',
+    };
+    return labels[actionType] || `${actionType} by`;
   };
 
   const downloadComplianceReport = async () => {
@@ -477,10 +508,20 @@ Ethiopian Customs Commission (ECC)
               </Typography>
             </Box>
             
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              by {log.signature.caller.commonName} ({log.signature.caller.role && log.signature.caller.role !== 'unknown' 
-                ? log.signature.caller.role 
-                : log.signature.caller.organizationUnit || log.signature.caller.mspId})
+            <Typography variant="body2" color="text.secondary" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <strong>{getActionLabel(log.actionType)}:</strong>
+              <Chip 
+                label={log.signature.caller.commonName} 
+                size="small" 
+                color="primary"
+                variant="outlined"
+                sx={{ fontWeight: 'bold' }}
+              />
+              <Typography variant="caption" component="span">
+                ({log.signature.caller.mspId} - {log.signature.caller.role && log.signature.caller.role !== 'unknown' 
+                  ? log.signature.caller.role 
+                  : log.signature.caller.organizationUnit})
+              </Typography>
             </Typography>
             
             {log.statusBefore && log.statusAfter && (
@@ -535,15 +576,29 @@ Ethiopian Customs Commission (ECC)
                 />
               </TableCell>
               <TableCell>
-                <Typography variant="body2">{log.signature.caller.commonName}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {log.signature.caller.role && log.signature.caller.role !== 'unknown' 
-                    ? log.signature.caller.role 
-                    : log.signature.caller.organizationUnit || log.signature.caller.mspId}
-                </Typography>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                    {log.signature.caller.commonName}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {log.signature.caller.mspId}
+                    {log.signature.caller.role && log.signature.caller.role !== 'unknown' 
+                      ? ` • ${log.signature.caller.role}` 
+                      : log.signature.caller.organizationUnit ? ` • ${log.signature.caller.organizationUnit}` : ''}
+                  </Typography>
+                </Box>
               </TableCell>
               <TableCell>
-                {log.statusBefore} → {log.statusAfter}
+                <Box>
+                  <Typography variant="body2">
+                    {log.statusBefore || '—'} → {log.statusAfter || '—'}
+                  </Typography>
+                  {log.reason && (
+                    <Typography variant="caption" color="text.secondary">
+                      {log.reason.substring(0, 50)}{log.reason.length > 50 ? '...' : ''}
+                    </Typography>
+                  )}
+                </Box>
               </TableCell>
               <TableCell>
                 <Tooltip title="Copy Transaction ID">
@@ -597,10 +652,16 @@ Ethiopian Customs Commission (ECC)
                         <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
                       </Typography>
                       <Typography variant="caption" component="div">
-                        <strong>Previous State Hash:</strong> {log.signature.previousStateHash || 'N/A'}
+                        <strong>Previous State Hash:</strong>{' '}
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
+                          {log.signature.previousStateHash}
+                        </span>
                       </Typography>
                       <Typography variant="caption" component="div">
-                        <strong>New State Hash:</strong> {log.signature.newStateHash || 'N/A'}
+                        <strong>New State Hash:</strong>{' '}
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
+                          {log.signature.newStateHash}
+                        </span>
                       </Typography>
                     </>
                   )}
@@ -608,6 +669,27 @@ Ethiopian Customs Commission (ECC)
                     <Typography variant="caption" component="div">
                       <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
                     </Typography>
+                  )}
+                  
+                  {/* Tamper Detection Alert */}
+                  {log.tampered && (
+                    <Box sx={{ mt: 1, p: 1, bgcolor: 'error.light', borderRadius: 1, border: '2px solid', borderColor: 'error.main' }}>
+                      <Typography variant="caption" sx={{ color: 'error.dark', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        🚨 TAMPER DETECTED
+                      </Typography>
+                      <Typography variant="caption" component="div" sx={{ color: 'error.dark', mt: 0.5 }}>
+                        {log.tamperReason}
+                      </Typography>
+                    </Box>
+                  )}
+                  {!log.tampered && (log.signature as any).recordType !== 'DATABASE' && (
+                    <Box sx={{ mt: 1, p: 1, bgcolor: 'success.light', borderRadius: 1 }}>
+                      <Typography variant="caption" sx={{ color: 'success.dark', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        {log.signature.previousStateHash === '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a' 
+                          ? '🔒 Genesis transaction - Chain begins here'
+                          : '✓ Hash chain verified - No tampering detected'}
+                      </Typography>
+                    </Box>
                   )}
                 </Paper>
               </Box>
@@ -647,16 +729,26 @@ Ethiopian Customs Commission (ECC)
               </Box>
 
               {/* Endorsement - only for blockchain records */}
-              {(log.signature as any).recordType !== 'DATABASE' && (
+              {(log.signature as any).recordType !== 'DATABASE' && log.signature.endorsingPeers && log.signature.endorsingPeers.length > 0 && (
                 <Box>
                   <Typography variant="subtitle2" gutterBottom>
                     Endorsement
                   </Typography>
                   <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
-                    <Typography variant="caption" component="div">
-                      <strong>Endorsing Peers:</strong>{' '}
-                      {log.signature.endorsingPeers?.join(', ') || 'N/A'}
+                    <Typography variant="caption" component="div" sx={{ mb: 1 }}>
+                      <strong>Endorsing Peers ({log.signature.endorsingPeers.length}):</strong>
                     </Typography>
+                    {log.signature.endorsingPeers.map((peer: string, idx: number) => (
+                      <Chip 
+                        key={idx}
+                        label={peer}
+                        size="small"
+                        color="success"
+                        variant="outlined"
+                        icon={<VerifiedIcon />}
+                        sx={{ mr: 0.5, mb: 0.5, fontSize: '0.7rem' }}
+                      />
+                    ))}
                   </Paper>
                 </Box>
               )}

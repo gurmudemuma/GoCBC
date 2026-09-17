@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -132,7 +133,146 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("failed to marshal forex: %v", err)
 	}
 
-	return ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
+	err = ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save forex: %v", err)
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "forexId", OldValue: "", NewValue: forexID, DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "exporterId", OldValue: "", NewValue: exporterID, DataType: "string"},
+		{FieldName: "requestedAmount", OldValue: "", NewValue: amountStr, DataType: "number"},
+		{FieldName: "currency", OldValue: "", NewValue: currency, DataType: "string"},
+		{FieldName: "status", OldValue: "", NewValue: "REQUESTED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE monitors forex requests
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: "Forex allocation requested by exporter. Pending bank/NBE approval.",
+	}
+
+	err = c.CreateAuditLog(ctx, "REQUEST", "FOREX", forexID, "", "REQUESTED", changes,
+		"Forex allocation requested by exporter", compliance)
+	if err != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", err)
+		// Don't fail the transaction if audit log fails
+	}
+
+	return nil
+}
+
+// ConfirmForex - NBE confirms forex allocation request (two-step workflow: REQUESTED → CONFIRMED → ALLOCATED)
+func (c *CoffeeContract) ConfirmForex(ctx contractapi.TransactionContextInterface,
+	forexID, officer, comments string) error {
+
+	// Get MSP ID for access control
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ConfirmForex: failed to get MSP ID: %w", err)
+	}
+
+	// Only NBE can confirm forex requests
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("ConfirmForex: unauthorized: only NBE can confirm forex (caller: %s)", mspID)
+	}
+
+	// VALIDATION: IDs
+	if err := ValidateID(forexID, "forexID"); err != nil {
+		return fmt.Errorf("ConfirmForex: %w", err)
+	}
+	if err := ValidateNonEmptyString(officer, "officer", MaxStringLen); err != nil {
+		return fmt.Errorf("ConfirmForex: %w", err)
+	}
+
+	forexJSON, err := ctx.GetStub().GetState("FOREX_" + forexID)
+	if err != nil {
+		return fmt.Errorf("ConfirmForex: failed to read forex %s: %w", forexID, err)
+	}
+	if forexJSON == nil {
+		return fmt.Errorf("ConfirmForex: forex %s does not exist", forexID)
+	}
+
+	var forex ForexAllocation
+	err = json.Unmarshal(forexJSON, &forex)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal forex: %v", err)
+	}
+
+	if forex.Status != "REQUESTED" {
+		return fmt.Errorf("forex cannot be confirmed, current status: %s (must be REQUESTED)", forex.Status)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Get confirmer identity
+	confirmerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		confirmerID = officer // Fallback to officer name if X.509 cert unavailable
+	}
+
+	forex.Status = "CONFIRMED"
+	forex.Comments = comments
+	forex.VerifiedBy = confirmerID      // Record who confirmed
+	forex.VerifiedByMSP = mspID         // Record MSP (should be NBEMSP)
+	forex.UpdatedAt = txTime
+
+	forexJSON, err = json.Marshal(forex)
+	if err != nil {
+		return fmt.Errorf("failed to marshal forex: %v", err)
+	}
+
+	// Emit event
+	event := map[string]interface{}{
+		"eventType":  "ForexConfirmed",
+		"forexID":    forexID,
+		"exporterID": forex.ExporterID,
+		"confirmedBy": officer,
+		"timestamp":  txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ForexConfirmed", eventJSON)
+
+	err = ctx.GetStub().PutState("FOREX_"+forexID, forexJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save forex: %v", err)
+	}
+
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "REQUESTED", NewValue: "CONFIRMED", DataType: "string"},
+		{FieldName: "verifiedBy", OldValue: "", NewValue: confirmerID, DataType: "string"},
+		{FieldName: "verifiedByMsp", OldValue: "", NewValue: mspID, DataType: "string"},
+		{FieldName: "comments", OldValue: "", NewValue: comments, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE confirmed forex request
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Forex request confirmed by NBE officer: %s", officer),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "CONFIRM", "FOREX", forexID, "REQUESTED", "CONFIRMED", changes,
+		fmt.Sprintf("Forex confirmed by %s (Officer: %s)", mspID, officer), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+		// Don't fail the transaction if audit log fails
+	}
+
+	return nil
 }
 
 // AllocateForex - Bank or NBE allocates foreign exchange with retention policy
@@ -220,8 +360,8 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("failed to unmarshal forex: %v", err)
 	}
 
-	if forex.Status != "REQUESTED" && forex.Status != "APPROVED" {
-		return fmt.Errorf("forex cannot be allocated, current status: %s", forex.Status)
+	if forex.Status != "REQUESTED" && forex.Status != "APPROVED" && forex.Status != "CONFIRMED" {
+		return fmt.Errorf("forex cannot be allocated, current status: %s (must be REQUESTED, CONFIRMED, or APPROVED)", forex.Status)
 	}
 
 	// Get transaction timestamp
@@ -293,6 +433,34 @@ func (c *CoffeeContract) AllocateForex(ctx contractapi.TransactionContextInterfa
 
 	// Note: Exporter will need to create shipment manually
 	// ECTA quality inspection will be triggered when shipment is created
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "REQUESTED", NewValue: "ALLOCATED", DataType: "string"},
+		{FieldName: "lcId", OldValue: "", NewValue: lcID, DataType: "string"},
+		{FieldName: "allocatedAmount", OldValue: "", NewValue: amountStr, DataType: "number"},
+		{FieldName: "exchangeRate", OldValue: "", NewValue: exchangeRateStr, DataType: "number"},
+		{FieldName: "retentionRate", OldValue: "", NewValue: retentionRateStr, DataType: "number"},
+		{FieldName: "nbeOfficer", OldValue: "", NewValue: officer, DataType: "string"},
+		{FieldName: "nbeApprovalRef", OldValue: "", NewValue: approvalRef, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE allocated forex
+		UCP600Check:    true,  // LC verified
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Forex allocated by %s with %s%% retention rate per NBE policy", mspID, retentionRateStr),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "ALLOCATE", "FOREX", forexID, "REQUESTED", "ALLOCATED", changes,
+		fmt.Sprintf("Forex allocated by %s (Officer: %s, Approval: %s)", mspID, officer, approvalRef), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+		// Don't fail the transaction if audit log fails
+	}
+	
 	return nil
 }
 
@@ -389,11 +557,26 @@ func (c *CoffeeContract) QueryForexByExporter(ctx contractapi.TransactionContext
 	return c.queryForex(ctx, queryString)
 }
 
-// QueryAllForex - Get all forex allocations
+// QueryAllForex - Get all forex allocations (optimized with CouchDB selector)
 func (c *CoffeeContract) QueryAllForex(ctx contractapi.TransactionContextInterface) ([]*ForexAllocation, error) {
-	resultsIterator, err := ctx.GetStub().GetStateByRange("FOREX_", "FOREX_~")
+	// Use CouchDB rich query for better performance
+	queryString := `{
+		"selector": {
+			"$and": [
+				{"forexId": {"$exists": true}},
+				{"_id": {"$regex": "^FOREX_"}}
+			]
+		},
+		"limit": 1000
+	}`
+	
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
-		return nil, err
+		// Fallback to range query
+		resultsIterator, err = ctx.GetStub().GetStateByRange("FOREX_", "FOREX_~")
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer resultsIterator.Close()
 
@@ -407,7 +590,7 @@ func (c *CoffeeContract) QueryAllForex(ctx contractapi.TransactionContextInterfa
 		var allocation ForexAllocation
 		err = json.Unmarshal(queryResponse.Value, &allocation)
 		if err != nil {
-			return nil, err
+			continue // Skip invalid documents
 		}
 		
 		// Ensure screenedAgainst is never null (backward compatibility fix)
@@ -596,7 +779,35 @@ func (c *CoffeeContract) SetExchangeRate(ctx contractapi.TransactionContextInter
 		return fmt.Errorf("failed to marshal rate: %v", err)
 	}
 
-	return ctx.GetStub().PutState("RATE_"+rateID, rateJSON)
+	err = ctx.GetStub().PutState("RATE_"+rateID, rateJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save rate: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "buyingRate", OldValue: "", NewValue: buyingRateStr, DataType: "float"},
+		{FieldName: "sellingRate", OldValue: "", NewValue: sellingRateStr, DataType: "float"},
+		{FieldName: "midRate", OldValue: "", NewValue: fmt.Sprintf("%.4f", midRate), DataType: "float"},
+		{FieldName: "currency", OldValue: "", NewValue: currency, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE sets official exchange rates
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Exchange rate set by NBE for %s: buying=%.4f, selling=%.4f", currency, buyingRate, sellingRate),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "SET_RATE", "EXCHANGE_RATE", rateID, "", "ACTIVE", changes,
+		fmt.Sprintf("NBE set exchange rate for %s", currency), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // GetCurrentExchangeRate - Get current active exchange rate for currency
@@ -767,7 +978,34 @@ func (c *CoffeeContract) SetRetentionPolicy(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("failed to marshal policy: %v", err)
 	}
 
-	return ctx.GetStub().PutState("POLICY_"+policyID, policyJSON)
+	err = ctx.GetStub().PutState("POLICY_"+policyID, policyJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save policy: %v", err)
+	}
+	
+	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
+	changes := []FieldChange{
+		{FieldName: "retentionRate", OldValue: "", NewValue: retentionRateStr, DataType: "float"},
+		{FieldName: "surrenderRate", OldValue: "", NewValue: fmt.Sprintf("%.2f", surrenderRate), DataType: "float"},
+		{FieldName: "commodityType", OldValue: "", NewValue: commodityType, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true, // NBE mandates forex retention policies
+		UCP600Check:    false,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("Retention policy set by NBE: %s retention, %s surrender. Justification: %s", retentionRateStr+"%", fmt.Sprintf("%.2f", surrenderRate)+"%", justification),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "SET_POLICY", "RETENTION_POLICY", policyID, "", "ACTIVE", changes,
+		fmt.Sprintf("NBE set retention policy for %s: %s%% retention", commodityType, retentionRateStr), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	return nil
 }
 
 // GetCurrentRetentionPolicy - Get active retention policy for commodity

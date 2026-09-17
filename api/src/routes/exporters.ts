@@ -25,15 +25,20 @@ const auditService = AuditService.getInstance();
 // GET /exporter-applications - List all applications (ECTA admin only)
 router.get('/exporter-applications', authMiddleware, async (req, res) => {
   try {
-    const { status, limit = 50 } = req.query;
+    const { status, exporterId, limit = 50 } = req.query;
     
-    let query = 'SELECT * FROM exporter_applications';
+    let query = 'SELECT * FROM exporter_applications WHERE 1=1';
     const params: any[] = [];
     let paramIndex = 1;
     
     if (status) {
-      query += ` WHERE status = $${paramIndex++}`;
+      query += ` AND status = $${paramIndex++}`;
       params.push(status);
+    }
+    
+    if (exporterId) {
+      query += ` AND exporter_id = $${paramIndex++}`;
+      params.push(exporterId);
     }
     
     query += ` ORDER BY submitted_at DESC LIMIT $${paramIndex}`;
@@ -222,16 +227,19 @@ router.post('/exporter-applications',
       
       logger.info(`✅ Application submitted: ID=${applicationId}, Database ID=${numericId}, Username=${credentials.username}`);
       
-      // ✅ Step 2.5: Record application submission on blockchain as audit trail
+      // ✅ Record application submission on blockchain via AuditService
       try {
-        const auditService = require('../services/auditService').default;
-        await auditService.recordAudit({
+        await auditService.log({
           entityType: 'EXPORTER_APPLICATION',
           entityId: applicationId,
-          actionType: 'SUBMIT',
-          actionBy: applicationData.email,
-          organizationMSP: 'ECTAMSP',  // Applications reviewed by ECTA
-          details: {
+          action: 'SUBMIT',
+          performedBy: applicationData.email,
+          organization: 'ECTAMSP',  // Applications go to ECTA
+          performedByOrg: 'ECTAMSP',
+          oldValue: '',
+          newValue: 'PENDING',
+          reason: `Application submitted by ${applicationData.companyName}`,
+          metadata: {
             companyName: applicationData.companyName,
             tinNumber: applicationData.tinNumber,
             businessLicense: applicationData.businessLicenseNumber,
@@ -243,12 +251,12 @@ router.post('/exporter-applications',
             city: applicationData.city,
             submittedAt
           },
-          timestamp: new Date()
+          ipAddress: req.ip
         });
-        logger.info(`✅ Application submission recorded on blockchain: ${applicationId}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record application on blockchain (non-fatal):`, blockchainErr);
-        // Non-fatal - application submission succeeds even if blockchain audit fails
+        logger.info(`✅ Application submission audit log recorded: ${applicationId}`);
+      } catch (auditErr) {
+        logger.warn(`⚠️ Failed to create audit log for application submission:`, auditErr);
+        // Non-fatal - application submission succeeds even if audit log fails
       }
       
       // Step 3: Send credentials email immediately (non-blocking - don't fail if email fails)
@@ -332,7 +340,8 @@ router.post('/exporter-applications/:applicationId/approve',
         application.professional_taster,
         application.taster_certificate,
         application.laboratory_certificate_number || '',
-        licenseExpiryDate
+        licenseExpiryDate,
+        (req as any).user?.role
       );
       
       if (!result.success) {
@@ -1163,7 +1172,8 @@ router.post('/',
         professionalTaster,
         tasterCertificate,
         laboratoryCertificateNumber || '',
-        licenseExpiryDate
+        licenseExpiryDate,
+        (req as any).user?.role // Pass user role for MSP determination
       );
 
       if (result.success) {
@@ -1608,7 +1618,8 @@ router.post('/applications/:applicationId/approve',
         application.professional_taster,
         application.taster_certificate,
         application.laboratory_certificate_number || '',
-        licenseExpiryDate
+        licenseExpiryDate,
+        (req as any).user?.role
       );
       
       if (!result.success) {
@@ -1634,6 +1645,36 @@ router.post('/applications/:applicationId/approve',
           }
         );
       });
+      
+      // ✅ Record application approval on blockchain via AuditService
+      try {
+        const user = (req as any).user;
+        await auditService.log({
+          entityType: 'EXPORTER_APPLICATION',
+          entityId: applicationId,
+          action: 'APPROVE',
+          performedBy: user?.username || 'ECTA Admin',
+          organization: 'ECTAMSP',
+          performedByOrg: 'ECTAMSP',
+          oldValue: 'PENDING',
+          newValue: 'APPROVED',
+          reason: `Application approved by ECTA. Exporter ${exporterId} registered on blockchain.`,
+          metadata: {
+            exporterId,
+            ectaLicenseNumber,
+            licenseExpiryDate,
+            blockchainTxId: result.txId,
+            companyName: application.company_name,
+            approvedBy: user?.username || 'ECTA Admin',
+            approvedAt: new Date().toISOString()
+          },
+          ipAddress: req.ip
+        });
+        logger.info(`✅ Application approval audit log recorded: ${applicationId}`);
+      } catch (auditErr) {
+        logger.warn(`⚠️ Failed to create audit log for application approval:`, auditErr);
+        // Non-fatal
+      }
       
       res.json({
         success: true,
@@ -1756,6 +1797,33 @@ router.post('/applications/:applicationId/reject',
           }
         );
       });
+      
+      // ✅ Record application rejection on blockchain via AuditService
+      try {
+        const user = (req as any).user;
+        await auditService.log({
+          entityType: 'EXPORTER_APPLICATION',
+          entityId: applicationId,
+          action: 'REJECT',
+          performedBy: user?.username || 'ECTA Admin',
+          organization: 'ECTAMSP',
+          performedByOrg: 'ECTAMSP',
+          oldValue: 'PENDING',
+          newValue: 'REJECTED',
+          reason: `Application rejected by ECTA: ${reason}`,
+          metadata: {
+            rejectionReason: reason,
+            companyName: application.company_name,
+            rejectedBy: user?.username || 'ECTA Admin',
+            rejectedAt: new Date().toISOString()
+          },
+          ipAddress: req.ip
+        });
+        logger.info(`✅ Application rejection audit log recorded: ${applicationId}`);
+      } catch (auditErr) {
+        logger.warn(`⚠️ Failed to create audit log for application rejection:`, auditErr);
+        // Non-fatal
+      }
       
       res.json({
         success: true,

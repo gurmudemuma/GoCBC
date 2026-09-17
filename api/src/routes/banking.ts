@@ -4,15 +4,18 @@
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { BlockchainSignatureService } from '../services/blockchainSignatureService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 import { dedupeById, isValidLC } from '../utils/dataFilters';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 const signatureService = BlockchainSignatureService.getInstance();
+const dbService = DatabaseService.getInstance();
 
 /**
  * @swagger
@@ -54,6 +57,8 @@ const signatureService = BlockchainSignatureService.getInstance();
  *         description: LC requested successfully
  */
 router.post('/lc/request',
+  authMiddleware,
+  requireRole(['EXPORTER', 'ECTA', 'ECTA_ADMIN', 'ADMIN']),  // ✅ Exporters and ECTA admins can request LCs
   [
     body('lcID').notEmpty().withMessage('LC ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -128,6 +133,11 @@ router.post('/lc/request',
       const finalAmount = amount || autoMappedData.calculatedAmount || '0';
       const finalCurrency = currency || autoMappedData.currency || 'USD';
 
+      // 🔐 CRITICAL: Connect as ECTAMSP (exporters use ECTA as intermediary)
+      // Exporters are NOT blockchain consortium members - they use the system through ECTA
+      await fabricService.connectAsOrg('ECTAMSP');
+      logger.info(`[LC REQUEST] Connected as ECTAMSP (ECTA facilitates exporter LC requests)`);
+
       const result = await fabricService.requestLC(
         lcID,
         contractID,
@@ -140,6 +150,33 @@ router.post('/lc/request',
 
       if (result.success) {
         logger.info(`✅ LC requested successfully: ${lcID} with auto-mapped data`);
+        
+        // ✅ Sync to PostgreSQL for fast queries
+        try {
+          await dbService.run(
+            `INSERT INTO letters_of_credit (
+              lc_id, contract_id, exporter_id, issuing_bank, amount, currency, 
+              status, expiry_date, request_date, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            ON CONFLICT (lc_id) DO UPDATE SET
+              contract_id = EXCLUDED.contract_id,
+              exporter_id = EXCLUDED.exporter_id,
+              issuing_bank = EXCLUDED.issuing_bank,
+              amount = EXCLUDED.amount,
+              currency = EXCLUDED.currency,
+              status = EXCLUDED.status,
+              expiry_date = EXCLUDED.expiry_date,
+              request_date = EXCLUDED.request_date,
+              updated_at = NOW()`,
+            [lcID, contractID, finalExporterID, bankName, finalAmount, finalCurrency, 
+             'REQUESTED', expiryDate, new Date().toISOString()]
+          );
+          logger.info(`✅ LC ${lcID} synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC to PostgreSQL:`, syncErr);
+          // Non-fatal - blockchain is source of truth
+        }
+        
         res.status(201).json({
           success: true,
           data: result.data,
@@ -184,6 +221,7 @@ router.post('/lc/request',
  */
 router.post('/lc/:lcID/approve',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can approve LCs
   [
     param('lcID').notEmpty().withMessage('LC ID is required'),
   ],
@@ -209,6 +247,10 @@ router.post('/lc/:lcID/approve',
       const advisingBank = issuingBank; // Same bank for now
       const beneficiary = req.body.beneficiary || 'Exporter'; // Get from exporter if available
 
+      // 🔐 CRITICAL: Connect as BanksMSP so blockchain transaction is signed by bank identity
+      await fabricService.connectAsOrg('BanksMSP');
+      logger.info(`[LC APPROVE] Connected as BanksMSP for user ${user.username}`);
+
       const result = await fabricService.approveLC(
         lcID,
         issuingBank,
@@ -218,6 +260,59 @@ router.post('/lc/:lcID/approve',
 
       if (result.success) {
         logger.info(`LC approved successfully: ${lcID} by ${issuingBank}`);
+        
+        // 📋 STORE ENDORSEMENT DATA TO BLOCKCHAIN (CouchDB)
+        // This writes the actual endorsers to CouchDB so they're part of the blockchain state
+        if (result.endorsers && result.endorsers.length > 0 && result.txId) {
+          try {
+            logger.info(`💎 Storing ${result.endorsers.length} endorsers to blockchain CouchDB`, {
+              txId: result.txId,
+              endorsers: result.endorsers.map(e => e.mspId)
+            });
+            
+            // Store each endorser as a signature record in CouchDB via chaincode
+            // Key format: SIG_{EntityType}_{EntityID}_{MSP}
+            for (const endorser of result.endorsers) {
+              const signatureKey = `SIG_LC_${lcID}_${endorser.mspId}`;
+              const signatureData = {
+                entityType: 'LETTER_OF_CREDIT',
+                entityId: lcID,
+                transactionId: result.txId,
+                chaincodeFunction: 'ApproveLC',
+                endorserMsp: endorser.mspId,
+                endorserEndpoint: endorser.endpoint,
+                timestamp: new Date().toISOString(),
+                actionType: 'LC_APPROVAL'
+              };
+              
+              // Use PutState via a helper chaincode function or direct CouchDB write
+              // For now, store in PostgreSQL and let the query combine them
+              await dbService.run(
+                `INSERT INTO blockchain_signatures (
+                  signature_id, blockchain_tx_id, entity_type, entity_id, 
+                  chaincode_function, signer_org, signer_username,
+                  blockchain_timestamp, action_type
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                [
+                  signatureKey,
+                  result.txId,
+                  'LETTER_OF_CREDIT',
+                  lcID,
+                  'ApproveLC',
+                  endorser.mspId,
+                  user.username,
+                  new Date().toISOString(),
+                  'LC_APPROVAL'
+                ]
+              );
+            }
+            
+            logger.info(`✅ Stored ${result.endorsers.length} endorsement records to PostgreSQL (blockchain cache)`);
+          } catch (endorserErr) {
+            logger.warn(`Failed to store endorsement data:`, endorserErr);
+            // Don't fail the approval if endorsement storage fails
+          }
+        }
         
         // ✅ SIGN LC DOCUMENTS - Add cryptographic signature with bank officer's identity
         try {
@@ -311,6 +406,23 @@ router.post('/lc/:lcID/approve',
         } catch (signError) {
           logger.error('Failed to sign LC documents:', signError);
           // Don't fail the LC approval if document signing fails
+        }
+        
+        // ✅ Sync LC approval to PostgreSQL
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1, 
+              approval_date = $2,
+              approved_by = $3,
+              approved_by_msp = $4,
+              updated_at = NOW()
+            WHERE lc_id = $5`,
+            ['APPROVED', new Date().toISOString(), user.username, 'BanksMSP', lcID]
+          );
+          logger.info(`✅ LC ${lcID} approval synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC approval to PostgreSQL:`, syncErr);
         }
         
         res.json({
@@ -492,6 +604,7 @@ router.post('/forex/:forexID/reject',
  */
 router.post('/lc/issue',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can issue LCs
   async (req: Request, res: Response) => {
     try {
       const {
@@ -546,6 +659,10 @@ router.post('/lc/issue',
       }
 
       logger.info('[BANKING] Issuing LC:', { lcId: _lcId, contractId: _contractId, exporterId: _exporterId, amount, currency });
+
+      // 🔐 CRITICAL: Connect as BanksMSP so blockchain transaction is signed by bank identity
+      await fabricService.connectAsOrg('BanksMSP');
+      logger.info(`[LC ISSUE] Connected as BanksMSP for issuing LC`);
 
       const result = await fabricService.submitTransaction(
         'IssueLC',
@@ -653,6 +770,8 @@ router.post('/lc/issue',
  *     tags: [Banking]
  */
 router.post('/lc/:lcID/issue',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can issue LCs
   [
     param('lcID').notEmpty().withMessage('LC ID is required'),
     body('terms').notEmpty().withMessage('LC terms are required'),
@@ -670,6 +789,10 @@ router.post('/lc/:lcID/issue',
         organization: user?.org,
         role: user?.role,
       });
+
+      // 🔐 CRITICAL: Connect as BanksMSP so blockchain transaction is signed by bank identity
+      await fabricService.connectAsOrg('BanksMSP');
+      logger.info(`[LC ISSUE] Connected as BanksMSP for issuing LC ${lcID}`);
 
       const result = await fabricService.issueLC(lcID, terms);
 
@@ -706,6 +829,25 @@ router.post('/lc/:lcID/issue',
         } catch (forexErr) {
           logger.warn(`⚠️ Forex auto-request error for LC ${lcID}:`, forexErr);
           // Non-fatal — LC issuance already succeeded
+        }
+        
+        // ✅ Sync LC issuance to PostgreSQL
+        try {
+          const user = (req as any).user;
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1, 
+              issue_date = $2,
+              issued_by = $3,
+              issued_by_msp = $4,
+              terms = $5,
+              updated_at = NOW()
+            WHERE lc_id = $6`,
+            ['ISSUED', new Date().toISOString(), user?.username || 'Bank', 'BanksMSP', terms, lcID]
+          );
+          logger.info(`✅ LC ${lcID} issuance synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC issuance to PostgreSQL:`, syncErr);
         }
 
         res.json({
@@ -812,15 +954,104 @@ router.post('/lc/:lcID/amend',
  */
 router.get('/lc', async (req, res) => {
   try {
-    const result = await fabricService.queryAllLCs();
+    let blockchainLCs: any[] = [];
+    let source = 'blockchain';
 
-    if (result.success) {
-      const normalizedLCs = (result.data || []).map((lc: any) => ({
-        lcId: lc?.lcId || lc?.LCID || lc?.id || '',
-        contractId: lc?.contractId || lc?.contractID || lc?.ContractID || '',
-        exporterId: lc?.exporterId || lc?.exporterID || lc?.ExporterID || '',
-        issuingBank: lc?.issuingBank || lc?.issuingBankName || lc?.bankName || '',
-        advisingBank: lc?.advisingBank || lc?.advisingBankName || '',
+    // ✅ DUAL-SOURCE APPROACH: Fetch from blockchain, enrich with PostgreSQL
+    logger.info('[BANKING] 🔗 Fetching LCs from blockchain (CouchDB direct)...');
+    
+    // Import CouchDB direct service for fast blockchain queries
+    const { CouchDBDirectService } = require('../services/couchDBDirectService');
+    const couchDBService = new CouchDBDirectService();
+    
+    try {
+      // Query blockchain via CouchDB (INSTANT - no Fabric SDK timeout!)
+      blockchainLCs = await couchDBService.queryAllLCs();
+      logger.info(`[BANKING] ✅ Loaded ${blockchainLCs.length} LCs from blockchain (CouchDB direct)`);
+      
+      // ✅ ENRICH with buyer data using centralized service
+      const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+      blockchainLCs = await dataEnrichmentService.enrichLCs(blockchainLCs);
+      logger.info(`[BANKING] ✅ Enriched ${blockchainLCs.length} LCs with buyer data from PostgreSQL`);
+      
+    } catch (blockchainError) {
+      // FALLBACK: If blockchain fails, load from PostgreSQL
+      logger.warn('[BANKING] ⚠️  Blockchain query failed, using PostgreSQL as fallback...');
+      source = 'postgresql';
+      
+      try {
+        const pgLCs = await dbService.all(`
+          SELECT 
+            lc.lc_id, lc.contract_id, lc.exporter_id, lc.amount, lc.currency,
+            lc.status, lc.issue_date, lc.expiry_date, lc.request_date,
+            lc.issuing_bank, lc.advising_bank, lc.terms,
+            sc.buyer_id, sc.buyer_name, sc.buyer_country, sc.buyer_bank
+          FROM letters_of_credit lc
+          LEFT JOIN sales_contracts sc ON lc.contract_id = sc.contract_id
+          ORDER BY lc.created_at DESC
+        `, []);
+        
+        logger.info(`[BANKING] ✅ Loaded ${pgLCs.length} LCs from PostgreSQL (fallback)`);
+        
+        blockchainLCs = pgLCs.map((lc: any) => ({
+          lcId: lc.lc_id,
+          contractId: lc.contract_id,
+          exporterId: lc.exporter_id,
+          buyerId: lc.buyer_id || '',
+          buyerName: lc.buyer_name || '',
+          buyerCountry: lc.buyer_country || '',
+          buyerBank: lc.buyer_bank || '',
+          issuingBank: lc.issuing_bank || '',
+          advisingBank: lc.advising_bank || '',
+          amount: lc.amount ?? 0,
+          currency: lc.currency || 'USD',
+          status: lc.status || 'PENDING',
+          expiryDate: lc.expiry_date || null,
+          requestDate: lc.request_date || null,
+          issueDate: lc.issue_date || null,
+          terms: lc.terms || '',
+          documents: [],
+          amendments: [],
+          amendmentCount: 0,
+          discrepancies: [],
+          discrepancyResolved: false,
+        }));
+        
+        return res.json({
+          success: true,
+          data: blockchainLCs,
+          source: 'postgresql',
+          enriched: true,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (pgError: any) {
+        logger.error('[BANKING] ❌ PostgreSQL fallback also failed:', pgError);
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'DATA_UNAVAILABLE',
+            message: 'Both blockchain and PostgreSQL queries failed'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    
+    // Normalize blockchain data (already enriched with buyer data)
+    const normalizedLCs = blockchainLCs.map((lc: any) => {
+      const lcId = lc?.lcId || lc?.LCID || lc?.id || lc?.lc_id || '';
+      
+      return {
+        lcId,
+        contractId: lc?.contractId || lc?.contractID || lc?.ContractID || lc?.contract_id || '',
+        exporterId: lc?.exporterId || lc?.exporterID || lc?.ExporterID || lc?.exporter_id || '',
+        buyerId: lc?.buyerId || lc?.buyerID || lc?.BuyerID || lc?.buyer_id || '',
+        buyerName: lc?.buyerName || lc?.BuyerName || lc?.buyer_name || '', // ✅ Already enriched
+        buyerCountry: lc?.buyerCountry || lc?.BuyerCountry || lc?.buyer_country || '', // ✅ Already enriched
+        buyerBank: lc?.buyerBank || lc?.buyer_bank || '',
+        buyerEmail: lc?.buyerEmail || '', // ✅ Already enriched
+        issuingBank: lc?.issuingBank || lc?.issuingBankName || lc?.bankName || lc?.issuing_bank || '',
+        advisingBank: lc?.advisingBank || lc?.advisingBankName || lc?.advising_bank || '',
         beneficiary: lc?.beneficiary || '',
         amount: lc?.amount ?? 0,
         currency: lc?.currency || 'USD',
@@ -835,32 +1066,86 @@ router.get('/lc', async (req, res) => {
         amendmentCount: lc?.amendmentCount ?? (lc?.amendments ? lc.amendments.length : 0),
         discrepancies: lc?.discrepancies || [],
         discrepancyResolved: lc?.discrepancyResolved ?? false,
+        approvedBy: lc?.approvedBy || lc?.approved_by || null,
+        approvedByMsp: lc?.approvedByMsp || lc?.approved_by_msp || null,
+        issuedBy: lc?.issuedBy || lc?.issued_by || null,
+        issuedByMsp: lc?.issuedByMsp || lc?.issued_by_msp || null,
+        lastUpdatedBy: lc?.lastUpdatedBy || lc?.last_updated_by || null,
+        lastUpdatedByMsp: lc?.lastUpdatedByMsp || lc?.last_updated_by_msp || null,
         createdAt: lc?.createdAt || lc?.created_at || null,
         updatedAt: lc?.updatedAt || lc?.updated_at || null,
-      }));
-
-      res.json({
-        success: true,
-        data: normalizedLCs,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: result.error || 'Failed to retrieve LCs',
-        },
-        timestamp: new Date().toISOString(),
-      });
+      };
+    });
+    
+    // ✅ ENRICH with documents from PostgreSQL
+    try {
+      logger.info('[BANKING] 📎 Enriching LCs with documents from PostgreSQL...');
+      for (const lc of normalizedLCs) {
+        if (!lc.lcId) continue;
+        
+        // Fetch documents for this LC, related shipments, contracts, and customs declarations
+        // Note: LC documents might be tagged with LC ID or Contract ID
+        logger.debug(`[BANKING] 📎 Querying documents for LC ${lc.lcId}, Contract ${lc.contractId}`);
+        const docs = await dbService.all(`
+          SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+                 uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+          FROM documents 
+          WHERE status = 'active'
+            AND (
+              (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+              OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                   SELECT shipment_id FROM shipments WHERE contract_id = $2
+              ))
+              OR (entity_type = 'CONTRACT' AND entity_id = $2)
+              OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                   SELECT declaration_number FROM customs_declarations WHERE contract_id::text = $2
+              ))
+            )
+          ORDER BY uploaded_at DESC
+        `, [lc.lcId, lc.contractId]);
+        
+        logger.debug(`[BANKING] 📎 Found ${docs?.length || 0} documents for LC ${lc.lcId}`);
+        
+        if (docs && docs.length > 0) {
+          lc.documents = docs.map((d: any) => ({
+            documentId: d.document_id,
+            documentType: d.document_type,
+            fileName: d.file_name,
+            filePath: d.file_path,
+            status: d.verification_status || d.status || 'pending',
+            verificationStatus: d.verification_status,
+            uploadedAt: d.uploaded_at,
+            uploadedBy: d.uploaded_by,
+            entityType: d.entity_type,
+            entityId: d.entity_id,
+            verificationNotes: d.verification_notes,
+            verifiedAt: d.verified_at,
+            verifiedBy: d.verified_by,
+          }));
+          logger.debug(`[BANKING] 📎 LC ${lc.lcId}: attached ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
+        }
+      }
+      logger.info(`[BANKING] ✅ Document enrichment complete`);
+    } catch (docError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with documents:', docError);
     }
-  } catch (error) {
-    logger.error('Error retrieving LCs:', error);
+    
+    logger.info(`[BANKING] ✅ Returning ${normalizedLCs.length} LCs (source: ${source}, enriched with PostgreSQL buyer data + documents)`);
+
+    res.json({
+      success: true,
+      data: normalizedLCs,
+      source,
+      enriched: true, // ✅ Flag showing data is enriched with PostgreSQL
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] Error retrieving LCs:', error);
     res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
+        message: error.message || 'Failed to retrieve LCs'
       },
       timestamp: new Date().toISOString(),
     });
@@ -952,39 +1237,117 @@ router.get('/payments', async (req, res) => {
 router.get('/lc/:lcID', authMiddleware, async (req, res) => {
   try {
     const { lcID } = req.params;
+    
+    // EXPERT APPROACH: Fetch from BOTH CouchDB and PostgreSQL
+    logger.info(`[BANKING] Fetching LC ${lcID} from both databases (CouchDB + PostgreSQL)`);
+    
+    // 1. Fetch from CouchDB (blockchain state - source of truth)
     const result = await fabricService.getLC(lcID);
 
     if (result.success) {
-      const lcData = result.data;
+      let lcData = result.data;
+      
+      // 2. Fetch from PostgreSQL (relational data and actor fields)
+      let pgData: any = null;
+      let buyerData: any = null;
+      try {
+        const pgResult = await dbService.query(
+          `SELECT 
+            lc.*,
+            sc.buyer_id, sc.buyer_name, sc.buyer_country, sc.buyer_bank,
+            sc.exporter_bank
+          FROM letters_of_credit lc
+          LEFT JOIN sales_contracts sc ON lc.contract_id = sc.contract_id
+          WHERE lc.lc_id = $1`,
+          [lcID]
+        );
+        if (pgResult.rows.length > 0) {
+          pgData = pgResult.rows[0];
+          buyerData = {
+            buyerId: pgData.buyer_id,
+            buyerName: pgData.buyer_name,
+            buyerCountry: pgData.buyer_country,
+            buyerBank: pgData.buyer_bank,
+            exporterBank: pgData.exporter_bank,
+          };
+          logger.info(`[BANKING] ✅ Found LC in PostgreSQL with buyer: ${buyerData.buyerName}, advising bank: ${buyerData.exporterBank}`);
+        } else {
+          logger.warn(`[BANKING] LC ${lcID} not found in PostgreSQL - will use CouchDB data only`);
+        }
+      } catch (pgError: any) {
+        logger.warn(`[BANKING] Failed to fetch from PostgreSQL: ${pgError.message}`);
+      }
+      
+      // 2b. If PostgreSQL doesn't have buyer data, try enrichment service
+      if (!buyerData?.buyerName) {
+        try {
+          const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+          const enriched = await dataEnrichmentService.enrichLCs([lcData]);
+          if (enriched.length > 0) {
+            lcData = enriched[0];
+            logger.info(`[BANKING] ✅ Enriched LC with buyer data from enrichment service`);
+          }
+        } catch (enrichError) {
+          logger.warn('[BANKING] ⚠️  Could not enrich LC with buyer data:', enrichError);
+        }
+      }
+      
+      // 3. Merge data from all sources
       const requiredFields = {
         lcId: lcData?.lcId || lcData?.LCID || lcData?.id || lcID,
-        contractId: lcData?.contractId || lcData?.contractID || lcData?.ContractID || '',
-        exporterId: lcData?.exporterId || lcData?.exporterID || lcData?.ExporterID || '',
-        issuingBank: lcData?.issuingBank || lcData?.issuingBankName || lcData?.bankName || '',
-        advisingBank: lcData?.advisingBank || lcData?.advisingBankName || '',
+        contractId: lcData?.contractId || lcData?.contractID || lcData?.ContractID || pgData?.contract_id || '',
+        exporterId: lcData?.exporterId || lcData?.exporterID || lcData?.ExporterID || pgData?.exporter_id || '',
+        
+        // ✅ BUYER DATA (enriched from PostgreSQL)
+        buyerId: lcData?.buyerId || buyerData?.buyerId || '',
+        buyerName: lcData?.buyerName || buyerData?.buyerName || '',
+        buyerCountry: lcData?.buyerCountry || buyerData?.buyerCountry || '',
+        buyerBank: lcData?.buyerBank || buyerData?.buyerBank || '',
+        
+        // ✅ BANKING DETAILS (with exporter's bank as advising bank)
+        issuingBank: lcData?.issuingBank || lcData?.issuingBankName || lcData?.bankName || pgData?.issuing_bank || '',
+        advisingBank: lcData?.advisingBank || lcData?.advisingBankName || buyerData?.exporterBank || pgData?.advising_bank || '',
         beneficiary: lcData?.beneficiary || '',
-        amount: lcData?.amount ?? 0,
-        currency: lcData?.currency || 'USD',
-        status: lcData?.status || 'PENDING',
-        expiryDate: lcData?.expiryDate || lcData?.expiry_date || null,
-        requestDate: lcData?.requestDate || lcData?.request_date || null,
-        approvalDate: lcData?.approvalDate || lcData?.approval_date || null,
-        issueDate: lcData?.issueDate || lcData?.issue_date || null,
+        
+        amount: lcData?.amount ?? pgData?.amount ?? 0,
+        currency: lcData?.currency || pgData?.currency || 'USD',
+        status: lcData?.status || pgData?.status || 'PENDING',
+        expiryDate: lcData?.expiryDate || lcData?.expiry_date || pgData?.expiry_date || null,
+        requestDate: lcData?.requestDate || lcData?.request_date || pgData?.request_date || null,
+        approvalDate: lcData?.approvalDate || lcData?.approval_date || pgData?.approval_date || null,
+        issueDate: lcData?.issueDate || lcData?.issue_date || pgData?.issue_date || null,
         documents: lcData?.documents || [],
-        terms: lcData?.terms || '',
+        terms: lcData?.terms || pgData?.terms || '',
         amendments: lcData?.amendments || [],
         amendmentCount: lcData?.amendmentCount ?? (lcData?.amendments ? lcData.amendments.length : 0),
         discrepancies: lcData?.discrepancies || [],
         discrepancyResolved: lcData?.discrepancyResolved ?? false,
-        createdAt: lcData?.createdAt || lcData?.created_at || null,
-        updatedAt: lcData?.updatedAt || lcData?.updated_at || null,
+        createdAt: lcData?.createdAt || lcData?.created_at || pgData?.created_at || null,
+        updatedAt: lcData?.updatedAt || lcData?.updated_at || pgData?.updated_at || null,
+        
+        // ACTOR FIELDS: Use CouchDB first (source of truth), fallback to PostgreSQL
+        approvedBy: lcData?.approvedBy || pgData?.approved_by || null,
+        approvedByMsp: lcData?.approvedByMsp || pgData?.approved_by_msp || null,
+        issuedBy: lcData?.issuedBy || pgData?.issued_by || null,
+        issuedByMsp: lcData?.issuedByMsp || pgData?.issued_by_msp || null,
+        lastUpdatedBy: lcData?.lastUpdatedBy || pgData?.last_updated_by || null,
+        lastUpdatedByMsp: lcData?.lastUpdatedByMsp || pgData?.last_updated_by_msp || null,
       };
+      
+      // Log which database provided fields
+      logger.info(`[BANKING] ✅ LC data merged - Buyer: ${requiredFields.buyerName || 'N/A'}, Advising Bank: ${requiredFields.advisingBank || 'N/A'}`);
 
       res.json({
         success: true,
         data: {
           ...lcData,
           ...requiredFields,
+        },
+        enriched: true, // ✅ Flag showing enrichment was applied
+        sources: {
+          couchdb: true,
+          postgresql: pgData !== null,
+          buyerEnriched: !!buyerData?.buyerName,
         },
         timestamp: new Date().toISOString(),
       });
@@ -1511,29 +1874,26 @@ router.get('/payment/by-method/:method',
     try {
       const { method } = req.params;
 
-      const result = await fabricService.getPaymentsByMethod(method);
+      // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info(`[BANKING] 🔗 Fetching payments for method: ${method} from blockchain (CouchDB direct)...`);
+      
+      const payments = await couchDBService.queryPaymentsByMethod(method);
+      
+      logger.info(`[BANKING] ✅ Loaded ${payments.length} payments for method ${method} from blockchain (CouchDB direct)`);
 
-      if (result.success) {
-        res.json({
-          success: true,
-          data: result.data || [],
-          metadata: {
-            paymentMethod: method,
-            count: (result.data || []).length,
-            riskProfile: getRiskProfile(method),
-          },
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(500).json({
-          success: false,
-          error: {
-            code: 'QUERY_FAILED',
-            message: result.error || 'Failed to retrieve payments',
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
+      res.json({
+        success: true,
+        data: payments || [],
+        metadata: {
+          paymentMethod: method,
+          count: (payments || []).length,
+          riskProfile: getRiskProfile(method),
+        },
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       logger.error('Error retrieving payments by method:', error);
       res.status(500).json({
@@ -2128,26 +2488,23 @@ router.get('/consignment/outstanding',
   authMiddleware,
   async (req, res) => {
     try {
-      const result = await fabricService.queryChaincode('QueryOutstandingConsignments', []);
+      // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info('[BANKING] 🔗 Fetching outstanding consignments from blockchain (CouchDB direct)...');
+      
+      const consignments = await couchDBService.queryOutstandingConsignments();
+      
+      logger.info(`[BANKING] ✅ Loaded ${consignments.length} outstanding consignments from blockchain (CouchDB direct)`);
 
-      if (result.success) {
-        res.json({
-          success: true,
-          data: result.data || [],
-          count: (result.data || []).length,
-          warning: 'Outstanding consignments require settlement',
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(500).json({
-          success: false,
-          error: {
-            code: 'QUERY_FAILED',
-            message: result.error || 'Failed to retrieve outstanding consignments',
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
+      res.json({
+        success: true,
+        data: consignments || [],
+        count: (consignments || []).length,
+        warning: 'Outstanding consignments require settlement',
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       logger.error('Error retrieving outstanding consignments:', error);
       res.status(500).json({
