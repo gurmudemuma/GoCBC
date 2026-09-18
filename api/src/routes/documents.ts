@@ -113,6 +113,20 @@ router.post('/:documentID/verify',
       const user = (req as any).user;
       const verificationID = `VER-${Date.now()}`;
 
+      // Get document details for blockchain signature
+      const doc = await postgresDb.get(
+        'SELECT * FROM documents WHERE document_id = $1',
+        [documentID]
+      );
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // ✅ Insert verification record
       await postgresDb.run(
         `INSERT INTO document_verifications (
@@ -125,16 +139,50 @@ router.post('/:documentID/verify',
       const newStatus = verified ? 'verified' : 'rejected';
       await postgresDb.run(
         `UPDATE documents 
-         SET verification_status = $1 
-         WHERE document_id = $2`,
-        [newStatus, documentID]
+         SET verification_status = $1, verified_by = $2, verified_at = NOW()
+         WHERE document_id = $3`,
+        [newStatus, user.username, documentID]
       );
 
       logger.info(`✅ Document ${documentID} verification status updated to: ${newStatus}`);
 
+      // ✅ 🔗 BLOCKCHAIN SIGNATURE: Record cryptographic signature on blockchain
+      let blockchainSignature: any = null;
+      try {
+        const signatureType = verified ? 'VERIFY' : 'REJECT';
+        const signatureReason = verified 
+          ? `Document verified by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`
+          : `Document rejected by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`;
+
+        const blockchainResult = await fabricService.signDocument(
+          documentID,
+          doc.file_hash || '',
+          signatureType,
+          signatureReason
+        );
+
+        if (blockchainResult.success) {
+          blockchainSignature = {
+            txId: blockchainResult.txId,
+            signatureId: blockchainResult.signatureId,
+            timestamp: new Date().toISOString()
+          };
+          logger.info(`✅ Document ${documentID} ${verified ? 'verification' : 'rejection'} signed on blockchain: TX ${blockchainResult.txId}`);
+        } else {
+          logger.warn(`⚠️ Failed to sign document on blockchain: ${blockchainResult.error}`);
+        }
+      } catch (blockchainError) {
+        logger.error('Blockchain signature failed (non-fatal):', blockchainError);
+      }
+
       res.json({
         success: true,
-        data: { documentID, verified, verificationStatus: newStatus },
+        data: { 
+          documentID, 
+          verified, 
+          verificationStatus: newStatus,
+          blockchainSignature  // ✅ Include blockchain proof
+        },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

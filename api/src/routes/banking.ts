@@ -1292,10 +1292,60 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
         }
       }
       
-      // 3. Merge data from all sources
+      // 3. Fetch ALL documents for this LC (LC, Contract, Shipment, Customs)
+      let allDocuments: any[] = [];
+      const contractId = lcData?.contractId || lcData?.contractID || lcData?.ContractID || pgData?.contract_id || '';
+      
+      if (contractId) {
+        try {
+          logger.debug(`[BANKING] 📎 Fetching ALL documents for LC ${lcID}, Contract ${contractId}`);
+          const docs = await dbService.all(`
+            SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+                   uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+            FROM documents 
+            WHERE status = 'active'
+              AND (
+                (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+                OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                     SELECT shipment_id FROM shipments WHERE contract_id = $2
+                ))
+                OR (entity_type = 'CONTRACT' AND entity_id = $2)
+                OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                     SELECT declaration_number FROM customs_declarations WHERE contract_id::text = $2
+                ))
+              )
+            ORDER BY uploaded_at DESC
+          `, [lcID, contractId]);
+          
+          if (docs && docs.length > 0) {
+            allDocuments = docs.map((d: any) => ({
+              documentId: d.document_id,
+              documentType: d.document_type,
+              fileName: d.file_name,
+              filePath: d.file_path,
+              status: d.verification_status || d.status || 'pending',
+              verificationStatus: d.verification_status,
+              uploadedAt: d.uploaded_at,
+              uploadedBy: d.uploaded_by,
+              entityType: d.entity_type,
+              entityId: d.entity_id,
+              verificationNotes: d.verification_notes,
+              verifiedAt: d.verified_at,
+              verifiedBy: d.verified_by,
+            }));
+            logger.info(`[BANKING] 📎 LC ${lcID}: Found ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
+          } else {
+            logger.warn(`[BANKING] 📎 No documents found for LC ${lcID}, Contract ${contractId}`);
+          }
+        } catch (docError) {
+          logger.warn('[BANKING] ⚠️  Could not fetch documents:', docError);
+        }
+      }
+      
+      // 4. Merge data from all sources
       const requiredFields = {
         lcId: lcData?.lcId || lcData?.LCID || lcData?.id || lcID,
-        contractId: lcData?.contractId || lcData?.contractID || lcData?.ContractID || pgData?.contract_id || '',
+        contractId,
         exporterId: lcData?.exporterId || lcData?.exporterID || lcData?.ExporterID || pgData?.exporter_id || '',
         
         // ✅ BUYER DATA (enriched from PostgreSQL)
@@ -1316,7 +1366,7 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
         requestDate: lcData?.requestDate || lcData?.request_date || pgData?.request_date || null,
         approvalDate: lcData?.approvalDate || lcData?.approval_date || pgData?.approval_date || null,
         issueDate: lcData?.issueDate || lcData?.issue_date || pgData?.issue_date || null,
-        documents: lcData?.documents || [],
+        documents: allDocuments,  // ✅ ALL DOCUMENTS (LC + Contract + Shipment + Customs)
         terms: lcData?.terms || pgData?.terms || '',
         amendments: lcData?.amendments || [],
         amendmentCount: lcData?.amendmentCount ?? (lcData?.amendments ? lcData.amendments.length : 0),

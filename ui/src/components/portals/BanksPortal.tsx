@@ -239,6 +239,7 @@ const BanksPortal: React.FC = () => {
   
   // Phase 1: Document Examination & Payment Release state
   const [documentExaminationOpen, setDocumentExaminationOpen] = useState(false);
+  const [verifyingDocumentId, setVerifyingDocumentId] = useState<string | null>(null); // ✅ Track which document is being verified
   const [paymentReleaseOpen, setPaymentReleaseOpen] = useState(false);
   const [lcAmendmentOpen, setLcAmendmentOpen] = useState(false);
   const [forexDetailsOpen, setForexDetailsOpen] = useState(false);
@@ -564,6 +565,20 @@ const BanksPortal: React.FC = () => {
       // Wait for all to complete and process forex with LC data
       const [lcs, swift, forex, shipments] = await Promise.all([lcPromise, swiftPromise, forexPromise, shipmentsPromise]);
 
+      // ✅ Filter delivered shipments by LC payment status
+      if (shipments && shipments.length > 0 && lcs && lcs.length > 0) {
+        const shipmentsWithPaymentReleased = shipments.filter((shipment: any) => {
+          // Find the LC for this shipment
+          const contractId = shipment.contractId || shipment.contractID;
+          const lc = lcs.find((l: any) => l.contractId === contractId);
+          
+          // Only include if LC payment has been released or settled
+          return lc && (lc.status === 'PAYMENT_RELEASED' || lc.status === 'SETTLED');
+        });
+        setDeliveredShipments(shipmentsWithPaymentReleased);
+        devLog(`[BANKS] ⚡ Delivered shipments with payment released: ${shipmentsWithPaymentReleased.length}`);
+      }
+
       // Process forex allocations with buyer names from LCs
       if (forex && forex.length > 0) {
         const mappedForex = forex.map((f: any) => {
@@ -621,15 +636,13 @@ const BanksPortal: React.FC = () => {
           // Must have documents uploaded
           if (!lc.documents || lc.documents.length === 0) return false;
           
-          // Must be in a status where documents are expected
-          if (!['ISSUED', 'FOREX_ALLOCATED', 'DOCUMENTS_SUBMITTED'].includes(lc.status)) return false;
+          // ✅ KEEP IN TAB 3: Show LCs in examination stages (including UTILIZED which means examined)
+          // This allows banks to see both pending and completed document examinations
+          if (!['ISSUED', 'FOREX_ALLOCATED', 'DOCUMENTS_SUBMITTED', 'UTILIZED', 'DOCUMENTS_COMPLIANT'].includes(lc.status)) return false;
           
-          // Include if ANY document is pending verification
-          const hasPendingDocs = lc.documents.some((d: any) => 
-            !d.status || d.status === 'pending' || d.status === 'uploaded' || d.status === 'submitted'
-          );
-          
-          return hasPendingDocs;
+          // ✅ Show ALL LCs in these statuses, regardless of document verification status
+          // Banks can see which documents are pending vs verified in the dialog
+          return true;
         });
         setLcsForExamination(forExam);
         devLog(`[BANKS] ⚡ LCs for document examination: ${forExam.length}`);
@@ -647,8 +660,9 @@ const BanksPortal: React.FC = () => {
           // Must have documents
           if (!lc.documents || lc.documents.length === 0) return false;
           
-          // Must be in a status where payment can be released
-          if (!['DOCUMENTS_COMPLIANT', 'READY_FOR_PAYMENT', 'FOREX_ALLOCATED'].includes(lc.status)) return false;
+          // ✅ Must be in a status where payment can be released
+          // UTILIZED = All documents examined and verified (from Tab 3)
+          if (!['UTILIZED', 'DOCUMENTS_COMPLIANT', 'READY_FOR_PAYMENT', 'FOREX_ALLOCATED'].includes(lc.status)) return false;
           
           // All documents must be verified/compliant
           const allDocsVerified = lc.documents.every((d: any) => 
@@ -1425,29 +1439,83 @@ const BanksPortal: React.FC = () => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
 
+    // ✅ IMMEDIATE UI FEEDBACK: Set loading state and optimistically update document
+    setVerifyingDocumentId(documentId);
+    
+    // Optimistic update: immediately show new status in UI
+    if (selectedLC && selectedLC.documents) {
+      const optimisticDocs = selectedLC.documents.map((d: any) => 
+        d.documentId === documentId || d.document_id === documentId
+          ? { ...d, verificationStatus: approved ? 'verified' : 'rejected', status: approved ? 'verified' : 'rejected' }
+          : d
+      );
+      setSelectedLC({ ...selectedLC, documents: optimisticDocs });
+    }
+
     try {
       const response = await apiFetch(`/documents/${documentId}/verify`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          approved,
-          verifierComments: approved ? 'Document verified and complies with LC terms' : 'Document does not comply',
-          verificationDate: new Date().toISOString(),
+          verified: approved,  // ✅ Backend expects "verified" not "approved"
+          remarks: approved ? 'Document verified and complies with LC terms' : 'Document does not comply',
         }),
       });
 
       const result = await response.json();
       if (result.success) {
         showSuccess(
-          approved ? 'Document Approved' : 'Document Rejected',
-          approved ? 'Document verified successfully' : 'Document marked as non-compliant'
+          approved ? 'Document Approved ✅' : 'Document Rejected ❌',
+          approved ? 'Document verified successfully with blockchain signature' : 'Document marked as non-compliant'
         );
-        loadBankingData(); // Refresh to show updated status
+        
+        // ✅ Refresh the document dialog to show updated status from server
+        if (selectedLC?.lcId) {
+          try {
+            const lcResponse = await apiFetch(`/banking/lc/${selectedLC.lcId}`, {
+              headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+            });
+            const lcResult = await lcResponse.json();
+            if (lcResult.success && lcResult.data) {
+              setSelectedLC(lcResult.data);  // ✅ Update dialog with fresh document statuses
+            }
+          } catch (refreshError) {
+            console.warn('Could not refresh LC documents:', refreshError);
+          }
+        }
+        
+        loadBankingData(); // Refresh main LC list
       } else {
+        // Revert optimistic update on error
+        if (selectedLC?.lcId) {
+          const lcResponse = await apiFetch(`/banking/lc/${selectedLC.lcId}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+          });
+          const lcResult = await lcResponse.json();
+          if (lcResult.success && lcResult.data) {
+            setSelectedLC(lcResult.data);
+          }
+        }
         showError('Verification Failed', result.error?.message || 'Unknown error');
       }
     } catch (error: any) {
+      // Revert optimistic update on error
+      if (selectedLC?.lcId) {
+        try {
+          const lcResponse = await apiFetch(`/banking/lc/${selectedLC.lcId}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+          });
+          const lcResult = await lcResponse.json();
+          if (lcResult.success && lcResult.data) {
+            setSelectedLC(lcResult.data);
+          }
+        } catch {
+          // Ignore refresh error
+        }
+      }
       showError('Network Error', error.message);
+    } finally {
+      setVerifyingDocumentId(null); // ✅ Clear loading state
     }
   };
 
@@ -2060,7 +2128,15 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <Description />, 
                 label: 'Pending Examination', 
-                value: lcsForExamination.length, 
+                value: lcsForExamination.filter((lc: any) => {
+                  // Count LCs with pending (unverified) documents
+                  if (!lc.documents || lc.documents.length === 0) return false;
+                  const hasPending = lc.documents.some((d: any) => 
+                    !d.verificationStatus || d.verificationStatus === 'pending' || 
+                    d.status === 'pending' || d.status === 'uploaded'
+                  );
+                  return hasPending;
+                }).length, 
                 color: '#ff9800',
                 subtitle: 'Documents Submitted',
                 description: 'Show LCs pending document review.',
@@ -2073,15 +2149,27 @@ const BanksPortal: React.FC = () => {
                   setDocumentExaminationFilter('PENDING_EXAMINATION');
                   setCurrentPage(0);
                 },
-                debug: `Examination Array Length: ${lcsForExamination.length}, Has Data: ${lcsForExamination.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <CheckCircle />, 
                 label: 'Examined Today', 
-                value: letterOfCredits.filter(lc => lc.status === 'UTILIZED').length, // UTILIZED = documents verified
+                value: (() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  return letterOfCredits.filter(lc => {
+                    // Check if documents were verified today
+                    if (!lc.documents || lc.documents.length === 0) return false;
+                    return lc.documents.some((d: any) => {
+                      if (!d.verifiedAt && !d.verified_at) return false;
+                      const verifiedDate = new Date(d.verifiedAt || d.verified_at);
+                      verifiedDate.setHours(0, 0, 0, 0);
+                      return verifiedDate.getTime() === today.getTime();
+                    });
+                  }).length;
+                })(),
                 color: '#4caf50',
                 subtitle: 'Completed',
-                description: 'Show LCs whose documents were verified.',
+                description: 'Show LCs whose documents were verified today.',
                 clickable: true,
                 selected: documentExaminationFilter === 'VERIFIED',
                 onClick: () => {
@@ -2095,7 +2183,41 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <AccessTime />, 
                 label: 'Avg Processing Time', 
-                value: '2.4d', 
+                value: (() => {
+                  // Calculate average time from document upload to verification
+                  const completedLCs = letterOfCredits.filter(lc => 
+                    lc.documents && lc.documents.length > 0 && 
+                    lc.documents.some((d: any) => d.verifiedAt || d.verified_at)
+                  );
+                  
+                  if (completedLCs.length === 0) return '—';
+                  
+                  let totalHours = 0;
+                  let count = 0;
+                  
+                  completedLCs.forEach(lc => {
+                    lc.documents.forEach((d: any) => {
+                      const uploaded = d.uploadedAt || d.uploaded_at;
+                      const verified = d.verifiedAt || d.verified_at;
+                      if (uploaded && verified) {
+                        const uploadTime = new Date(uploaded).getTime();
+                        const verifyTime = new Date(verified).getTime();
+                        const hours = (verifyTime - uploadTime) / (1000 * 60 * 60);
+                        if (hours >= 0) {
+                          totalHours += hours;
+                          count++;
+                        }
+                      }
+                    });
+                  });
+                  
+                  if (count === 0) return '—';
+                  const avgHours = totalHours / count;
+                  const avgDays = avgHours / 24;
+                  
+                  if (avgDays < 1) return `${Math.round(avgHours)}h`;
+                  return `${avgDays.toFixed(1)}d`;
+                })(),
                 color: '#2196F3',
                 subtitle: 'Document Review',
                 description: 'Average time required to complete document examination.',
@@ -2104,7 +2226,23 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <Assignment />, 
                 label: 'Compliance Rate', 
-                value: '96%', 
+                value: (() => {
+                  // Calculate percentage of verified vs rejected documents
+                  const allDocs = letterOfCredits.flatMap(lc => lc.documents || []);
+                  const processedDocs = allDocs.filter((d: any) => 
+                    d.verificationStatus === 'verified' || d.verificationStatus === 'rejected' ||
+                    d.status === 'verified' || d.status === 'rejected'
+                  );
+                  
+                  if (processedDocs.length === 0) return '—';
+                  
+                  const verifiedCount = processedDocs.filter((d: any) => 
+                    d.verificationStatus === 'verified' || d.status === 'verified'
+                  ).length;
+                  
+                  const rate = (verifiedCount / processedDocs.length) * 100;
+                  return `${Math.round(rate)}%`;
+                })(),
                 color: '#9b30b7',
                 subtitle: 'UCP 600 Standard',
                 description: 'Percentage of documents compliant with UCP 600.',
@@ -4922,10 +5060,59 @@ const BanksPortal: React.FC = () => {
                               size="small"
                               variant="contained"
                               startIcon={<CheckCircle />}
-                              onClick={() => {
-                                setSelectedLC(lc);
+                              onClick={(() => {
+                                console.log('[TAB3] 🔘 Examine Documents button clicked for LC:', lc.lcId);
+                                
+                                // ✅ OPEN DIALOG IMMEDIATELY with loading state
+                                setSelectedLC({ ...lc, documents: lc.documents || [] });
                                 setDocumentExaminationOpen(true);
-                              }}
+                                setLcDetailsLoading(true);
+                                
+                                // ✅ Fetch documents in background (non-blocking)
+                                (async () => {
+                                  try {
+                                    const token = localStorage.getItem('authToken');
+                                    console.log('[TAB3] Token exists:', !!token);
+                                    
+                                    if (!token) {
+                                      console.error('[TAB3] No auth token found');
+                                      setLcDetailsLoading(false);
+                                      return;
+                                    }
+                                    
+                                    const apiUrl = `http://localhost:3001/api/v1/banking/lc/${lc.lcId}`;
+                                    console.log('[TAB3] Fetching documents from:', apiUrl);
+                                    
+                                    const response = await fetch(apiUrl, {
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`,
+                                        'Content-Type': 'application/json'
+                                      }
+                                    });
+                                    
+                                    console.log('[TAB3] Response status:', response.status, response.statusText);
+                                    
+                                    if (response.ok) {
+                                      const result = await response.json();
+                                      console.log('[TAB3] Response data received');
+                                      
+                                      if (result.success && result.data) {
+                                        console.log('[TAB3] ✅ Fetched LC with', result.data.documents?.length || 0, 'documents');
+                                        setSelectedLC(result.data);
+                                      } else {
+                                        console.warn('[TAB3] API returned no data, keeping cached LC');
+                                      }
+                                    } else {
+                                      const errorText = await response.text();
+                                      console.error('[TAB3] API failed:', response.status, errorText);
+                                    }
+                                  } catch (error) {
+                                    console.error('[TAB3] Error fetching LC:', error);
+                                  } finally {
+                                    setLcDetailsLoading(false);
+                                  }
+                                })();
+                              })}
                               sx={{
                                 bgcolor: '#9b30b7',
                                 '&:hover': { bgcolor: '#7a2592' },
@@ -5092,11 +5279,18 @@ const BanksPortal: React.FC = () => {
                               size="small"
                               variant="contained"
                               startIcon={<Payment />}
-                              onClick={() => {
-                                showInfo(
-                                  'Payment Release',
-                                  `Release payment for LC: ${lc.lcId}\nExporter: ${lc.exporterId}\nAmount: $${lc.amount?.toLocaleString()} ${lc.currency}\n\nThis will initiate SWIFT payment to the beneficiary bank.`
+                              onClick={async () => {
+                                // Confirm before releasing payment
+                                const confirmed = window.confirm(
+                                  `Release payment for LC ${lc.lcId}?\n\n` +
+                                  `Exporter: ${lc.exporterId}\n` +
+                                  `Amount: $${lc.amount?.toLocaleString()} ${lc.currency}\n\n` +
+                                  `This will initiate SWIFT payment to the beneficiary bank and create a blockchain signature.`
                                 );
+                                
+                                if (confirmed) {
+                                  await handleReleasePayment(lc.lcId, lc.amount, lc.currency);
+                                }
                               }}
                               sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}
                             >
@@ -5263,6 +5457,16 @@ const BanksPortal: React.FC = () => {
           Document Examination - LC {selectedLC?.lcId}
         </DialogTitle>
         <DialogContent sx={{ mt: 2 }}>
+          {/* Loading Indicator */}
+          {lcDetailsLoading && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, p: 2, bgcolor: '#f5f5f5', borderRadius: 1 }}>
+              <CircularProgress size={24} />
+              <Typography variant="body2" color="text.secondary">
+                Loading complete document package...
+              </Typography>
+            </Box>
+          )}
+          
           {selectedLC && (
             <>
               {/* LC Summary */}
@@ -5423,10 +5627,18 @@ const BanksPortal: React.FC = () => {
                                 onClick={async () => {
                                   try {
                                     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-                                    const token = localStorage.getItem('token');
+                                    const token = localStorage.getItem('authToken');
                                     
-                                    console.log('Viewing document:', doc.documentId);
+                                    // Get document ID (handle both camelCase and snake_case)
+                                    const docId = doc.documentId || doc.document_id;
+                                    
+                                    console.log('Viewing document:', docId, 'Full doc object:', doc);
                                     console.log('Token exists:', !!token);
+                                    
+                                    if (!docId) {
+                                      alert('Document ID not found. Cannot view document.');
+                                      return;
+                                    }
                                     
                                     if (!token) {
                                       alert('Authentication required. Please login again.');
@@ -5435,7 +5647,7 @@ const BanksPortal: React.FC = () => {
                                     }
                                     
                                     // Fetch document with authentication
-                                    const response = await fetch(`${apiUrl}/api/v1/documents/${doc.documentId}/download`, {
+                                    const response = await fetch(`${apiUrl}/api/v1/documents/${docId}/download`, {
                                       headers: {
                                         'Authorization': `Bearer ${token}`
                                       }
@@ -5489,23 +5701,23 @@ const BanksPortal: React.FC = () => {
                                   size="small"
                                   variant="contained"
                                   color="success"
-                                  startIcon={<CheckCircle />}
+                                  startIcon={verifyingDocumentId === doc.documentId ? <CircularProgress size={16} color="inherit" /> : <CheckCircle />}
                                   onClick={() => handleVerifyDocument(doc.documentId, true)}
-                                  disabled={doc.verificationStatus === 'verified' || doc.status === 'verified'}
+                                  disabled={doc.verificationStatus === 'verified' || doc.status === 'verified' || verifyingDocumentId === doc.documentId}
                                   sx={{ flex: 1 }}
                                 >
-                                  Approve
+                                  {verifyingDocumentId === doc.documentId ? 'Approving...' : 'Approve'}
                                 </Button>
                                 <Button
                                   size="small"
                                   variant="contained"
                                   color="error"
-                                  startIcon={<Cancel />}
+                                  startIcon={verifyingDocumentId === doc.documentId ? <CircularProgress size={16} color="inherit" /> : <Cancel />}
                                   onClick={() => handleVerifyDocument(doc.documentId, false)}
-                                  disabled={doc.verificationStatus === 'rejected' || doc.status === 'rejected'}
+                                  disabled={doc.verificationStatus === 'rejected' || doc.status === 'rejected' || verifyingDocumentId === doc.documentId}
                                   sx={{ flex: 1 }}
                                 >
-                                  Reject
+                                  {verifyingDocumentId === doc.documentId ? 'Rejecting...' : 'Reject'}
                                 </Button>
                               </Box>
                             </Box>

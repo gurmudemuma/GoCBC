@@ -11,6 +11,7 @@ export interface ChaincodeResponse {
   data?: any;
   error?: string;
   txId?: string;
+  signatureId?: string;  // ✅ Added for blockchain signature tracking
   endorsers?: Array<{
     mspId: string;
     endpoint: string;
@@ -1777,12 +1778,33 @@ export class FabricService {
     signatureType: string,
     remarks: string = ''
   ): Promise<ChaincodeResponse> {
-    return this.invokeChaincode('SignDocument', [
+    const result = await this.invokeChaincode('SignDocument', [
       documentId,
       documentHash,
       signatureType,
       remarks,
     ]);
+
+    // ✅ Generate signatureId using chaincode's format: SIG_{documentID}_{mspID}_{timestamp}
+    // Since SignDocument returns nil/error (not JSON), we construct the ID ourselves
+    if (result.success) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const mspId = this.currentMspId || 'BanksMSP';
+      const signatureId = `SIG_${documentId}_${mspId}_${timestamp}`;
+      
+      return {
+        ...result,
+        signatureId,
+        data: {
+          signatureId,
+          documentId,
+          signatureType,
+          timestamp: new Date().toISOString()
+        }
+      };
+    }
+
+    return result;
   }
 
   /**
