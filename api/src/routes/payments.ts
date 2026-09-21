@@ -1486,43 +1486,40 @@ router.post('/',
   async (req: Request, res: Response) => {
     try {
       const { paymentID, lcNumber, contractID, exporterID, amount, currency, paymentMethod, paymentDate } = req.body;
+      const user = (req as any).user;
 
+      // ✅ BLOCKCHAIN-FIRST: Call InitiatePayment chaincode BEFORE DB write
+      const blockchainResult = await fabricService.invokeChaincode(
+        'InitiatePayment',
+        [
+          paymentID,
+          contractID || '',
+          exporterID,
+          lcNumber || '',
+          String(amount),
+          currency || 'USD',
+          'AUTO', // receivingBank - auto-mapped from LC
+          'AUTO', // receivingBankBIC - auto-mapped from LC
+          'AUTO', // beneficiaryName - auto-mapped from LC
+          'AUTO', // beneficiaryAccount - auto-mapped
+          paymentMethod || 'LC'
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Payment initiated on blockchain: ${paymentID}, TX: ${blockchain_tx_id}`);
+
+      // Now persist to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO payments (
-          payment_id, lc_number, contract_id, exporter_id, amount, currency, payment_method, payment_date
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [paymentID, lcNumber || null, contractID, exporterID, amount, currency, paymentMethod, paymentDate]
+          payment_id, lc_number, contract_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [paymentID, lcNumber || null, contractID, exporterID, amount, currency, paymentMethod, paymentDate, blockchain_tx_id]
       );
-
-      // ✅ Record payment on blockchain (this is payment confirmation/record, different from InitiatePayment)
-      try {
-        const auditService = require('../services/auditService').default;
-        const user = (req as any).user;
-        await auditService.recordAudit({
-          entityType: 'PAYMENT_RECORD',
-          entityId: paymentID,
-          actionType: 'RECORD',
-          actionBy: user?.username || exporterID,
-          organizationMSP: 'BanksMSP',
-          details: {
-            lcNumber,
-            contractID,
-            exporterID,
-            amount,
-            currency,
-            paymentMethod,
-            paymentDate
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Payment record recorded on blockchain: ${paymentID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record payment on blockchain (non-fatal):`, blockchainErr);
-      }
 
       res.json({
         success: true,
-        data: { paymentID, amount, currency },
+        data: { paymentID, amount, currency, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

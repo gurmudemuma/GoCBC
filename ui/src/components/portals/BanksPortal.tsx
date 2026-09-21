@@ -40,6 +40,7 @@ import {
   AccordionSummary,
   AccordionDetails,
   CircularProgress,
+  Badge,
 } from '@mui/material';
 import { ExpandMore } from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
@@ -74,6 +75,7 @@ import {
   AdminPanelSettings,
   Timeline,
   VerifiedUser,
+  Verified,
   AccountTree,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
@@ -101,7 +103,7 @@ import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 import { DocumentManagementPanel } from '@/components/documents';
-import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
+import { BlockchainStatusIcon, BlockchainTxChip } from '@/components/blockchain';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 import BusinessActivityTimeline from '@/components/documents/BusinessActivityTimeline';
 import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend';
@@ -398,15 +400,33 @@ const BanksPortal: React.FC = () => {
     const isSuperAdmin = userRole === 'ADMIN';
     
     const allTabs = [
+      // ✅ WORKFLOW ORDER: Follows the actual LC banking process lifecycle
+      // Tab 0: LC Request & Approval (START - Exporter Portal → Banks Portal)
       { index: 0, label: 'Payment Methods', icon: <Payment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      
+      // Tab 1: Forex Allocation (After LC Approved/Issued)
       { index: 1, label: `Forex Allocations${forexAllocations.length > 0 ? ` (${forexAllocations.length})` : ''}`, icon: <CurrencyExchange />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
-      { index: 2, label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
-      { index: 3, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
-      { index: 4, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
-      { index: 5, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
-      { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
-      { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
-      { index: 8, label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, icon: <CheckCircle />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      
+      // Tab 2: Document Examination (Exporter submits → Bank examines)
+      { index: 2, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
+      
+      // Tab 3: Payment Release (After documents verified)
+      { index: 3, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
+      
+      // Tab 4: SWIFT Messages (Payment instructions)
+      { index: 4, label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
+      
+      // Tab 5: LC Settlements (Final settlement after delivery)
+      { index: 5, label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, icon: <CheckCircle />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      
+      // Tab 6: Analytics (Reporting)
+      { index: 6, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
+      
+      // Tab 7: User Management (Admin)
+      { index: 7, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
+      
+      // Tab 8: Audit Trail (Compliance)
+      { index: 8, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -472,9 +492,9 @@ const BanksPortal: React.FC = () => {
 
   // Load audit stats when Audit Trail tab is active
   useEffect(() => {
-    if (activeTab === 7) {
+    if (activeTab === 8) {  // Audit Trail now at index 8
       loadAuditStats();
-    } else if (activeTab === 6) {
+    } else if (activeTab === 7) {  // User Management now at index 7
       loadUserStats();
     }
   }, [activeTab]);
@@ -636,9 +656,10 @@ const BanksPortal: React.FC = () => {
           // Must have documents uploaded
           if (!lc.documents || lc.documents.length === 0) return false;
           
-          // ✅ KEEP IN TAB 3: Show LCs in examination stages (including UTILIZED which means examined)
+          // ✅ KEEP IN TAB 2: Show LCs in examination stages (including UTILIZED which means examined)
           // This allows banks to see both pending and completed document examinations
-          if (!['ISSUED', 'FOREX_ALLOCATED', 'DOCUMENTS_SUBMITTED', 'UTILIZED', 'DOCUMENTS_COMPLIANT'].includes(lc.status)) return false;
+          // Valid statuses from chaincode: FOREX_ALLOCATED → UTILIZED (after examination)
+          if (!['FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)) return false;
           
           // ✅ Show ALL LCs in these statuses, regardless of document verification status
           // Banks can see which documents are pending vs verified in the dialog
@@ -660,19 +681,65 @@ const BanksPortal: React.FC = () => {
           // Must have documents
           if (!lc.documents || lc.documents.length === 0) return false;
           
-          // ✅ Must be in a status where payment can be released
-          // UTILIZED = All documents examined and verified (from Tab 3)
-          if (!['UTILIZED', 'DOCUMENTS_COMPLIANT', 'READY_FOR_PAYMENT', 'FOREX_ALLOCATED'].includes(lc.status)) return false;
+          // ✅ Must be UTILIZED (documents examined) to release payment
+          // Valid chaincode workflow: UTILIZED → PAYMENT_RELEASED (via ReleaseLCPayment)
+          // TEMPORARY: Also accept FOREX_ALLOCATED with verified docs (migration period)
+          if (lc.status !== 'UTILIZED' && lc.status !== 'FOREX_ALLOCATED') return false;
           
           // All documents must be verified/compliant
-          const allDocsVerified = lc.documents.every((d: any) => 
-            d.status === 'verified' || d.status === 'approved' || d.status === 'compliant'
-          );
+          // Check both status and verificationStatus fields
+          const allDocsVerified = lc.documents.every((d: any) => {
+            const docStatus = d.verificationStatus || d.status || '';
+            return docStatus === 'verified' || docStatus === 'approved' || docStatus === 'compliant';
+          });
           
           return allDocsVerified;
         });
         setLcsForPaymentRelease(forPayment);
         devLog(`[BANKS] ⚡ LCs ready for payment release: ${forPayment.length}`);
+        
+        // ✅ ENHANCED DEBUG: Show why LCs are not qualifying for payment release
+        if (forPayment.length === 0 && lcs.length > 0) {
+          const utilizedLCs = lcs.filter((lc: any) => lc.status === 'UTILIZED');
+          devLog(`[BANKS] 🔍 DEBUG Payment Release Filter:`);
+          devLog(`  - Total LCs: ${lcs.length}`);
+          devLog(`  - LCs in UTILIZED status: ${utilizedLCs.length}`);
+          devLog(`  - LCs with documents: ${lcs.filter((lc: any) => lc.documents && lc.documents.length > 0).length}`);
+          
+          // Check LCs with verified docs (using same logic as filter)
+          const lcsWithVerifiedDocs = lcs.filter((lc: any) => {
+            if (!lc.documents || lc.documents.length === 0) return false;
+            return lc.documents.every((d: any) => {
+              const docStatus = d.verificationStatus || d.status || '';
+              return docStatus === 'verified' || docStatus === 'approved' || docStatus === 'compliant';
+            });
+          });
+          devLog(`  - LCs with verified docs: ${lcsWithVerifiedDocs.length}`);
+          
+          // Show status breakdown
+          const statusCounts: any = {};
+          lcs.forEach((lc: any) => {
+            statusCounts[lc.status] = (statusCounts[lc.status] || 0) + 1;
+          });
+          devLog(`  - LC Status Breakdown:`, statusCounts);
+          
+          // Show sample UTILIZED LC with document details
+          if (utilizedLCs.length > 0) {
+            const sampleLC = utilizedLCs[0];
+            devLog(`  - Sample UTILIZED LC:`, {
+              lcId: sampleLC.lcId,
+              status: sampleLC.status,
+              documentCount: sampleLC.documents?.length || 0,
+              documents: sampleLC.documents?.map((d: any) => ({
+                type: d.documentType,
+                status: d.status,
+                verificationStatus: d.verificationStatus,
+                combined: d.verificationStatus || d.status || ''
+              }))
+            });
+          }
+        }
+        
         if (forPayment.length > 0) {
           devLog(`[BANKS] 💰 LCs with verified documents:`, forPayment.map((lc: any) => ({
             lcId: lc.lcId,
@@ -1931,6 +1998,20 @@ const BanksPortal: React.FC = () => {
   return (
     <ThemeProvider theme={banksTheme}>
       <Box sx={{ p: 3 }}>
+        {/* ⛓️ BLOCKCHAIN NETWORK STATUS - Show blockchain features prominently */}
+        <Alert 
+          severity="info" 
+          icon={<Verified />}
+          sx={{ mb: 3, bgcolor: 'rgba(25, 118, 210, 0.08)', border: '2px solid #1976d2' }}
+        >
+          <Typography variant="subtitle2" fontWeight="bold">
+            🔗 Hyperledger Fabric Blockchain Network Active
+          </Typography>
+          <Typography variant="caption">
+            Multi-organization Consortium • Real-time Transaction Verification • Immutable Ledger
+          </Typography>
+        </Alert>
+
         {/* Professional KPI Cards - Dynamic per Tab */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
           {(() => {
@@ -2052,8 +2133,8 @@ const BanksPortal: React.FC = () => {
                   setCurrentPage(0);
                 }
               },
-            ] : activeTab === 2 ? [
-              // Tab 2: SWIFT Messages - Show multiple KPI cards like other tabs
+            ] : activeTab === 4 ? [
+              // Tab 4: SWIFT Messages - Show multiple KPI cards like other tabs
               { 
                 icon: <MessageOutlined />, 
                 label: 'Total Messages', 
@@ -2123,23 +2204,15 @@ const BanksPortal: React.FC = () => {
                   setCurrentPage(0);
                 }
               },
-            ] : activeTab === 3 ? [
-              // Tab 3: Document Examination KPIs - Show data in table
+            ] : activeTab === 2 ? [
+              // Tab 2: Document Examination KPIs - Show data in table
               { 
                 icon: <Description />, 
                 label: 'Pending Examination', 
-                value: lcsForExamination.filter((lc: any) => {
-                  // Count LCs with pending (unverified) documents
-                  if (!lc.documents || lc.documents.length === 0) return false;
-                  const hasPending = lc.documents.some((d: any) => 
-                    !d.verificationStatus || d.verificationStatus === 'pending' || 
-                    d.status === 'pending' || d.status === 'uploaded'
-                  );
-                  return hasPending;
-                }).length, 
+                value: lcsForExamination.length,  // Show all LCs in examination tab
                 color: '#ff9800',
                 subtitle: 'Documents Submitted',
-                description: 'Show LCs pending document review.',
+                description: 'Show all LCs in document examination tab.',
                 clickable: true,
                 selected: documentExaminationFilter === 'PENDING_EXAMINATION',
                 onClick: () => {
@@ -2153,23 +2226,10 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <CheckCircle />, 
                 label: 'Examined Today', 
-                value: (() => {
-                  const today = new Date();
-                  today.setHours(0, 0, 0, 0);
-                  return letterOfCredits.filter(lc => {
-                    // Check if documents were verified today
-                    if (!lc.documents || lc.documents.length === 0) return false;
-                    return lc.documents.some((d: any) => {
-                      if (!d.verifiedAt && !d.verified_at) return false;
-                      const verifiedDate = new Date(d.verifiedAt || d.verified_at);
-                      verifiedDate.setHours(0, 0, 0, 0);
-                      return verifiedDate.getTime() === today.getTime();
-                    });
-                  }).length;
-                })(),
+                value: lcsForExamination.filter((lc: any) => lc.status === 'UTILIZED').length,
                 color: '#4caf50',
                 subtitle: 'Completed',
-                description: 'Show LCs whose documents were verified today.',
+                description: 'Show LCs with documents examined and verified.',
                 clickable: true,
                 selected: documentExaminationFilter === 'VERIFIED',
                 onClick: () => {
@@ -2196,6 +2256,7 @@ const BanksPortal: React.FC = () => {
                   let count = 0;
                   
                   completedLCs.forEach(lc => {
+                    if (!lc.documents) return;
                     lc.documents.forEach((d: any) => {
                       const uploaded = d.uploadedAt || d.uploaded_at;
                       const verified = d.verifiedAt || d.verified_at;
@@ -2248,8 +2309,8 @@ const BanksPortal: React.FC = () => {
                 description: 'Percentage of documents compliant with UCP 600.',
                 clickable: false,
               },
-            ] : activeTab === 5 ? [
-              // Tab 5: Analytics KPIs
+            ] : activeTab === 6 ? [
+              // Tab 6: Analytics KPIs
               { 
                 icon: <Assessment />,
                 label: 'Total Metrics', 
@@ -2258,8 +2319,8 @@ const BanksPortal: React.FC = () => {
                 color: '#1976d2',
                 clickable: false,
               },
-            ] : activeTab === 6 ? [
-              // Tab 6: User Management KPIs
+            ] : activeTab === 7 ? [
+              // Tab 7: User Management KPIs
               { 
                 icon: <People />, 
                 label: 'Total Users', 
@@ -2296,8 +2357,8 @@ const BanksPortal: React.FC = () => {
                 description: 'Users with administrator privileges.',
                 clickable: false,
               },
-            ] : activeTab === 7 ? [
-              // Tab 7: Audit Trail KPIs
+            ] : activeTab === 8 ? [
+              // Tab 8: Audit Trail KPIs
               { 
                 icon: <Timeline />, 
                 label: 'Total Activities', 
@@ -2334,8 +2395,8 @@ const BanksPortal: React.FC = () => {
                 description: 'Organizations involved in transactions.',
                 clickable: false,
               },
-            ] : activeTab === 8 ? [
-              // Tab 8: LC Settlements KPIs
+            ] : activeTab === 5 ? [
+              // Tab 5: LC Settlements KPIs
               { 
                 icon: <CheckCircle />, 
                 label: 'Delivered Shipments', 
@@ -4732,8 +4793,8 @@ const BanksPortal: React.FC = () => {
         rejectLabel="Reject LC"
       />
 
-      {/* Tab 2: SWIFT Messages */}
-      {activeTab === 2 && (
+      {/* Tab 4: SWIFT Messages */}
+      {activeTab === 4 && (
         <ModernCard>
           <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
@@ -4950,8 +5011,8 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 3: Document Examination */}
-      {activeTab === 3 && (
+      {/* Tab 2: Document Examination */}
+      {activeTab === 2 && (
         <ModernCard title="Document Examination">
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
@@ -5019,7 +5080,19 @@ const BanksPortal: React.FC = () => {
                           <strong>${lc.amount?.toLocaleString()} {lc.currency}</strong>
                         </TableCell>
                         <TableCell>
-                          <StatusChip label={lc.status} status="pending" />
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <StatusChip label={lc.status} status="pending" />
+                            {(lc.approvedByMsp || lc.issuedByMsp) && (
+                              <Chip 
+                                label="Blockchain"
+                                size="small"
+                                icon={<Verified />}
+                                color="primary"
+                                variant="outlined"
+                                sx={{ fontWeight: 600 }}
+                              />
+                            )}
+                          </Box>
                         </TableCell>
                         <TableCell>
                           {lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'}
@@ -5177,8 +5250,8 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 4: Payment Release */}
-      {activeTab === 4 && (
+      {/* Tab 3: Payment Release */}
+      {activeTab === 3 && (
         <ModernCard title="Payment Release">
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
@@ -5353,18 +5426,18 @@ const BanksPortal: React.FC = () => {
         </ModernCard>
       )}
 
-      {/* Tab 5: Analytics */}
-      {activeTab === 5 && (
+      {/* Tab 6: Analytics */}
+      {activeTab === 6 && (
         <AnalyticsDashboard />
       )}
 
-      {/* Tab 6: User Management */}
-      {activeTab === 6 && (
+      {/* Tab 7: User Management */}
+      {activeTab === 7 && (
         <UserManagement />
       )}
 
-      {/* Tab 7: Audit Trail */}
-      {activeTab === 7 && (
+      {/* Tab 8: Audit Trail */}
+      {activeTab === 8 && (
         <AuditTrailTable
           title="Banks Portal - Complete Transaction History"
           autoRefresh={true}
@@ -5374,8 +5447,8 @@ const BanksPortal: React.FC = () => {
         />
       )}
 
-      {/* Tab 8: LC Settlements */}
-      {activeTab === 8 && (
+      {/* Tab 5: LC Settlements */}
+      {activeTab === 5 && (
         <Box>
           <Typography variant="h5" gutterBottom sx={{ color: '#9b30b7', fontWeight: 700 }}>
             💰 LC Settlement Tracking

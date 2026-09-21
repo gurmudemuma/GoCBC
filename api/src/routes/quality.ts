@@ -2,10 +2,12 @@ import { Router, Request, Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
 import { authMiddleware } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
+import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
+const fabricService = FabricService.getInstance();
 
 // Helper function for validation
 const validateRequest = (req: Request, res: Response, next: any) => {
@@ -89,43 +91,36 @@ router.post('/inspections',
         });
       }
 
+      // ✅ BLOCKCHAIN-FIRST: Call RequestInspection chaincode BEFORE DB insert
+      const blockchainResult = await fabricService.invokeChaincode(
+        'RequestInspection',
+        [
+          inspectionID,
+          shipmentID || '',
+          contractID || '',
+          exporterID,
+          requestedDate || new Date().toISOString().split('T')[0]
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection request recorded on blockchain: ${inspectionID}, TX: ${blockchain_tx_id}`);
+
+      // Now insert to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO quality_inspections (
           inspection_id, exporter_id, contract_id, shipment_id, coffee_type,
-          quantity, sample_size, requested_date, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          quantity, sample_size, requested_date, status, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [inspectionID, exporterID, contractID || null, shipmentID || null, coffeeType, 
-         quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'pending']
+         quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'pending', blockchain_tx_id]
       );
-
-      // ✅ Record inspection request on blockchain as audit trail
-      try {
-        const auditService = require('../services/auditService').default;
-        await auditService.recordAudit({
-          entityType: 'QUALITY_INSPECTION',
-          entityId: inspectionID,
-          actionType: 'REQUEST',
-          actionBy: exporterID,
-          organizationMSP: 'ECTAMSP',
-          details: {
-            shipmentId: shipmentID,
-            contractId: contractID,
-            coffeeType,
-            quantity,
-            requestedDate: requestedDate || new Date().toISOString()
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Inspection request recorded on blockchain: ${inspectionID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record inspection on blockchain (non-fatal):`, blockchainErr);
-      }
 
       logger.info(`Quality inspection requested: ${inspectionID}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'pending' },
+        data: { inspectionID, status: 'pending', blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -263,7 +258,36 @@ INSPECTOR REMARKS:
 ${remarks || 'No additional remarks'}
 `.trim();
 
-      // Update inspection with ALL results
+      // ✅ BLOCKCHAIN-FIRST: Call PerformInspection chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'PerformInspection',
+        [
+          inspectionID,
+          inspectorID || 'AUTO',
+          inspectorName || 'ECTA Quality Lab',
+          String(sampleSize || 100),
+          String(moistureContent),
+          String(defectCount),
+          beanSize || 'Screen 17',
+          color || 'Green',
+          odor || 'Fresh',
+          String(fragrance || 0),
+          String(flavor || 0),
+          String(aftertaste || 0),
+          String(acidity || 0),
+          String(body || 0),
+          String(balance || 0),
+          String(uniformity || 0),
+          String(cleanCup || 0),
+          String(sweetness || 0),
+          String(overall || 0)
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection performance recorded on blockchain: ${inspectionID}, TX: ${blockchain_tx_id}`);
+
+      // Now update inspection with ALL results
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'inspected',
@@ -276,6 +300,7 @@ ${remarks || 'No additional remarks'}
           grade = $7,
           cup_quality = $8,
           remarks = $9,
+          blockchain_tx_id = $10,
           updated_at = NOW()
         WHERE inspection_id = $1`,
         [
@@ -287,7 +312,8 @@ ${remarks || 'No additional remarks'}
           parseInt(beanSize) || 17,
           grade,
           cupQualityJson,  // Store all cup scores as JSON
-          comprehensiveRemarks
+          comprehensiveRemarks,
+          blockchain_tx_id
         ]
       );
 
@@ -300,7 +326,8 @@ ${remarks || 'No additional remarks'}
           status: 'inspected',
           grade,
           overall,
-          cupQuality: cupQualityScores
+          cupQuality: cupQualityScores,
+          blockchain_tx_id
         },
         timestamp: new Date().toISOString()
       });
@@ -356,16 +383,30 @@ router.post('/inspections/:inspectionID/approve',
         });
       }
 
-      // Approve inspection
+      // ✅ BLOCKCHAIN-FIRST: Call ApproveInspection chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'ApproveInspection',
+        [
+          inspectionID,
+          approvedBy || 'ECTA Quality Director',
+          certificateNo || `CERT${inspectionID}`
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection approval recorded on blockchain: ${inspectionID}, TX: ${blockchain_tx_id}`);
+
+      // Now approve inspection in database
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'approved',
           passed = true,
           certification_number = $2,
           grade = COALESCE(grade, 'Grade 1'),
+          blockchain_tx_id = $3,
           updated_at = NOW()
         WHERE inspection_id = $1`,
-        [inspectionID, certificateNo || `CERT${inspectionID}`]
+        [inspectionID, certificateNo || `CERT${inspectionID}`, blockchain_tx_id]
       );
 
       logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNo}`);
@@ -467,7 +508,7 @@ router.post('/inspections/:inspectionID/approve',
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'approved', certificateNo },
+        data: { inspectionID, status: 'approved', certificateNo, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -523,22 +564,36 @@ router.post('/inspections/:inspectionID/reject',
         });
       }
 
-      // Reject inspection
+      // ✅ BLOCKCHAIN-FIRST: Call RejectInspection chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'RejectInspection',
+        [
+          inspectionID,
+          rejectedBy || 'ECTA Quality Director',
+          reason
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection rejection recorded on blockchain: ${inspectionID}, TX: ${blockchain_tx_id}`);
+
+      // Now reject inspection in database
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'rejected',
           passed = false,
           remarks = $2,
+          blockchain_tx_id = $3,
           updated_at = NOW()
         WHERE inspection_id = $1`,
-        [inspectionID, `REJECTED: ${reason}`]
+        [inspectionID, `REJECTED: ${reason}`, blockchain_tx_id]
       );
 
       logger.info(`Quality inspection rejected: ${inspectionID}, Reason: ${reason}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'rejected', reason },
+        data: { inspectionID, status: 'rejected', reason, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -606,14 +661,32 @@ router.post('/inspections/:inspectionID/issue-permit',
 
       const permitNumber = exportPermitNo || `PERMIT${Date.now()}`;
 
-      // Update inspection status to permit_issued
+      // ✅ BLOCKCHAIN-FIRST: Call IssueExportPermit chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'IssueExportPermit',
+        [
+          permitNumber,
+          inspection.shipment_id || '',
+          '', // contractID
+          inspection.exporter_id || '',
+          inspectionID,
+          new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // valid for 90 days
+          `Export permit based on quality inspection ${inspectionID} - Certificate: ${inspection.certification_number}`
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Export permit recorded on blockchain: ${permitNumber}, TX: ${blockchain_tx_id}`);
+
+      // Now update inspection status to permit_issued
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'permit_issued',
           remarks = COALESCE(remarks, '') || '\n\nEXPORT PERMIT ISSUED: ' || $2 || ' by ' || $3,
+          blockchain_tx_id = $4,
           updated_at = NOW()
         WHERE inspection_id = $1`,
-        [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office']
+        [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office', blockchain_tx_id]
       );
 
       logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}`);
@@ -628,7 +701,8 @@ router.post('/inspections/:inspectionID/issue-permit',
           shipmentID: inspection.shipment_id,
           exportPermitNo: permitNumber,
           certificateNo: inspection.certification_number,
-          status: 'permit_issued'
+          status: 'permit_issued',
+          blockchain_tx_id
         },
         message: 'Export permit issued successfully. Shipment ready for customs clearance.',
         timestamp: new Date().toISOString()
@@ -675,6 +749,24 @@ router.post('/inspections/:inspectionID/complete',
         });
       }
 
+      // ✅ BLOCKCHAIN-FIRST: Use audit service for legacy complete endpoint
+      const auditService = require('../services/auditService').default;
+      await auditService.log({
+        entityType: 'QUALITY_INSPECTION',
+        entityId: inspectionID,
+        action: 'COMPLETE',
+        performedBy: inspectorName || 'ECTA Inspector',
+        organization: 'ECTAMSP',
+        performedByOrg: 'ECTAMSP',
+        oldValue: 'PENDING',
+        newValue: 'COMPLETED',
+        reason: `Legacy inspection completion - Grade: ${grade}, Passed: ${passed}`,
+        metadata: { grade, cupQuality, moistureContent, defectCount, screenSize, passed, certificationNumber },
+        ipAddress: (req as any).ip
+      });
+      logger.info(`✅ Legacy inspection completion recorded on blockchain: ${inspectionID}`);
+
+      // Now update inspection
       await postgresDb.run(
         `UPDATE quality_inspections SET
           inspection_date = $1, grade = $2, cup_quality = $3, moisture_content = $4,

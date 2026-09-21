@@ -9,12 +9,14 @@ import { DatabaseService } from '../services/databaseService';
 import { DocumentSignatureService } from '../services/documentSignatureService';
 import { FabricService } from '../services/fabricService';
 import { CryptoUserService } from '../services/cryptoUserService';
+import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 import { logger } from '../utils/logger';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
 const cryptoUserService = CryptoUserService.getInstance();
 const fabricService = FabricService.getInstance();
+const signatureService = BlockchainSignatureService.getInstance();
 
 // Configure multer for file uploads
 const uploadDir = path.join(__dirname, '../../uploads/documents');
@@ -77,18 +79,70 @@ router.post('/',
       const user = (req as any).user;
       const exporterID = user.exporterId || user.username;
 
+      // ✅ BLOCKCHAIN FIRST: Register document hash on blockchain
+      logger.info(`Registering document ${documentID} on blockchain...`);
+      const blockchainResult = await fabricService.invokeChaincode('RegisterDocumentHash', [
+        documentID,
+        fileHash,
+        documentType,
+        shipmentID || '',
+        contractID || '',
+        user.username,
+        JSON.stringify({ fileName, ipfsCID, uploadedAt: new Date().toISOString() })
+      ]);
+
+      if (!blockchainResult.success) {
+        logger.error(`Blockchain registration failed for ${documentID}:`, blockchainResult.error);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'BLOCKCHAIN_ERROR',
+            message: 'Document rejected by blockchain network',
+            details: blockchainResult.error
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info(`✅ Document ${documentID} registered on blockchain (TX: ${blockchainResult.txId})`);
+
+      // ✅ Record blockchain signature
+      try {
+        await signatureService.recordSignature({
+          entityType: 'DOCUMENT',
+          entityId: documentID,
+          actionType: 'REGISTER',
+          signerUsername: user.username,
+          signerOrg: 'BanksMSP',
+          signerRole: user.role || 'BANKS',
+          blockchainTxId: blockchainResult.txId,
+          blockchainTimestamp: new Date(),
+          chaincodeName: 'coffee',
+          chaincodeFunction: 'RegisterDocumentHash',
+          transactionArgs: [documentID, fileHash, documentType],
+          metadata: { fileName, documentType }
+        });
+      } catch (sigErr) {
+        logger.warn('Failed to record signature:', sigErr);
+      }
+
+      // ✅ Cache in PostgreSQL
       await postgresDb.run(
         `INSERT INTO documents (
           document_id, shipment_id, contract_id, exporter_id, document_type,
-          file_name, file_hash, ipfs_cid, uploaded_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          file_name, file_hash, ipfs_cid, uploaded_by, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [documentID, shipmentID || null, contractID || null, exporterID,
-         documentType, fileName, fileHash, ipfsCID || null, user.username]
+         documentType, fileName, fileHash, ipfsCID || null, user.username, blockchainResult.txId]
       );
 
       res.json({
         success: true,
-        data: { documentID, status: 'uploaded' },
+        data: { 
+          documentID, 
+          status: 'uploaded',
+          blockchainTxId: blockchainResult.txId
+        },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -127,15 +181,78 @@ router.post('/:documentID/verify',
         });
       }
 
-      // ✅ Insert verification record
+      // ✅ BLOCKCHAIN FIRST: Verify document hash on blockchain
+      logger.info(`Verifying document ${documentID} on blockchain...`);
+      const signatureType = verified ? 'VERIFY' : 'REJECT';
+      const signatureReason = verified 
+        ? `Document verified by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`
+        : `Document rejected by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`;
+
+      const blockchainResult = await fabricService.invokeChaincode('VerifyDocumentHash', [
+        documentID,
+        doc.file_hash || '',
+        user.username,
+        verified ? 'verified' : 'rejected',
+        remarks || ''
+      ]);
+
+      if (!blockchainResult.success) {
+        logger.error(`Blockchain verification failed for ${documentID}:`, blockchainResult.error);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'BLOCKCHAIN_ERROR',
+            message: 'Document verification rejected by blockchain network',
+            details: blockchainResult.error
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info(`✅ Document ${documentID} verified on blockchain (TX: ${blockchainResult.txId})`);
+
+      let blockchainSignature: any = null;
+      blockchainSignature = {
+        txId: blockchainResult.txId,
+        signatureId: blockchainResult.signatureId,
+        timestamp: new Date().toISOString()
+      };
+
+      // ✅ Store blockchain signature
+      try {
+        await postgresDb.run(
+          `INSERT INTO blockchain_signatures (
+            signature_id, blockchain_tx_id, entity_type, entity_id,
+            chaincode_function, signer_org, signer_username,
+            blockchain_timestamp, action_type
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (signature_id) DO NOTHING`,
+          [
+            blockchainResult.signatureId || `SIG-${Date.now()}`,
+            blockchainResult.txId,
+            'DOCUMENT',
+            documentID,
+            'VerifyDocumentHash',
+            user.organization || 'BanksMSP',
+            user.username,
+            new Date(),
+            signatureType
+          ]
+        );
+        logger.info(`✅ Blockchain signature stored in database: ${blockchainResult.signatureId}`);
+      } catch (dbError) {
+        logger.error('Failed to store blockchain signature in database:', dbError);
+      }
+
+      // ✅ Cache verification in PostgreSQL
       await postgresDb.run(
         `INSERT INTO document_verifications (
-          verification_id, document_id, verified_by, verified_by_org, verified, remarks
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [verificationID, documentID, user.username, user.organization, verified, remarks || null]
+          verification_id, document_id, verified_by, verified_by_org, verified, remarks, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [verificationID, documentID, user.username, user.organization, verified, remarks || null, blockchainResult.txId]
       );
 
-      // ✅ UPDATE: Also update the document's verification_status field
+      // ✅ Update document's verification_status
       const newStatus = verified ? 'verified' : 'rejected';
       await postgresDb.run(
         `UPDATE documents 
@@ -144,36 +261,7 @@ router.post('/:documentID/verify',
         [newStatus, user.username, documentID]
       );
 
-      logger.info(`✅ Document ${documentID} verification status updated to: ${newStatus}`);
-
-      // ✅ 🔗 BLOCKCHAIN SIGNATURE: Record cryptographic signature on blockchain
-      let blockchainSignature: any = null;
-      try {
-        const signatureType = verified ? 'VERIFY' : 'REJECT';
-        const signatureReason = verified 
-          ? `Document verified by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`
-          : `Document rejected by ${user.username} (${user.organization})${remarks ? ': ' + remarks : ''}`;
-
-        const blockchainResult = await fabricService.signDocument(
-          documentID,
-          doc.file_hash || '',
-          signatureType,
-          signatureReason
-        );
-
-        if (blockchainResult.success) {
-          blockchainSignature = {
-            txId: blockchainResult.txId,
-            signatureId: blockchainResult.signatureId,
-            timestamp: new Date().toISOString()
-          };
-          logger.info(`✅ Document ${documentID} ${verified ? 'verification' : 'rejection'} signed on blockchain: TX ${blockchainResult.txId}`);
-        } else {
-          logger.warn(`⚠️ Failed to sign document on blockchain: ${blockchainResult.error}`);
-        }
-      } catch (blockchainError) {
-        logger.error('Blockchain signature failed (non-fatal):', blockchainError);
-      }
+      logger.info(`✅ Document ${documentID} verification cached in database: ${newStatus}`);
 
       res.json({
         success: true,
@@ -181,7 +269,8 @@ router.post('/:documentID/verify',
           documentID, 
           verified, 
           verificationStatus: newStatus,
-          blockchainSignature  // ✅ Include blockchain proof
+          blockchainTxId: blockchainResult.txId,
+          blockchainSignature
         },
         timestamp: new Date().toISOString()
       });
@@ -276,12 +365,68 @@ router.post('/upload',
         uploadedBy: user.username
       });
 
-      // Store document in database with file path
+      // ✅ BLOCKCHAIN FIRST: Register document hash on blockchain
+      logger.info(`Registering document ${documentID} on blockchain...`);
+      const blockchainResult = await fabricService.invokeChaincode('RegisterDocumentHash', [
+        documentID,
+        fileHash,
+        finalDocType,
+        finalEntityType === 'SHIPMENT' ? finalEntityId : '',
+        finalEntityType === 'CONTRACT' ? finalEntityId : '',
+        user.username,
+        JSON.stringify({ 
+          fileName: finalFileName, 
+          entityType: finalEntityType,
+          entityId: finalEntityId,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          uploadedAt: new Date().toISOString() 
+        })
+      ]);
+
+      if (!blockchainResult.success) {
+        // Clean up uploaded file
+        fs.unlinkSync(file.path);
+        logger.error(`Blockchain registration failed for ${documentID}:`, blockchainResult.error);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'BLOCKCHAIN_ERROR',
+            message: 'Document rejected by blockchain network',
+            details: blockchainResult.error
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info(`✅ Document ${documentID} registered on blockchain (TX: ${blockchainResult.txId})`);
+
+      // ✅ Record blockchain signature
+      try {
+        await signatureService.recordSignature({
+          entityType: 'DOCUMENT',
+          entityId: documentID,
+          actionType: 'REGISTER',
+          signerUsername: user.username,
+          signerOrg: 'BanksMSP',
+          signerRole: user.role || 'BANKS',
+          blockchainTxId: blockchainResult.txId,
+          blockchainTimestamp: new Date(),
+          chaincodeName: 'coffee',
+          chaincodeFunction: 'RegisterDocumentHash',
+          transactionArgs: [documentID, fileHash, documentType],
+          metadata: { fileName, documentType }
+        });
+      } catch (sigErr) {
+        logger.warn('Failed to record signature:', sigErr);
+      }
+
+      // ✅ Cache in PostgreSQL
       await postgresDb.run(
         `INSERT INTO documents (
           document_id, entity_type, entity_id, document_type, file_name,
-          file_hash, mime_type, file_size, file_path, uploaded_by, status, description
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          file_hash, mime_type, file_size, file_path, uploaded_by, status, description, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           documentID, 
           finalEntityType, 
@@ -294,32 +439,12 @@ router.post('/upload',
           file.path,
           user.username,
           'active',
-          description || null
+          description || null,
+          blockchainResult.txId
         ]
       );
 
-      logger.info('Authenticated document uploaded successfully:', documentID);
-
-      // ✅ Register document hash on blockchain for immutable audit trail
-      try {
-        const result = await fabricService.invokeChaincode('RegisterDocumentHash', [
-          documentID,
-          finalEntityId,
-          finalEntityType,
-          fileHash,
-          '', // IPFS CID (not using IPFS)
-          finalFileName,
-          finalDocType
-        ]);
-        
-        if (result.success) {
-          logger.info(`✅ Document hash registered on blockchain: ${documentID}, txId: ${result.txId}`);
-        } else {
-          logger.warn(`⚠️ Failed to register document hash on blockchain: ${result.error}`);
-        }
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to register document on blockchain (non-fatal):`, blockchainErr);
-      }
+      logger.info('Authenticated document cached in database:', documentID);
 
       res.json({
         success: true,
@@ -327,8 +452,9 @@ router.post('/upload',
           documentId: documentID,
           fileName: finalFileName,
           hash: fileHash,
-          ipfsCID: null, // Not using IPFS for now
-          status: 'uploaded'
+          ipfsCID: null,
+          status: 'uploaded',
+          blockchainTxId: blockchainResult.txId
         },
         timestamp: new Date().toISOString()
       });
@@ -389,12 +515,68 @@ router.post('/upload-registration',
         filePath: file.path
       });
 
-      // Store document in database with file path
+      // ✅ BLOCKCHAIN FIRST: Register document hash on blockchain
+      logger.info(`Registering registration document ${documentID} on blockchain...`);
+      const blockchainResult = await fabricService.invokeChaincode('RegisterDocumentHash', [
+        documentID,
+        fileHash,
+        finalDocType,
+        '',
+        '',
+        'applicant',
+        JSON.stringify({ 
+          fileName: finalFileName, 
+          entityType: finalEntityType,
+          entityId: finalEntityId,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          uploadedAt: new Date().toISOString() 
+        })
+      ]);
+
+      if (!blockchainResult.success) {
+        // Clean up uploaded file
+        fs.unlinkSync(file.path);
+        logger.error(`Blockchain registration failed for ${documentID}:`, blockchainResult.error);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'BLOCKCHAIN_ERROR',
+            message: 'Document rejected by blockchain network',
+            details: blockchainResult.error
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info(`✅ Registration document ${documentID} registered on blockchain (TX: ${blockchainResult.txId})`);
+
+      // ✅ Record blockchain signature
+      try {
+        await signatureService.recordSignature({
+          entityType: 'DOCUMENT',
+          entityId: documentID,
+          actionType: 'REGISTER',
+          signerUsername: 'applicant',
+          signerOrg: 'ECTAMSP',
+          signerRole: 'APPLICANT',
+          blockchainTxId: blockchainResult.txId,
+          blockchainTimestamp: new Date(),
+          chaincodeName: 'coffee',
+          chaincodeFunction: 'RegisterDocumentHash',
+          transactionArgs: [documentID, fileHash, finalDocType],
+          metadata: { fileName: finalFileName, entityType: finalEntityType, entityId: finalEntityId }
+        });
+      } catch (sigErr) {
+        logger.warn('Failed to record signature:', sigErr);
+      }
+
+      // ✅ Cache in PostgreSQL
       await postgresDb.run(
         `INSERT INTO documents (
           document_id, entity_type, entity_id, document_type, file_name,
-          file_hash, mime_type, file_size, file_path, uploaded_by, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          file_hash, mime_type, file_size, file_path, uploaded_by, status, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           documentID, 
           finalEntityType, 
@@ -406,11 +588,12 @@ router.post('/upload-registration',
           file.size,
           file.path,
           'applicant',
-          'active'
+          'active',
+          blockchainResult.txId
         ]
       );
 
-      logger.info('Registration document uploaded successfully:', documentID);
+      logger.info('Registration document cached in database:', documentID);
 
       res.json({
         success: true,
@@ -418,8 +601,9 @@ router.post('/upload-registration',
           documentId: documentID,
           fileName: finalFileName,
           hash: fileHash,
-          ipfsCID: null, // Not using IPFS for now
-          status: 'uploaded'
+          ipfsCID: null,
+          status: 'uploaded',
+          blockchainTxId: blockchainResult.txId
         },
         timestamp: new Date().toISOString()
       });
@@ -832,24 +1016,21 @@ router.post('/:documentId/sign',
         });
       }
 
-      // 2. Check if file exists and is PDF
-      if (!doc.file_path || !fs.existsSync(doc.file_path)) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
-          timestamp: new Date().toISOString()
-        });
-      }
-
+      // 2. Check if file exists - for PDF visual signature
+      const fileExists = doc.file_path && fs.existsSync(doc.file_path);
       const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+      
+      if (!fileExists) {
+        logger.warn(`Physical file not found for ${documentId}: ${doc.file_path || 'no path'} - proceeding with blockchain-only signature`);
+      }
 
       // 3. Create signature ID and timestamp
       const signatureId = `SIG-${documentId}-${user.org || 'ORG'}-${Date.now()}`;
       const timestamp = new Date().toISOString();
 
-      // 4. Add visual signature stamp to PDF (if applicable)
+      // 4. Add visual signature stamp to PDF (if file exists and is PDF)
       let visualSignatureAdded = false;
-      if (isPDF) {
+      if (fileExists && isPDF) {
         try {
           await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
             signer: user.username || user.sub || 'Unknown',
@@ -867,7 +1048,45 @@ router.post('/:documentId/sign',
         }
       }
 
-      // 5. Store signature in database
+      // 5. ✅ BLOCKCHAIN FIRST: Sign document on blockchain
+      logger.info(`Signing document ${documentId} on blockchain...`);
+      const FabricService = (await import('../services/fabricService')).default;
+      const fabricService = FabricService.getInstance();
+      
+      let blockchainTxId: string | null = null;
+      if (fabricService.isConnected()) {
+        const blockchainResult = await fabricService.signDocument(
+          documentId,
+          doc.file_hash,
+          signatureType,
+          remarks || ''
+        );
+        
+        if (!blockchainResult.success) {
+          logger.error(`Blockchain signing failed for ${documentId}:`, blockchainResult.error);
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'BLOCKCHAIN_ERROR',
+              message: 'Document signature rejected by blockchain network',
+              details: blockchainResult.error
+            },
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        blockchainTxId = blockchainResult.txId || null;
+        logger.info(`✅ Document signed on blockchain (TX: ${blockchainTxId})`);
+      } else {
+        logger.error('Blockchain not connected - cannot sign document');
+        return res.status(503).json({
+          success: false,
+          error: { code: 'BLOCKCHAIN_UNAVAILABLE', message: 'Blockchain service not available' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // 6. ✅ Cache signature in database
       await postgresDb.run(
         `INSERT INTO document_signatures (
           signature_id, document_id, signer_id, signer_org, signature_type,
@@ -879,47 +1098,12 @@ router.post('/:documentId/sign',
           user.username || user.sub,
           user.org || user.organization,
           signatureType,
-          user.sub || null, // X.509 certificate ID
+          user.sub || null,
           remarks || null,
-          null, // Will be filled when blockchain transaction is recorded
+          blockchainTxId,
           visualSignatureAdded
         ]
       );
-
-      // 6. 🔗 BLOCKCHAIN: Sign document on blockchain with X.509 certificate
-      let blockchainTxId: string | null = null;
-      try {
-        const FabricService = (await import('../services/fabricService')).default;
-        const fabricService = FabricService.getInstance();
-        
-        if (fabricService.isConnected()) {
-          const blockchainResult = await fabricService.signDocument(
-            documentId,
-            doc.file_hash,
-            signatureType,
-            remarks || ''
-          );
-          
-          if (blockchainResult.success) {
-            blockchainTxId = blockchainResult.txId || null;
-            
-            // Update signature record with blockchain TX ID
-            await postgresDb.run(
-              'UPDATE document_signatures SET blockchain_tx_id = $1 WHERE signature_id = $2',
-              [blockchainTxId, signatureId]
-            );
-            
-            logger.info(`✅ Blockchain signature recorded: ${blockchainTxId}`);
-          } else {
-            logger.warn(`Blockchain signature failed: ${blockchainResult.error}`);
-          }
-        } else {
-          logger.warn('Blockchain not connected - signature stored in database only');
-        }
-      } catch (blockchainError) {
-        logger.error('Blockchain signature error:', blockchainError);
-        // Continue - database signature is already recorded
-      }
 
       // 7. Update document status
       await postgresDb.run(
@@ -927,18 +1111,19 @@ router.post('/:documentId/sign',
         [signatureType === 'APPROVE' ? 'approved' : signatureType === 'REJECT' ? 'rejected' : 'signed', documentId]
       );
 
-      // 7. Log to audit trail
+      // 8. Log to audit trail
       await postgresDb.run(
         `INSERT INTO audit_trail (
-          entity_type, entity_id, action, performed_by, performed_by_org,
+          entity_type, entity_id, action, performed_by, organization, performed_by_org,
           old_value, new_value, reason, metadata, ip_address
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           'DOCUMENT',
           documentId,
           `SIGNATURE_${signatureType}`,
-          user.username || user.sub,
-          user.org || user.organization,
+          user.username || user.sub || 'UNKNOWN',
+          user.org || user.organization || 'SYSTEM',  // ✅ Default to SYSTEM if org not available
+          user.org || user.organization || null,
           'unsigned',
           'signed',
           `Document signed with ${signatureType} signature`,
@@ -946,7 +1131,7 @@ router.post('/:documentId/sign',
             signatureId,
             signatureType,
             signer: user.username,
-            organization: user.org,
+            organization: user.org || user.organization,
             visualSignatureAdded,
             remarks,
             timestamp

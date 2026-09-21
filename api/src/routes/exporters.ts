@@ -187,6 +187,34 @@ router.post('/exporter-applications',
       
       const documentsJSON = JSON.stringify(applicationData.documents || []);
       
+      // ✅ BLOCKCHAIN-FIRST: Record application submission on blockchain BEFORE DB insert
+      await auditService.log({
+        entityType: 'EXPORTER_APPLICATION',
+        entityId: applicationIdValue,
+        action: 'SUBMIT',
+        performedBy: applicationData.email,
+        organization: 'ECTAMSP',  // Applications go to ECTA
+        performedByOrg: 'ECTAMSP',
+        oldValue: '',
+        newValue: 'PENDING',
+        reason: `Application submitted by ${applicationData.companyName}`,
+        metadata: {
+          companyName: applicationData.companyName,
+          tinNumber: applicationData.tinNumber,
+          businessLicense: applicationData.businessLicenseNumber,
+          exporterType: applicationData.exporterType || 'company',
+          capitalRequirement: applicationData.capitalRequirement,
+          professionalTaster: applicationData.professionalTaster,
+          email: applicationData.email,
+          phone: applicationData.phone,
+          city: applicationData.city,
+          submittedAt
+        },
+        ipAddress: req.ip
+      });
+      logger.info(`✅ Application submission recorded on blockchain: ${applicationIdValue}`);
+
+      // Now insert application to database
       const appResult = await postgresDb.get(appQuery, [
         applicationIdValue,
         applicationData.companyName,
@@ -226,38 +254,6 @@ router.post('/exporter-applications',
       );
       
       logger.info(`✅ Application submitted: ID=${applicationId}, Database ID=${numericId}, Username=${credentials.username}`);
-      
-      // ✅ Record application submission on blockchain via AuditService
-      try {
-        await auditService.log({
-          entityType: 'EXPORTER_APPLICATION',
-          entityId: applicationId,
-          action: 'SUBMIT',
-          performedBy: applicationData.email,
-          organization: 'ECTAMSP',  // Applications go to ECTA
-          performedByOrg: 'ECTAMSP',
-          oldValue: '',
-          newValue: 'PENDING',
-          reason: `Application submitted by ${applicationData.companyName}`,
-          metadata: {
-            companyName: applicationData.companyName,
-            tinNumber: applicationData.tinNumber,
-            businessLicense: applicationData.businessLicenseNumber,
-            exporterType: applicationData.exporterType || 'company',
-            capitalRequirement: applicationData.capitalRequirement,
-            professionalTaster: applicationData.professionalTaster,
-            email: applicationData.email,
-            phone: applicationData.phone,
-            city: applicationData.city,
-            submittedAt
-          },
-          ipAddress: req.ip
-        });
-        logger.info(`✅ Application submission audit log recorded: ${applicationId}`);
-      } catch (auditErr) {
-        logger.warn(`⚠️ Failed to create audit log for application submission:`, auditErr);
-        // Non-fatal - application submission succeeds even if audit log fails
-      }
       
       // Step 3: Send credentials email immediately (non-blocking - don't fail if email fails)
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -362,6 +358,33 @@ router.post('/exporter-applications/:applicationId/approve',
         }
       } else {
         logger.info(`✅ Exporter ${exporterId} registered on blockchain (TxID: ${result.txId})`);
+        
+        // ✅ STORE BLOCKCHAIN SIGNATURE
+        try {
+          const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+          await postgresDb.run(
+            `INSERT INTO blockchain_signatures (
+              signature_id, blockchain_tx_id, entity_type, entity_id,
+              chaincode_function, signer_org, signer_username,
+              blockchain_timestamp, action_type, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+            ON CONFLICT (signature_id) DO NOTHING`,
+            [
+              signatureId,
+              result.txId,
+              'EXPORTER_APPLICATION',
+              applicationId,
+              'ApproveExporter',
+              (req as any).user?.org || 'CECBSMSP',
+              (req as any).user?.username || 'admin',
+              'APPROVED'
+            ]
+          );
+          logger.info(`✅ Blockchain signature stored: ${signatureId}`);
+        } catch (sigErr) {
+          logger.error(`⚠️ Failed to store blockchain signature:`, sigErr);
+          // Non-blocking - continue with approval
+        }
       }
 
       // Step 2: Generate professional license PDF with digital signature
@@ -518,6 +541,27 @@ router.post('/exporter-applications/:applicationId/reject',
         return;
       }
 
+      // ✅ BLOCKCHAIN-FIRST: Record rejection on blockchain BEFORE any DB updates
+      const auditService = require('../services/auditService').default;
+      const adminUser = (req as any).user;
+      const blockchainResult = await auditService.recordAudit({
+        entityType: 'EXPORTER_APPLICATION',
+        entityId: applicationId,
+        actionType: 'REJECT',
+        actionBy: adminUser?.username || 'ECTA_ADMIN',
+        organizationMSP: 'ECTAMSP',
+        details: {
+          applicationId,
+          companyName: application.company_name,
+          email: application.email,
+          reason
+        },
+        timestamp: new Date()
+      });
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Application rejection recorded on blockchain: ${applicationId}, TX: ${blockchain_tx_id}`);
+
       // Step 1: Keep the inactive user account but mark it as rejected
       // This allows the applicant to login and see rejection reason
       await postgresDb.run(
@@ -525,14 +569,14 @@ router.post('/exporter-applications/:applicationId/reject',
         [application.email]
       );
 
-      // Step 2: Update application status to rejected
+      // Step 2: Update application status to rejected with blockchain TX ID
       await postgresDb.run(
-        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3 WHERE application_id = $4',
-        ['rejected', new Date().toISOString(), reason, applicationId]
+        'UPDATE exporter-applications SET status = $1, rejected_at = $2, rejection_reason = $3, blockchain_tx_id = $4 WHERE application_id = $5',
+        ['rejected', new Date().toISOString(), reason, blockchain_tx_id, applicationId]
       );
       
       // Get the user's temporary credentials
-      const user = await postgresDb.get('SELECT username, password_hash FROM users WHERE email = $1 AND role = $2', [application.email, 'EXPORTER']);
+      const exporterUser = await postgresDb.get('SELECT username, password_hash FROM users WHERE email = $1 AND role = $2', [application.email, 'EXPORTER']);
       
       // Generate a new temporary password for resubmission
       const bcrypt = require('bcrypt');
@@ -551,7 +595,7 @@ router.post('/exporter-applications/:applicationId/reject',
         applicationId,
         email: application.email,
         reason,
-        username: user?.username || application.email,
+        username: exporterUser?.username || application.email,
         temporaryPassword: tempPassword,
         resubmitUrl: `${loginUrl}/login`,
       }).catch((emailError) => {
@@ -1786,7 +1830,28 @@ router.post('/applications/:applicationId/reject',
         return;
       }
       
-      // Update application status
+      // ✅ BLOCKCHAIN-FIRST: Record application rejection on blockchain BEFORE DB update
+      const user = (req as any).user;
+      await auditService.log({
+        entityType: 'EXPORTER_APPLICATION',
+        entityId: applicationId,
+        action: 'REJECT',
+        performedBy: user?.username || 'ECTA Admin',
+        organization: 'ECTAMSP',
+        performedByOrg: 'ECTAMSP',
+        oldValue: 'PENDING',
+        newValue: 'REJECTED',
+        reason: `Application rejected by ECTA: ${reason}`,
+        metadata: {
+          rejectionReason: reason,
+          companyName: application.company_name,
+          rejectedBy: user?.username || 'ECTA Admin'
+        },
+        ipAddress: req.ip
+      });
+      logger.info(`✅ Application rejection recorded on blockchain: ${applicationId}`);
+
+      // Now update application status (blockchain_tx_id handled by auditService.log)
       await new Promise((resolve, reject) => {
         db.run(
           'UPDATE exporter_applications SET status = ?, rejected_at = ?, rejection_reason = ? WHERE application_id = ?',
@@ -1797,33 +1862,6 @@ router.post('/applications/:applicationId/reject',
           }
         );
       });
-      
-      // ✅ Record application rejection on blockchain via AuditService
-      try {
-        const user = (req as any).user;
-        await auditService.log({
-          entityType: 'EXPORTER_APPLICATION',
-          entityId: applicationId,
-          action: 'REJECT',
-          performedBy: user?.username || 'ECTA Admin',
-          organization: 'ECTAMSP',
-          performedByOrg: 'ECTAMSP',
-          oldValue: 'PENDING',
-          newValue: 'REJECTED',
-          reason: `Application rejected by ECTA: ${reason}`,
-          metadata: {
-            rejectionReason: reason,
-            companyName: application.company_name,
-            rejectedBy: user?.username || 'ECTA Admin',
-            rejectedAt: new Date().toISOString()
-          },
-          ipAddress: req.ip
-        });
-        logger.info(`✅ Application rejection audit log recorded: ${applicationId}`);
-      } catch (auditErr) {
-        logger.warn(`⚠️ Failed to create audit log for application rejection:`, auditErr);
-        // Non-fatal
-      }
       
       res.json({
         success: true,

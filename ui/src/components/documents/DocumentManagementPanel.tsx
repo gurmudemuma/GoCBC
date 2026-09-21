@@ -242,8 +242,11 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
   const getMissingDocuments = () => {
     if (requiredDocuments.length === 0) return [];
     
-    const uploadedTypes = documents.map(d => d.document_type);
-    return requiredDocuments.filter(type => !uploadedTypes.includes(type));
+    // Normalize document types for comparison (convert to uppercase with underscores)
+    const normalizeDocType = (type: string) => type.toUpperCase().replace(/\s+/g, '_');
+    const uploadedTypes = documents.map(d => normalizeDocType(d.document_type));
+    const requiredNormalized = requiredDocuments.map(type => normalizeDocType(type));
+    return requiredDocuments.filter((type, index) => !uploadedTypes.includes(requiredNormalized[index]));
   };
 
   const missingDocs = getMissingDocuments();

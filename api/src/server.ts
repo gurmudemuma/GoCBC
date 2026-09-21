@@ -249,6 +249,10 @@ class CECBSServer {
     // V3.2 Blockchain Signatures - Cryptographic proof for all entities (public endpoint)
     apiV1.use('/blockchain-signatures', blockchainSignaturesRoutes); // Entity-level blockchain signatures - public transparency
 
+    // V3.3 Blockchain Statistics & Health Monitoring
+    const blockchainStatsRoutes = require('./routes/blockchain-stats').default;
+    apiV1.use('/blockchain', authMiddleware, blockchainStatsRoutes); // Blockchain network statistics
+
     // V3.3 Dual-Source Statistics - Fetch from BOTH CouchDB and PostgreSQL
     apiV1.use('/stats', authMiddleware, statsRoutes); // Bank portal stats from both blockchain and database
 

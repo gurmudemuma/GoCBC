@@ -107,41 +107,40 @@ router.post('/risk-assessment',
       const assessmentID = `RISK-${Date.now()}`;
       const user = (req as any).user;
 
+      // ✅ BLOCKCHAIN-FIRST: Record risk assessment on blockchain BEFORE DB write
+      const auditService = require('../services/auditService').default;
+      const blockchainResult = await auditService.recordAudit({
+        entityType: 'CUSTOMS_RISK_ASSESSMENT',
+        entityId: assessmentID,
+        actionType: 'ASSESS',
+        actionBy: user.username,
+        organizationMSP: 'CustomsMSP',
+        details: {
+          shipmentID,
+          exporterID,
+          riskLevel,
+          riskFactors,
+          inspectionRequired: inspectionRequired || false
+        },
+        timestamp: new Date()
+      });
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Risk assessment recorded on blockchain: ${assessmentID}, TX: ${blockchain_tx_id}`);
+
+      // Now persist to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO customs_risk_assessments (
           assessment_id, shipment_id, exporter_id, risk_factors, risk_level,
-          inspection_required, assessed_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          inspection_required, assessed_by, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [assessmentID, shipmentID, exporterID, JSON.stringify(riskFactors || {}),
-         riskLevel, inspectionRequired || false, user.username]
+         riskLevel, inspectionRequired || false, user.username, blockchain_tx_id]
       );
-
-      // ✅ Record risk assessment on blockchain
-      try {
-        const auditService = require('../services/auditService').default;
-        await auditService.recordAudit({
-          entityType: 'CUSTOMS_RISK_ASSESSMENT',
-          entityId: assessmentID,
-          actionType: 'ASSESS',
-          actionBy: user.username,
-          organizationMSP: 'CustomsMSP',
-          details: {
-            shipmentID,
-            exporterID,
-            riskLevel,
-            riskFactors,
-            inspectionRequired: inspectionRequired || false
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Risk assessment recorded on blockchain: ${assessmentID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record risk assessment on blockchain (non-fatal):`, blockchainErr);
-      }
 
       res.json({
         success: true,
-        data: { assessmentID, riskLevel },
+        data: { assessmentID, riskLevel, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -163,40 +162,39 @@ router.post('/clearance',
     try {
       const { shipmentID, clearanceNumber, status, clearedBy, clearedDate } = req.body;
       const clearanceID = `CLR-${Date.now()}`;
+      const user = (req as any).user;
 
+      // ✅ BLOCKCHAIN-FIRST: Record clearance on blockchain BEFORE DB write
+      const auditService = require('../services/auditService').default;
+      const blockchainResult = await auditService.recordAudit({
+        entityType: 'CUSTOMS_CLEARANCE',
+        entityId: clearanceID,
+        actionType: 'CREATE',
+        actionBy: user?.username || clearedBy || 'customs',
+        organizationMSP: 'CustomsMSP',
+        details: {
+          shipmentID,
+          clearanceNumber,
+          status: status || 'pending'
+        },
+        timestamp: new Date()
+      });
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs clearance recorded on blockchain: ${clearanceID}, TX: ${blockchain_tx_id}`);
+
+      // Now persist to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO customs_clearances (
-          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [clearanceID, shipmentID, clearanceNumber, status || 'pending',
-         clearedBy || null, clearedDate || null]
+         clearedBy || null, clearedDate || null, blockchain_tx_id]
       );
-
-      // ✅ Record clearance on blockchain
-      try {
-        const auditService = require('../services/auditService').default;
-        const user = (req as any).user;
-        await auditService.recordAudit({
-          entityType: 'CUSTOMS_CLEARANCE',
-          entityId: clearanceID,
-          actionType: 'CREATE',
-          actionBy: user?.username || clearedBy || 'customs',
-          organizationMSP: 'CustomsMSP',
-          details: {
-            shipmentID,
-            clearanceNumber,
-            status: status || 'pending'
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Customs clearance recorded on blockchain: ${clearanceID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record clearance on blockchain (non-fatal):`, blockchainErr);
-      }
 
       res.json({
         success: true,
-        data: { clearanceID, clearanceNumber, status },
+        data: { clearanceID, clearanceNumber, status, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -474,13 +472,34 @@ router.post('/declaration/submit',
         });
       }
 
-      // Store in customs_declarations table with full declaration data
+      // ✅ BLOCKCHAIN-FIRST: Submit declaration to chaincode BEFORE DB write
+      const blockchainResult = await fabricService.invokeChaincode(
+        'SubmitCustomsDeclaration',
+        [
+          declarationID,
+          shipmentID,
+          exporterID,
+          declarationType || 'STANDARD',
+          hsCode || '090111',
+          String(quantity || 0),
+          String(value || 0),
+          currency || 'USD',
+          destination || 'Unknown',
+          portOfExit || 'Djibouti Port',
+          String(eudrCompliant || false)
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
+
+      // Now persist to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO customs_declarations (
           declaration_number, shipment_id, exporter_id, declaration_type, hs_code, 
           quantity, customs_value_usd, currency, destination, port_of_exit, 
-          eudr_compliant, additional_notes, status, inspection_required, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())`,
+          eudr_compliant, additional_notes, status, inspection_required, blockchain_tx_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())`,
         [
           declarationID, 
           shipmentID, 
@@ -495,37 +514,10 @@ router.post('/declaration/submit',
           eudrCompliant || false,
           additionalNotes || '',
           'SUBMITTED',
-          true
+          true,
+          blockchain_tx_id
         ]
       );
-
-      // ✅ Record customs declaration on blockchain
-      try {
-        const auditService = require('../services/auditService').default;
-        await auditService.recordAudit({
-          entityType: 'CUSTOMS_DECLARATION',
-          entityId: declarationID,
-          actionType: 'SUBMIT',
-          actionBy: exporterID,
-          organizationMSP: 'CustomsMSP',
-          details: {
-            shipmentID,
-            exporterID,
-            declarationType: declarationType || 'STANDARD',
-            hsCode: hsCode || '090111',
-            quantity: quantity || 0,
-            customsValueUSD: value || 0,
-            currency: currency || 'USD',
-            destination: destination || 'Unknown',
-            portOfExit: portOfExit || 'Djibouti Port',
-            eudrCompliant: eudrCompliant || false
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record declaration on blockchain (non-fatal):`, blockchainErr);
-      }
 
       logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
 
@@ -535,6 +527,7 @@ router.post('/declaration/submit',
           declarationID,
           shipmentID,
           status: 'SUBMITTED',
+          blockchain_tx_id,
           message: 'Declaration submitted successfully and ready for customs officer review'
         },
         timestamp: new Date().toISOString()
@@ -628,12 +621,26 @@ router.post('/declaration/:declarationId/review',
       // Use the assigned inspector's username directly (no more mapping)
       const officerName = assignedInspector || user.username || 'Customs Officer';
 
-      // Update declaration with assigned officer and status
+      // ✅ BLOCKCHAIN-FIRST: Call ReviewCustomsDeclaration chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'ReviewCustomsDeclaration',
+        [
+          declarationId,
+          officerName,
+          inspectionType || 'STANDARD',
+          inspectorNotes || 'Inspection scheduled'
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+
+      // Now update declaration with assigned officer and status
       await postgresDb.run(
         `UPDATE customs_declarations 
-         SET customs_officer = $1, status = $2, updated_at = NOW() 
-         WHERE declaration_number = $3`,
-        [officerName, 'UNDER_INSPECTION', declarationId]
+         SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW() 
+         WHERE declaration_number = $4`,
+        [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
       );
 
       logger.info(`[CUSTOMS] Declaration ${declarationId} updated: officer=${officerName}, status=UNDER_INSPECTION`);
@@ -644,6 +651,7 @@ router.post('/declaration/:declarationId/review',
           declarationId,
           status: 'UNDER_INSPECTION',
           assignedOfficer: officerName,
+          blockchain_tx_id,
           message: 'Inspection scheduled successfully'
         },
         timestamp: new Date().toISOString()
@@ -673,12 +681,24 @@ router.post('/declaration/:declarationId/complete-inspection',
 
       logger.info(`[CUSTOMS] Completing inspection for declaration ${declarationId} by ${user.username}`);
 
-      // Update declaration status to UNDER_REVIEW after inspection
+      // ✅ BLOCKCHAIN-FIRST: Call CompleteInspection chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'CompleteInspection',
+        [
+          declarationId,
+          inspectorComments || 'Inspection completed'
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection completion recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+
+      // Now update declaration status to UNDER_REVIEW after inspection
       await postgresDb.run(
         `UPDATE customs_declarations 
-         SET status = $1, updated_at = NOW() 
-         WHERE declaration_number = $2`,
-        ['UNDER_REVIEW', declarationId]
+         SET status = $1, blockchain_tx_id = $2, updated_at = NOW() 
+         WHERE declaration_number = $3`,
+        ['UNDER_REVIEW', blockchain_tx_id, declarationId]
       );
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} inspection completed: status=UNDER_REVIEW`);
@@ -738,15 +758,7 @@ router.post('/declaration/:declarationId/clear',
 
       logger.info(`[CUSTOMS] Clearing declaration ${declarationId} by ${user.username}`);
 
-      // Update declaration status to CLEARED
-      await postgresDb.run(
-        `UPDATE customs_declarations 
-         SET status = $1, customs_officer = $2, updated_at = NOW() 
-         WHERE declaration_number = $3`,
-        ['CLEARED', clearedBy || user.username, declarationId]
-      );
-
-      // Get shipment ID from declaration
+      // Get shipment ID from declaration first
       const declaration = await postgresDb.get(
         `SELECT shipment_id FROM customs_declarations WHERE declaration_number = $1`,
         [declarationId]
@@ -760,13 +772,36 @@ router.post('/declaration/:declarationId/clear',
         });
       }
 
-      // Store clearance record with duty and tax amounts
       const clearanceID = clearanceNumber || `CLR-${Date.now()}`;
+
+      // ✅ BLOCKCHAIN-FIRST: Call ClearCustomsDeclaration chaincode BEFORE DB updates
+      const blockchainResult = await fabricService.invokeChaincode(
+        'ClearCustomsDeclaration',
+        [
+          declarationId,
+          clearedBy || user.username,
+          clearanceID,
+          String(exportDuty || 0)
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs clearance recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+
+      // Now update declaration status to CLEARED
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET status = $1, customs_officer = $2, blockchain_tx_id = $3, updated_at = NOW() 
+         WHERE declaration_number = $4`,
+        ['CLEARED', clearedBy || user.username, blockchain_tx_id, declarationId]
+      );
+
+      // Store clearance record with duty and tax amounts and blockchain TX ID
       await postgresDb.run(
         `INSERT INTO customs_clearances (
           clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date,
-          duty_amount, tax_amount, exit_point, remarks
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          duty_amount, tax_amount, exit_point, remarks, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           clearanceID, 
           declaration.shipment_id, 
@@ -777,33 +812,10 @@ router.post('/declaration/:declarationId/clear',
           exportDuty || 0,
           vatAmount || 0,
           exitPoint || null,
-          clearanceRemarks || null
+          clearanceRemarks || null,
+          blockchain_tx_id
         ]
       );
-
-      // ✅ Record clearance on blockchain
-      try {
-        const auditService = require('../services/auditService').default;
-        await auditService.recordAudit({
-          entityType: 'CUSTOMS_CLEARANCE',
-          entityId: clearanceID,
-          actionType: 'CLEAR',
-          actionBy: user.username,
-          organizationMSP: 'CustomsMSP',
-          details: {
-            declarationId,
-            shipmentID: declaration.shipment_id,
-            clearanceNumber,
-            exportDuty: exportDuty || 0,
-            vatAmount: vatAmount || 0,
-            exitPoint: exitPoint || null
-          },
-          timestamp: new Date()
-        });
-        logger.info(`✅ Customs clearance recorded on blockchain: ${clearanceID}`);
-      } catch (blockchainErr) {
-        logger.warn(`⚠️ Failed to record clearance on blockchain (non-fatal):`, blockchainErr);
-      }
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully with clearance ${clearanceNumber}`);
 

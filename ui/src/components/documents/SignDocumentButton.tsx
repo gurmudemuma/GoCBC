@@ -95,7 +95,7 @@ const SignDocumentButton: React.FC<SignDocumentButtonProps> = ({
       setLoading(true);
       setError(null);
 
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('authToken');
       if (!token) {
         throw new Error('Authentication token not found. Please log in again.');
       }

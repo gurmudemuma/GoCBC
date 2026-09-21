@@ -2223,16 +2223,26 @@ router.post('/:shipmentID/status',
       const { status, location, updatedBy } = req.body;
       const user = (req as any).user;
 
+      // ✅ BLOCKCHAIN-FIRST: Call UpdateShipmentStatus chaincode BEFORE DB write
+      const blockchainResult = await fabricService.invokeChaincode(
+        'UpdateShipmentStatus',
+        [shipmentID, status]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Shipment status updated on blockchain: ${shipmentID}, Status: ${status}, TX: ${blockchain_tx_id}`);
+
+      // Now record status history in database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO shipment_status_history (
-          shipment_id, status, location, updated_by
-        ) VALUES ($1, $2, $3, $4)`,
-        [shipmentID, status, location || null, updatedBy || user.username]
+          shipment_id, status, location, updated_by, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [shipmentID, status, location || null, updatedBy || user.username, blockchain_tx_id]
       );
 
       res.json({
         success: true,
-        data: { shipmentID, status },
+        data: { shipmentID, status, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

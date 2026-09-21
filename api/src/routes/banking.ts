@@ -151,6 +151,32 @@ router.post('/lc/request',
       if (result.success) {
         logger.info(`✅ LC requested successfully: ${lcID} with auto-mapped data`);
         
+        // ✅ STORE BLOCKCHAIN SIGNATURE
+        try {
+          const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+          await dbService.run(
+            `INSERT INTO blockchain_signatures (
+              signature_id, blockchain_tx_id, entity_type, entity_id,
+              chaincode_function, signer_org, signer_username,
+              blockchain_timestamp, action_type, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+            ON CONFLICT (signature_id) DO NOTHING`,
+            [
+              signatureId,
+              result.txId,
+              'LC',
+              lcID,
+              'RequestLC',
+              (req as any).user?.org || 'ExportersMSP',
+              (req as any).user?.username || 'exporter',
+              'LC_REQUESTED'
+            ]
+          );
+          logger.info(`✅ Blockchain signature stored: ${signatureId}`);
+        } catch (sigErr) {
+          logger.error(`⚠️ Failed to store blockchain signature:`, sigErr);
+        }
+        
         // ✅ Sync to PostgreSQL for fast queries
         try {
           await dbService.run(
@@ -1238,57 +1264,195 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
   try {
     const { lcID } = req.params;
     
-    // EXPERT APPROACH: Fetch from BOTH CouchDB and PostgreSQL
-    logger.info(`[BANKING] Fetching LC ${lcID} from both databases (CouchDB + PostgreSQL)`);
+    logger.info(`[BANKING] 🚀 Fetching LC ${lcID} using PARALLEL approach (CouchDB + PostgreSQL simultaneously)`);
     
-    // 1. Fetch from CouchDB (blockchain state - source of truth)
-    const result = await fabricService.getLC(lcID);
-
-    if (result.success) {
-      let lcData = result.data;
+    // ✅ PARALLEL FETCH: Fetch from CouchDB and PostgreSQL at the same time
+    const startTime = Date.now();
+    
+    const [blockchainResult, pgResult] = await Promise.allSettled([
+      // Query 1: Blockchain (CouchDB via Fabric)
+      fabricService.getLC(lcID),
       
-      // 2. Fetch from PostgreSQL (relational data and actor fields)
-      let pgData: any = null;
-      let buyerData: any = null;
-      try {
-        const pgResult = await dbService.query(
-          `SELECT 
-            lc.*,
-            sc.buyer_id, sc.buyer_name, sc.buyer_country, sc.buyer_bank,
-            sc.exporter_bank
-          FROM letters_of_credit lc
-          LEFT JOIN sales_contracts sc ON lc.contract_id = sc.contract_id
-          WHERE lc.lc_id = $1`,
-          [lcID]
-        );
-        if (pgResult.rows.length > 0) {
-          pgData = pgResult.rows[0];
-          buyerData = {
-            buyerId: pgData.buyer_id,
-            buyerName: pgData.buyer_name,
-            buyerCountry: pgData.buyer_country,
-            buyerBank: pgData.buyer_bank,
-            exporterBank: pgData.exporter_bank,
-          };
-          logger.info(`[BANKING] ✅ Found LC in PostgreSQL with buyer: ${buyerData.buyerName}, advising bank: ${buyerData.exporterBank}`);
-        } else {
-          logger.warn(`[BANKING] LC ${lcID} not found in PostgreSQL - will use CouchDB data only`);
-        }
-      } catch (pgError: any) {
-        logger.warn(`[BANKING] Failed to fetch from PostgreSQL: ${pgError.message}`);
+      // Query 2: PostgreSQL (LC + buyer data)
+      dbService.query(
+        `SELECT 
+          lc.*,
+          sc.buyer_id, sc.buyer_name, sc.buyer_country, sc.buyer_bank,
+          sc.exporter_bank
+        FROM letters_of_credit lc
+        LEFT JOIN sales_contracts sc ON lc.contract_id = sc.contract_id
+        WHERE lc.lc_id = $1`,
+        [lcID]
+      ),
+    ]);
+    
+    const fetchTime = Date.now() - startTime;
+    logger.info(`[BANKING] ⚡ Parallel fetch completed in ${fetchTime}ms`);
+    
+    // Process blockchain result
+    let lcData: any = null;
+    let blockchainSuccess = false;
+    
+    if (blockchainResult.status === 'fulfilled' && blockchainResult.value.success) {
+      lcData = blockchainResult.value.data;
+      
+      // ✅ NORMALIZE FIELD NAMES: Blockchain returns PascalCase, we need camelCase
+      if (lcData) {
+        lcData = {
+          ...lcData,
+          // Map PascalCase to camelCase for consistency
+          lcId: lcData.lcId || lcData.LCID || lcData.LcId,
+          contractId: lcData.contractId || lcData.ContractID,
+          exporterId: lcData.exporterId || lcData.ExporterID,
+          buyerId: lcData.buyerId || lcData.BuyerID,
+          buyerName: lcData.buyerName || lcData.BuyerName,
+          buyerCountry: lcData.buyerCountry || lcData.BuyerCountry,
+          buyerBank: lcData.buyerBank || lcData.BuyerBank,
+          issuingBank: lcData.issuingBank || lcData.IssuingBank || lcData.issuingBankName,
+          advisingBank: lcData.advisingBank || lcData.AdvisingBank || lcData.advisingBankName,
+          beneficiary: lcData.beneficiary || lcData.Beneficiary,
+          amount: lcData.amount || lcData.Amount,
+          currency: lcData.currency || lcData.Currency,
+          status: lcData.status || lcData.Status,
+          expiryDate: lcData.expiryDate || lcData.ExpiryDate || lcData.expiry_date,
+          requestDate: lcData.requestDate || lcData.RequestDate || lcData.request_date,
+          approvalDate: lcData.approvalDate || lcData.ApprovalDate || lcData.approval_date,
+          issueDate: lcData.issueDate || lcData.IssueDate || lcData.issue_date,
+          terms: lcData.terms || lcData.Terms,
+          approvedBy: lcData.approvedBy || lcData.ApprovedBy,
+          approvedByMsp: lcData.approvedByMsp || lcData.ApprovedByMSP,
+          issuedBy: lcData.issuedBy || lcData.IssuedBy,
+          issuedByMsp: lcData.issuedByMsp || lcData.IssuedByMSP,
+          createdAt: lcData.createdAt || lcData.CreatedAt,
+          updatedAt: lcData.updatedAt || lcData.UpdatedAt,
+        };
       }
       
-      // 2b. If PostgreSQL doesn't have buyer data, try enrichment service
-      if (!buyerData?.buyerName) {
+      blockchainSuccess = true;
+      logger.info(`[BANKING] ✅ Blockchain query successful (normalized field names)`);
+    } else {
+      const error = blockchainResult.status === 'rejected' 
+        ? blockchainResult.reason 
+        : blockchainResult.value?.error;
+      logger.warn(`[BANKING] ⚠️  Blockchain query failed: ${error}`);
+    }
+    
+    // Process PostgreSQL result
+    let pgData: any = null;
+    let buyerData: any = null;
+    
+    if (pgResult.status === 'fulfilled' && pgResult.value.rows.length > 0) {
+      pgData = pgResult.value.rows[0];
+      buyerData = {
+        buyerId: pgData.buyer_id,
+        buyerName: pgData.buyer_name,
+        buyerCountry: pgData.buyer_country,
+        buyerBank: pgData.buyer_bank,
+        exporterBank: pgData.exporter_bank,
+      };
+      logger.info(`[BANKING] ✅ PostgreSQL query successful: buyer=${buyerData.buyerName}`);
+    } else {
+      logger.warn(`[BANKING] ⚠️  PostgreSQL query failed or no data found`);
+    }
+    
+    // ✅ SMART FALLBACK: Use whichever succeeded
+    if (!blockchainSuccess && pgData) {
+      // Blockchain failed, use PostgreSQL as primary source
+      logger.info(`[BANKING] 📊 Using PostgreSQL as primary source (blockchain unavailable)`);
+      
+      // Fetch documents in parallel with LC data
+      const docs = await dbService.all(`
+        SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+               uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+        FROM documents 
+        WHERE status = 'active'
+          AND (
+            (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+            OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                 SELECT shipment_id FROM shipments WHERE contract_id = $2
+            ))
+            OR (entity_type = 'CONTRACT' AND entity_id = $2)
+            OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                 SELECT declaration_number FROM customs_declarations WHERE contract_id::text = $2
+            ))
+          )
+        ORDER BY uploaded_at DESC
+      `, [lcID, pgData.contract_id || '']);
+      
+      const allDocuments = docs.map((d: any) => ({
+        documentId: d.document_id,
+        documentType: d.document_type,
+        fileName: d.file_name,
+        filePath: d.file_path,
+        status: d.verification_status || d.status || 'pending',
+        verificationStatus: d.verification_status,
+        uploadedAt: d.uploaded_at,
+        uploadedBy: d.uploaded_by,
+        entityType: d.entity_type,
+        entityId: d.entity_id,
+        verificationNotes: d.verification_notes,
+        verifiedAt: d.verified_at,
+        verifiedBy: d.verified_by,
+      }));
+      
+      logger.info(`[BANKING] ✅ Returning PostgreSQL data: ${allDocuments.length} documents`);
+      
+      return res.json({
+        success: true,
+        data: {
+          lcId: pgData.lc_id,
+          contractId: pgData.contract_id,
+          exporterId: pgData.exporter_id,
+          buyerId: pgData.buyer_id,
+          buyerName: pgData.buyer_name,
+          buyerCountry: pgData.buyer_country,
+          buyerBank: pgData.buyer_bank,
+          issuingBank: pgData.issuing_bank || 'Commercial Bank of Ethiopia',
+          advisingBank: pgData.advising_bank || pgData.exporter_bank,
+          amount: pgData.amount,
+          currency: pgData.currency || 'USD',
+          status: pgData.status,
+          expiryDate: pgData.expiry_date,
+          issueDate: pgData.issue_date,
+          requestDate: pgData.request_date,
+          terms: pgData.terms || '',
+          documents: allDocuments,
+          amendments: [],
+          amendmentCount: 0,
+          discrepancies: [],
+          discrepancyResolved: false,
+        },
+        source: 'postgresql-primary',
+        fetchTimeMs: fetchTime,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    
+    if (blockchainSuccess) {
+      // Blockchain succeeded, enrich with PostgreSQL data if available
+      logger.info(`[BANKING] 🔗 Using blockchain as primary, enriching with PostgreSQL data`);
+      
+      // Merge buyer data if available from PostgreSQL
+      if (buyerData?.buyerName) {
+        lcData = {
+          ...lcData,
+          buyerId: buyerData.buyerId || lcData.buyerId,
+          buyerName: buyerData.buyerName || lcData.buyerName,
+          buyerCountry: buyerData.buyerCountry || lcData.buyerCountry,
+          buyerBank: buyerData.buyerBank || lcData.buyerBank,
+          advisingBank: buyerData.exporterBank || lcData.advisingBank,
+        };
+      } else {
+        // Try enrichment service as fallback
         try {
           const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
           const enriched = await dataEnrichmentService.enrichLCs([lcData]);
           if (enriched.length > 0) {
             lcData = enriched[0];
-            logger.info(`[BANKING] ✅ Enriched LC with buyer data from enrichment service`);
+            logger.info(`[BANKING] ✅ Enriched with enrichment service`);
           }
         } catch (enrichError) {
-          logger.warn('[BANKING] ⚠️  Could not enrich LC with buyer data:', enrichError);
+          logger.warn('[BANKING] ⚠️  Enrichment service failed');
         }
       }
       
@@ -1395,18 +1559,21 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
         },
         enriched: true, // ✅ Flag showing enrichment was applied
         sources: {
-          couchdb: true,
+          blockchain: blockchainSuccess,
           postgresql: pgData !== null,
           buyerEnriched: !!buyerData?.buyerName,
         },
+        fetchTimeMs: fetchTime,
         timestamp: new Date().toISOString(),
       });
     } else {
+      // Both blockchain and PostgreSQL failed
+      logger.error(`[BANKING] ❌ Both blockchain and PostgreSQL queries failed for LC ${lcID}`);
       res.status(404).json({
         success: false,
         error: {
           code: 'NOT_FOUND',
-          message: result.error || 'LC not found',
+          message: 'LC not found in any database',
         },
         timestamp: new Date().toISOString(),
       });
@@ -2664,6 +2831,27 @@ router.post('/lc/:lcID/examine-documents',
 
       if (result.success) {
         logger.info(`✅ LC documents examined: ${lcID}, compliant: ${compliant}`);
+        
+        // ✅ BLOCKCHAIN-FIRST: Update PostgreSQL after successful blockchain update
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          
+          if (compliant) {
+            // Update LC status to UTILIZED if documents are compliant
+            await db.run(
+              `UPDATE letters_of_credit 
+               SET status = 'UTILIZED', updated_at = NOW() 
+               WHERE lc_id = $1`,
+              [lcID]
+            );
+            logger.info(`✅ PostgreSQL updated: LC ${lcID} status set to UTILIZED`);
+          }
+        } catch (dbError) {
+          logger.warn(`⚠️  Failed to update PostgreSQL for LC ${lcID}:`, dbError);
+          // Don't fail the request since blockchain update succeeded
+        }
+        
         res.json({
           success: true,
           data: result.data,
