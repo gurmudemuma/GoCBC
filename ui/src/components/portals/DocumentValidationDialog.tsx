@@ -278,7 +278,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
             <>
               <List>
                 {data.documents.map((doc, idx) => (
-                  <Paper key={idx} variant="outlined" sx={{ mb: 2, p: 2 }}>
+                  <Paper key={doc.id || doc.name || `doc-${idx}`} variant="outlined" sx={{ mb: 2, p: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
                       <AttachFile 
                         sx={{ 

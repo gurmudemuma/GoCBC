@@ -805,7 +805,7 @@ router.get('/inspections',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      const { status, exporterID } = req.query;
+      const { status, exporterID, shipmentID } = req.query;
       let query = 'SELECT * FROM quality_inspections WHERE 1=1';
       const params: any[] = [];
       let paramIndex = 1;
@@ -817,6 +817,10 @@ router.get('/inspections',
       if (exporterID) {
         query += ` AND exporter_id = $${paramIndex++}`;
         params.push(exporterID);
+      }
+      if (shipmentID) {
+        query += ` AND shipment_id = $${paramIndex++}`;
+        params.push(shipmentID);
       }
 
       query += ' ORDER BY created_at DESC';
@@ -876,20 +880,32 @@ router.get('/inspections',
           scheduledDate: insp.scheduled_date,
           inspectionDate: insp.inspection_date,
           approvalDate: insp.approval_date,
+          inspectorID: insp.inspector_id,
+          inspectorName: insp.inspector_name,
           certificateNo: insp.certification_number,
           certificationNumber: insp.certification_number,
+          exportPermitNo: insp.export_permit_no,
           grade: insp.grade,
+          passed: insp.passed,
           cupQuality: insp.cup_quality,  // Raw JSON string or text
           cupQualityScores: cupQualityScores,  // Parsed JSON object
           moistureContent: insp.moisture_content,
           defectCount: insp.defect_count,
           screenSize: insp.screen_size,
-          passed: insp.passed,
+          beanSize: insp.bean_size,
+          color: insp.color,
+          odor: insp.odor,
+          classification: insp.classification,
+          pesticideTest: insp.pesticide_test,
+          heavyMetalTest: insp.heavy_metal_test,
+          mycotoxinTest: insp.mycotoxin_test,
           remarks: insp.remarks,
+          approvedBy: insp.approved_by,
           overall: overallScore,
           overallScore: overallScore,
           createdAt: insp.created_at,
           updatedAt: insp.updated_at,
+          blockchainTxId: insp.blockchain_tx_id,
         };
       });
 
@@ -900,6 +916,87 @@ router.get('/inspections',
       });
     } catch (error: any) {
       logger.error('List inspections error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /quality/inspections/:inspectionID
+ * Get a specific quality inspection by ID
+ * @access Authenticated
+ */
+router.get('/inspections/:inspectionID',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { inspectionID } = req.params;
+      
+      logger.info(`[QUALITY] Fetching inspection: ${inspectionID}`);
+      
+      const inspection = await postgresDb.get(
+        'SELECT * FROM quality_inspections WHERE inspection_id = $1',
+        [inspectionID]
+      );
+      
+      if (!inspection) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Inspection ${inspectionID} not found` },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Normalize field names
+      const normalized = {
+        inspectionID: inspection.inspection_id,
+        shipmentID: inspection.shipment_id,
+        contractID: inspection.contract_id,
+        exporterID: inspection.exporter_id,
+        coffeeType: inspection.coffee_type,
+        quantity: inspection.quantity,
+        sampleSize: inspection.sample_size,
+        scheduledDate: inspection.scheduled_date,
+        inspectionDate: inspection.inspection_date,
+        inspectorID: inspection.inspector_id,
+        inspectorName: inspection.inspector_name,
+        grade: inspection.grade,
+        passed: inspection.passed,
+        cupQuality: inspection.cup_quality,
+        moistureContent: inspection.moisture_content,
+        defectCount: inspection.defect_count,
+        screenSize: inspection.screen_size,
+        beanSize: inspection.bean_size,
+        color: inspection.color,
+        odor: inspection.odor,
+        overall: inspection.overall_score || inspection.overall,
+        classification: inspection.classification,
+        pesticideTest: inspection.pesticide_test,
+        heavyMetalTest: inspection.heavy_metal_test,
+        mycotoxinTest: inspection.mycotoxin_test,
+        remarks: inspection.remarks,
+        status: inspection.status,
+        certificationNumber: inspection.certification_number,
+        certificateNo: inspection.certificate_no,
+        exportPermitNo: inspection.export_permit_no,
+        approvedBy: inspection.approved_by,
+        createdAt: inspection.created_at,
+        updatedAt: inspection.updated_at,
+        blockchainTxId: inspection.blockchain_tx_id
+      };
+      
+      res.json({
+        success: true,
+        data: normalized,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error: any) {
+      logger.error('[QUALITY] Error fetching inspection:', error);
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },

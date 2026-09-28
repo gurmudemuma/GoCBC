@@ -131,7 +131,13 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 		fmt.Printf("RequestLC ERROR: failed to unmarshal contract: %v\n", err)
 		return fmt.Errorf("failed to unmarshal contract: %v", err)
 	}
-	fmt.Printf("RequestLC: Contract verified and data loaded\n")
+	
+	// ✅ CRITICAL VALIDATION: Contract must be APPROVED before LC can be requested
+	if contract.ContractStatus != "APPROVED" {
+		fmt.Printf("RequestLC ERROR: contract %s status is %s, must be APPROVED\n", contractID, contract.ContractStatus)
+		return fmt.Errorf("RequestLC: contract %s must be APPROVED before LC request (current status: %s)", contractID, contract.ContractStatus)
+	}
+	fmt.Printf("RequestLC: Contract verified (status: APPROVED) and data loaded\n")
 
 	// AUTO-MAP: Exporter ID from contract
 	mappedExporterID := exporterID

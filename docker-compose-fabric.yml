@@ -14,6 +14,12 @@ volumes:
   peer0.customs.cecbs.et:
   peer0.shipping.cecbs.et:
   peer0.buyers.cecbs.et:
+  couchdb.ecta-data:
+  couchdb.ecx-data:
+  couchdb.banks-data:
+  couchdb.nbe-data:
+  couchdb.customs-data:
+  couchdb.shipping-data:
   postgres-data:
   redis-data:
   kafka-data:
@@ -111,6 +117,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.ecta-data:/opt/couchdb/data
     ports:
       - 5984:5984
     networks:
@@ -169,6 +177,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.ecx-data:/opt/couchdb/data
     ports:
       - 6984:5984
     networks:
@@ -227,6 +237,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.banks-data:/opt/couchdb/data
     ports:
       - 7984:5984
     networks:
@@ -285,6 +297,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.nbe-data:/opt/couchdb/data
     ports:
       - 8984:5984
     networks:
@@ -342,6 +356,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.customs-data:/opt/couchdb/data
     ports:
       - 9984:5984
     networks:
@@ -400,6 +416,8 @@ services:
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
+    volumes:
+      - couchdb.shipping-data:/opt/couchdb/data
     ports:
       - 10984:5984
     networks:
@@ -413,10 +431,10 @@ services:
     build:
       context: ./chaincodes/coffee
       dockerfile: Dockerfile
-    image: coffee-chaincode:1.85
+    image: coffee-chaincode:1.97
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_1.90:3c872fff8e422b1fc783cff64445f0ef67d35239735cb6a8b613590837359055
+      - CORE_CHAINCODE_ID_NAME=coffee_1.97:b4509646b9e97db88fecbf85d6c425b350c9327e8df9fbf4c29074a6a930030b
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
     ports:
       - "9999:9999"

@@ -288,7 +288,7 @@ export const PaymentDocuments: React.FC = () => {
           <List sx={{ bgcolor: 'grey.50', borderRadius: 1 }}>
             {documents.map((doc, index) => (
               <ListItem
-                key={index}
+                key={typeof doc === 'string' ? doc : `payment-doc-${index}`}
                 sx={{ borderBottom: index < documents.length - 1 ? '1px solid' : 'none', borderColor: 'divider' }}
                 secondaryAction={
                   <IconButton edge="end" onClick={() => handleRemoveDocument(index)} color="error">

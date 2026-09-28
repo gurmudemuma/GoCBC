@@ -43,6 +43,7 @@ import axios from 'axios';
 import SignDocumentButton from './SignDocumentButton';
 import DocumentSignatureTracker from './DocumentSignatureTracker';
 import SignatureStatusBadge from './SignatureStatusBadge';
+import ApprovalProgressIndicator from './ApprovalProgressIndicator';
 
 interface Document {
   document_id: string;
@@ -312,6 +313,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                   <TableCell>Uploaded By</TableCell>
                   <TableCell>Date</TableCell>
                   <TableCell>Status</TableCell>
+                  <TableCell>Approval</TableCell>
                   <TableCell>Signatures</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
@@ -339,6 +341,17 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                         label={doc.status}
                         size="small"
                         color={getStatusColor(doc.status) as any}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      {/* Compact Approval Badge - will fetch on hover/expand */}
+                      <Chip 
+                        label="Multi-party" 
+                        size="small" 
+                        variant="outlined" 
+                        color="info"
+                        icon={<VerifiedIcon />}
+                        style={{ fontSize: '0.7rem' }}
                       />
                     </TableCell>
                     <TableCell>{getSignatureStatusBadge(doc)}</TableCell>
@@ -467,6 +480,18 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                     </Box>
                   )}
                 </Box>
+
+                {/* Approval Progress (if multi-party approval required) */}
+                <ApprovalProgressIndicator
+                  documentId={viewingDocument.document_id}
+                  showApproveButton={allowSign}
+                  onApprovalComplete={() => {
+                    fetchDocuments();
+                    if (onDocumentSigned) {
+                      onDocumentSigned(viewingDocument.document_id, { workflowComplete: true });
+                    }
+                  }}
+                />
 
                 {/* Signature Tracker */}
                 {showSignatureTracker && (

@@ -231,13 +231,22 @@ const NBEPortal: React.FC = () => {
         console.log(`Loaded ${allContracts.length} contracts from API`);
       }
 
-      // 🔗 Load forex allocations DIRECTLY from CouchDB blockchain
-      console.log('[NBE] 🔗 Loading forex DIRECTLY from Hyperledger Fabric CouchDB...');
+      // 🔗 Load forex allocations from API (which fetches from blockchain)
+      console.log('[NBE] 🔗 Loading forex from API...');
       try {
-        const blockchainForex = await couchDBService.getAllForex();
-        console.log(`[NBE] ✅ Loaded ${blockchainForex.length} forex from BLOCKCHAIN (no API, pure CouchDB)`);
+        const response = await apiFetch('/forex', {
+          method: 'GET',
+        });
         
-        const forexData = blockchainForex.map((forex) => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch forex: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        const blockchainForex = result.data || [];
+        console.log(`[NBE] ✅ Loaded ${blockchainForex.length} forex from API (blockchain source)`);
+        
+        const forexData = blockchainForex.map((forex: any) => {
           const status = forex.status || 'REQUESTED';
           const isAllocated = status === 'ALLOCATED';
           
@@ -268,12 +277,12 @@ const NBEPortal: React.FC = () => {
         setForexAllocations(forexData);
         setAllForexAllocations(forexData);
         console.log(`[NBE] 📊 Forex by status:`, {
-          REQUESTED: forexData.filter(f => f.status === 'REQUESTED').length,
-          CONFIRMED: forexData.filter(f => f.status === 'CONFIRMED').length,
-          ALLOCATED: forexData.filter(f => f.status === 'ALLOCATED').length,
+          REQUESTED: forexData.filter((f: any) => f.status === 'REQUESTED').length,
+          CONFIRMED: forexData.filter((f: any) => f.status === 'CONFIRMED').length,
+          ALLOCATED: forexData.filter((f: any) => f.status === 'ALLOCATED').length,
         });
       } catch (error) {
-        console.error('[NBE] ❌ Failed to load forex from blockchain:', error);
+        console.error('[NBE] ❌ Failed to load forex from API:', error);
         setForexAllocations([]);
       }
 

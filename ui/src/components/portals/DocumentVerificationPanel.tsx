@@ -310,7 +310,7 @@ export const DocumentVerificationPanel: React.FC<DocumentVerificationPanelProps>
                 {paymentData?.documents && paymentData.documents.length > 0 ? (
                   <List dense>
                     {paymentData.documents.map((doc: string, index: number) => (
-                      <ListItem key={index}>
+                      <ListItem key={typeof doc === 'string' ? doc : `doc-${index}`}>
                         <ListItemIcon>
                           <Description color="action" />
                         </ListItemIcon>

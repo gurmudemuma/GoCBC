@@ -3067,6 +3067,31 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   />
                 </Grid>
               </Grid>
+
+              {/* Document Management Panel for Clearance Documents */}
+              {selectedDeclaration && (
+                <Box sx={{ mt: 3 }}>
+                  <Divider sx={{ my: 2 }} />
+                  <DocumentManagementPanel
+                    entityType="CUSTOMS_DECLARATION"
+                    entityId={selectedDeclaration.declarationId}
+                    title="Customs Declaration Documents"
+                    allowUpload={true}
+                    allowSign={true}
+                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
+                    defaultSignatureType="VERIFY"
+                    showSignatureTracker={true}
+                    requiredDocuments={[
+                      'COMMERCIAL_INVOICE',
+                      'PACKING_LIST',
+                      'BILL_OF_LADING',
+                      'CERTIFICATE_OF_ORIGIN',
+                      'EXPORT_PERMIT',
+                      'QUALITY_CERTIFICATE'
+                    ]}
+                  />
+                </Box>
+              )}
             </Box>
           )}
         </DialogContent>

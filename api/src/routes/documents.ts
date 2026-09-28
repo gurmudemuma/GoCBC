@@ -365,6 +365,15 @@ router.post('/upload',
         uploadedBy: user.username
       });
 
+      // ✅ SYNC APPROVAL REQUIREMENTS: Ensure blockchain has approval rules
+      try {
+        const blockchainApprovalSync = (await import('../services/blockchainApprovalSync')).default;
+        await blockchainApprovalSync.ensureRequirementSynced(finalDocType, finalEntityType);
+        logger.debug(`Approval requirements synced for ${finalDocType}/${finalEntityType}`);
+      } catch (syncErr) {
+        logger.warn(`Failed to sync approval requirements:`, syncErr);
+      }
+
       // ✅ BLOCKCHAIN FIRST: Register document hash on blockchain
       logger.info(`Registering document ${documentID} on blockchain...`);
       const blockchainResult = await fabricService.invokeChaincode('RegisterDocumentHash', [
@@ -1016,7 +1025,39 @@ router.post('/:documentId/sign',
         });
       }
 
-      // 2. Check if file exists - for PDF visual signature
+      // ✅ 2. MULTI-PARTY APPROVAL: Validate approval for APPROVE signature type
+      if (signatureType === 'APPROVE') {
+        const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+        
+        const validation = await ApprovalRulesService.validateApproval(
+          documentId,
+          user.username || user.sub,
+          user.role
+        );
+
+        if (!validation.canApprove) {
+          logger.warn(`Approval denied for ${documentId}: ${validation.reason}`);
+          return res.status(403).json({
+            success: false,
+            error: {
+              code: 'APPROVAL_DENIED',
+              message: validation.reason || 'You cannot approve this document',
+              details: {
+                requiresApproval: validation.requiresApproval,
+                currentApprovals: validation.currentApprovals,
+                requiredApprovals: validation.requiredApprovals,
+                approvedBy: validation.approvedBy,
+                nextRequiredRole: validation.nextRequiredRole
+              }
+            },
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        logger.info(`✅ Approval validation passed: ${documentId} (${validation.currentApprovals + 1}/${validation.requiredApprovals})`);
+      }
+
+      // 3. Check if file exists - for PDF visual signature
       const fileExists = doc.file_path && fs.existsSync(doc.file_path);
       const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
       
@@ -1024,11 +1065,11 @@ router.post('/:documentId/sign',
         logger.warn(`Physical file not found for ${documentId}: ${doc.file_path || 'no path'} - proceeding with blockchain-only signature`);
       }
 
-      // 3. Create signature ID and timestamp
+      // 4. Create signature ID and timestamp
       const signatureId = `SIG-${documentId}-${user.org || 'ORG'}-${Date.now()}`;
       const timestamp = new Date().toISOString();
 
-      // 4. Add visual signature stamp to PDF (if file exists and is PDF)
+      // 5. Add visual signature stamp to PDF (if file exists and is PDF)
       let visualSignatureAdded = false;
       if (fileExists && isPDF) {
         try {
@@ -1054,12 +1095,37 @@ router.post('/:documentId/sign',
       const fabricService = FabricService.getInstance();
       
       let blockchainTxId: string | null = null;
+      let approvalMetadata: any = null;
+      
+      // ✅ For APPROVE signatures, gather approval workflow metadata for blockchain
+      if (signatureType === 'APPROVE') {
+        const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+        const validation = await ApprovalRulesService.validateApproval(
+          documentId,
+          user.username || user.sub,
+          user.role
+        );
+        
+        approvalMetadata = {
+          multiPartyApproval: validation.requiresApproval,
+          approvalLevel: validation.currentApprovals + 1,
+          requiredApprovals: validation.requiredApprovals,
+          approverRole: user.role,
+          workflowComplete: validation.isComplete
+        };
+      }
+      
       if (fabricService.isConnected()) {
+        // Include approval metadata in remarks for blockchain immutability
+        const blockchainRemarks = approvalMetadata 
+          ? `${remarks || 'Document approved'} | Approval: ${approvalMetadata.approvalLevel}/${approvalMetadata.requiredApprovals} | Role: ${approvalMetadata.approverRole}`
+          : remarks || '';
+          
         const blockchainResult = await fabricService.signDocument(
           documentId,
           doc.file_hash,
           signatureType,
-          remarks || ''
+          blockchainRemarks
         );
         
         if (!blockchainResult.success) {
@@ -1076,7 +1142,7 @@ router.post('/:documentId/sign',
         }
         
         blockchainTxId = blockchainResult.txId || null;
-        logger.info(`✅ Document signed on blockchain (TX: ${blockchainTxId})`);
+        logger.info(`✅ Document signed on blockchain (TX: ${blockchainTxId})${approvalMetadata ? ` [Multi-party approval: ${approvalMetadata.approvalLevel}/${approvalMetadata.requiredApprovals}]` : ''}`);
       } else {
         logger.error('Blockchain not connected - cannot sign document');
         return res.status(503).json({
@@ -1086,30 +1152,66 @@ router.post('/:documentId/sign',
         });
       }
 
-      // 6. ✅ Cache signature in database
-      await postgresDb.run(
-        `INSERT INTO document_signatures (
-          signature_id, document_id, signer_id, signer_org, signature_type,
-          certificate_id, remarks, blockchain_tx_id, visual_signature_added
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          signatureId,
+      // 6. ✅ Cache signature in database (with multi-party approval support)
+      if (signatureType === 'APPROVE') {
+        // Use approval service to record approval
+        const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+        const approvalResult = await ApprovalRulesService.recordApproval(
           documentId,
           user.username || user.sub,
-          user.org || user.organization,
-          signatureType,
-          user.sub || null,
-          remarks || null,
-          blockchainTxId,
-          visualSignatureAdded
-        ]
-      );
+          user.role,
+          blockchainTxId || undefined
+        );
 
-      // 7. Update document status
-      await postgresDb.run(
-        'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
-        [signatureType === 'APPROVE' ? 'approved' : signatureType === 'REJECT' ? 'rejected' : 'signed', documentId]
-      );
+        if (!approvalResult.success) {
+          logger.error(`Failed to record approval: ${approvalResult.message}`);
+          return res.status(400).json({
+            success: false,
+            error: { code: 'APPROVAL_FAILED', message: approvalResult.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        logger.info(`✅ Approval recorded: ${approvalResult.message} (workflow complete: ${approvalResult.workflowComplete})`);
+
+        // Update document status only if all approvals complete
+        if (approvalResult.workflowComplete) {
+          await postgresDb.run(
+            'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+            ['approved', documentId]
+          );
+        } else {
+          await postgresDb.run(
+            'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+            ['pending_approval', documentId]
+          );
+        }
+      } else {
+        // For non-approval signatures, use legacy method
+        await postgresDb.run(
+          `INSERT INTO document_signatures (
+            signature_id, document_id, signer_id, signer_org, signature_type,
+            certificate_id, remarks, blockchain_tx_id, visual_signature_added
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            signatureId,
+            documentId,
+            user.username || user.sub,
+            user.org || user.organization,
+            signatureType,
+            user.sub || null,
+            remarks || null,
+            blockchainTxId,
+            visualSignatureAdded
+          ]
+        );
+
+        // Update document status
+        await postgresDb.run(
+          'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+          [signatureType === 'REJECT' ? 'rejected' : 'signed', documentId]
+        );
+      }
 
       // 8. Log to audit trail
       await postgresDb.run(
@@ -1674,6 +1776,114 @@ router.post('/:documentId/verify-signature',
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/documents/{documentId}/approval-status:
+ *   get:
+ *     summary: Get multi-party approval status for a document
+ *     tags: [Documents]
+ */
+router.get('/:documentId/approval-status',
+  authMiddleware,
+  param('documentId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      const user = (req as any).user;
+
+      logger.info(`Fetching approval status for document: ${documentId} by ${user.username}`);
+
+      // Get document info
+      const doc = await postgresDb.get(
+        'SELECT document_id, document_type, entity_type, status FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Get approval requirements and workflow state
+      const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+      
+      const requirements = await ApprovalRulesService.getRequirements(
+        doc.document_type,
+        doc.entity_type
+      );
+
+      const workflowState = await ApprovalRulesService.getApprovalStatus(documentId);
+
+      // Get user's validation status
+      const validation = await ApprovalRulesService.validateApproval(
+        documentId,
+        user.username || user.sub,
+        user.role
+      );
+
+      // Get all signatures for this document
+      const signatures = await postgresDb.all(
+        `SELECT id, signature_type as "signatureType", signed_by as "signedBy", 
+                signed_by_role as "signedByRole", signed_by_org as "signedByOrg",
+                approval_status as "approvalStatus", approval_level as "approvalLevel",
+                created_at as "createdAt", blockchain_tx_id as "blockchainTxId"
+         FROM document_signatures
+         WHERE document_id = $1 AND signature_type = 'approve'
+         ORDER BY created_at ASC`,
+        [documentId]
+      );
+
+      res.json({
+        success: true,
+        data: {
+          documentId,
+          documentType: doc.document_type,
+          entityType: doc.entity_type,
+          documentStatus: doc.status,
+          requiresMultiPartyApproval: requirements !== null && requirements.minApprovers > 1,
+          requirements: requirements ? {
+            minApprovers: requirements.minApprovers,
+            requiredRoles: requirements.requiredRoles,
+            approvalOrder: requirements.approvalOrder,
+            description: requirements.description
+          } : null,
+          workflowState: workflowState ? {
+            requiredApprovals: workflowState.requiredApprovals,
+            currentApprovals: workflowState.currentApprovals,
+            approvalStatus: workflowState.approvalStatus,
+            approvedBy: workflowState.approvedBy,
+            isComplete: workflowState.currentApprovals >= workflowState.requiredApprovals,
+            completedAt: workflowState.completedAt,
+            rejectedBy: workflowState.rejectedBy,
+            rejectionReason: workflowState.rejectionReason
+          } : null,
+          userValidation: {
+            canApprove: validation.canApprove,
+            reason: validation.reason,
+            nextRequiredRole: validation.nextRequiredRole
+          },
+          signatures: signatures || [],
+          timestamp: new Date().toISOString()
+        }
+      });
+
+    } catch (error: any) {
+      logger.error('Error fetching approval status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to fetch approval status'
+        },
         timestamp: new Date().toISOString()
       });
     }

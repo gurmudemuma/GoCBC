@@ -200,7 +200,7 @@ const CBE_COLORS = {
 
 const BanksPortal: React.FC = () => {
   // 🔇 Logging Control - Set to true to enable verbose logs
-  const DEV_LOGGING = false;
+  const DEV_LOGGING = true;
   const devLog = (...args: any[]) => {
     if (DEV_LOGGING) console.log(...args);
   };
@@ -534,6 +534,10 @@ const BanksPortal: React.FC = () => {
                 approvalDate: lc.approvalDate,
                 issuingBank: lc.issuingBank,
                 advisingBank: lc.advisingBank,
+                // ✅ CRITICAL: Include customs clearance data from API
+                customsClearanceStatus: lc.customsClearanceStatus,
+                customsCleared: lc.customsCleared,
+                customsClearanceDate: lc.customsClearanceDate,
               }));
               setLetterOfCredits(lcs);
               devLog(`[BANKS] ⚡ LCs loaded: ${lcs.length}`);
@@ -557,10 +561,14 @@ const BanksPortal: React.FC = () => {
           .catch(err => { console.warn('[BANKS] SWIFT failed:', err); return []; }),
 
         // 3. Forex
-        couchDBService.getAllForex()
-          .then(forex => {
-            devLog(`[BANKS] ⚡ Forex loaded: ${forex.length}`);
-            return forex;
+        apiFetch('/forex', { headers: { 'Authorization': `Bearer ${token}` }})
+          .then(r => r.json())
+          .then(result => {
+            if (result.success) {
+              devLog(`[BANKS] ⚡ Forex loaded: ${result.data?.length || 0}`);
+              return result.data || [];
+            }
+            return [];
           })
           .catch(err => { console.warn('[BANKS] Forex failed:', err); return []; }),
 
@@ -677,24 +685,78 @@ const BanksPortal: React.FC = () => {
         }
 
         // Filter LCs for payment release (documents examined and compliant, awaiting payment)
+        console.log('[BANKS] 🚀 Starting payment release filter, total LCs:', lcs.length);
         const forPayment = lcs.filter((lc: any) => {
+          const isTarget = lc.lcId === 'LC1789460822330';
+          if (isTarget) console.log('[BANKS] 🎯 Found target LC1789460822330, checking conditions...');
+          
           // Must have documents
-          if (!lc.documents || lc.documents.length === 0) return false;
+          if (!lc.documents || lc.documents.length === 0) {
+            if (isTarget) console.log('[BANKS] ❌ FAIL: No documents');
+            return false;
+          }
+          if (isTarget) console.log('[BANKS] ✅ Has documents:', lc.documents.length);
           
           // ✅ Must be UTILIZED (documents examined) to release payment
           // Valid chaincode workflow: UTILIZED → PAYMENT_RELEASED (via ReleaseLCPayment)
           // TEMPORARY: Also accept FOREX_ALLOCATED with verified docs (migration period)
-          if (lc.status !== 'UTILIZED' && lc.status !== 'FOREX_ALLOCATED') return false;
+          if (lc.status !== 'UTILIZED' && lc.status !== 'FOREX_ALLOCATED') {
+            if (isTarget) console.log('[BANKS] ❌ FAIL: Status not UTILIZED or FOREX_ALLOCATED. Current:', lc.status);
+            return false;
+          }
+          if (isTarget) console.log('[BANKS] ✅ Status OK:', lc.status);
           
-          // All documents must be verified/compliant
-          // Check both status and verificationStatus fields
-          const allDocsVerified = lc.documents.every((d: any) => {
+          // ✅ All documents must be verified/compliant AND have complete approval workflows
+          const allDocsApproved = lc.documents.every((d: any) => {
+            // Check verification status
             const docStatus = d.verificationStatus || d.status || '';
-            return docStatus === 'verified' || docStatus === 'approved' || docStatus === 'compliant';
+            const isVerified = docStatus === 'verified' || docStatus === 'approved' || docStatus === 'compliant';
+            
+            if (isTarget && !isVerified) {
+              console.log('[BANKS] ❌ Doc not verified:', d.documentType, 'status:', docStatus);
+            }
+            
+            // ✅ Check multi-party approval workflow
+            if (d.requiresMultiPartyApproval) {
+              // Document requires multi-party approval - must be complete
+              if (isTarget) console.log('[BANKS] 🔐 Doc requires approval:', d.documentType, 'complete:', d.approvalWorkflowComplete);
+              return isVerified && d.approvalWorkflowComplete === true;
+            }
+            
+            // No multi-party approval required - just needs verification
+            return isVerified;
           });
           
-          return allDocsVerified;
+          if (!allDocsApproved) {
+            if (isTarget) console.log('[BANKS] ❌ FAIL: Not all docs approved');
+            return false;
+          }
+          if (isTarget) console.log('[BANKS] ✅ All docs approved');
+          
+          // ✅ CUSTOMS CLEARANCE REQUIRED: Must have customs clearance before payment release
+          // Check if shipment has customs clearance completed
+          const hasCustomsClearance = lc.customsClearanceStatus === 'CLEARED' || 
+                                      lc.customsClearanceStatus === 'cleared' ||
+                                      lc.customsCleared === true;
+          
+          if (isTarget) {
+            console.log('[BANKS] 🚢 Customs check:', {
+              customsClearanceStatus: lc.customsClearanceStatus,
+              customsCleared: lc.customsCleared,
+              hasCustomsClearance
+            });
+          }
+          
+          if (!hasCustomsClearance) {
+            if (isTarget) console.log('[BANKS] ❌ FAIL: Customs not cleared');
+            return false;
+          }
+          
+          if (isTarget) console.log('[BANKS] ✅✅✅ ALL CHECKS PASSED! LC should be included');
+          
+          return hasCustomsClearance;
         });
+        console.log('[BANKS] 🚀 Payment filter complete, forPayment count:', forPayment.length);
         setLcsForPaymentRelease(forPayment);
         devLog(`[BANKS] ⚡ LCs ready for payment release: ${forPayment.length}`);
         
@@ -716,6 +778,19 @@ const BanksPortal: React.FC = () => {
           });
           devLog(`  - LCs with verified docs: ${lcsWithVerifiedDocs.length}`);
           
+          // Check customs clearance
+          const lcsWithCustoms = lcs.filter((lc: any) => {
+            return lc.customsClearanceStatus === 'CLEARED' || lc.customsClearanceStatus === 'cleared' || lc.customsCleared === true;
+          });
+          devLog(`  - LCs with customs clearance: ${lcsWithCustoms.length}`);
+          
+          // ✅ Check approval workflows
+          const lcsWithPendingApprovals = lcs.filter((lc: any) => {
+            if (!lc.documents || lc.documents.length === 0) return false;
+            return lc.documents.some((d: any) => d.requiresMultiPartyApproval && !d.approvalWorkflowComplete);
+          });
+          devLog(`  - LCs with pending approvals: ${lcsWithPendingApprovals.length}`);
+          
           // Show status breakdown
           const statusCounts: any = {};
           lcs.forEach((lc: any) => {
@@ -730,11 +805,16 @@ const BanksPortal: React.FC = () => {
               lcId: sampleLC.lcId,
               status: sampleLC.status,
               documentCount: sampleLC.documents?.length || 0,
+              customsClearanceStatus: sampleLC.customsClearanceStatus || 'NOT SET',
+              customsCleared: sampleLC.customsCleared || false,
               documents: sampleLC.documents?.map((d: any) => ({
                 type: d.documentType,
                 status: d.status,
                 verificationStatus: d.verificationStatus,
-                combined: d.verificationStatus || d.status || ''
+                combined: d.verificationStatus || d.status || '',
+                requiresMultiPartyApproval: d.requiresMultiPartyApproval || false,
+                approvalProgress: d.requiresMultiPartyApproval ? `${d.currentApprovals}/${d.requiredApprovals}` : 'N/A',
+                approvalComplete: d.approvalWorkflowComplete
               }))
             });
           }

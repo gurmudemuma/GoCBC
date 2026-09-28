@@ -372,9 +372,13 @@ router.post('/:paymentID/documents',
 
       await fabricService.connectAsOrg('BanksMSP');
 
+      // Chaincode expects documents as a JSON-stringified array of strings
+      // Each document should be a JSON string within the array
+      const documentStrings = documents.map((doc: any) => JSON.stringify(doc));
+      
       const result = await fabricService.invokeChaincode('SubmitPaymentDocuments', [
         paymentID,
-        JSON.stringify(documents),
+        JSON.stringify(documentStrings), // Pass array as single JSON string parameter
       ]);
 
       if (result.success) {
@@ -796,7 +800,7 @@ router.post('/:paymentID/settle',
         });
       }
 
-      await fabricService.connectAsOrg('NBEMSP');
+      await fabricService.connectAsOrg('BanksMSP'); // Banks settle payments
 
       const result = await fabricService.invokeChaincode('SettlePayment', [
         paymentID,
@@ -1048,6 +1052,36 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     } catch (enrichError) {
       logger.warn('[PAYMENT] ⚠️  Could not enrich payments with buyer data:', enrichError);
     }
+
+    // ✅ NORMALIZE and CALCULATE fields
+    const NBE_EXCHANGE_RATE = 57.5; // ETB per USD (should be dynamic in production)
+    payments = payments.map((payment: any) => {
+      const amount = payment.amount || 0;
+      const exchangeRate = payment.exchangeRate || NBE_EXCHANGE_RATE;
+      const retentionRate = payment.retentionRate || 0.10; // 10% default retention
+      
+      // Calculate derived fields if not already set
+      const amountBirr = payment.amountBirr || (amount * exchangeRate);
+      const retainedAmount = payment.retainedAmount || (amount * retentionRate);
+      const convertedAmount = payment.convertedAmount || amountBirr;
+      const advancePercentage = payment.advancePercentage || 0;
+      const advanceAmount = payment.advanceAmount || (amount * (advancePercentage / 100));
+      const balanceAmount = payment.balanceAmount || (amount - advanceAmount);
+      
+      return {
+        ...payment,
+        exchangeRate,
+        amountBirr,
+        retainedAmount,
+        convertedAmount,
+        advanceAmount,
+        balanceAmount,
+        // Ensure shipmentId is populated
+        shipmentId: payment.shipmentId || payment.ShipmentID || payment.shipment_id || '',
+        // Ensure verifiedById is populated
+        verifiedById: payment.verifiedById || payment.verifiedBy || '',
+      };
+    });
 
     // Apply blockchain-side filters (status, exporter, dates)
     if (status) {

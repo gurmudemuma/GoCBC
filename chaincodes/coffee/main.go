@@ -1267,6 +1267,47 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 	}
 	fmt.Printf("CreateShipment: Contract data loaded for mapping\n")
 
+	// ✅ CRITICAL VALIDATION: Check if LC exists and has forex allocated before allowing shipment
+	fmt.Printf("CreateShipment: Validating LC and forex allocation...\n")
+	lcIterator, err := ctx.GetStub().GetStateByRange("LC_", "LC_~")
+	if err != nil {
+		return fmt.Errorf("failed to query LCs: %v", err)
+	}
+	defer lcIterator.Close()
+	
+	lcFound := false
+	lcValidated := false
+	for lcIterator.HasNext() {
+		response, err := lcIterator.Next()
+		if err != nil {
+			continue
+		}
+		var lc LetterOfCredit
+		if json.Unmarshal(response.Value, &lc) == nil {
+			if lc.ContractID == contractID {
+				lcFound = true
+				// LC must have forex allocated before shipment can be created
+				if lc.Status == "FOREX_ALLOCATED" || lc.Status == "UTILIZED" || lc.Status == "PAYMENT_RELEASED" {
+					lcValidated = true
+					fmt.Printf("CreateShipment: LC %s validated (status: %s)\n", lc.LCID, lc.Status)
+					break
+				} else {
+					fmt.Printf("CreateShipment ERROR: LC %s status is %s, must be FOREX_ALLOCATED or later\n", lc.LCID, lc.Status)
+					return fmt.Errorf("CreateShipment: LC for contract %s must have forex allocated before shipment creation (current LC status: %s)", contractID, lc.Status)
+				}
+			}
+		}
+	}
+	
+	if !lcFound {
+		fmt.Printf("CreateShipment ERROR: No LC found for contract %s\n", contractID)
+		return fmt.Errorf("CreateShipment: No Letter of Credit found for contract %s. LC with forex allocation required before shipment creation", contractID)
+	}
+	
+	if !lcValidated {
+		return fmt.Errorf("CreateShipment: LC validation failed for contract %s", contractID)
+	}
+
 	// AUTO-MAP: Exporter ID from contract if not provided
 	mappedExporterID := exporterID
 	if mappedExporterID == "" || mappedExporterID == "AUTO" {

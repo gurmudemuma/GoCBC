@@ -1100,6 +1100,9 @@ router.get('/lc', async (req, res) => {
         lastUpdatedByMsp: lc?.lastUpdatedByMsp || lc?.last_updated_by_msp || null,
         createdAt: lc?.createdAt || lc?.created_at || null,
         updatedAt: lc?.updatedAt || lc?.updated_at || null,
+        customsClearanceStatus: 'PENDING', // Will be enriched below
+        customsCleared: false, // Will be enriched below
+        customsClearanceDate: null as any, // Will be enriched below
       };
     });
     
@@ -1156,7 +1159,127 @@ router.get('/lc', async (req, res) => {
       logger.warn('[BANKING] ⚠️  Could not enrich with documents:', docError);
     }
     
-    logger.info(`[BANKING] ✅ Returning ${normalizedLCs.length} LCs (source: ${source}, enriched with PostgreSQL buyer data + documents)`);
+    // ✅ ENRICH with customs clearance status from PostgreSQL
+    try {
+      logger.info('[BANKING] 🚢 Enriching LCs with customs clearance status...');
+      for (const lc of normalizedLCs) {
+        if (!lc.contractId) continue;
+        
+        // First, get the numeric contract ID from export_contracts table
+        const contract = await dbService.get(
+          `SELECT id FROM export_contracts WHERE contract_number = $1`,
+          [lc.contractId]
+        );
+        
+        if (!contract || !contract.id) {
+          lc.customsClearanceStatus = 'PENDING';
+          lc.customsCleared = false;
+          continue;
+        }
+        
+        // Get customs clearance for this contract using numeric ID
+        const clearances = await dbService.all(
+          `SELECT declaration_number, status, clearance_date 
+           FROM customs_declarations 
+           WHERE contract_id = $1 
+           ORDER BY created_at DESC 
+           LIMIT 1`,
+          [contract.id]
+        );
+        
+        if (clearances && clearances.length > 0) {
+          const clearance = clearances[0];
+          lc.customsClearanceStatus = clearance.status || 'PENDING';
+          lc.customsCleared = clearance.status === 'CLEARED' || clearance.status === 'cleared';
+          lc.customsClearanceDate = clearance.clearance_date;
+          logger.debug(`[BANKING] 🚢 LC ${lc.lcId}: customs status=${lc.customsClearanceStatus}`);
+        } else {
+          lc.customsClearanceStatus = 'PENDING';
+          lc.customsCleared = false;
+        }
+      }
+      logger.info(`[BANKING] ✅ Customs clearance enrichment complete`);
+      
+      // 🔍 DEBUG: Log specific LC details
+      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+      if (targetLC) {
+        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330:`, {
+          lcId: targetLC.lcId,
+          status: targetLC.status,
+          contractId: targetLC.contractId,
+          documentCount: targetLC.documents?.length || 0,
+          customsClearanceStatus: targetLC.customsClearanceStatus,
+          customsCleared: targetLC.customsCleared
+        });
+      }
+    } catch (customsError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with customs clearance:', customsError);
+    }
+    
+    // ✅ ENRICH documents with multi-party approval workflow state
+    try {
+      logger.info('[BANKING] 🔐 Enriching documents with approval workflow state...');
+      for (const lc of normalizedLCs) {
+        if (!lc.documents || lc.documents.length === 0) continue;
+        
+        for (const doc of lc.documents) {
+          // Get approval workflow state
+          const approvalState = await dbService.get(
+            `SELECT required_approvals, current_approvals, approval_status, approved_by
+             FROM approval_workflow_state
+             WHERE document_id = $1`,
+            [doc.documentId]
+          );
+          
+          if (approvalState && approvalState.required_approvals > 1) {
+            // Multi-party approval required
+            doc.requiresMultiPartyApproval = true;
+            doc.currentApprovals = approvalState.current_approvals || 0;
+            doc.requiredApprovals = approvalState.required_approvals;
+            doc.approvalWorkflowComplete = (approvalState.current_approvals >= approvalState.required_approvals);
+            doc.approvalStatus = approvalState.approval_status || 'pending';
+            doc.approvedBy = approvalState.approved_by || [];
+            logger.debug(`[BANKING] 🔐 Doc ${doc.documentId}: approval ${doc.currentApprovals}/${doc.requiredApprovals} (complete: ${doc.approvalWorkflowComplete})`);
+          } else {
+            // No multi-party approval required or no workflow exists
+            doc.requiresMultiPartyApproval = false;
+            doc.approvalWorkflowComplete = true; // No approval needed, so consider complete
+            doc.currentApprovals = 1;
+            doc.requiredApprovals = 1;
+          }
+        }
+      }
+      logger.info(`[BANKING] ✅ Approval workflow enrichment complete`);
+      
+      // 🔍 DEBUG: Log LC1789460822330 documents in detail
+      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+      if (targetLC && targetLC.documents) {
+        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330 Documents (${targetLC.documents.length}):`, 
+          targetLC.documents.map((d: any) => ({
+            type: d.documentType,
+            status: d.status,
+            verificationStatus: d.verificationStatus,
+            requiresApproval: d.requiresMultiPartyApproval,
+            approvalComplete: d.approvalWorkflowComplete
+          }))
+        );
+      }
+    } catch (approvalError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with approval workflow:', approvalError);
+    }
+    
+    logger.info(`[BANKING] ✅ Returning ${normalizedLCs.length} LCs (source: ${source}, enriched with PostgreSQL buyer data + documents + customs + approvals)`);
+
+    // 🔍 FINAL DEBUG: Confirm LC1789460822330 customs data before sending to frontend
+    const finalLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+    if (finalLC) {
+      logger.info(`[BANKING] 🔍 FINAL CHECK LC1789460822330 before response:`, {
+        lcId: finalLC.lcId,
+        customsClearanceStatus: finalLC.customsClearanceStatus,
+        customsCleared: finalLC.customsCleared,
+        status: finalLC.status
+      });
+    }
 
     res.json({
       success: true,

@@ -2326,3 +2326,58 @@ router.post('/verify/:logId', authMiddleware, async (req: any, res: Response) =>
     });
   }
 });
+
+
+/**
+ * GET /audit/trail/:entityType/:entityId
+ * Get audit trail for a specific entity (database + blockchain combined)
+ */
+router.get('/trail/:entityType/:entityId', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { entityType, entityId } = req.params;
+    
+    logger.info(`[AUDIT] Fetching audit trail for ${entityType} ${entityId}`);
+    
+    // Get database audit logs
+    const dbLogs = await auditService.getEntityLogs(entityType, entityId);
+    
+    // Try to get blockchain logs too
+    let blockchainLogs: any[] = [];
+    try {
+      const bcResult = await auditService.getBlockchainAuditLogs({
+        entityType,
+        entityId
+      });
+      blockchainLogs = bcResult || [];
+    } catch (bcErr) {
+      logger.warn(`[AUDIT] Could not fetch blockchain logs: ${bcErr}`);
+    }
+    
+    // Combine and sort by timestamp
+    const allLogs = [...dbLogs, ...blockchainLogs].sort((a: any, b: any) => {
+      const timeA = new Date(a.timestamp || a.created_at).getTime();
+      const timeB = new Date(b.timestamp || b.created_at).getTime();
+      return timeB - timeA; // Most recent first
+    });
+    
+    res.json({
+      success: true,
+      data: allLogs,
+      metadata: {
+        totalLogs: allLogs.length,
+        databaseLogs: dbLogs.length,
+        blockchainLogs: blockchainLogs.length,
+        entityType,
+        entityId
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error fetching audit trail:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch audit trail',
+      timestamp: new Date().toISOString()
+    });
+  }
+});

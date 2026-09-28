@@ -592,6 +592,297 @@ type DocumentWithSignatures struct {
 	UpdatedAt        time.Time            `json:"updatedAt"`
 }
 
+// ==================== MULTI-PARTY APPROVAL STRUCTURES ====================
+
+// ApprovalRequirement defines multi-party approval rules for document types
+type ApprovalRequirement struct {
+	RequirementID string   `json:"requirementId"` // Unique ID: DOCTYPE_ENTITYTYPE
+	DocumentType  string   `json:"documentType"`  // COMMERCIAL_INVOICE, BILL_OF_LADING, etc.
+	EntityType    string   `json:"entityType"`    // LC, CONTRACT, SHIPMENT, CUSTOMS_DECLARATION
+	MinApprovers  int      `json:"minApprovers"`  // Minimum number of approvers required
+	RequiredRoles []string `json:"requiredRoles"` // Roles that must approve (in order for sequential)
+	ApprovalOrder string   `json:"approvalOrder"` // "sequential" or "parallel"
+	Description   string   `json:"description"`   // Human-readable description
+	Active        bool     `json:"active"`        // Is this requirement active?
+	CreatedBy     string   `json:"createdBy"`     // Who created this requirement
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// DocumentApprovalState tracks approval progress on blockchain
+type DocumentApprovalState struct {
+	DocumentID        string    `json:"documentId"`
+	DocumentType      string    `json:"documentType"`
+	EntityType        string    `json:"entityType"`
+	RequiredApprovals int       `json:"requiredApprovals"`
+	CurrentApprovals  int       `json:"currentApprovals"`
+	ApprovedBy        []string  `json:"approvedBy"`      // Certificate hashes of approvers
+	ApprovedByRoles   []string  `json:"approvedByRoles"` // Corresponding roles
+	ApprovalOrder     string    `json:"approvalOrder"`   // sequential or parallel
+	ApprovalStatus    string    `json:"approvalStatus"`  // pending, in_progress, approved, rejected
+	WorkflowComplete  bool      `json:"workflowComplete"`
+	RejectedBy        string    `json:"rejectedBy"`
+	RejectionReason   string    `json:"rejectionReason"`
+	LastApprovalAt    time.Time `json:"lastApprovalAt"`
+	CompletedAt       time.Time `json:"completedAt"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// ==================== END MULTI-PARTY APPROVAL STRUCTURES ====================
+
+// ==================== MULTI-PARTY APPROVAL FUNCTIONS ====================
+
+// SetApprovalRequirement - Admin function to set approval requirements for document types
+func (c *CoffeeContract) SetApprovalRequirement(
+	ctx contractapi.TransactionContextInterface,
+	documentType string,
+	entityType string,
+	minApprovers int,
+	requiredRoles string, // Comma-separated roles
+	approvalOrder string, // "sequential" or "parallel"
+	description string,
+) error {
+	// Get caller identity
+	callerMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get caller MSP ID: %w", err)
+	}
+
+	// Only admin MSPs can set approval requirements
+	if callerMSPID != "NBEMSP" && callerMSPID != "AdminMSP" {
+		return fmt.Errorf("unauthorized: only NBE/Admin can set approval requirements (caller: %s)", callerMSPID)
+	}
+
+	requirementID := fmt.Sprintf("APPREQ_%s_%s", documentType, entityType)
+	
+	// Parse roles
+	roles := []string{}
+	if requiredRoles != "" {
+		roles = parseCommaSeparated(requiredRoles)
+	}
+
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	requirement := ApprovalRequirement{
+		RequirementID: requirementID,
+		DocumentType:  documentType,
+		EntityType:    entityType,
+		MinApprovers:  minApprovers,
+		RequiredRoles: roles,
+		ApprovalOrder: approvalOrder,
+		Description:   description,
+		Active:        true,
+		CreatedBy:     callerMSPID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	reqJSON, err := json.Marshal(requirement)
+	if err != nil {
+		return fmt.Errorf("failed to marshal requirement: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(requirementID, reqJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store requirement: %w", err)
+	}
+
+	fmt.Printf("✅ Approval requirement set: %s/%s requires %d approvers\n", documentType, entityType, minApprovers)
+	return nil
+}
+
+// GetApprovalRequirement - Get approval requirement for a document type
+func (c *CoffeeContract) GetApprovalRequirement(
+	ctx contractapi.TransactionContextInterface,
+	documentType string,
+	entityType string,
+) (*ApprovalRequirement, error) {
+	requirementID := fmt.Sprintf("APPREQ_%s_%s", documentType, entityType)
+	
+	reqJSON, err := ctx.GetStub().GetState(requirementID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read requirement: %w", err)
+	}
+
+	if reqJSON == nil {
+		return nil, nil // No requirement set
+	}
+
+	var requirement ApprovalRequirement
+	err = json.Unmarshal(reqJSON, &requirement)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal requirement: %w", err)
+	}
+
+	if !requirement.Active {
+		return nil, nil // Requirement is inactive
+	}
+
+	return &requirement, nil
+}
+
+// validateApproval - Internal function to validate if a signature can be approved
+func (c *CoffeeContract) validateApproval(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	documentType string,
+	entityType string,
+	signerRole string,
+	signerCertHash string,
+) (bool, string, int, error) {
+	// Get approval requirement
+	requirement, err := c.GetApprovalRequirement(ctx, documentType, entityType)
+	if err != nil {
+		return false, "", 0, fmt.Errorf("failed to get requirement: %w", err)
+	}
+
+	// If no requirement, single approval is sufficient
+	if requirement == nil || requirement.MinApprovers <= 1 {
+		return true, "No multi-party requirement", 1, nil
+	}
+
+	// Get or create approval state
+	stateKey := "APPSTATE_" + documentID
+	stateJSON, _ := ctx.GetStub().GetState(stateKey)
+
+	var state DocumentApprovalState
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	if stateJSON == nil {
+		// Create new state
+		state = DocumentApprovalState{
+			DocumentID:        documentID,
+			DocumentType:      documentType,
+			EntityType:        entityType,
+			RequiredApprovals: requirement.MinApprovers,
+			CurrentApprovals:  0,
+			ApprovedBy:        []string{},
+			ApprovedByRoles:   []string{},
+			ApprovalOrder:     requirement.ApprovalOrder,
+			ApprovalStatus:    "pending",
+			WorkflowComplete:  false,
+			CreatedAt:         now,
+		}
+	} else {
+		json.Unmarshal(stateJSON, &state)
+	}
+
+	// Check if already approved by this signer
+	for _, certHash := range state.ApprovedBy {
+		if certHash == signerCertHash {
+			return false, "You have already approved this document", 0, nil
+		}
+	}
+
+	// Check if workflow is already complete
+	if state.WorkflowComplete {
+		return false, "Document approval workflow is already complete", 0, nil
+	}
+
+	// Check if rejected
+	if state.ApprovalStatus == "rejected" {
+		return false, "Document was rejected", 0, nil
+	}
+
+	// Validate role
+	roleValid := false
+	for _, role := range requirement.RequiredRoles {
+		if role == signerRole {
+			roleValid = true
+			break
+		}
+	}
+	if !roleValid {
+		return false, fmt.Sprintf("Your role (%s) is not authorized. Required roles: %v", signerRole, requirement.RequiredRoles), 0, nil
+	}
+
+	// For sequential approval, check order
+	if requirement.ApprovalOrder == "sequential" {
+		expectedRoleIndex := state.CurrentApprovals
+		if expectedRoleIndex >= len(requirement.RequiredRoles) {
+			return false, "All required approvals already received", 0, nil
+		}
+		expectedRole := requirement.RequiredRoles[expectedRoleIndex]
+		if expectedRole != signerRole {
+			return false, fmt.Sprintf("Sequential approval required. Waiting for %s approval first", expectedRole), 0, nil
+		}
+	}
+
+	// Calculate new approval level
+	newApprovalLevel := state.CurrentApprovals + 1
+
+	// Validation passed
+	return true, "Approval validated", newApprovalLevel, nil
+}
+
+// recordApproval - Internal function to record an approval
+func (c *CoffeeContract) recordApproval(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	signerCertHash string,
+	signerRole string,
+	approvalLevel int,
+) error {
+	stateKey := "APPSTATE_" + documentID
+	stateJSON, _ := ctx.GetStub().GetState(stateKey)
+
+	var state DocumentApprovalState
+	json.Unmarshal(stateJSON, &state)
+
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+
+	// Update state
+	state.ApprovedBy = append(state.ApprovedBy, signerCertHash)
+	state.ApprovedByRoles = append(state.ApprovedByRoles, signerRole)
+	state.CurrentApprovals = approvalLevel
+	state.LastApprovalAt = now
+
+	// Check if complete
+	if state.CurrentApprovals >= state.RequiredApprovals {
+		state.ApprovalStatus = "approved"
+		state.WorkflowComplete = true
+		state.CompletedAt = now
+		fmt.Printf("✅ Approval workflow COMPLETE for %s (%d/%d)\n", documentID, state.CurrentApprovals, state.RequiredApprovals)
+	} else {
+		state.ApprovalStatus = "in_progress"
+		fmt.Printf("⏳ Approval progress for %s: %d/%d\n", documentID, state.CurrentApprovals, state.RequiredApprovals)
+	}
+
+	// Save state
+	updatedStateJSON, _ := json.Marshal(state)
+	return ctx.GetStub().PutState(stateKey, updatedStateJSON)
+}
+
+// Helper function to parse comma-separated string
+func parseCommaSeparated(input string) []string {
+	result := []string{}
+	if input == "" {
+		return result
+	}
+	parts := []rune(input)
+	current := ""
+	for _, char := range parts {
+		if char == ',' {
+			if current != "" {
+				result = append(result, current)
+				current = ""
+			}
+		} else if char != ' ' {
+			current += string(char)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// ==================== END MULTI-PARTY APPROVAL FUNCTIONS ====================
+
+
 // SignDocument - Sign a document with X.509 certificate (blockchain-backed)
 func (c *CoffeeContract) SignDocument(
 	ctx contractapi.TransactionContextInterface,
@@ -626,6 +917,63 @@ func (c *CoffeeContract) SignDocument(
 	// Get optional attributes
 	signerRole, _, _ := ctx.GetClientIdentity().GetAttributeValue("role")
 	signerEmail, _, _ := ctx.GetClientIdentity().GetAttributeValue("email")
+
+	// ✅ MULTI-PARTY APPROVAL VALIDATION (for APPROVE signature type)
+	var approvalLevel int = 1
+	var workflowComplete bool = false
+	
+	if signatureType == "APPROVE" {
+		// Get document metadata from DOCSIGS to know document type and entity type
+		docKey := "DOCSIGS_" + documentID
+		docSigJSON, _ := ctx.GetStub().GetState(docKey)
+		
+		var docType string = "UNKNOWN"
+		var entityType string = "UNKNOWN"
+		
+		if docSigJSON != nil {
+			var docWithSigs DocumentWithSignatures
+			json.Unmarshal(docSigJSON, &docWithSigs)
+			docType = docWithSigs.DocumentType
+			entityType = docWithSigs.EntityType
+		}
+		
+		// Validate approval
+		canApprove, reason, level, err := c.validateApproval(
+			ctx,
+			documentID,
+			docType,
+			entityType,
+			signerRole,
+			signerCertHash,
+		)
+		
+		if err != nil {
+			return fmt.Errorf("approval validation error: %w", err)
+		}
+		
+		if !canApprove {
+			return fmt.Errorf("approval denied: %s", reason)
+		}
+		
+		approvalLevel = level
+		
+		// Record approval on blockchain
+		err = c.recordApproval(ctx, documentID, signerCertHash, signerRole, approvalLevel)
+		if err != nil {
+			return fmt.Errorf("failed to record approval: %w", err)
+		}
+		
+		// Check if workflow is complete
+		stateKey := "APPSTATE_" + documentID
+		stateJSON, _ := ctx.GetStub().GetState(stateKey)
+		if stateJSON != nil {
+			var state DocumentApprovalState
+			json.Unmarshal(stateJSON, &state)
+			workflowComplete = state.WorkflowComplete
+		}
+		
+		fmt.Printf("✅ Multi-party approval validation passed: %s (Level %d, Complete: %v)\n", documentID, approvalLevel, workflowComplete)
+	}
 
 	// ✅ STEP 2: Get blockchain transaction details
 	txID := ctx.GetStub().GetTxID()

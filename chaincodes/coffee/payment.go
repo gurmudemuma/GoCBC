@@ -651,9 +651,10 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 		settlerID = settlerMSP // Fallback
 	}
 	
-	// Only Banks can settle payments
+	// ✅ CRITICAL: Only Banks can settle payments - STRICT ENFORCEMENT
 	if settlerMSP != "BanksMSP" {
-		log.Printf("WARNING: Non-Bank MSP settling payment: %s", settlerMSP)
+		log.Printf("ERROR: Unauthorized payment settlement attempt by MSP: %s", settlerMSP)
+		return fmt.Errorf("SettlePayment: unauthorized - only BanksMSP can settle payments (attempted by: %s)", settlerMSP)
 	}
 	
 	log.Printf("Payment %s settled by: %s (MSP: %s)", paymentID, settlerID, settlerMSP)

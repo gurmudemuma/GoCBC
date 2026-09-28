@@ -3464,6 +3464,30 @@ const ShippingPortal: React.FC = () => {
                 </Typography>
               </Alert>
 
+              {/* Document Management Panel for Shipment Documents */}
+              {selectedRecord && selectedRecord.shipmentId && (
+                <Box sx={{ mt: 3 }}>
+                  <Divider sx={{ mb: 2 }} />
+                  <DocumentManagementPanel
+                    entityType="SHIPMENT"
+                    entityId={selectedRecord.shipmentId}
+                    title="Shipment Documents"
+                    allowUpload={true}
+                    allowSign={true}
+                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
+                    defaultSignatureType="VERIFY"
+                    showSignatureTracker={true}
+                    requiredDocuments={[
+                      'BILL_OF_LADING',
+                      'COMMERCIAL_INVOICE',
+                      'PACKING_LIST',
+                      'CERTIFICATE_OF_ORIGIN',
+                      'INSURANCE_CERTIFICATE'
+                    ]}
+                  />
+                </Box>
+              )}
+
               {/* Blockchain Verification Section */}
               <Box sx={{ mt: 3 }}>
                 <Divider sx={{ mb: 2 }} />
@@ -4425,7 +4449,7 @@ const ShippingPortal: React.FC = () => {
                 {approvalDialog.verificationData.uploadedDocuments.length > 0 ? (
                   <Grid container spacing={2}>
                     {approvalDialog.verificationData.uploadedDocuments.map((doc, idx) => (
-                      <Grid item xs={12} md={6} key={idx}>
+                      <Grid item xs={12} md={6} key={doc.documentId || doc.fileName || doc.name || `shipping-doc-${idx}`}>
                         <Paper 
                           elevation={1} 
                           sx={{ 

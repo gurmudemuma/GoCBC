@@ -1,7 +1,7 @@
-# Use existing coffee-chaincode image (no internet needed)
+# Use the old working base image
 FROM coffee-chaincode:1.85
 WORKDIR /app
-# Replace the binary with the new v1.89
+# Copy the new chaincode binary
 COPY coffee /app/chaincode
 RUN chmod +x /app/chaincode
 CMD ["/app/chaincode"]

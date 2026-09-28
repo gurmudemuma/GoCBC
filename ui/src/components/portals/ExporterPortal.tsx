@@ -688,71 +688,70 @@ const ExporterPortal: React.FC = () => {
     
     console.log('[EXPORTER] ⚡ Profile section complete, starting blockchain data load...');
     
-    // EXPERT FIX: Load contracts DIRECTLY from blockchain (fast!)
+    // EXPERT FIX: Load contracts from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading contracts from BLOCKCHAIN...');
-      console.log('[EXPORTER] CouchDB URL: http://localhost:5984/coffeechannel_coffee');
-      const allContractsFromBlockchain = await couchDBService.query('/coffeechannel_coffee/_all_docs?startkey="CONTRACT"&endkey="CONTRACT\ufff0"&include_docs=true');
-      console.log('[EXPORTER] ✅ Blockchain query successful, parsing response...');
+      console.log('[EXPORTER] 🔗 Loading contracts from API...');
+      const response = await apiFetch('/contracts', { method: 'GET' });
       
-      if (allContractsFromBlockchain && allContractsFromBlockchain.rows) {
-        const allDocs = allContractsFromBlockchain.rows.map((row: any) => row.doc).filter((doc: any) => doc && !doc._id.startsWith('_design'));
-        console.log(`[EXPORTER] ✅ Found ${allDocs.length} total contracts on blockchain`);
-        
-        // Filter contracts for current exporter only  
-        const myContracts = allDocs.filter((c: any) => {
-          const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
-          return contractExporterId === currentExporterId;
-        });
-        
-        console.log(`[EXPORTER] ✅ Found ${myContracts.length} contracts for exporter ${currentExporterId}`);
-        console.log(`[EXPORTER] Contract statuses:`, myContracts.map((c: any) => ({ 
-          id: c.contractID || c.contractId, 
-          status: c.contractStatus 
-        })));
-        
-        // Map blockchain contracts to UI format (removed validation filter - show ALL contracts)
-        const mappedContracts = myContracts.map((c: any, index: number) => {
-          const contractId = c.contractID || c.contractId || c.ContractID || 
-                            `TEMP_${currentExporterId}_${index}_${Date.now()}`;
-          
-          const buyerBank = c.buyerBank || c.BuyerBank || '';
-          const exporterBank = c.exporterBank || c.ExporterBank || '';
-          
-          const rawQuantity = c.quantity || c.Quantity || '0';
-          const rawPricePerKg = c.pricePerKg || c.PricePerKg || '0';
-          const rawTotalValue = c.totalValue || c.TotalValue || '0';
-          
-          const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
-          const pricePerKg = typeof rawPricePerKg === 'string' ? parseFloat(rawPricePerKg) || 0 : Number(rawPricePerKg) || 0;
-          const totalValue = typeof rawTotalValue === 'string' ? parseFloat(rawTotalValue) || 0 : Number(rawTotalValue) || 0;
-          
-          return {
-            contractId: contractId,
-            nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
-              buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
-              buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
-              origin: c.origin || c.Origin || c.contractOrigin || c.contractOrigin || '',
-              buyerBank: buyerBank,
-              exporterBank: exporterBank,
-              coffeeType: c.coffeeType || c.CoffeeType || 'Unknown',
-              quantity,
-              pricePerKg,
-              totalValue,
-              currency: c.currency || c.Currency || 'USD',
-              status: c.contractStatus || c.ContractStatus || 'REGISTERED',
-              registrationDate: c.registrationDate || c.RegistrationDate || new Date().toISOString(),
-              approvalDate: c.approvalDate || c.ApprovalDate || ''
-            };
-          });
-        setContracts(mappedContracts);
-        setAllContracts(mappedContracts);
-        console.log(`✅ Loaded ${mappedContracts.length} contracts for exporter ${currentExporterId}`);
-      } else {
-        console.log('[EXPORTER] ⚠️ No contracts found on blockchain');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch contracts: ${response.statusText}`);
       }
+      
+      const result = await response.json();
+      const allDocs = result.data || [];
+      console.log(`[EXPORTER] ✅ Found ${allDocs.length} total contracts from API`);
+      
+      // Filter contracts for current exporter only  
+      const myContracts = allDocs.filter((c: any) => {
+        const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
+        return contractExporterId === currentExporterId;
+      });
+      
+      console.log(`[EXPORTER] ✅ Found ${myContracts.length} contracts for exporter ${currentExporterId}`);
+      console.log(`[EXPORTER] Contract statuses:`, myContracts.map((c: any) => ({ 
+        id: c.contractID || c.contractId, 
+        status: c.contractStatus 
+      })));
+      
+      // Map blockchain contracts to UI format (removed validation filter - show ALL contracts)
+      const mappedContracts = myContracts.map((c: any, index: number) => {
+        const contractId = c.contractID || c.contractId || c.ContractID || 
+                          `TEMP_${currentExporterId}_${index}_${Date.now()}`;
+        
+        const buyerBank = c.buyerBank || c.BuyerBank || '';
+        const exporterBank = c.exporterBank || c.ExporterBank || '';
+        
+        const rawQuantity = c.quantity || c.Quantity || '0';
+        const rawPricePerKg = c.pricePerKg || c.PricePerKg || '0';
+        const rawTotalValue = c.totalValue || c.TotalValue || '0';
+        
+        const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
+        const pricePerKg = typeof rawPricePerKg === 'string' ? parseFloat(rawPricePerKg) || 0 : Number(rawPricePerKg) || 0;
+        const totalValue = typeof rawTotalValue === 'string' ? parseFloat(rawTotalValue) || 0 : Number(rawTotalValue) || 0;
+        
+        return {
+          contractId: contractId,
+          nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
+          buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
+          buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
+          origin: c.origin || c.Origin || c.contractOrigin || c.contractOrigin || '',
+          buyerBank: buyerBank,
+          exporterBank: exporterBank,
+          coffeeType: c.coffeeType || c.CoffeeType || 'Unknown',
+          quantity,
+          pricePerKg,
+          totalValue,
+          currency: c.currency || c.Currency || 'USD',
+          status: c.contractStatus || c.ContractStatus || 'REGISTERED',
+          registrationDate: c.registrationDate || c.RegistrationDate || new Date().toISOString(),
+          approvalDate: c.approvalDate || c.ApprovalDate || ''
+        };
+      });
+      setContracts(mappedContracts);
+      setAllContracts(mappedContracts);
+      console.log(`✅ Loaded ${mappedContracts.length} contracts for exporter ${currentExporterId}`);
     } catch (error) {
-      console.error('[EXPORTER] ❌ Failed to load contracts from blockchain:', error);
+      console.error('[EXPORTER] ❌ Failed to load contracts from API:', error);
       console.error('[EXPORTER] Error details:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
@@ -760,10 +759,17 @@ const ExporterPortal: React.FC = () => {
       });
     }
 
-    // EXPERT FIX: Load LCs DIRECTLY from blockchain (fast!)
+    // EXPERT FIX: Load LCs from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading LCs from BLOCKCHAIN...');
-      const allLCs = await couchDBService.getAllLCs();
+      console.log('[EXPORTER] 🔗 Loading LCs from API...');
+      const response = await apiFetch('/banking/lc', { method: 'GET' });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch LCs: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      const allLCs = result.data || [];
       
       const myLCs = allLCs.filter((lc: any) => 
         (lc.exporterId || lc.ExporterID) === currentExporterId
@@ -825,10 +831,17 @@ const ExporterPortal: React.FC = () => {
       var loadedLCsForForex: any = [];
     }
 
-    // EXPERT FIX: Load Forex allocations DIRECTLY from blockchain (fast!)
+    // EXPERT FIX: Load Forex allocations from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading Forex from BLOCKCHAIN...');
-      const allForex = await couchDBService.getAllForex();
+      console.log('[EXPORTER] 🔗 Loading Forex from API...');
+      const response = await apiFetch('/forex', { method: 'GET' });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch forex: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      const allForex = result.data || [];
       
       const myForex = allForex.filter((f: any) => 
         (f.exporterId || f.ExporterID) === currentExporterId
@@ -905,169 +918,172 @@ const ExporterPortal: React.FC = () => {
       console.warn('Could not load forex allocations:', error);
     }
 
-    // EXPERT FIX: Load Shipments DIRECTLY from blockchain (fast!)
+    // EXPERT FIX: Load Shipments from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading shipments from BLOCKCHAIN...');
-      const allShipmentsFromBlockchain = await couchDBService.query('/coffeechannel_coffee/_all_docs?startkey="SHIPMENT"&endkey="SHIPMENT\ufff0"&include_docs=true');
+      console.log('[EXPORTER] 🔗 Loading shipments from API...');
+      const shipmentsResponse = await apiFetch('/shipments', { method: 'GET' });
       
-      if (allShipmentsFromBlockchain && allShipmentsFromBlockchain.rows) {
-        const allShipmentDocs = allShipmentsFromBlockchain.rows.map((row: any) => row.doc).filter((doc: any) => doc && !doc._id.startsWith('_design'));
-        console.log(`[EXPORTER] ✅ Found ${allShipmentDocs.length} total shipments on blockchain`);
+      if (!shipmentsResponse.ok) {
+        throw new Error(`Failed to fetch shipments: ${shipmentsResponse.statusText}`);
+      }
+      
+      const shipmentsResult = await shipmentsResponse.json();
+      const allShipmentDocs = shipmentsResult.data || [];
+      console.log(`[EXPORTER] ✅ Found ${allShipmentDocs.length} total shipments from API`);
+      
+      const myShipments = allShipmentDocs.filter((s: any) => 
+        (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
+      );
+      console.log(`[EXPORTER] ✅ Found ${myShipments.length} shipments for exporter ${currentExporterId}`);
         
-        const myShipments = allShipmentDocs.filter((s: any) => 
-          (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
-        );
-        console.log(`[EXPORTER] ✅ Found ${myShipments.length} shipments for exporter ${currentExporterId}`);
+        // Load quality inspections to check for approved shipments
+        const inspectionsResponse = await apiFetch('/quality/inspections', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const inspectionsResult = await inspectionsResponse.json();
+        
+        let approvedShipmentIds: Set<string> = new Set();
+        if (inspectionsResult.success && inspectionsResult.data && Array.isArray(inspectionsResult.data)) {
+          console.log('[EXPORTER] Loaded quality inspections:', inspectionsResult.data.length);
+          // Find all approved inspections
+          const approvedInspections = inspectionsResult.data.filter((i: any) => 
+            i.status === 'APPROVED' || i.status === 'SHIPPED'
+          );
+          approvedShipmentIds = new Set(approvedInspections.map((i: any) => i.shipmentId || i.shipmentID));
+          console.log('[EXPORTER] Approved shipment IDs:', Array.from(approvedShipmentIds));
           
-          // Load quality inspections to check for approved shipments
-          const inspectionsResponse = await apiFetch('/quality/inspections', {
+          // Log first MY shipment RAW data to see exact blockchain fields
+          if (myShipments.length > 0) {
+            console.log('[EXPORTER] ========== FIRST MY SHIPMENT RAW DATA ==========');
+            console.log(JSON.stringify(myShipments[0], null, 2));
+            console.log('[EXPORTER] ======================================================');
+          }
+        } else {
+          console.log('[EXPORTER] Loaded quality inspections: no data or not an array', inspectionsResult.data);
+        }
+        
+        // Filter out shipments with empty/invalid data - show ALL shipments with shipmentId
+        const validShipments = myShipments.filter((s: any) => {
+          const shipmentId = s.shipmentID || s.shipmentId || '';
+          
+          // Only require valid shipmentId (removed quantity/grade requirements)
+          const hasValidData = shipmentId !== '';
+          
+          if (!hasValidData) {
+            console.log(`[EXPORTER] Filtering out shipment without ID`);
+          }
+          
+          return hasValidData;
+        });
+        
+        console.log(`[EXPORTER] Filtered from ${myShipments.length} to ${validShipments.length} valid shipments`);
+        
+        const mappedShipments = validShipments.map((s: any) => {
+          const shipmentId = s.shipmentID || s.shipmentId;
+          let status = s.status || s.Status || s.shipmentStatus || 'CREATED';
+          
+          // Update status if quality inspection is approved
+          if (status === 'CREATED' && approvedShipmentIds.has(shipmentId)) {
+            status = 'SHIPPED';
+            console.log(`[EXPORTER] Updated shipment ${shipmentId} status to SHIPPED (quality approved)`);
+          }
+          
+          // Ensure quantity is always a valid number - try all possible field names
+          const rawQuantity = s.quantity || s.Quantity || s.shipmentQuantity || s.ShipmentQuantity || 0;
+          const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
+          
+          // Debug log the raw shipment to see ALL available fields
+          console.log(`[SHIPMENT MAPPING] Processing ${shipmentId}:`, {
+            rawQuantity,
+            parsedQuantity: quantity,
+            rawGrade: s.grade || s.Grade,
+            rawBuyerId: s.buyerId || s.buyerID || s.BuyerID,
+            rawStatus: s.status || s.Status,
+            allFields: Object.keys(s),
+          });
+          
+          // Map ALL shipment fields from blockchain to UI format
+          return {
+            shipmentId,
+            contractId: s.contractID || s.contractId,
+            exporterId: s.exporterID || s.exporterId || s.ExporterID,
+            buyerId: s.buyerID || s.buyerId || s.BuyerID,
+            origin: s.origin || s.Origin,
+            quantity, // Properly parsed quantity
+            grade: s.grade || s.Grade || s.coffeeGrade || s.CoffeeGrade,
+            icoNumber: s.icoNumber || s.ICONumber,
+            ecxLotNumber: s.ecxLotNumber || s.ECXLotNumber,
+            channel: s.channel || s.Channel,
+            forexRate: s.forexRate || s.ForexRate || 0,
+            valueUSD: s.valueUSD || s.valueUsd || s.ValueUSD || 0,
+            eudrCompliant: s.eudrCompliant || s.EUDRCompliant || false,
+            transportMode: s.transportMode || s.TransportMode || 'SEA',
+            status,
+            billOfLading: s.billOfLadingNo || s.billOfLading || s.BillOfLading,
+            vesselName: s.vesselName || s.VesselName,
+            currentLocation: s.currentLocation || s.CurrentLocation,
+            estimatedArrival: s.estimatedArrival || s.EstimatedArrival,
+            departurePort: s.departurePort || s.DeparturePort,
+            destinationPort: s.destinationPort || s.DestinationPort,
+            createdAt: s.createdAt || s.CreatedAt || s.timestamp || s.Timestamp,
+          };
+        });
+        
+        // ✅ SHIPMENTS TAB: ONLY SHOW ACTUAL SHIPMENTS
+        // Approved contracts should be handled in "My Contracts" tab with LC request workflow
+        // Correct workflow: Contract Approved → Request LC → Bank Issues LC + Allocates Forex → Create Shipment
+        console.log('[EXPORTER] ========== SHIPMENTS TAB: ACTUAL SHIPMENTS ONLY ==========');
+        console.log(`[EXPORTER] Loaded ${mappedShipments.length} actual shipments for exporter`);
+        
+        setShipments(mappedShipments);
+        setAllShipments(mappedShipments);
+        console.log(`[EXPORTER] Loaded ${myShipments.length} shipments for exporter`);
+        console.log('[EXPORTER] Sample shipment data:', myShipments[0]);
+        console.log('[EXPORTER] Shipment contract IDs:', myShipments.map((s: any) => ({
+          shipmentId: s.shipmentID || s.shipmentId,
+          contractId: s.contractID || s.contractId,
+          quantity: s.quantity || s.Quantity
+        })));
+        
+        // NOW check forex allocation alert AFTER shipments are loaded
+        // Only show forex alert if there's allocated forex BUT no shipment created yet
+        try {
+          const forexResponse = await apiFetch('/forex', {
             headers: { 'Authorization': `Bearer ${token}` }
           });
-          const inspectionsResult = await inspectionsResponse.json();
-          
-          let approvedShipmentIds: Set<string> = new Set();
-          if (inspectionsResult.success && inspectionsResult.data && Array.isArray(inspectionsResult.data)) {
-            console.log('[EXPORTER] Loaded quality inspections:', inspectionsResult.data.length);
-            // Find all approved inspections
-            const approvedInspections = inspectionsResult.data.filter((i: any) => 
-              i.status === 'APPROVED' || i.status === 'SHIPPED'
+          const forexResult = await forexResponse.json();
+          if (forexResult.success && forexResult.data) {
+            const myForex = forexResult.data.filter((f: any) => 
+              (f.exporterId || f.ExporterID) === currentExporterId
             );
-            approvedShipmentIds = new Set(approvedInspections.map((i: any) => i.shipmentId || i.shipmentID));
-            console.log('[EXPORTER] Approved shipment IDs:', Array.from(approvedShipmentIds));
             
-            // Log first MY shipment RAW data to see exact blockchain fields
-            if (myShipments.length > 0) {
-              console.log('[EXPORTER] ========== FIRST MY SHIPMENT RAW DATA ==========');
-              console.log(JSON.stringify(myShipments[0], null, 2));
-              console.log('[EXPORTER] ======================================================');
-            }
-          } else {
-            console.log('[EXPORTER] Loaded quality inspections: no data or not an array', inspectionsResult.data);
-          }
-          
-          // Filter out shipments with empty/invalid data - show ALL shipments with shipmentId
-          const validShipments = myShipments.filter((s: any) => {
-            const shipmentId = s.shipmentID || s.shipmentId || '';
-            
-            // Only require valid shipmentId (removed quantity/grade requirements)
-            const hasValidData = shipmentId !== '';
-            
-            if (!hasValidData) {
-              console.log(`[EXPORTER] Filtering out shipment without ID`);
-            }
-            
-            return hasValidData;
-          });
-          
-          console.log(`[EXPORTER] Filtered from ${myShipments.length} to ${validShipments.length} valid shipments`);
-          
-          const mappedShipments = validShipments.map((s: any) => {
-            const shipmentId = s.shipmentID || s.shipmentId;
-            let status = s.status || s.Status || s.shipmentStatus || 'CREATED';
-            
-            // Update status if quality inspection is approved
-            if (status === 'CREATED' && approvedShipmentIds.has(shipmentId)) {
-              status = 'SHIPPED';
-              console.log(`[EXPORTER] Updated shipment ${shipmentId} status to SHIPPED (quality approved)`);
-            }
-            
-            // Ensure quantity is always a valid number - try all possible field names
-            const rawQuantity = s.quantity || s.Quantity || s.shipmentQuantity || s.ShipmentQuantity || 0;
-            const quantity = typeof rawQuantity === 'string' ? parseFloat(rawQuantity) || 0 : Number(rawQuantity) || 0;
-            
-            // Debug log the raw shipment to see ALL available fields
-            console.log(`[SHIPMENT MAPPING] Processing ${shipmentId}:`, {
-              rawQuantity,
-              parsedQuantity: quantity,
-              rawGrade: s.grade || s.Grade,
-              rawBuyerId: s.buyerId || s.buyerID || s.BuyerID,
-              rawStatus: s.status || s.Status,
-              allFields: Object.keys(s),
-            });
-            
-            // Map ALL shipment fields from blockchain to UI format
-            return {
-              shipmentId,
-              contractId: s.contractID || s.contractId,
-              exporterId: s.exporterID || s.exporterId || s.ExporterID,
-              buyerId: s.buyerID || s.buyerId || s.BuyerID,
-              origin: s.origin || s.Origin,
-              quantity, // Properly parsed quantity
-              grade: s.grade || s.Grade || s.coffeeGrade || s.CoffeeGrade,
-              icoNumber: s.icoNumber || s.ICONumber,
-              ecxLotNumber: s.ecxLotNumber || s.ECXLotNumber,
-              channel: s.channel || s.Channel,
-              forexRate: s.forexRate || s.ForexRate || 0,
-              valueUSD: s.valueUSD || s.valueUsd || s.ValueUSD || 0,
-              eudrCompliant: s.eudrCompliant || s.EUDRCompliant || false,
-              transportMode: s.transportMode || s.TransportMode || 'SEA',
-              status,
-              billOfLading: s.billOfLadingNo || s.billOfLading || s.BillOfLading,
-              vesselName: s.vesselName || s.VesselName,
-              currentLocation: s.currentLocation || s.CurrentLocation,
-              estimatedArrival: s.estimatedArrival || s.EstimatedArrival,
-              departurePort: s.departurePort || s.DeparturePort,
-              destinationPort: s.destinationPort || s.DestinationPort,
-              createdAt: s.createdAt || s.CreatedAt || s.timestamp || s.Timestamp,
-            };
-          });
-          
-          // ✅ SHIPMENTS TAB: ONLY SHOW ACTUAL SHIPMENTS
-          // Approved contracts should be handled in "My Contracts" tab with LC request workflow
-          // Correct workflow: Contract Approved → Request LC → Bank Issues LC + Allocates Forex → Create Shipment
-          console.log('[EXPORTER] ========== SHIPMENTS TAB: ACTUAL SHIPMENTS ONLY ==========');
-          console.log(`[EXPORTER] Loaded ${mappedShipments.length} actual shipments for exporter`);
-          
-          setShipments(mappedShipments);
-          setAllShipments(mappedShipments);
-          console.log(`[EXPORTER] Loaded ${myShipments.length} shipments for exporter`);
-          console.log('[EXPORTER] Sample shipment data:', myShipments[0]);
-          console.log('[EXPORTER] Shipment contract IDs:', myShipments.map((s: any) => ({
-            shipmentId: s.shipmentID || s.shipmentId,
-            contractId: s.contractID || s.contractId,
-            quantity: s.quantity || s.Quantity
-          })));
-          
-          // NOW check forex allocation alert AFTER shipments are loaded
-          // Only show forex alert if there's allocated forex BUT no shipment created yet
-          try {
-            const forexResponse = await apiFetch('/forex', {
-              headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const forexResult = await forexResponse.json();
-            if (forexResult.success && forexResult.data) {
-              const myForex = forexResult.data.filter((f: any) => 
-                (f.exporterId || f.ExporterID) === currentExporterId
+            const allocated = myForex.find((f: any) => (f.status || f.Status) === 'ALLOCATED');
+            if (allocated) {
+              const allocatedContractId = allocated.contractId || allocated.ContractID;
+              // Check if exporter has already created a shipment for this contract
+              const existingShipment = myShipments.find((s: any) => 
+                (s.contractID || s.contractId) === allocatedContractId
               );
               
-              const allocated = myForex.find((f: any) => (f.status || f.Status) === 'ALLOCATED');
-              if (allocated) {
-                const allocatedContractId = allocated.contractId || allocated.ContractID;
-                // Check if exporter has already created a shipment for this contract
-                const existingShipment = myShipments.find((s: any) => 
-                  (s.contractID || s.contractId) === allocatedContractId
-                );
-                
-                if (!existingShipment) {
-                  // Only show alert if no shipment exists yet for this allocated forex
-                  console.log(`[EXPORTER] Showing forex alert for contract ${allocatedContractId} - no shipment created yet`);
-                  setForexAllocatedAlert({
-                    show: true,
-                    forexId: allocated.forexId || allocated.ForexID,
-                    contractId: allocatedContractId,
-                    allocatedAmount: allocated.allocatedAmount || allocated.AllocatedAmount || 0,
-                    currency: allocated.currency || allocated.Currency || 'USD',
-                    exchangeRate: allocated.exchangeRate || allocated.ExchangeRate || 0,
-                  });
-                } else {
-                  console.log(`[EXPORTER] Shipment already exists for allocated forex contract ${allocatedContractId}, not showing alert`);
-                  setForexAllocatedAlert(null); // Dismiss alert if shipment exists
-                }
+              if (!existingShipment) {
+                // Only show alert if no shipment exists yet for this allocated forex
+                console.log(`[EXPORTER] Showing forex alert for contract ${allocatedContractId} - no shipment created yet`);
+                setForexAllocatedAlert({
+                  show: true,
+                  forexId: allocated.forexId || allocated.ForexID,
+                  contractId: allocatedContractId,
+                  allocatedAmount: allocated.allocatedAmount || allocated.AllocatedAmount || 0,
+                  currency: allocated.currency || allocated.Currency || 'USD',
+                  exchangeRate: allocated.exchangeRate || allocated.ExchangeRate || 0,
+                });
+              } else {
+                console.log(`[EXPORTER] Shipment already exists for allocated forex contract ${allocatedContractId}, not showing alert`);
+                setForexAllocatedAlert(null); // Dismiss alert if shipment exists
               }
             }
-          } catch (forexError) {
-            console.warn('[EXPORTER] Error checking forex for alert:', forexError);
           }
+        } catch (forexError) {
+          console.warn('[EXPORTER] Error checking forex for alert:', forexError);
         }
     } catch (error) {
       console.warn('Could not load shipments:', error);
@@ -3645,7 +3661,7 @@ const ExporterPortal: React.FC = () => {
                       </Typography>
                       <List dense>
                         {contractDocuments.map((doc, idx) => (
-                          <ListItem key={idx}>
+                          <ListItem key={doc.file.name + '-' + doc.file.size + '-' + idx}>
                             <ListItemText 
                               primary={doc.file.name}
                               secondary={`${(doc.file.size / 1024).toFixed(2)} KB`}
@@ -5890,7 +5906,7 @@ This contract is registered with ECTA and approved by NBE.
                   </Typography>
                   {customsDocuments.map((doc, index) => (
                     <Box
-                      key={index}
+                      key={doc.file?.name || doc.name || `customs-doc-${index}`}
                       sx={{
                         display: 'flex',
                         alignItems: 'center',

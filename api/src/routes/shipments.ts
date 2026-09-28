@@ -2293,8 +2293,8 @@ router.post('/:shipmentID/shipping-document',
       logger.info(`[SHIPPING] Recording ${transportMode} document for shipment: ${shipmentID}`);
       logger.info(`[SHIPPING] Carrier: ${carrierName}, Document: ${documentNo}`);
 
-      // Connect as Shipping organization
-      await fabricService.connectAsOrg('ShippingMSP');
+      // Connect as ECTA organization (exporters submit shipping docs)
+      await fabricService.connectAsOrg('ECTAMSP');
 
       // Update shipment in blockchain using RecordShippingDetails
       const result = await fabricService.invokeChaincode('RecordShippingDetails', [
