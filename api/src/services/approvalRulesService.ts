@@ -288,7 +288,8 @@ class ApprovalRulesService {
     documentId: string,
     userId: string,
     userRole: string,
-    blockchainTxId?: string
+    blockchainTxId?: string,
+    userOrg?: string
   ): Promise<{ success: boolean; message: string; workflowComplete: boolean }> {
     try {
       // Validate approval
@@ -303,17 +304,20 @@ class ApprovalRulesService {
       }
 
       // Record signature in document_signatures table
+      // Generate unique signature_id
+      const signatureId = `SIG-${documentId}-${userOrg || 'UNKNOWN'}-${Date.now()}`;
+      
       await dbService.run(
         `INSERT INTO document_signatures 
-         (document_id, signature_type, signed_by, signed_by_role, signed_by_org, 
+         (signature_id, document_id, signature_type, signer_id, signed_by_role, signer_org, 
           approval_status, blockchain_tx_id, approval_level, approval_order)
-         VALUES ($1, 'approve', $2, $3, 
-                 (SELECT organization FROM users WHERE user_id = $2 LIMIT 1),
-                 'approved', $4, $5, $6)`,
+         VALUES ($1, $2, 'APPROVE', $3, $4, $5, 'approved', $6, $7, $8)`,
         [
+          signatureId,
           documentId,
           userId,
           userRole,
+          userOrg || 'Unknown',
           blockchainTxId || null,
           validation.currentApprovals + 1,
           validation.currentApprovals + 1

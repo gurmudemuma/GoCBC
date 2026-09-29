@@ -1,16 +1,14 @@
 /**
  * Direct CouchDB Blockchain Query Service
  * 
- * Queries Hyperledger Fabric state database (CouchDB) directly
- * Bypasses API layer for pure blockchain data access
+ * ⚠️ DISABLED: Direct CouchDB access from browser violates CORS policy
+ * All blockchain data now flows through API endpoints:
+ * - GET /api/v1/blockchain-signatures/entity/:entityType/:entityId
+ * - GET /api/v1/audit/blockchain/:entityType/:entityId
+ * - GET /api/v1/lcs (for Letter of Credit data)
  * 
- * CouchDB Ports (Hyperledger Fabric State DB):
- * - peer0.ecta:   5984
- * - peer0.ecx:    6984
- * - peer0.banks:  7984
- * - peer0.nbe:    8984
- * - peer0.customs: 9984
- * - peer0.shipping: 10984
+ * This service now returns empty results to prevent CORS errors
+ * and ensure proper architecture: UI → API → Blockchain/CouchDB
  */
 
 const COUCHDB_CONFIG = {
@@ -20,6 +18,9 @@ const COUCHDB_CONFIG = {
   username: 'admin',
   password: 'adminpw'
 };
+
+// 🔇 Direct CouchDB calls are DISABLED to prevent CORS errors
+const DIRECT_COUCHDB_ENABLED = false;
 
 // 🔇 Logging Control - Set to true to enable verbose logs
 const DEV_LOGGING = false;
@@ -102,9 +103,14 @@ class CouchDBService {
   }
 
   /**
-   * Private query method
+   * Private query method - DISABLED to prevent CORS errors
    */
   private async _query(path: string): Promise<any> {
+    if (!DIRECT_COUCHDB_ENABLED) {
+      // Silent return - no CORS errors
+      return { rows: [], total_rows: 0 };
+    }
+    
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method: 'GET',
@@ -120,7 +126,11 @@ class CouchDBService {
 
       return await response.json();
     } catch (error) {
-      console.error('[CouchDB] Query failed:', error);
+      // Silently fail when direct access is disabled
+      if (!DIRECT_COUCHDB_ENABLED) {
+        return { rows: [], total_rows: 0 };
+      }
+      devLog('[CouchDB] Query failed:', error);
       throw error;
     }
   }
@@ -144,7 +154,7 @@ class CouchDBService {
 
       return forexList;
     } catch (error) {
-      console.error('[CouchDB] Failed to query forex:', error);
+      devLog('[CouchDB] Failed to query forex:', error);
       return [];
     }
   }
@@ -163,7 +173,7 @@ class CouchDBService {
       devLog(`[CouchDB] ✅ Found forex ${forexId} on blockchain`);
       return this.normalizeForex(doc);
     } catch (error) {
-      console.error(`[CouchDB] Forex ${forexId} not found:`, error);
+      devLog(`[CouchDB] Forex ${forexId} not found:`, error);
       return null;
     }
   }
@@ -187,7 +197,7 @@ class CouchDBService {
 
       return lcList;
     } catch (error) {
-      console.error('[CouchDB] Failed to query LCs:', error);
+      devLog('[CouchDB] Failed to query LCs:', error);
       return [];
     }
   }
@@ -271,7 +281,7 @@ class CouchDBService {
       devLog('[CouchDB] ✅ Connection successful');
       return true;
     } catch (error) {
-      console.error('[CouchDB] ❌ Connection failed:', error);
+      devLog('[CouchDB] ❌ Connection failed:', error);
       return false;
     }
   }
@@ -283,7 +293,7 @@ class CouchDBService {
     try {
       return await this._query(`/${COUCHDB_CONFIG.database}`);
     } catch (error) {
-      console.error('[CouchDB] Failed to get database info:', error);
+      devLog('[CouchDB] Failed to get database info:', error);
       return null;
     }
   }
@@ -313,7 +323,7 @@ class CouchDBService {
 
       return auditRecords;
     } catch (error) {
-      console.error(`[CouchDB] Failed to query audit trail:`, error);
+      devLog(`[CouchDB] Failed to query audit trail:`, error);
       return [];
     }
   }

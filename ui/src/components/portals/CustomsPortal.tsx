@@ -3072,23 +3072,33 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               {selectedDeclaration && (
                 <Box sx={{ mt: 3 }}>
                   <Divider sx={{ my: 2 }} />
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>Customs Officer Responsibility:</strong> You must sign CUSTOMS_DECLARATION, DUTY_ASSESSMENT, 
+                      and EXPORT_PERMIT documents (Sequential: Customs Officer first, then Senior Customs Officer). 
+                      These signatures are required to authorize customs clearance and export.
+                    </Typography>
+                  </Alert>
                   <DocumentManagementPanel
                     entityType="CUSTOMS_DECLARATION"
                     entityId={selectedDeclaration.declarationId}
-                    title="Customs Declaration Documents"
+                    title="Customs Documents (Customs Officers Must Sign)"
                     allowUpload={true}
                     allowSign={true}
-                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
-                    defaultSignatureType="VERIFY"
+                    allowedSignatureTypes={['APPROVE']}
+                    defaultSignatureType="APPROVE"
                     showSignatureTracker={true}
                     requiredDocuments={[
-                      'COMMERCIAL_INVOICE',
-                      'PACKING_LIST',
-                      'BILL_OF_LADING',
-                      'CERTIFICATE_OF_ORIGIN',
-                      'EXPORT_PERMIT',
-                      'QUALITY_CERTIFICATE'
+                      'CUSTOMS_DECLARATION',
+                      'DUTY_ASSESSMENT',
+                      'EXPORT_PERMIT'
                     ]}
+                    onDocumentSigned={(docId, data) => {
+                      console.log('Customs document signed:', docId, data);
+                    }}
+                    onDocumentUploaded={(doc) => {
+                      console.log('Customs document uploaded:', doc);
+                    }}
                   />
                 </Box>
               )}

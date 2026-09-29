@@ -3940,6 +3940,41 @@ The exporter can reapply once all requirements are met.`,
                 )}
               </Paper>
 
+              {/* ECTA Document Signing Panel */}
+              <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>ECTA Responsibility:</strong> ECTA Inspector and Supervisor must sign QUALITY_CERTIFICATE, 
+                    CERTIFICATE_OF_ORIGIN, and EXPORT_PERMIT documents (Sequential: Inspector first, then Supervisor). 
+                    These signatures are required before LC document examination by banks.
+                  </Typography>
+                </Alert>
+                <DocumentManagementPanel
+                  entityType="CONTRACT"
+                  entityId={selectedContract.contractID || selectedContract.contractId}
+                  title="ECTA Quality & Origin Documents (Must Sign)"
+                  allowUpload={true}
+                  allowSign={true}
+                  allowedSignatureTypes={['APPROVE']}
+                  defaultSignatureType="APPROVE"
+                  showSignatureTracker={true}
+                  requiredDocuments={[
+                    'QUALITY_CERTIFICATE',
+                    'CERTIFICATE_OF_ORIGIN',
+                    'EXPORT_PERMIT'
+                  ]}
+                  onDocumentSigned={(docId, data) => {
+                    console.log('ECTA document signed:', docId, data);
+                    // Reload contract documents
+                    loadData();
+                  }}
+                  onDocumentUploaded={(doc) => {
+                    console.log('ECTA document uploaded:', doc);
+                    loadData();
+                  }}
+                />
+              </Paper>
+
               {/* Blockchain Verification Section */}
               <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
                 <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>

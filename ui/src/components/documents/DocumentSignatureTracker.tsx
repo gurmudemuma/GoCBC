@@ -94,7 +94,13 @@ const DocumentSignatureTracker: React.FC<DocumentSignatureTrackerProps> = ({
       setLoading(true);
       setError(null);
 
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('authToken'); // Fixed: use 'authToken' not 'token'
+      if (!token) {
+        setError('Not authenticated');
+        setLoading(false);
+        return;
+      }
+      
       const response = await axios.get(
         `http://localhost:3001/api/v1/documents/${documentId}/signatures`,
         {
@@ -109,7 +115,12 @@ const DocumentSignatureTracker: React.FC<DocumentSignatureTrackerProps> = ({
       }
     } catch (err: any) {
       console.error('Error fetching signatures:', err);
-      setError(err.response?.data?.error?.message || 'Failed to load signatures');
+      // Silently handle 401 errors - user token expired
+      if (err.response?.status === 401) {
+        setError('Session expired');
+      } else {
+        setError(err.response?.data?.error?.message || 'Failed to load signatures');
+      }
     } finally {
       setLoading(false);
     }

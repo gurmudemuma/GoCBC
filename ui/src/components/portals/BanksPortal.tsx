@@ -4371,29 +4371,37 @@ const BanksPortal: React.FC = () => {
                   <DocumentManagementPanel
                     entityType="LC"
                     entityId={selectedLC.lcId}
-                    title="LC Documents"
+                    title="Payment Release Documents (UCP 600 Critical)"
                     allowUpload={selectedLC.status === 'ISSUED'}
                     allowSign={true}
-                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
-                    defaultSignatureType="VERIFY"
+                    allowedSignatureTypes={['APPROVE']}
+                    defaultSignatureType="APPROVE"
                     showSignatureTracker={true}
                     requiredDocuments={[
                       'COMMERCIAL_INVOICE',
-                      'PACKING_LIST',
                       'BILL_OF_LADING',
-                      'CERTIFICATE_OF_ORIGIN',
-                      'INSURANCE_CERTIFICATE',
-                      'QUALITY_CERTIFICATE'
+                      'PACKING_LIST'
                     ]}
                     onDocumentSigned={(docId, data) => {
-                      console.log('LC document signed:', docId, data);
+                      console.log('LC payment document signed:', docId, data);
                       loadBankingData();
                     }}
                     onDocumentUploaded={(doc) => {
-                      console.log('LC document uploaded:', doc);
+                      console.log('LC payment document uploaded:', doc);
                       loadBankingData();
                     }}
                   />
+                  
+                  {/* Supporting Documents Section - Already signed by other parties */}
+                  <Box sx={{ mt: 2 }}>
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      <Typography variant="body2">
+                        <strong>Note:</strong> Supporting documents (Certificate of Origin, Quality Certificate, Insurance Certificate, Export Permit, etc.) 
+                        must be signed by ECTA, Customs, and Shipping authorities at their respective portals before LC document examination.
+                        Only the 3 critical payment documents above require bank officer approval for payment release per UCP 600 standards.
+                      </Typography>
+                    </Alert>
+                  </Box>
                 </Grid>
 
                 {/* Next Steps */}

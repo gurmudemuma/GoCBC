@@ -61,42 +61,15 @@ class CECBSApi {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
           
-          try {
-            // Try to refresh the token
-            const token = localStorage.getItem('authToken');
-            if (token) {
-              console.log('Token expired, attempting to refresh...');
-              const refreshResponse = await axios.post(
-                `${process.env.CECBS_API_URL || 'http://localhost:3001/api/v1'}/auth/refresh`,
-                {},
-                {
-                  headers: {
-                    Authorization: `Bearer ${token}`,
-                  },
-                }
-              );
-              
-              if (refreshResponse.data.success && refreshResponse.data.data.token) {
-                const newToken = refreshResponse.data.data.token;
-                localStorage.setItem('authToken', newToken);
-                
-                // Update the failed request with new token
-                originalRequest.headers.Authorization = `Bearer ${newToken}`;
-                
-                console.log('Token refreshed successfully');
-                return this.client(originalRequest);
-              }
-            }
-          } catch (refreshError) {
-            console.warn('Token refresh failed, clearing session');
-          }
+          console.warn('Authentication failed (401) - Session expired or invalid token');
           
-          // If refresh fails or no token, clear session and redirect
-          console.warn('Authentication failed - clearing token and redirecting to login');
+          // Clear authentication data
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
+          
           // Only redirect if not already on login page
           if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            console.log('Redirecting to login page...');
             window.location.href = '/login?error=session_expired';
           }
         }

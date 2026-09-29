@@ -3468,22 +3468,33 @@ const ShippingPortal: React.FC = () => {
               {selectedRecord && selectedRecord.shipmentId && (
                 <Box sx={{ mt: 3 }}>
                   <Divider sx={{ mb: 2 }} />
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>Shipping Agent Responsibility:</strong> You must sign BILL_OF_LADING, SHIPPING_MANIFEST, 
+                      and CONTAINER_SEAL documents. BILL_OF_LADING signature confirms goods loaded on board. 
+                      These signed documents are required for bank payment release and customs clearance.
+                    </Typography>
+                  </Alert>
                   <DocumentManagementPanel
                     entityType="SHIPMENT"
                     entityId={selectedRecord.shipmentId}
-                    title="Shipment Documents"
+                    title="Shipping Documents (Shipping Agent Must Sign)"
                     allowUpload={true}
                     allowSign={true}
-                    allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
-                    defaultSignatureType="VERIFY"
+                    allowedSignatureTypes={['APPROVE']}
+                    defaultSignatureType="APPROVE"
                     showSignatureTracker={true}
                     requiredDocuments={[
                       'BILL_OF_LADING',
-                      'COMMERCIAL_INVOICE',
-                      'PACKING_LIST',
-                      'CERTIFICATE_OF_ORIGIN',
-                      'INSURANCE_CERTIFICATE'
+                      'SHIPPING_MANIFEST',
+                      'CONTAINER_SEAL'
                     ]}
+                    onDocumentSigned={(docId, data) => {
+                      console.log('Shipping document signed:', docId, data);
+                    }}
+                    onDocumentUploaded={(doc) => {
+                      console.log('Shipping document uploaded:', doc);
+                    }}
                   />
                 </Box>
               )}

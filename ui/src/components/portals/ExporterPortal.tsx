@@ -3129,25 +3129,34 @@ const ExporterPortal: React.FC = () => {
                 {/* Document Management Panel */}
                 <Grid item xs={12}>
                   <Divider sx={{ my: 2 }} />
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>Exporter Responsibility:</strong> You must sign all contract documents (SALES_CONTRACT, PROFORMA_INVOICE, COMMERCIAL_INVOICE, PACKING_LIST) 
+                      before submission to bank for LC processing. Your signature confirms document authenticity and accuracy.
+                    </Typography>
+                  </Alert>
                   <DocumentManagementPanel
                     entityType="CONTRACT"
                     entityId={selectedContract.contractId}
-                    title="Contract Documents"
+                    title="Contract Documents (Exporter Must Sign)"
                     allowUpload={true}
                     allowSign={true}
-                    allowedSignatureTypes={['UPLOAD']}
-                    defaultSignatureType="UPLOAD"
+                    allowedSignatureTypes={['UPLOAD', 'APPROVE']}
+                    defaultSignatureType="APPROVE"
                     showSignatureTracker={true}
                     requiredDocuments={[
                       'SALES_CONTRACT',
                       'PROFORMA_INVOICE',
-                      'PURCHASE_ORDER'
+                      'COMMERCIAL_INVOICE',
+                      'PACKING_LIST'
                     ]}
                     onDocumentSigned={(docId, data) => {
-                      console.log('Document signed:', docId, data);
+                      console.log('Exporter document signed:', docId, data);
+                      // Document signed successfully - signature recorded on blockchain
                     }}
                     onDocumentUploaded={(doc) => {
-                      console.log('Document uploaded:', doc);
+                      console.log('Exporter document uploaded:', doc);
+                      // Document uploaded successfully
                     }}
                   />
                 </Grid>

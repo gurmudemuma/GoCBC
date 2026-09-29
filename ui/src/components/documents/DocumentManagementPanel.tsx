@@ -44,6 +44,8 @@ import SignDocumentButton from './SignDocumentButton';
 import DocumentSignatureTracker from './DocumentSignatureTracker';
 import SignatureStatusBadge from './SignatureStatusBadge';
 import ApprovalProgressIndicator from './ApprovalProgressIndicator';
+import SignatureOverlay from './SignatureOverlay';
+import PDFViewer from './PDFViewer';
 
 interface Document {
   document_id: string;
@@ -97,14 +99,18 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [documentType, setDocumentType] = useState('');
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
+  const [viewingSignatures, setViewingSignatures] = useState<any[]>([]);
 
   const fetchDocuments = async () => {
     try {
       setLoading(true);
       setError(null);
 
+      if (typeof window === 'undefined') return; // Skip on server-side
+      
       const token = localStorage.getItem('authToken'); // Fixed: was 'token', should be 'authToken'
       const response = await axios.get(
         `http://localhost:3001/api/v1/documents/entity/${entityType}/${entityId}`,
@@ -129,6 +135,12 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
   };
 
   useEffect(() => {
+    // Initialize auth token on client-side only
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('authToken');
+      setAuthToken(token);
+    }
+    
     if (entityId) {
       fetchDocuments();
     }
@@ -147,6 +159,8 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
     try {
       setUploading(true);
       setError(null);
+
+      if (typeof window === 'undefined') return; // Skip on server-side
 
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -187,6 +201,8 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
 
   const handleDownload = async (doc: Document) => {
     try {
+      if (typeof window === 'undefined') return; // Skip on server-side
+      
       const token = localStorage.getItem('authToken'); // Fixed: was 'token', should be 'authToken'
       const response = await axios.get(
         `http://localhost:3001/api/v1/documents/${doc.document_id}/download`,
@@ -209,9 +225,35 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
     }
   };
 
-  const handleView = (document: Document) => {
+  const handleView = async (document: Document) => {
     setViewingDocument(document);
     setViewerOpen(true);
+    
+    // Fetch signatures for this document
+    try {
+      if (typeof window === 'undefined') return; // Skip on server-side
+      
+      const token = localStorage.getItem('authToken');
+      const response = await axios.get(
+        `http://localhost:3001/api/v1/documents/${document.document_id}/signatures`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      
+      console.log('Signatures response:', response.data); // DEBUG
+      
+      if (response.data.success && response.data.data?.signatures) {
+        console.log('Setting signatures:', response.data.data.signatures); // DEBUG
+        setViewingSignatures(response.data.data.signatures);
+      } else {
+        console.log('No signatures found in response'); // DEBUG
+        setViewingSignatures([]);
+      }
+    } catch (err) {
+      console.error('Error fetching signatures:', err);
+      setViewingSignatures([]);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -251,6 +293,15 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
   };
 
   const missingDocs = getMissingDocuments();
+
+  // Filter documents based on requiredDocuments if specified
+  const normalizeDocType = (type: string) => type.toUpperCase().replace(/\s+/g, '_').replace(/-/g, '_');
+  const filteredDocuments = requiredDocuments.length > 0
+    ? documents.filter(doc => {
+        const normalizedDocType = normalizeDocType(doc.document_type);
+        return requiredDocuments.some(required => normalizeDocType(required) === normalizedDocType);
+      })
+    : documents;
 
   if (loading) {
     return (
@@ -299,7 +350,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
           </Alert>
         )}
 
-        {documents.length === 0 ? (
+        {filteredDocuments.length === 0 ? (
           <Alert severity="info">
             No documents uploaded yet. {allowUpload && 'Click "Upload Document" to add files.'}
           </Alert>
@@ -319,7 +370,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                 </TableRow>
               </TableHead>
               <TableBody>
-                {documents.map((doc) => (
+                {filteredDocuments.map((doc) => (
                   <TableRow key={doc.document_id} hover>
                     <TableCell>
                       <Stack direction="row" spacing={1} alignItems="center">
@@ -453,20 +504,150 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
           <DialogContent dividers>
             {viewingDocument && (
               <Stack spacing={3}>
-                {/* Document Preview */}
-                <Box sx={{ height: '500px', bgcolor: 'grey.100', borderRadius: 1 }}>
+                {/* Document Preview with Signature Overlay */}
+                <Box sx={{ position: 'relative', height: '500px', bgcolor: 'grey.100', borderRadius: 1, overflow: 'hidden' }}>
                   {viewingDocument.mime_type === 'application/pdf' ? (
-                    <iframe
-                      src={`http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/view?token=${localStorage.getItem('authToken')}`}
-                      style={{ width: '100%', height: '100%', border: 'none' }}
-                      title={viewingDocument.file_name}
-                    />
-                  ) : viewingDocument.mime_type.startsWith('image/') ? (
-                    <img
-                      src={`http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/download?token=${localStorage.getItem('authToken')}`}
-                      alt={viewingDocument.file_name}
-                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                    />
+                    authToken ? (
+                      <>
+                        {/* PDF Viewer with PDF.js */}
+                        <PDFViewer
+                          documentId={viewingDocument.document_id}
+                          token={authToken}
+                          height={500}
+                        />
+                        
+                        {/* Always show watermark overlay on top of PDF */}
+                        {viewingSignatures && viewingSignatures.length > 0 && (
+                          <>
+                            {/* Diagonal "SIGNED" Watermark */}
+                            <Box
+                              sx={{
+                                position: 'absolute',
+                                top: '50%',
+                                left: '50%',
+                                transform: 'translate(-50%, -50%) rotate(-45deg)',
+                                zIndex: 1000,
+                                pointerEvents: 'none',
+                                userSelect: 'none',
+                              }}
+                            >
+                              <Typography
+                                variant="h1"
+                                sx={{
+                                  fontSize: { xs: '6rem', sm: '8rem', md: '10rem' },
+                                  fontWeight: 900,
+                                  color: 'rgba(76, 175, 80, 0.25)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: 8,
+                                  textShadow: '0 0 30px rgba(76, 175, 80, 0.5)',
+                                  WebkitTextStroke: '3px rgba(76, 175, 80, 0.4)',
+                                }}
+                              >
+                                SIGNED
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                sx={{
+                                  position: 'absolute',
+                                  bottom: -30,
+                                  left: '50%',
+                                  transform: 'translateX(-50%)',
+                                  color: 'rgba(76, 175, 80, 0.6)',
+                                  fontSize: '1.5rem',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                  textShadow: '0 0 10px rgba(76, 175, 80, 0.3)',
+                                }}
+                              >
+                                ⛓️ Blockchain Verified
+                              </Typography>
+                            </Box>
+                          </>
+                        )}
+                        
+                        {/* Signature badges in corner */}
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            pointerEvents: 'none',
+                            zIndex: 1001,
+                          }}
+                        >
+                          {typeof window !== 'undefined' && authToken && (
+                            <SignatureOverlay
+                              signatures={viewingSignatures}
+                              documentName={viewingDocument.file_name}
+                            />
+                          )}
+                        </Box>
+                      </>
+                    ) : (
+                      <Box display="flex" alignItems="center" justifyContent="center" height="100%">
+                        <CircularProgress />
+                      </Box>
+                    )
+                  ) : viewingDocument.mime_type?.startsWith('image/') ? (
+                    authToken ? (
+                      <>
+                        <img
+                          src={`http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/download?token=${authToken}`}
+                          alt={viewingDocument.file_name}
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                        />
+                        {/* Signature Overlay for images */}
+                        {viewingSignatures && viewingSignatures.length > 0 && (
+                          <Box
+                            sx={{
+                              position: 'absolute',
+                              top: '50%',
+                              left: '50%',
+                              transform: 'translate(-50%, -50%) rotate(-45deg)',
+                              zIndex: 1000,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            <Typography
+                              variant="h1"
+                              sx={{
+                                fontSize: '8rem',
+                                fontWeight: 900,
+                                color: 'rgba(76, 175, 80, 0.3)',
+                                textTransform: 'uppercase',
+                                letterSpacing: 8,
+                              }}
+                            >
+                              SIGNED
+                            </Typography>
+                          </Box>
+                        )}
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            pointerEvents: 'none',
+                            zIndex: 1001,
+                          }}
+                        >
+                          {typeof window !== 'undefined' && authToken && (
+                            <SignatureOverlay
+                              signatures={viewingSignatures}
+                              documentName={viewingDocument.file_name}
+                            />
+                          )}
+                        </Box>
+                      </>
+                    ) : (
+                      <Box display="flex" alignItems="center" justifyContent="center" height="100%">
+                        <CircularProgress />
+                      </Box>
+                    )
                   ) : (
                     <Box
                       display="flex"
@@ -485,8 +666,26 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                 <ApprovalProgressIndicator
                   documentId={viewingDocument.document_id}
                   showApproveButton={allowSign}
-                  onApprovalComplete={() => {
-                    fetchDocuments();
+                  onApprovalComplete={async () => {
+                    await fetchDocuments();
+                    // Refetch signatures for overlay
+                    try {
+                      if (typeof window === 'undefined') return;
+                      
+                      const token = localStorage.getItem('authToken');
+                      const response = await axios.get(
+                        `http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/signatures`,
+                        {
+                          headers: { Authorization: `Bearer ${token}` },
+                        }
+                      );
+                      if (response.data.success && response.data.data?.signatures) {
+                        setViewingSignatures(response.data.data.signatures);
+                      }
+                    } catch (err) {
+                      console.error('Error refetching signatures:', err);
+                    }
+                    
                     if (onDocumentSigned) {
                       onDocumentSigned(viewingDocument.document_id, { workflowComplete: true });
                     }

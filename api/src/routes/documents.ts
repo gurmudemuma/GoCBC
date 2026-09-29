@@ -639,7 +639,45 @@ router.post('/upload-registration',
 
 // Download/View document
 router.get('/:documentId/download',
-  authMiddleware,
+  // Custom auth middleware that accepts token from query params or Authorization header
+  async (req: Request, res: Response, next: any) => {
+    try {
+      const { token } = req.query;
+      const authHeader = req.headers.authorization;
+      
+      let jwtToken: string | null = null;
+      
+      // Try to get token from query param first (for iframe access)
+      if (token && typeof token === 'string') {
+        jwtToken = token;
+      }
+      // Fall back to Authorization header
+      else if (authHeader && authHeader.startsWith('Bearer ')) {
+        jwtToken = authHeader.substring(7);
+      }
+      
+      if (!jwtToken) {
+        return res.status(401).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'No authentication token provided' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Verify the token (same logic as authMiddleware)
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(jwtToken, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+      (req as any).user = decoded;
+      next();
+    } catch (error: any) {
+      logger.error('Authentication failed in download route:', error);
+      return res.status(401).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  },
   async (req: Request, res: Response) => {
     try {
       const { documentId } = req.params;
@@ -664,9 +702,85 @@ router.get('/:documentId/download',
       
       logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
       
+      // Resolve file path - handle both absolute and relative paths
+      let filePath = doc.file_path;
+      let pathFound = false;
+      
+      // Check if it's a real absolute path (with drive letter on Windows or root on Unix)
+      // Paths like "/uploads/..." are relative in our context
+      const isReallyAbsolute = path.isAbsolute(filePath) && (
+        /^[a-zA-Z]:/.test(filePath) || // Windows drive letter
+        fs.existsSync(filePath) // Actually exists as absolute
+      );
+      
+      if (!isReallyAbsolute) {
+        // Try multiple possible base paths
+        const possiblePaths = [
+          path.join(__dirname, '../..', filePath), // From api/dist
+          path.join(process.cwd(), filePath.replace(/^\//, '')), // From project root, strip leading /
+          path.join(process.cwd(), 'api', filePath.replace(/^\//, '')), // From api directory
+        ];
+        
+        // Find the first path that exists
+        for (const testPath of possiblePaths) {
+          if (fs.existsSync(testPath)) {
+            filePath = testPath;
+            logger.info(`Resolved file path: ${filePath}`);
+            pathFound = true;
+            break;
+          }
+        }
+        
+        // If still not found, try fallback locations based on file name
+        if (!pathFound) {
+          const fileName = path.basename(doc.file_path);
+          const baseFileName = fileName.replace(/\.[^/.]+$/, ''); // Remove extension
+          const fallbackDirs = [
+            path.join(__dirname, '../../uploads/documents'),
+            path.join(__dirname, '../../uploads/declarations'),
+            path.join(process.cwd(), 'api/uploads/documents'),
+            path.join(process.cwd(), 'api/uploads/declarations'),
+          ];
+          
+          logger.info(`Searching for ${fileName} in fallback locations...`);
+          
+          // First try exact match
+          for (const dir of fallbackDirs) {
+            const testPath = path.join(dir, fileName);
+            if (fs.existsSync(testPath)) {
+              filePath = testPath;
+              logger.info(`Found file in fallback location: ${filePath}`);
+              pathFound = true;
+              break;
+            }
+          }
+          
+          // If exact match fails, try fuzzy match (files starting with same name)
+          if (!pathFound) {
+            logger.info(`Trying fuzzy match for ${baseFileName}...`);
+            for (const dir of fallbackDirs) {
+              if (fs.existsSync(dir)) {
+                const files = fs.readdirSync(dir);
+                const matchedFile = files.find(f => 
+                  f.toLowerCase().startsWith(baseFileName.toLowerCase())
+                );
+                if (matchedFile) {
+                  filePath = path.join(dir, matchedFile);
+                  logger.info(`Found similar file in fallback location: ${filePath}`);
+                  pathFound = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } else {
+        pathFound = fs.existsSync(filePath);
+      }
+      
       // Check if file exists
-      if (!doc.file_path || !fs.existsSync(doc.file_path)) {
-        logger.error(`File not found on disk: ${doc.file_path}`);
+      if (!pathFound || !fs.existsSync(filePath)) {
+        logger.error(`File not found on disk: ${filePath} (original: ${doc.file_path})`);
         return res.status(404).json({
           success: false,
           error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
@@ -687,7 +801,7 @@ router.get('/:documentId/download',
       logger.info(`Streaming file: ${doc.file_name}`);
       
       // Send file
-      const fileStream = fs.createReadStream(doc.file_path);
+      const fileStream = fs.createReadStream(filePath);
       fileStream.pipe(res);
       
       // ✅ LOG TO AUDIT TRAIL - Document Viewed
@@ -970,7 +1084,28 @@ router.get('/entity/:entityType/:entityId',
         logger.warn('SQLite query failed:', sqliteError);
       }
       
-      logger.info(`Total: Found ${allDocuments.length} documents for ${entityType}/${entityId}`);
+      // ✅ ADDITIONAL DEDUPLICATION: Remove duplicates by document_type + file_name
+      // This handles cases where same document was uploaded multiple times
+      const seen = new Map<string, any>();
+      const deduplicated = allDocuments.filter(doc => {
+        const key = `${doc.document_type}_${doc.file_name}`;
+        if (seen.has(key)) {
+          // Keep the most recent version
+          const existing = seen.get(key);
+          if (new Date(doc.uploaded_at) > new Date(existing.uploaded_at)) {
+            seen.set(key, doc);
+            return false; // Remove the old one (already added)
+          }
+          return false; // Keep existing, skip this one
+        }
+        seen.set(key, doc);
+        return true;
+      });
+      
+      // Replace with deduplicated list
+      allDocuments = Array.from(seen.values());
+      
+      logger.info(`Total: Found ${allDocuments.length} unique documents for ${entityType}/${entityId} (after deduplication)`);
       
       res.json({
         success: true,
@@ -1160,7 +1295,8 @@ router.post('/:documentId/sign',
           documentId,
           user.username || user.sub,
           user.role,
-          blockchainTxId || undefined
+          blockchainTxId || undefined,
+          user.org || user.organization || 'Unknown'
         );
 
         if (!approvalResult.success) {
@@ -1832,8 +1968,8 @@ router.get('/:documentId/approval-status',
 
       // Get all signatures for this document
       const signatures = await postgresDb.all(
-        `SELECT id, signature_type as "signatureType", signed_by as "signedBy", 
-                signed_by_role as "signedByRole", signed_by_org as "signedByOrg",
+        `SELECT id, signature_type as "signatureType", signer_id as "signedBy", 
+                signed_by_role as "signedByRole", signer_org as "signedByOrg",
                 approval_status as "approvalStatus", approval_level as "approvalLevel",
                 created_at as "createdAt", blockchain_tx_id as "blockchainTxId"
          FROM document_signatures

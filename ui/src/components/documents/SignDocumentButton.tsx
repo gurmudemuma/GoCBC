@@ -3,7 +3,7 @@
  * Button component for signing documents with blockchain-backed cryptographic signatures
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Button,
   Dialog,
@@ -73,6 +73,48 @@ const SignDocumentButton: React.FC<SignDocumentButtonProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [signatures, setSignatures] = useState<any[]>([]);
+  const [checkingSignatures, setCheckingSignatures] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Fetch current user and existing signatures
+  useEffect(() => {
+    const fetchSignaturesAndUser = async () => {
+      try {
+        const token = localStorage.getItem('authToken');
+        if (!token) return;
+
+        // Get current user from localStorage or API
+        const userStr = localStorage.getItem('user');
+        if (userStr) {
+          setCurrentUser(JSON.parse(userStr));
+        }
+
+        // Fetch existing signatures for this document
+        const response = await axios.get(
+          `http://localhost:3001/api/v1/documents/${documentId}/signatures`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (response.data.success && response.data.data?.signatures) {
+          setSignatures(response.data.data.signatures);
+        }
+      } catch (err) {
+        console.error('Error fetching signatures:', err);
+      } finally {
+        setCheckingSignatures(false);
+      }
+    };
+
+    fetchSignaturesAndUser();
+  }, [documentId]);
+
+  // Check if current user has already signed
+  const hasUserSigned = currentUser && signatures.some(
+    sig => sig.signer_id === currentUser.username || sig.signer_id === currentUser.userId
+  );
 
   const handleOpen = () => {
     setOpen(true);
@@ -113,6 +155,22 @@ const SignDocumentButton: React.FC<SignDocumentButtonProps> = ({
 
       if (response.data.success) {
         setSuccess(true);
+        
+        // Refetch signatures to update button state
+        try {
+          const token = localStorage.getItem('authToken');
+          const sigResponse = await axios.get(
+            `http://localhost:3001/api/v1/documents/${documentId}/signatures`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+            }
+          );
+          if (sigResponse.data.success && sigResponse.data.data?.signatures) {
+            setSignatures(sigResponse.data.data.signatures);
+          }
+        } catch (sigErr) {
+          console.error('Error refetching signatures:', sigErr);
+        }
         
         // Call success callback
         if (onSignSuccess) {
@@ -187,13 +245,13 @@ const SignDocumentButton: React.FC<SignDocumentButtonProps> = ({
       <Button
         variant={variant}
         size={size}
-        color={color}
-        disabled={disabled}
+        color={hasUserSigned ? 'success' : color}
+        disabled={disabled || checkingSignatures || hasUserSigned}
         onClick={handleOpen}
-        startIcon={showIcon ? <DrawIcon /> : undefined}
+        startIcon={showIcon ? (hasUserSigned ? <CheckCircleIcon /> : <DrawIcon />) : undefined}
         fullWidth={fullWidth}
       >
-        Sign Document
+        {hasUserSigned ? 'Signed' : 'Sign Document'}
       </Button>
 
       <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
