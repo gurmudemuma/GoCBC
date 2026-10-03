@@ -1,6 +1,6 @@
 -- Payment Processing Enhancement Tables
 
--- Payment Confirmations
+-- Payment Confirmations - new table
 CREATE TABLE IF NOT EXISTS payment_confirmations (
     id SERIAL PRIMARY KEY,
     confirmation_id VARCHAR(50) UNIQUE NOT NULL,
@@ -14,24 +14,15 @@ CREATE TABLE IF NOT EXISTS payment_confirmations (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Forex Allocations
-CREATE TABLE IF NOT EXISTS forex_allocations (
-    id SERIAL PRIMARY KEY,
-    allocation_id VARCHAR(50) UNIQUE NOT NULL,
-    lc_number VARCHAR(50),
-    contract_id VARCHAR(50) NOT NULL,
-    exporter_id VARCHAR(50) NOT NULL,
-    amount_usd DECIMAL(15, 2) NOT NULL,
-    exchange_rate DECIMAL(10, 4) NOT NULL,
-    amount_etb DECIMAL(15, 2) NOT NULL,
-    allocation_date DATE NOT NULL,
-    approved_by VARCHAR(100) NOT NULL,
-    status VARCHAR(20) DEFAULT 'allocated',
-    utilized_amount DECIMAL(15, 2) DEFAULT 0,
-    remarks TEXT,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+-- Enhance Forex Allocations table (already exists from base schema)
+ALTER TABLE forex_allocations
+ADD COLUMN IF NOT EXISTS contract_id VARCHAR(50),
+ADD COLUMN IF NOT EXISTS exporter_id VARCHAR(50),
+ADD COLUMN IF NOT EXISTS amount_etb DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(100),
+ADD COLUMN IF NOT EXISTS utilized_amount DECIMAL(15, 2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS remarks TEXT,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_payment_confirmations_payment ON payment_confirmations(payment_id);

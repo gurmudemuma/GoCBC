@@ -2317,29 +2317,100 @@ func (c *CoffeeContract) GetHistory(ctx contractapi.TransactionContextInterface,
 	return history, nil
 }
 
+// TLS certificate and key for CCAAS server mode
+const tlsCert = `-----BEGIN CERTIFICATE-----
+MIID3jCCAsagAwIBAgIUAvKgUC+wprMmkxdZV5hSdI80vLcwDQYJKoZIhvcNAQEL
+BQAwZzELMAkGA1UEBhMCRVQxDjAMBgNVBAgMBUFkZGlzMRMwEQYDVQQHDApBZGRp
+c0FiYWJhMRgwFgYDVQQKDA9Db2ZmZWVDaGFpbmNvZGUxGTAXBgNVBAMMEGNvZmZl
+ZS1jaGFpbmNvZGUwHhcNMjYxMDAxMjAzNTA0WhcNMjcxMDAxMjAzNTA0WjBnMQsw
+CQYDVQQGEwJFVDEOMAwGA1UECAwFQWRkaXMxEzARBgNVBAcMCkFkZGlzQWJhYmEx
+GDAWBgNVBAoMD0NvZmZlZUNoYWluY29kZTEZMBcGA1UEAwwQY29mZmVlLWNoYWlu
+Y29kZTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALAS1Db/tVtHlrvC
+z99je/VEr8JHL8DaC8yPCuGG3L7qQWxLsnaQUyv+ncGHgQsBtsrJ4H/T552+NEDG
+f8DCnq2utG4wkrcDJl7aMdFs84H/cGLecAtLFDrB0mhEeuIQKD6rClEaePlzDWAR
+VTuJ1pEk1c+pVIg5Z4A69GI1jbkgT1H2yjpbz5AMqP8b72dzGji+3sMgCBAOn0/p
+OCRcfmYurIyGtZRAcn+zXe7FX7k+vv9/MgQ+0w9m4Qurq4AhpLz4rI4CFN4uG00G
+j+IJo1KgZ8DQ8Uzy4TQEmF98+1vY+mIhS292X24hh0CD9OlF9zaCdBEzgJre9C+P
+3ygc3J8CAwEAAaOBgTB/MB0GA1UdDgQWBBT2w/yC/24A61RWj1iZqVLDKEntPzAf
+BgNVHSMEGDAWgBT2w/yC/24A61RWj1iZqVLDKEntPzAPBgNVHRMBAf8EBTADAQH/
+MCwGA1UdEQQlMCOCEGNvZmZlZS1jaGFpbmNvZGWCCWxvY2FsaG9zdIcEfwAAATAN
+BgkqhkiG9w0BAQsFAAOCAQEAmAqmlXSGt+Cn3rdG979TGY6CJ87+fF+LmX7z1E6d
+Bw7DDDjF7Hh+lWgT9o3L97VUvk0YcLMg4ncWPInetqOa5QwU++mDH5IOa+baaNaL
+6lBHax2Fan6/U+Ml61SVUkgTNJfn9gonJT4RBEGBR+WOmOtYy5CIkCL1e9t9roAT
+Jrfl0H92dwGPimjCIgacZEJxD+1zOIoJ4dqR2oq6U02Ru9CEUOq+F384hnArawJB
+BvPhsj9rPrB/H0B3fAfwEMGOKALGjmI5h48Rc6xmgRdsIq2+IwPSGMYBlcdReHab
+TbN5b9oXQ5bdMnN76vy+6OYl1/bwMpbmGh3DAJGFEmklKg==
+-----END CERTIFICATE-----`
+
+const tlsKey = `-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCwEtQ2/7VbR5a7
+ws/fY3v1RK/CRy/A2gvMjwrhhty+6kFsS7J2kFMr/p3Bh4ELAbbKyeB/0+edvjRA
+xn/Awp6trrRuMJK3AyZe2jHRbPOB/3Bi3nALSxQ6wdJoRHriECg+qwpRGnj5cw1g
+EVU7idaRJNXPqVSIOWeAOvRiNY25IE9R9so6W8+QDKj/G+9ncxo4vt7DIAgQDp9P
+6TgkXH5mLqyMhrWUQHJ/s13uxV+5Pr7/fzIEPtMPZuELq6uAIaS8+KyOAhTeLhtN
+Bo/iCaNSoGfA0PFM8uE0BJhffPtb2PpiIUtvdl9uIYdAg/TpRfc2gnQRM4Ca3vQv
+j98oHNyfAgMBAAECggEAAqk+MNibhpYl5o+Ssbcgs/vGRkLqK1mATSaqTO9LXc1P
+kNHyEA2tXCBchQTFxANSHm1/qZ7rxLwPsRzu6FxopopZ6sJsLTzscwmMMDSb146j
+RbND8T/AvgSY5/+E9e61lQDjxocGZgrBnH6WkbBLIGV0n89Y2jg34r3BXMyfaDlY
+yjbNZB3jV36FTwLNouX0H3wjFPkHLqNNbCyzxCwJiADcmsXZkein+M4lFqPtvrmj
+k1NyC9vKuRjBR778oYF6A3+ttJ2i5UAiBsXpA1VWEVrAAVNatfoTTRcylF831hI9
+TFSkTKocBgDkmQ3kZkgxbwc9scJlT9KCQaJhHU67pQKBgQD4itY5bAQo3t/0Hzvq
+YvepZX+DeLGYK47INsDgonycN2cbaMIFkbYfDWo6C1Q9Xaw/J6CUK+iYLBqUGwZ1
+21/QCIAuoGmp53NHnElTTI57tTXEV6X6VAJA//qUemg40hxoqo7hAqXd+wzSYmaN
+Nkm1GQuV8gusvpuoVf7OOtMG9QKBgQC1W1PXg7S0rdmqAt3p9POd8Qgou/58YoAV
+Q0DpDNhV9dFcQDXNaC8fP5ko2sd86BKdkx10SM6FF+Y+FB0qJOxXfV65Cc7R27a/
+0EmBAvnSytKS2aHYQoaWVs079jEByOjMf1+Yeux/3p6yCcvf1fttWWF80CyXMj7h
+2KCCVypQwwKBgEHrYOId+gR1CGURG60QzqsJFobiLgg0FUyY6RMrRW2RbDFi2YLs
+oKcfwbrfYlpcS+D8O6TQ+IHTwMDjYhVEN+dPOeAj/6Jmlra5huEm/utkpnwK2yTH
+v0lKG0XiKV5Yq9w+0GJxd1imy0HJg3WUnnv/xojgh6QrcdF17Xz5MRs5AoGAUCfr
+aKe3qNvmBnR57LvtKPOtbYOZuRQ4FC3DdL3OqD+bpzBiF0Vi/ma3pQz9esF/6NFr
+BUhgrwafJvTw5v2m0AyDXzlsheicXy8KLdFI5dfrNiimldThc3UuBMCNbIKGEkyB
+zf0WpnWYoowd5fLHy87jfazs6G62yE9csf8gns0CgYBVa7eXucLvRz0qVarc3QGC
+Cnj0lIOjcfogkeHYgdWZIhCe/wNRmi8zE62vt46hK8yrWM03acft27EFAYC+zYQ0
+qAu0kELpeJDWt5vMoQ4amm45V/JtibyWZkEbnoi/0OVR2DzihAzalVPxGl0Ww4sU
+VFyJPht0bH65fYWiHKZjUQ==
+-----END PRIVATE KEY-----`
+
 func main() {
-	// Chaincode as a Service (CaaS) configuration
+	// Check for Chaincode as a Service (CaaS) configuration
 	ccid := os.Getenv("CORE_CHAINCODE_ID_NAME")
 	address := os.Getenv("CHAINCODE_SERVER_ADDRESS")
-
-	log.Printf("Starting Coffee Chaincode - CCID: %s, Address: %s", ccid, address)
 
 	chaincode, err := contractapi.NewChaincode(&CoffeeContract{})
 	if err != nil {
 		log.Panicf("Error creating coffee chaincode: %v", err)
 	}
 
-	// Create chaincode server for external mode (CaaS)
-	server := &shim.ChaincodeServer{
-		CCID:     ccid,
-		Address:  address,
-		CC:       chaincode,
-		TLSProps: shim.TLSProperties{Disabled: true}, // TLS disabled as per connection.json
-	}
+	// If both CCID and address are set, use CCAAS server mode
+	if ccid != "" && address != "" {
+		log.Printf("Starting Coffee Chaincode (CCAAS Server Mode) - CCID: %s, Address: %s", ccid, address)
+		log.Printf("Chaincode: %+v", chaincode)
 
-	log.Printf("Starting chaincode server on %s", address)
-	if err := server.Start(); err != nil {
-		log.Panicf("Error starting coffee chaincode server: %v", err)
+		server := &shim.ChaincodeServer{
+			CCID:     ccid,
+			Address:  address,
+			CC:       chaincode,
+			TLSProps: shim.TLSProperties{
+				Disabled:     false,
+				Key:          []byte(tlsKey),
+				Cert:         []byte(tlsCert),
+			},
+		}
+
+		log.Printf("ChaincodeServer struct created: CCID=%s, Address=%s, TLS=enabled", server.CCID, server.Address)
+		log.Printf("About to call server.Start() on %s with TLS", address)
+		
+		if err := server.Start(); err != nil {
+			log.Panicf("Error starting coffee chaincode server: %v", err)
+		}
+		
+		log.Printf("server.Start() returned without error - server should be running with TLS")
+	} else {
+		// Traditional mode - chaincode started by peer
+		log.Printf("Starting Coffee Chaincode (Traditional Mode)")
+		if err := shim.Start(chaincode); err != nil {
+			log.Panicf("Error starting coffee chaincode: %v", err)
+		}
 	}
 }
 

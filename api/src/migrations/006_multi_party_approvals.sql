@@ -21,16 +21,23 @@ CREATE TABLE IF NOT EXISTS approval_requirements (
 );
 
 -- ============================================
--- 2. UPDATE DOCUMENT_SIGNATURES TABLE
+-- 2. DOCUMENT_SIGNATURES TABLE
 -- ============================================
--- Add fields to track approval workflow
-ALTER TABLE document_signatures 
-ADD COLUMN IF NOT EXISTS approval_level INTEGER DEFAULT 1,
-ADD COLUMN IF NOT EXISTS approval_order INTEGER DEFAULT 1,
-ADD COLUMN IF NOT EXISTS signed_by_role VARCHAR(100),
-ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) DEFAULT 'pending', -- pending, approved, rejected
-ADD COLUMN IF NOT EXISTS approval_notes TEXT,
-ADD COLUMN IF NOT EXISTS requires_further_approval BOOLEAN DEFAULT false;
+-- Create document_signatures table if not exists
+CREATE TABLE IF NOT EXISTS document_signatures (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) NOT NULL,
+    signature_type VARCHAR(50) NOT NULL,
+    signed_by VARCHAR(500),
+    signed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    approval_level INTEGER DEFAULT 1,
+    approval_order INTEGER DEFAULT 1,
+    signed_by_role VARCHAR(100),
+    approval_status VARCHAR(50) DEFAULT 'pending',
+    approval_notes TEXT,
+    requires_further_approval BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Add index for faster approval queries
 CREATE INDEX IF NOT EXISTS idx_doc_signatures_approval 
@@ -40,22 +47,28 @@ ON document_signatures(document_id, signature_type, approval_status);
 -- 3. APPROVAL WORKFLOW STATE TABLE
 -- ============================================
 -- Tracks overall approval progress for each document
-CREATE TABLE IF NOT EXISTS approval_workflow_state (
-    id SERIAL PRIMARY KEY,
-    document_id VARCHAR(255) NOT NULL REFERENCES documents(document_id),
-    entity_type VARCHAR(50) NOT NULL,
-    document_type VARCHAR(100) NOT NULL,
-    required_approvals INTEGER NOT NULL DEFAULT 1,
-    current_approvals INTEGER NOT NULL DEFAULT 0,
-    approval_status VARCHAR(50) DEFAULT 'pending', -- pending, in_progress, approved, rejected
-    approved_by TEXT[], -- Array of user IDs who approved
-    rejected_by VARCHAR(255), -- User who rejected (if any)
-    rejection_reason TEXT,
-    completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(document_id)
-);
+-- Enhance approval_workflow_state table (basic version exists from base schema)
+ALTER TABLE approval_workflow_state
+ADD COLUMN IF NOT EXISTS document_id VARCHAR(255),
+ADD COLUMN IF NOT EXISTS document_type VARCHAR(100),
+ADD COLUMN IF NOT EXISTS required_approvals INTEGER DEFAULT 1,
+ADD COLUMN IF NOT EXISTS current_approvals INTEGER DEFAULT 0,
+ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) DEFAULT 'pending',
+ADD COLUMN IF NOT EXISTS approved_by TEXT[],
+ADD COLUMN IF NOT EXISTS rejected_by VARCHAR(255),
+ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Add unique constraint if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'approval_workflow_state_document_id_key'
+    ) THEN
+        ALTER TABLE approval_workflow_state ADD CONSTRAINT approval_workflow_state_document_id_key UNIQUE (document_id);
+    END IF;
+END $$;
 
 -- Add index for workflow queries
 CREATE INDEX IF NOT EXISTS idx_approval_workflow_status 
@@ -171,10 +184,10 @@ CREATE TRIGGER trigger_update_approval_workflow
 CREATE OR REPLACE VIEW document_approval_status AS
 SELECT 
     d.document_id,
-    d.entity_type,
-    d.entity_id,
+    aws.entity_type,
+    aws.entity_id,
     d.document_type,
-    d.file_name,
+    d.document_name as file_name,
     d.status as document_status,
     aws.required_approvals,
     aws.current_approvals,
@@ -192,7 +205,7 @@ SELECT
     aws.updated_at as approval_updated_at
 FROM documents d
 LEFT JOIN approval_workflow_state aws ON d.document_id = aws.document_id
-LEFT JOIN approval_requirements ar ON d.document_type = ar.document_type AND d.entity_type = ar.entity_type
+LEFT JOIN approval_requirements ar ON d.document_type = ar.document_type AND aws.entity_type = ar.entity_type
 WHERE d.status != 'deleted';
 
 COMMENT ON VIEW document_approval_status IS 'Comprehensive view of document approval progress';

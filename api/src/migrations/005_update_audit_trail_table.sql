@@ -1,33 +1,30 @@
 -- Migration: Update audit_trail table with additional columns for comprehensive logging
 -- This adds columns needed for the audit service
 
--- Add performed_by_org column (alias for organization)
+-- Add performed_by_org column (base schema doesn't have 'organization' column in audit_trail)
 ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS performed_by_org VARCHAR(100);
-
--- Add old_value and new_value for tracking state changes
-ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS old_value TEXT;
-ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS new_value TEXT;
-
--- Add reason for actions
+ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS performed_by VARCHAR(255);
+ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS organization VARCHAR(100);
+ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS changes JSONB;
+ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS blockchain_tx_id VARCHAR(255);
 ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS reason TEXT;
-
--- Add metadata as JSONB for flexible storage
 ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
 
--- Add IP address for security tracking
-ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);
+-- Add IP address for security tracking (already exists in base schema)
+-- ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);
 
 -- Copy organization data to performed_by_org for backward compatibility
-UPDATE audit_trail SET performed_by_org = organization WHERE performed_by_org IS NULL;
+UPDATE audit_trail SET performed_by_org = organization WHERE performed_by_org IS NULL AND organization IS NOT NULL;
 
 -- Copy changes to metadata for backward compatibility
 UPDATE audit_trail SET metadata = COALESCE(changes, '{}'::jsonb) WHERE metadata = '{}'::jsonb;
 
--- Create additional indexes for performance
+-- Create additional indexes for performance (timestamp column exists in base schema)
 CREATE INDEX IF NOT EXISTS idx_audit_trail_action ON audit_trail(action);
 CREATE INDEX IF NOT EXISTS idx_audit_trail_performed_by ON audit_trail(performed_by);
 CREATE INDEX IF NOT EXISTS idx_audit_trail_performed_by_org ON audit_trail(performed_by_org);
-CREATE INDEX IF NOT EXISTS idx_audit_trail_created_at ON audit_trail(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_timestamp_desc ON audit_trail(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_trail_entity_action ON audit_trail(entity_type, action);
 
 -- Add comments for documentation

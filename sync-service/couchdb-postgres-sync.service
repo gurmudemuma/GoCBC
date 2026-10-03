@@ -1,0 +1,21 @@
+[Unit]
+Description=CouchDB to PostgreSQL Synchronization Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=guda
+WorkingDirectory=/home/guda/GoCBC/sync-service
+ExecStart=/usr/bin/node /home/guda/GoCBC/sync-service/couchdb-postgres-sync.js --watch
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=couchdb-postgres-sync
+
+# Environment
+Environment="NODE_ENV=production"
+
+[Install]
+WantedBy=multi-user.target

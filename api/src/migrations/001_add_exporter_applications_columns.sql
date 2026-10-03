@@ -32,5 +32,5 @@ ADD COLUMN IF NOT EXISTS exporter_type VARCHAR(50) DEFAULT 'STANDARD';
 -- Create index on status for faster queries
 CREATE INDEX IF NOT EXISTS idx_exporter_applications_status ON exporter_applications(status);
 
--- Create index on submitted_at for sorting
-CREATE INDEX IF NOT EXISTS idx_exporter_applications_submitted_at ON exporter_applications(submitted_at);
+-- Create index on submitted_date for sorting (base schema uses submitted_date, not submitted_at)
+CREATE INDEX IF NOT EXISTS idx_exporter_applications_submitted_date ON exporter_applications(submitted_date);

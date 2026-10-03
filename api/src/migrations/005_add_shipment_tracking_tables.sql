@@ -1,18 +1,13 @@
 -- Shipment Tracking Enhancement Tables
 
--- Shipment Status History
-CREATE TABLE IF NOT EXISTS shipment_status_history (
-    id SERIAL PRIMARY KEY,
-    shipment_id VARCHAR(50) NOT NULL,
-    status VARCHAR(50) NOT NULL,
-    location VARCHAR(255),
-    updated_by VARCHAR(50) NOT NULL,
-    update_date TIMESTAMP DEFAULT NOW(),
-    remarks TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
+-- Enhance Shipment Status History table (already exists from base schema)
+ALTER TABLE shipment_status_history
+ADD COLUMN IF NOT EXISTS location VARCHAR(255),
+ADD COLUMN IF NOT EXISTS updated_by VARCHAR(50),
+ADD COLUMN IF NOT EXISTS update_date TIMESTAMP DEFAULT NOW(),
+ADD COLUMN IF NOT EXISTS remarks TEXT;
 
--- Shipment Locations (GPS tracking)
+-- Shipment Locations (GPS tracking) - new table
 CREATE TABLE IF NOT EXISTS shipment_locations (
     id SERIAL PRIMARY KEY,
     shipment_id VARCHAR(50) NOT NULL,

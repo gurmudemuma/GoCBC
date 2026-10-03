@@ -44,6 +44,29 @@ print_step "Stopping Node.js processes and freeing ports..."
 bash kill-ports.sh
 print_success "All Node.js processes stopped and ports freed"
 
+# Stop CouchDB sync service
+print_step "Stopping CouchDB → PostgreSQL sync service..."
+if [ -f "$PROJECT_ROOT/sync-service/sync-service.pid" ]; then
+    SYNC_PID=$(cat "$PROJECT_ROOT/sync-service/sync-service.pid")
+    if ps -p $SYNC_PID > /dev/null 2>&1; then
+        kill $SYNC_PID 2>/dev/null || true
+        rm "$PROJECT_ROOT/sync-service/sync-service.pid"
+        print_success "Sync service stopped (PID: $SYNC_PID)"
+    else
+        print_warning "Sync service was not running"
+        rm "$PROJECT_ROOT/sync-service/sync-service.pid"
+    fi
+else
+    # Try to find by process name
+    SYNC_PIDS=$(ps aux | grep "couchdb-postgres-sync.js --watch" | grep -v grep | awk '{print $2}' || true)
+    if [ ! -z "$SYNC_PIDS" ]; then
+        kill $SYNC_PIDS 2>/dev/null || true
+        print_success "Sync service stopped"
+    else
+        print_warning "Sync service was not running"
+    fi
+fi
+
 # Stop Docker containers
 print_step "Stopping Docker containers..."
 cd "$PROJECT_ROOT"

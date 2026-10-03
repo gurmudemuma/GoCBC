@@ -6,63 +6,59 @@
 -- AUDIT LOGS TABLE
 -- =============================================================================
 -- Comprehensive audit trail for all system operations
--- Records: user actions, blockchain transactions, data changes, security events
+-- Enhance audit_logs table (basic version exists from base schema)
+ALTER TABLE audit_logs
+ADD COLUMN IF NOT EXISTS event_type VARCHAR(100),
+ADD COLUMN IF NOT EXISTS event_category VARCHAR(50),
+ADD COLUMN IF NOT EXISTS severity VARCHAR(20) DEFAULT 'INFO',
+ADD COLUMN IF NOT EXISTS user_id INTEGER,
+ADD COLUMN IF NOT EXISTS username VARCHAR(255),
+ADD COLUMN IF NOT EXISTS user_role VARCHAR(50),
+ADD COLUMN IF NOT EXISTS organization VARCHAR(100),
+ADD COLUMN IF NOT EXISTS description TEXT,
+ADD COLUMN IF NOT EXISTS resource_type VARCHAR(100),
+ADD COLUMN IF NOT EXISTS resource_id VARCHAR(255),
+ADD COLUMN IF NOT EXISTS ip_address INET,
+ADD COLUMN IF NOT EXISTS user_agent TEXT,
+ADD COLUMN IF NOT EXISTS endpoint VARCHAR(255),
+ADD COLUMN IF NOT EXISTS http_method VARCHAR(10),
+ADD COLUMN IF NOT EXISTS http_status INTEGER,
+ADD COLUMN IF NOT EXISTS old_value JSONB,
+ADD COLUMN IF NOT EXISTS new_value JSONB,
+ADD COLUMN IF NOT EXISTS blockchain_tx_id VARCHAR(255),
+ADD COLUMN IF NOT EXISTS blockchain_block_number BIGINT,
+ADD COLUMN IF NOT EXISTS blockchain_timestamp TIMESTAMP,
+ADD COLUMN IF NOT EXISTS metadata JSONB,
+ADD COLUMN IF NOT EXISTS tags TEXT[];
 
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id SERIAL PRIMARY KEY,
+-- Add constraints if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'audit_logs_valid_severity'
+    ) THEN
+        ALTER TABLE audit_logs 
+        ADD CONSTRAINT audit_logs_valid_severity 
+        CHECK (severity IN ('DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'));
+    END IF;
     
-    -- Event Identification
-    event_type VARCHAR(100) NOT NULL,  -- LOGIN, LOGOUT, CREATE_CONTRACT, UPDATE_SHIPMENT, etc.
-    event_category VARCHAR(50) NOT NULL, -- AUTH, BLOCKCHAIN, DATABASE, API, SECURITY
-    severity VARCHAR(20) DEFAULT 'INFO', -- DEBUG, INFO, WARN, ERROR, CRITICAL
-    
-    -- Actor Information
-    user_id INTEGER REFERENCES users(id),
-    username VARCHAR(255),
-    user_role VARCHAR(50),
-    organization VARCHAR(100),
-    
-    -- Action Details
-    action VARCHAR(255) NOT NULL,  -- Brief description
-    description TEXT,              -- Detailed description
-    resource_type VARCHAR(100),    -- CONTRACT, SHIPMENT, USER, DOCUMENT, etc.
-    resource_id VARCHAR(255),      -- ID of affected resource
-    
-    -- Request Context
-    ip_address INET,
-    user_agent TEXT,
-    endpoint VARCHAR(255),         -- API endpoint called
-    http_method VARCHAR(10),       -- GET, POST, PUT, DELETE
-    http_status INTEGER,           -- Response status code
-    
-    -- Data Changes
-    old_value JSONB,               -- Previous state
-    new_value JSONB,               -- New state
-    changes JSONB,                 -- Specific fields changed
-    
-    -- Blockchain Integration
-    blockchain_tx_id VARCHAR(255), -- Fabric transaction ID
-    blockchain_block_number BIGINT,
-    blockchain_timestamp TIMESTAMP,
-    
-    -- Metadata
-    metadata JSONB,                -- Additional context
-    tags TEXT[],                   -- Searchable tags
-    
-    -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    -- Indexing
-    CONSTRAINT valid_severity CHECK (severity IN ('DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL')),
-    CONSTRAINT valid_category CHECK (event_category IN ('AUTH', 'BLOCKCHAIN', 'DATABASE', 'API', 'SECURITY', 'SYSTEM'))
-);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'audit_logs_valid_category'
+    ) THEN
+        ALTER TABLE audit_logs 
+        ADD CONSTRAINT audit_logs_valid_category 
+        CHECK (event_category IN ('AUTH', 'BLOCKCHAIN', 'DATABASE', 'API', 'SECURITY', 'SYSTEM'));
+    END IF;
+END $$;
 
--- Indexes for fast searching
+-- Indexes for fast searching (timestamp column exists in base schema, not created_at)
 CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_category ON audit_logs(event_category);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_severity ON audit_logs(severity);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp_desc ON audit_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_blockchain_tx ON audit_logs(blockchain_tx_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_metadata ON audit_logs USING GIN (metadata);
@@ -78,109 +74,8 @@ COMMENT ON COLUMN audit_logs.blockchain_tx_id IS 'Associated Fabric transaction 
 -- NOTIFICATIONS TABLE
 -- =============================================================================
 -- Multi-channel notification management (Email, SMS, Push, In-App, Webhook)
-
-CREATE TABLE IF NOT EXISTS notifications (
-    id SERIAL PRIMARY KEY,
-    
-    -- Recipient Information
-    user_id INTEGER REFERENCES users(id),
-    recipient_email VARCHAR(255),
-    recipient_phone VARCHAR(50),
-    recipient_name VARCHAR(255),
-    organization VARCHAR(100),
-    
-    -- Notification Content
-    title VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    notification_type VARCHAR(100) NOT NULL, -- CONTRACT_APPROVED, SHIPMENT_DELAYED, PAYMENT_DUE, etc.
-    priority VARCHAR(20) DEFAULT 'NORMAL',   -- LOW, NORMAL, HIGH, URGENT
-    category VARCHAR(50),                     -- OPERATIONAL, COMPLIANCE, FINANCIAL, SYSTEM
-    
-    -- Delivery Channels
-    channels TEXT[] NOT NULL,                 -- ['EMAIL', 'SMS', 'PUSH', 'IN_APP', 'WEBHOOK']
-    
-    -- Email Specific
-    email_subject VARCHAR(255),
-    email_html TEXT,
-    email_attachments JSONB,                  -- [{filename, path, contentType}]
-    
-    -- SMS Specific
-    sms_message TEXT,
-    
-    -- Push Notification Specific
-    push_data JSONB,                          -- Custom payload for mobile push
-    
-    -- In-App Specific
-    in_app_read BOOLEAN DEFAULT FALSE,
-    in_app_read_at TIMESTAMP,
-    
-    -- Webhook Specific
-    webhook_url TEXT,
-    webhook_payload JSONB,
-    webhook_headers JSONB,
-    
-    -- Action Links
-    action_url TEXT,                          -- Deep link to relevant resource
-    action_label VARCHAR(100),                -- "View Shipment", "Approve Contract"
-    
-    -- Related Resources
-    resource_type VARCHAR(100),               -- CONTRACT, SHIPMENT, PAYMENT, etc.
-    resource_id VARCHAR(255),
-    contract_id VARCHAR(255),
-    shipment_id VARCHAR(255),
-    
-    -- Delivery Status
-    status VARCHAR(50) DEFAULT 'PENDING',     -- PENDING, SENT, DELIVERED, FAILED, RETRY
-    email_sent BOOLEAN DEFAULT FALSE,
-    email_sent_at TIMESTAMP,
-    email_error TEXT,
-    sms_sent BOOLEAN DEFAULT FALSE,
-    sms_sent_at TIMESTAMP,
-    sms_error TEXT,
-    webhook_sent BOOLEAN DEFAULT FALSE,
-    webhook_sent_at TIMESTAMP,
-    webhook_response_status INTEGER,
-    webhook_error TEXT,
-    
-    -- Retry Logic
-    retry_count INTEGER DEFAULT 0,
-    max_retries INTEGER DEFAULT 3,
-    next_retry_at TIMESTAMP,
-    
-    -- Scheduling
-    scheduled_for TIMESTAMP,                  -- For delayed notifications
-    expires_at TIMESTAMP,                     -- Auto-delete after this date
-    
-    -- Metadata
-    metadata JSONB,
-    tags TEXT[],
-    
-    -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sent_at TIMESTAMP,
-    
-    -- Constraints
-    CONSTRAINT valid_priority CHECK (priority IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')),
-    CONSTRAINT valid_status CHECK (status IN ('PENDING', 'SENT', 'DELIVERED', 'FAILED', 'RETRY', 'CANCELLED'))
-);
-
--- Indexes for notification management
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
-CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(notification_type);
-CREATE INDEX IF NOT EXISTS idx_notifications_priority ON notifications(priority);
-CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_scheduled ON notifications(scheduled_for) WHERE status = 'PENDING';
-CREATE INDEX IF NOT EXISTS idx_notifications_retry ON notifications(next_retry_at) WHERE status = 'RETRY';
-CREATE INDEX IF NOT EXISTS idx_notifications_resource ON notifications(resource_type, resource_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_in_app_unread ON notifications(user_id, in_app_read) WHERE in_app_read = FALSE;
-CREATE INDEX IF NOT EXISTS idx_notifications_metadata ON notifications USING GIN (metadata);
-
-COMMENT ON TABLE notifications IS 'Multi-channel notification management system';
-COMMENT ON COLUMN notifications.channels IS 'Delivery channels: EMAIL, SMS, PUSH, IN_APP, WEBHOOK';
-COMMENT ON COLUMN notifications.priority IS 'Notification priority level';
-COMMENT ON COLUMN notifications.status IS 'Delivery status';
+-- Note: Basic notifications table already exists from base schema, will be enhanced by migration 004_webhooks_and_notifications.sql
+-- This migration focuses on notification_templates table
 
 -- =============================================================================
 -- NOTIFICATION TEMPLATES TABLE
@@ -258,7 +153,7 @@ ON CONFLICT (template_code) DO NOTHING;
 -- VIEWS
 -- =============================================================================
 
--- Recent audit logs view
+-- Recent audit logs view (base schema uses 'timestamp' not 'created_at')
 CREATE OR REPLACE VIEW recent_audit_logs AS
 SELECT 
     id,
@@ -271,10 +166,10 @@ SELECT
     resource_type,
     resource_id,
     ip_address,
-    created_at
+    timestamp as created_at
 FROM audit_logs
-WHERE created_at > NOW() - INTERVAL '30 days'
-ORDER BY created_at DESC;
+WHERE timestamp > NOW() - INTERVAL '30 days'
+ORDER BY timestamp DESC;
 
 -- Pending notifications view
 CREATE OR REPLACE VIEW pending_notifications AS

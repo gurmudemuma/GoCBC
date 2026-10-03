@@ -6,31 +6,21 @@
 -- AUDIT LOG TABLE (API Level)
 -- ====================================================================
 
--- Drop existing table if it exists
-DROP TABLE IF EXISTS audit_log CASCADE;
+-- Enhance audit_log table (basic version exists from base schema)
+ALTER TABLE audit_log
+ADD COLUMN IF NOT EXISTS user_id INTEGER,
+ADD COLUMN IF NOT EXISTS username VARCHAR(100),
+ADD COLUMN IF NOT EXISTS action VARCHAR(50),
+ADD COLUMN IF NOT EXISTS details JSONB,
+ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45),
+ADD COLUMN IF NOT EXISTS user_agent TEXT;
 
--- Create the audit_log table
-CREATE TABLE audit_log (
-  id SERIAL PRIMARY KEY,
-  user_id INTEGER REFERENCES users(id),
-  username VARCHAR(100),
-  action VARCHAR(50) NOT NULL,
-  entity_type VARCHAR(50) NOT NULL,
-  entity_id VARCHAR(200) NOT NULL,
-  details JSONB,
-  ip_address VARCHAR(45),
-  user_agent TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create indexes for fast queries
-CREATE INDEX idx_audit_log_user_id ON audit_log(user_id);
-CREATE INDEX idx_audit_log_entity ON audit_log(entity_type, entity_id);
-CREATE INDEX idx_audit_log_action ON audit_log(action);
-CREATE INDEX idx_audit_log_created_at ON audit_log(created_at DESC);
-
--- Create index on JSONB details for faster JSON queries
-CREATE INDEX idx_audit_log_details ON audit_log USING GIN (details);
+-- Ensure indexes exist
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_details ON audit_log USING GIN (details);
 
 -- ====================================================================
 -- VIEW: Recent Audit Activity
@@ -46,7 +36,7 @@ SELECT
   al.details,
   al.ip_address,
   al.created_at,
-  u.full_name as user_full_name,
+  u.username as user_full_name,
   u.organization
 FROM audit_log al
 LEFT JOIN users u ON al.user_id = u.id

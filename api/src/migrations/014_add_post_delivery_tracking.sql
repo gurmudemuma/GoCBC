@@ -5,53 +5,67 @@
 -- ====================================================================
 -- POST-DELIVERY TRACKING TABLE
 -- ====================================================================
-CREATE TABLE IF NOT EXISTS post_delivery_tracking (
-  id SERIAL PRIMARY KEY,
-  shipment_id VARCHAR(100) NOT NULL UNIQUE,
-  contract_id VARCHAR(100) NOT NULL,
-  exporter_id VARCHAR(100) NOT NULL,
-  delivery_date TIMESTAMP NOT NULL,
-  
-  -- Payment Settlement
-  payment_received BOOLEAN DEFAULT FALSE,
-  payment_received_date TIMESTAMP,
-  payment_amount DECIMAL(15, 2),
-  payment_currency VARCHAR(3),
-  swift_reference VARCHAR(100),
-  
-  -- Forex Repatriation
-  forex_repatriated BOOLEAN DEFAULT FALSE,
-  forex_repatriation_date TIMESTAMP,
-  forex_amount DECIMAL(15, 2),
-  forex_rate DECIMAL(10, 4),
-  
-  -- LC Settlement
-  lc_used BOOLEAN DEFAULT FALSE,
-  lc_settled BOOLEAN DEFAULT FALSE,
-  lc_settlement_date TIMESTAMP,
-  lc_reference VARCHAR(100),
-  
-  -- ECTA Audit
-  ecta_audit_completed BOOLEAN DEFAULT FALSE,
-  ecta_audit_date TIMESTAMP,
-  ecta_audit_result VARCHAR(20) CHECK (ecta_audit_result IN ('PASSED', 'FAILED', 'PENDING')),
-  ecta_audit_notes TEXT,
-  
-  -- Contract Closure
-  contract_closed BOOLEAN DEFAULT FALSE,
-  contract_closure_date TIMESTAMP,
-  
-  -- Workflow Status
-  overall_status VARCHAR(20) DEFAULT 'PENDING' CHECK (overall_status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'DELAYED', 'ISSUE')),
-  completion_percentage INTEGER DEFAULT 0 CHECK (completion_percentage >= 0 AND completion_percentage <= 100),
-  expected_completion_date TIMESTAMP,
-  
-  -- Audit Trail
-  created_by INTEGER REFERENCES users(id),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_by INTEGER REFERENCES users(id),
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- Enhance post_delivery_tracking table (basic version exists from base schema)
+ALTER TABLE post_delivery_tracking
+ADD COLUMN IF NOT EXISTS contract_id VARCHAR(100),
+ADD COLUMN IF NOT EXISTS exporter_id VARCHAR(100),
+ADD COLUMN IF NOT EXISTS delivery_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS payment_received BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS payment_received_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS payment_amount DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS payment_currency VARCHAR(3),
+ADD COLUMN IF NOT EXISTS swift_reference VARCHAR(100),
+ADD COLUMN IF NOT EXISTS forex_repatriated BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS forex_repatriation_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS forex_amount DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS forex_rate DECIMAL(10, 4),
+ADD COLUMN IF NOT EXISTS lc_used BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS lc_settled BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS lc_settlement_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS lc_reference VARCHAR(100),
+ADD COLUMN IF NOT EXISTS ecta_audit_completed BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS ecta_audit_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS ecta_audit_result VARCHAR(20),
+ADD COLUMN IF NOT EXISTS ecta_audit_notes TEXT,
+ADD COLUMN IF NOT EXISTS contract_closed BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS contract_closure_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS overall_status VARCHAR(20) DEFAULT 'PENDING',
+ADD COLUMN IF NOT EXISTS completion_percentage INTEGER DEFAULT 0,
+ADD COLUMN IF NOT EXISTS expected_completion_date TIMESTAMP,
+ADD COLUMN IF NOT EXISTS created_by INTEGER,
+ADD COLUMN IF NOT EXISTS updated_by INTEGER,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Add constraints if not exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'post_delivery_tracking_ecta_audit_result_check'
+    ) THEN
+        ALTER TABLE post_delivery_tracking 
+        ADD CONSTRAINT post_delivery_tracking_ecta_audit_result_check 
+        CHECK (ecta_audit_result IN ('PASSED', 'FAILED', 'PENDING'));
+    END IF;
+    
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'post_delivery_tracking_overall_status_check'
+    ) THEN
+        ALTER TABLE post_delivery_tracking 
+        ADD CONSTRAINT post_delivery_tracking_overall_status_check 
+        CHECK (overall_status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'DELAYED', 'ISSUE'));
+    END IF;
+    
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'post_delivery_tracking_completion_percentage_check'
+    ) THEN
+        ALTER TABLE post_delivery_tracking 
+        ADD CONSTRAINT post_delivery_tracking_completion_percentage_check 
+        CHECK (completion_percentage >= 0 AND completion_percentage <= 100);
+    END IF;
+END $$;
 
 -- Index for fast lookups
 CREATE INDEX IF NOT EXISTS idx_post_delivery_shipment ON post_delivery_tracking(shipment_id);
@@ -65,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_post_delivery_delivery_date ON post_delivery_trac
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS post_delivery_checklist (
   id SERIAL PRIMARY KEY,
-  shipment_id VARCHAR(100) NOT NULL REFERENCES post_delivery_tracking(shipment_id) ON DELETE CASCADE,
+  shipment_id VARCHAR(100) NOT NULL,
   item_type VARCHAR(50) NOT NULL,
   description TEXT NOT NULL,
   display_order INTEGER NOT NULL,
@@ -84,13 +98,13 @@ CREATE INDEX IF NOT EXISTS idx_checklist_completed ON post_delivery_checklist(co
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS post_delivery_issues (
   id SERIAL PRIMARY KEY,
-  shipment_id VARCHAR(100) NOT NULL REFERENCES post_delivery_tracking(shipment_id) ON DELETE CASCADE,
+  shipment_id VARCHAR(100) NOT NULL,
   issue_type VARCHAR(50) NOT NULL CHECK (issue_type IN ('PAYMENT_OVERDUE', 'FOREX_DELAYED', 'LC_ISSUE', 'AUDIT_REQUIRED', 'COMPLIANCE_ISSUE')),
   severity VARCHAR(20) NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
   message TEXT NOT NULL,
   resolved BOOLEAN DEFAULT FALSE,
   resolved_at TIMESTAMP,
-  resolved_by INTEGER REFERENCES users(id),
+  resolved_by INTEGER,
   resolution_notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   

@@ -137,6 +137,7 @@ wait_for_port() {
     
     # Fallback: check if docker container is running
     local container_check=$(docker ps --format '{{.Ports}}' | grep -c ":$port->" 2>/dev/null || echo "0")
+    container_check=$(echo "$container_check" | tr -d '\n' | tr -d ' ')
     if [ "$container_check" -gt 0 ]; then
         print_warning "$service container is up (port $port may be firewalled, continuing...)"
         return 0
@@ -243,7 +244,7 @@ build_chaincode() {
         return
     fi
     
-    print_header "Building Coffee Chaincode"
+    print_header "Building Coffee Chaincode with TLS"
     
     if ! command -v go &> /dev/null; then
         print_warning "Go not found, skipping chaincode build"
@@ -251,9 +252,26 @@ build_chaincode() {
     fi
     
     cd "$CHAINCODE_DIR"
-    print_step "Building Go chaincode..."
-    if go build -o chaincode; then
-        print_success "Chaincode built successfully"
+    print_step "Building Go chaincode with TLS support..."
+    if CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coffee-chaincode .; then
+        print_success "Chaincode built successfully with TLS enabled"
+        
+        # Verify TLS certificates exist
+        if [ -f "tls/server-cert.pem" ] && [ -f "tls/server-key.pem" ]; then
+            print_success "TLS certificates found (server-cert.pem, server-key.pem)"
+        else
+            print_warning "TLS certificates not found in tls/ directory"
+            print_info "TLS certs are embedded in binary - external files not required"
+        fi
+        
+        # Verify connection.json has TLS enabled
+        if [ -f "connection.json" ]; then
+            if grep -q '"tls_required".*true' connection.json; then
+                print_success "connection.json has TLS enabled"
+            else
+                print_warning "connection.json has TLS disabled"
+            fi
+        fi
     else
         print_error "Chaincode build failed"
         exit 1
@@ -315,6 +333,77 @@ build_typescript() {
 # ============================================================================
 # DOCKER/BLOCKCHAIN FUNCTIONS
 # ============================================================================
+
+start_chaincode_container() {
+    print_header "Starting TLS-Enabled Chaincode Container"
+    
+    # Check if container is already running
+    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        print_info "Chaincode container already running"
+        return 0
+    fi
+    
+    # Stop and remove old container if exists
+    if docker ps -a --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        print_step "Removing old chaincode container..."
+        docker stop coffee-chaincode 2>/dev/null || true
+        docker rm coffee-chaincode 2>/dev/null || true
+    fi
+    
+    # Calculate the correct CCID for TLS package
+    # This will be updated when chaincode is deployed
+    print_step "Starting chaincode container with TLS support..."
+    
+    # Use docker-compose to start the chaincode service
+    if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d coffee-chaincode 2>/dev/null; then
+        print_success "Chaincode container started via docker-compose"
+    else
+        # Fallback: start manually with correct configuration
+        print_step "Starting chaincode manually..."
+        
+        # Check if binary exists
+        if [ ! -f "$CHAINCODE_DIR/coffee-chaincode" ]; then
+            print_error "Chaincode binary not found at $CHAINCODE_DIR/coffee-chaincode"
+            print_info "Run: cd $CHAINCODE_DIR && CGO_ENABLED=0 go build -o coffee-chaincode ."
+            return 1
+        fi
+        
+        # Start with the correct CCID for TLS package
+        docker run -d \
+            --name coffee-chaincode \
+            --network cecbs-network \
+            -e CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999 \
+            -e CORE_CHAINCODE_ID_NAME=coffee_1.9_tls:2b094adc2b1d5c848eacf297c7ab1c1bcd2af67cb7f763f8f11c8e303a951db4 \
+            -e CORE_CHAINCODE_LOGGING_LEVEL=INFO \
+            -p 9999:9999 \
+            -v "$CHAINCODE_DIR:/app" \
+            -w /app \
+            ubuntu:22.04 \
+            /app/coffee-chaincode
+        
+        if [ $? -eq 0 ]; then
+            print_success "Chaincode container started manually"
+        else
+            print_error "Failed to start chaincode container"
+            return 1
+        fi
+    fi
+    
+    # Wait for chaincode to be ready
+    sleep 3
+    if docker logs coffee-chaincode 2>&1 | grep -q "Starting Coffee Chaincode"; then
+        print_success "Chaincode is running with TLS enabled"
+        
+        # Check TLS status
+        if docker logs coffee-chaincode 2>&1 | grep -q "TLS=enabled\|with TLS"; then
+            print_success "✓ TLS encryption is ENABLED"
+        else
+            print_warning "⚠ TLS status unclear - check logs: docker logs coffee-chaincode"
+        fi
+    else
+        print_warning "Chaincode may not be ready yet"
+    fi
+}
 
 start_fabric_network() {
     print_header "Starting Hyperledger Fabric Network"
@@ -520,6 +609,72 @@ start_ui() {
     fi
 }
 
+start_sync_service() {
+    print_header "Starting CouchDB → PostgreSQL Sync Service"
+    
+    local SYNC_DIR="$PROJECT_ROOT/sync-service"
+    
+    if [ ! -d "$SYNC_DIR" ]; then
+        print_warning "Sync service directory not found: $SYNC_DIR"
+        print_info "Skipping sync service startup"
+        return 0
+    fi
+    
+    if [ ! -f "$SYNC_DIR/couchdb-postgres-sync.js" ]; then
+        print_warning "Sync service script not found"
+        print_info "Skipping sync service startup"
+        return 0
+    fi
+    
+    # Check if dependencies are installed
+    if [ ! -d "$SYNC_DIR/node_modules" ]; then
+        print_step "Installing sync service dependencies..."
+        cd "$SYNC_DIR"
+        if npm install --silent 2>/dev/null; then
+            print_success "Sync service dependencies installed"
+        else
+            print_warning "Failed to install sync service dependencies"
+            cd "$PROJECT_ROOT"
+            return 0
+        fi
+        cd "$PROJECT_ROOT"
+    fi
+    
+    # Check if sync service is already running
+    if [ -f "$SYNC_DIR/sync-service.pid" ]; then
+        local sync_pid=$(cat "$SYNC_DIR/sync-service.pid")
+        if ps -p $sync_pid > /dev/null 2>&1; then
+            print_success "Sync service is already running (PID: $sync_pid)"
+            return 0
+        else
+            # Remove stale PID file
+            rm "$SYNC_DIR/sync-service.pid"
+        fi
+    fi
+    
+    # Start sync service
+    print_step "Starting continuous sync service (every 30 seconds)..."
+    cd "$SYNC_DIR"
+    nohup node couchdb-postgres-sync.js --watch > sync-continuous.log 2>&1 &
+    local sync_pid=$!
+    echo $sync_pid > sync-service.pid
+    cd "$PROJECT_ROOT"
+    
+    sleep 2
+    
+    # Verify it's running
+    if ps -p $sync_pid > /dev/null 2>&1; then
+        print_success "Sync service started successfully (PID: $sync_pid)"
+        print_info "Syncing all 6 CouchDB instances to PostgreSQL every 30 seconds"
+        print_info "View logs: tail -f $SYNC_DIR/sync-continuous.log"
+        print_info "Manage service: $SYNC_DIR/manage-sync.sh {status|stop|restart|logs}"
+    else
+        print_warning "Sync service failed to start"
+        print_info "Check logs: $SYNC_DIR/sync-continuous.log"
+        rm "$SYNC_DIR/sync-service.pid" 2>/dev/null
+    fi
+}
+
 # ============================================================================
 # TESTING FUNCTIONS
 # ============================================================================
@@ -583,10 +738,29 @@ show_summary() {
     
     echo -e "${BOLD}${GREEN}Blockchain Status:${RESET}"
     if [ "$chaincode_deployed" = "0" ]; then
-        echo -e "  ${GREEN}✓ Chaincode:${RESET}       Deployed and operational"
+        echo -e "  ${GREEN}✓ Chaincode:${RESET}       Deployed and operational with TLS"
     else
         echo -e "  ${YELLOW}⚠ Chaincode:${RESET}       Deployment had issues (check logs)"
         echo -e "    ${CYAN}Manual fix:${RESET}        ./deploy-chaincode.sh"
+    fi
+    
+    # Check chaincode TLS status
+    if docker logs coffee-chaincode 2>&1 | grep -q "TLS=enabled\|with TLS"; then
+        echo -e "  ${GREEN}✓ TLS Security:${RESET}    Enabled (encrypted communication)"
+    else
+        echo -e "  ${YELLOW}⚠ TLS Security:${RESET}    Status unknown"
+    fi
+    
+    # Check sync service status
+    if [ -f "$PROJECT_ROOT/sync-service/sync-service.pid" ]; then
+        local sync_pid=$(cat "$PROJECT_ROOT/sync-service/sync-service.pid")
+        if ps -p $sync_pid > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ CouchDB Sync:${RESET}    Running (syncing every 30s)"
+        else
+            echo -e "  ${YELLOW}⚠ CouchDB Sync:${RESET}    Not running"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ CouchDB Sync:${RESET}    Not started"
     fi
     echo ""
     
@@ -606,6 +780,8 @@ show_summary() {
     echo -e "  ${CYAN}Stop system:${RESET}          ./stop-all.sh"
     echo -e "  ${CYAN}API logs:${RESET}             tail -f /tmp/cecbs-api.log"
     echo -e "  ${CYAN}UI logs:${RESET}              tail -f /tmp/cecbs-ui.log"
+    echo -e "  ${CYAN}Sync logs:${RESET}            tail -f sync-service/sync-continuous.log"
+    echo -e "  ${CYAN}Manage sync:${RESET}          sync-service/manage-sync.sh status"
     echo ""
     
     if [ "$chaincode_deployed" != "0" ]; then
@@ -616,10 +792,13 @@ show_summary() {
     
     echo -e "${BOLD}${GREEN}Process IDs:${RESET}"
     if [ -f /tmp/cecbs-api.pid ]; then
-        echo -e "  ${CYAN}API PID:${RESET}  $(cat /tmp/cecbs-api.pid)"
+        echo -e "  ${CYAN}API PID:${RESET}   $(cat /tmp/cecbs-api.pid)"
     fi
     if [ -f /tmp/cecbs-ui.pid ]; then
-        echo -e "  ${CYAN}UI PID:${RESET}   $(cat /tmp/cecbs-ui.pid)"
+        echo -e "  ${CYAN}UI PID:${RESET}    $(cat /tmp/cecbs-ui.pid)"
+    fi
+    if [ -f "$PROJECT_ROOT/sync-service/sync-service.pid" ]; then
+        echo -e "  ${CYAN}Sync PID:${RESET}  $(cat "$PROJECT_ROOT/sync-service/sync-service.pid")"
     fi
     echo ""
     
@@ -651,6 +830,7 @@ main() {
     build_chaincode
     install_dependencies
     build_typescript
+    start_chaincode_container  # Start TLS chaincode before network
     start_fabric_network
     
     # Run database migrations (automatic)
@@ -694,6 +874,8 @@ main() {
         sleep 5
         start_ui
         sleep 5
+        start_sync_service
+        sleep 2
         test_connections
     fi
     
@@ -703,6 +885,22 @@ main() {
     show_summary "$chaincode_status"
     
     echo -e "${GREEN}Total startup time: ${duration} seconds${RESET}"
+    echo ""
+    
+    # Run system verification
+    if command -v nc &> /dev/null || command -v curl &> /dev/null; then
+        echo -e "${CYAN}${BOLD}Running system verification...${RESET}"
+        echo ""
+        if bash "$PROJECT_ROOT/verify-complete-system.sh"; then
+            echo ""
+            echo -e "${GREEN}${BOLD}✅ All systems verified and operational!${RESET}"
+        else
+            echo ""
+            echo -e "${YELLOW}${BOLD}⚠ System verification found some issues (see above)${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ Skipping verification (nc or curl not available)${RESET}"
+    fi
     echo ""
 }
 

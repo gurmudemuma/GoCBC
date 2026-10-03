@@ -8,6 +8,22 @@ echo "=========================================="
 echo "🚀 Universal Chaincode Deployment"
 echo "=========================================="
 
+# Verify builder scripts are correct
+echo ""
+echo "Verifying external builder scripts..."
+if [ ! -x "builders/ccaas/bin/detect" ] || [ ! -x "builders/ccaas/bin/build" ] || [ ! -x "builders/ccaas/bin/release" ]; then
+    echo "❌ Error: Builder scripts are missing or not executable"
+    echo "Fixing permissions..."
+    chmod +x builders/ccaas/bin/detect builders/ccaas/bin/build builders/ccaas/bin/release
+fi
+
+# Verify release script uses correct parameter
+if grep -q 'BUILD_OUTPUT_DIR="\$1"' builders/ccaas/bin/release; then
+    echo "✓ Release script is correctly configured"
+else
+    echo "⚠️  Warning: Release script may need updating"
+fi
+
 # Get current committed version and sequence
 echo ""
 echo "Detecting current chaincode version..."
@@ -56,14 +72,21 @@ cat > "${PKG_DIR}/metadata.json" << EOF
 }
 EOF
 
-# Create connection.json pointing to the external chaincode container
-cat > "${PKG_DIR}/connection.json" << EOF
+# Create connection.json pointing to the external chaincode container with TLS
+# Use the TLS-enabled connection.json from chaincodes/coffee/
+if [ -f "chaincodes/coffee/connection.json" ]; then
+    echo "Using TLS-enabled connection.json from chaincodes/coffee/"
+    cp chaincodes/coffee/connection.json "${PKG_DIR}/connection.json"
+else
+    echo "⚠️  Warning: TLS connection.json not found, creating basic version"
+    cat > "${PKG_DIR}/connection.json" << EOF
 {
   "address": "coffee-chaincode:9999",
   "dial_timeout": "10s",
   "tls_required": false
 }
 EOF
+fi
 
 # Create the chaincode package
 cd "$PKG_DIR"

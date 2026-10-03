@@ -1,30 +1,20 @@
 -- Quality Control & Certification Tables
 
--- Quality Inspections
-CREATE TABLE IF NOT EXISTS quality_inspections (
-    id SERIAL PRIMARY KEY,
-    inspection_id VARCHAR(50) UNIQUE NOT NULL,
-    exporter_id VARCHAR(50) NOT NULL,
-    contract_id VARCHAR(50),
-    shipment_id VARCHAR(50),
-    coffee_type VARCHAR(100) NOT NULL,
-    quantity DECIMAL(15, 2) NOT NULL,
-    sample_size DECIMAL(10, 2),
-    requested_date DATE NOT NULL,
-    inspection_date DATE,
-    inspector_name VARCHAR(100),
-    grade VARCHAR(20),
-    cup_quality VARCHAR(50),
-    moisture_content DECIMAL(5, 2),
-    defect_count INTEGER,
-    screen_size INTEGER,
-    passed BOOLEAN,
-    certification_number VARCHAR(50),
-    remarks TEXT,
-    status VARCHAR(20) DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+-- Enhance Quality Inspections table (already exists from base schema)
+ALTER TABLE quality_inspections 
+ADD COLUMN IF NOT EXISTS inspection_id VARCHAR(50) UNIQUE,
+ADD COLUMN IF NOT EXISTS exporter_id VARCHAR(50),
+ADD COLUMN IF NOT EXISTS contract_id VARCHAR(50),
+ADD COLUMN IF NOT EXISTS coffee_type VARCHAR(100),
+ADD COLUMN IF NOT EXISTS quantity DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS sample_size DECIMAL(10, 2),
+ADD COLUMN IF NOT EXISTS requested_date DATE,
+ADD COLUMN IF NOT EXISTS inspector_name VARCHAR(100),
+ADD COLUMN IF NOT EXISTS screen_size INTEGER,
+ADD COLUMN IF NOT EXISTS passed BOOLEAN,
+ADD COLUMN IF NOT EXISTS certification_number VARCHAR(50),
+ADD COLUMN IF NOT EXISTS remarks TEXT,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
 
 -- Quality Certificates
 CREATE TABLE IF NOT EXISTS quality_certificates (

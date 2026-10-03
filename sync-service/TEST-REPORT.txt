@@ -1,0 +1,49 @@
+════════════════════════════════════════════════════════════
+  CouchDB → PostgreSQL Sync Service Test
+  Thu Oct  1 10:19:46 AM EAT 2026
+════════════════════════════════════════════════════════════
+
+1️⃣  Checking Docker Containers...
+
+✅ Found blockchain containers:
+couchdb.nbe
+cecbs-postgres
+couchdb.banks
+couchdb.ecta
+couchdb.customs
+couchdb.ecx
+couchdb.shipping
+
+2️⃣  Testing CouchDB Connections...
+
+  ✓ Port 5984: Online (9 databases)
+  ✓ Port 6984: Online (9 databases)
+  ✓ Port 7984: Online (2 databases)
+  ✓ Port 8984: Online (2 databases)
+  ✓ Port 9984: Online (2 databases)
+  ✓ Port 10984: Online (2 databases)
+
+3️⃣  Testing PostgreSQL Connection...
+
+❌ PostgreSQL: Connection failed
+
+4️⃣  Running Sync Service...
+
+✅ Sync service executed
+✅ No sync status errors
+
+Summary:
+📊 Synchronization Summary
+═══════════════════════════════════════
+
+5️⃣  Checking PostgreSQL Data...
+
+❌ Cannot query PostgreSQL
+
+════════════════════════════════════════════════════════════
+  Test Complete
+════════════════════════════════════════════════════════════
+
+📄 Full report saved to: /home/guda/GoCBC/sync-service/TEST-REPORT.txt
+📋 Sync log saved to: /home/guda/GoCBC/sync-service/sync-test.log
+

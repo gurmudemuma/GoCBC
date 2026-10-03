@@ -1,6 +1,6 @@
 -- Customs Operations Tables
 
--- Customs Risk Assessments
+-- Customs Risk Assessments (new table)
 CREATE TABLE IF NOT EXISTS customs_risk_assessments (
     id SERIAL PRIMARY KEY,
     assessment_id VARCHAR(50) UNIQUE NOT NULL,
@@ -15,23 +15,17 @@ CREATE TABLE IF NOT EXISTS customs_risk_assessments (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Customs Clearances
-CREATE TABLE IF NOT EXISTS customs_clearances (
-    id SERIAL PRIMARY KEY,
-    clearance_id VARCHAR(50) UNIQUE NOT NULL,
-    shipment_id VARCHAR(50) NOT NULL,
-    clearance_number VARCHAR(50) UNIQUE NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    cleared_by VARCHAR(100),
-    cleared_date DATE,
-    duty_amount DECIMAL(15, 2),
-    tax_amount DECIMAL(15, 2),
-    remarks TEXT,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+-- Enhance Customs Clearances table (already exists from base schema)
+ALTER TABLE customs_clearances
+ADD COLUMN IF NOT EXISTS clearance_number VARCHAR(50) UNIQUE,
+ADD COLUMN IF NOT EXISTS cleared_by VARCHAR(100),
+ADD COLUMN IF NOT EXISTS cleared_date DATE,
+ADD COLUMN IF NOT EXISTS duty_amount DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(15, 2),
+ADD COLUMN IF NOT EXISTS remarks TEXT,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
 
--- Customs Inspections
+-- Customs Inspections (new table)
 CREATE TABLE IF NOT EXISTS customs_inspections (
     id SERIAL PRIMARY KEY,
     inspection_id VARCHAR(50) UNIQUE NOT NULL,

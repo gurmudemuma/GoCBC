@@ -34,8 +34,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Find user in database
     const user = await db.get(
-      `SELECT id, username, email, password_hash, full_name, role, organization,
-       exporter_id, ecta_license, phone, permissions, status
+      `SELECT id, username, email, password_hash, role, organization, status
        FROM users WHERE username = $1`,
       [username]
     );
@@ -205,12 +204,6 @@ router.post('/login', async (req: Request, res: Response) => {
       signOptions
     ) as string;
 
-    // Update last login
-    await db.run(
-      'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
-      [user.id]
-    );
-
     // Log audit trail
     try {
       await db.run(
@@ -223,19 +216,19 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Remove sensitive data from response
-    const { password_hash, ...userWithoutPassword } = user;
+    const { password: _, ...userWithoutPassword } = user;
 
     // Map database field names to camelCase for frontend
     const userResponse = {
       id: user.id,
       username: user.username,
       email: user.email,
-      fullName: user.full_name,
+      fullName: user.username, // Use username as fallback
       role: user.role,
       organization: user.organization,
-      exporterId: user.exporter_id,
-      ectaLicense: user.ecta_license,
-      phone: user.phone,
+      exporterId: null,
+      ectaLicense: null,
+      phone: null,
       status: user.status,
       permissions,
       lastLogin: new Date().toISOString(),
