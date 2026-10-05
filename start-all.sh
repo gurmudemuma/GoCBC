@@ -40,6 +40,11 @@ CHAINCODE_PORT=9999
 SKIP_BUILD=false
 DEV_MODE=false
 SKIP_TESTS=false
+ENABLE_NGINX=false
+NGINX_IP=""
+NGINX_DOMAIN=""
+NGINX_SSL="none"
+INTERACTIVE=true
 
 for arg in "$@"; do
     case $arg in
@@ -52,8 +57,37 @@ for arg in "$@"; do
         --skip-tests)
             SKIP_TESTS=true
             ;;
+        --with-nginx)
+            ENABLE_NGINX=true
+            INTERACTIVE=false
+            ;;
+        --nginx-ip=*)
+            NGINX_IP="${arg#*=}"
+            ;;
+        --nginx-domain=*)
+            NGINX_DOMAIN="${arg#*=}"
+            ;;
+        --nginx-ssl=*)
+            NGINX_SSL="${arg#*=}"
+            ;;
+        --no-interactive)
+            INTERACTIVE=false
+            ;;
         *)
             echo "Unknown argument: $arg"
+            echo ""
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --skip-build          Skip chaincode building"
+            echo "  --dev-mode            Enable development mode"
+            echo "  --skip-tests          Skip connection tests"
+            echo "  --with-nginx          Enable nginx reverse proxy"
+            echo "  --nginx-ip=IP         Server IP for nginx (e.g., 10.3.15.7)"
+            echo "  --nginx-domain=DOMAIN Domain name for nginx (optional)"
+            echo "  --nginx-ssl=TYPE      SSL type: none|selfsigned|letsencrypt"
+            echo "  --no-interactive      Skip interactive prompts"
+            echo ""
             exit 1
             ;;
     esac
@@ -149,6 +183,114 @@ wait_for_port() {
 
 # ============================================================================
 # PREREQUISITE CHECKS
+# ============================================================================
+# INTERACTIVE MENU
+# ============================================================================
+
+show_deployment_menu() {
+    if [ "$INTERACTIVE" = false ]; then
+        return 0
+    fi
+    
+    echo ""
+    echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════${RESET}"
+    echo -e "${CYAN}${BOLD}  CECBS Deployment Configuration${RESET}"
+    echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════${RESET}"
+    echo ""
+    echo -e "${YELLOW}This script will start all backend services.${RESET}"
+    echo ""
+    echo -e "${BOLD}Do you want to enable Nginx reverse proxy?${RESET}"
+    echo ""
+    echo "1) ${GREEN}No${RESET} - Development mode (localhost only)"
+    echo "   Access: http://localhost:3000 (UI), http://localhost:3001 (API)"
+    echo "   Best for: Local development and testing"
+    echo ""
+    echo "2) ${BLUE}Yes${RESET} - Production mode (with Nginx)"
+    echo "   Access: http://your-ip/ (unified access point)"
+    echo "   Best for: Server deployment, external access, SSL"
+    echo ""
+    echo "3) ${MAGENTA}Skip${RESET} - Backend only (configure Nginx later)"
+    echo "   Start services now, add Nginx manually when ready"
+    echo ""
+    
+    read -p "Enter choice [1-3] (default: 1): " choice
+    choice=${choice:-1}
+    
+    case $choice in
+        1)
+            echo ""
+            print_info "Starting in development mode (no Nginx)"
+            ENABLE_NGINX=false
+            ;;
+        2)
+            echo ""
+            print_info "Production mode selected - Nginx will be configured"
+            ENABLE_NGINX=true
+            
+            # Ask for server IP
+            echo ""
+            echo -e "${BOLD}Server IP address:${RESET}"
+            read -p "Enter IP (e.g., 10.3.15.7): " NGINX_IP
+            
+            if [ -z "$NGINX_IP" ]; then
+                print_error "IP address is required for Nginx deployment"
+                print_warning "Falling back to development mode"
+                ENABLE_NGINX=false
+                return 0
+            fi
+            
+            # Ask for domain (optional)
+            echo ""
+            echo -e "${BOLD}Domain name (optional):${RESET}"
+            read -p "Enter domain (or press Enter to skip): " NGINX_DOMAIN
+            
+            # Ask for SSL
+            echo ""
+            echo -e "${BOLD}SSL Configuration:${RESET}"
+            echo "1) None - HTTP only"
+            echo "2) Self-signed certificate"
+            echo "3) Let's Encrypt (requires domain)"
+            echo ""
+            read -p "Enter choice [1-3] (default: 1): " ssl_choice
+            ssl_choice=${ssl_choice:-1}
+            
+            case $ssl_choice in
+                1) NGINX_SSL="none" ;;
+                2) NGINX_SSL="selfsigned" ;;
+                3) 
+                    if [ -z "$NGINX_DOMAIN" ]; then
+                        print_warning "Let's Encrypt requires a domain name"
+                        print_info "Using self-signed certificate instead"
+                        NGINX_SSL="selfsigned"
+                    else
+                        NGINX_SSL="letsencrypt"
+                    fi
+                    ;;
+                *) NGINX_SSL="none" ;;
+            esac
+            
+            echo ""
+            print_success "Nginx configuration:"
+            echo "  • IP: $NGINX_IP"
+            [ -n "$NGINX_DOMAIN" ] && echo "  • Domain: $NGINX_DOMAIN"
+            echo "  • SSL: $NGINX_SSL"
+            ;;
+        3)
+            echo ""
+            print_info "Backend only mode - Nginx can be configured later"
+            print_info "Run: cd nginx-configs && sudo ./deploy-cecbs-nginx.sh --ip <your-ip>"
+            ENABLE_NGINX=false
+            ;;
+        *)
+            print_warning "Invalid choice, using development mode"
+            ENABLE_NGINX=false
+            ;;
+    esac
+    
+    echo ""
+    sleep 1
+}
+
 # ============================================================================
 
 check_prerequisites() {
@@ -334,13 +476,81 @@ build_typescript() {
 # DOCKER/BLOCKCHAIN FUNCTIONS
 # ============================================================================
 
-start_chaincode_container() {
-    print_header "Starting TLS-Enabled Chaincode Container"
+detect_deployed_chaincode_version() {
+    print_step "Detecting deployed chaincode version on channel..."
     
-    # Check if container is already running
-    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
-        print_info "Chaincode container already running"
+    # Query the channel for committed chaincode with timeout
+    # Use 'set +e' temporarily to prevent script exit on error
+    set +e
+    local deployed_info=$(timeout 15 docker exec peer0.ecta.cecbs.et bash -c "
+        export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+        export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+        peer lifecycle chaincode querycommitted --channelID coffeechannel --name coffee 2>/dev/null
+    " 2>/dev/null)
+    local query_exit_code=$?
+    set -e
+    
+    if [ $query_exit_code -ne 0 ] || [ -z "$deployed_info" ]; then
+        print_warning "No chaincode deployed on channel yet (or query failed/timed out)"
+        print_info "Will proceed with fresh deployment"
+        echo ""
+        return 1
+    fi
+    
+    # Parse version and sequence
+    DEPLOYED_VERSION=$(echo "$deployed_info" | grep -oP 'Version: \K[0-9.]+' || echo "")
+    DEPLOYED_SEQUENCE=$(echo "$deployed_info" | grep -oP 'Sequence: \K[0-9]+' || echo "")
+    
+    if [ -n "$DEPLOYED_VERSION" ]; then
+        print_success "Deployed chaincode: coffee v${DEPLOYED_VERSION} (sequence ${DEPLOYED_SEQUENCE})"
+        echo "$DEPLOYED_VERSION"
         return 0
+    else
+        print_warning "Could not parse deployed version"
+        echo ""
+        return 1
+    fi
+}
+
+start_chaincode_container() {
+    print_header "Starting Chaincode Container (Auto-Detect Version)"
+    
+    # First, detect what version is deployed on the channel
+    print_step "Step 1: Detect deployed chaincode version from blockchain..."
+    set +e  # Temporarily disable exit on error
+    DEPLOYED_VERSION=$(detect_deployed_chaincode_version)
+    local detection_result=$?
+    set -e  # Re-enable exit on error
+    
+    if [ $detection_result -ne 0 ] || [ -z "$DEPLOYED_VERSION" ]; then
+        print_warning "Chaincode not yet deployed on channel"
+        print_info "Container will be started after chaincode deployment step"
+        print_info "Default version 1.0 will be used for initial deployment"
+        
+        # Set default for initial deployment
+        DEPLOYED_VERSION="1.0"
+        
+        # Don't start container yet - it will be started after deployment
+        print_success "Chaincode container will be started after deployment"
+        return 0
+    fi
+    
+    print_success "Target chaincode version: $DEPLOYED_VERSION"
+    
+    # Check if container is already running with correct version
+    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        local running_ccid=$(docker inspect coffee-chaincode -f '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep CORE_CHAINCODE_ID_NAME | cut -d'=' -f2)
+        if [[ "$running_ccid" == coffee_${DEPLOYED_VERSION}:* ]]; then
+            print_success "Chaincode container already running with correct version ($DEPLOYED_VERSION)"
+            export RUNNING_CHAINCODE_VERSION="$DEPLOYED_VERSION"
+            echo "$DEPLOYED_VERSION" > /tmp/cecbs-chaincode-version.txt
+            return 0
+        else
+            print_warning "Container running with wrong version: $running_ccid"
+            print_step "Stopping and restarting with correct version..."
+            docker stop coffee-chaincode 2>/dev/null || true
+            docker rm coffee-chaincode 2>/dev/null || true
+        fi
     fi
     
     # Stop and remove old container if exists
@@ -350,58 +560,111 @@ start_chaincode_container() {
         docker rm coffee-chaincode 2>/dev/null || true
     fi
     
-    # Calculate the correct CCID for TLS package
-    # This will be updated when chaincode is deployed
-    print_step "Starting chaincode container with TLS support..."
+    # Update metadata to match deployed version
+    print_step "Step 2: Sync local metadata with deployed version ${DEPLOYED_VERSION}..."
+    mkdir -p "$PROJECT_ROOT/chaincode-package"
+    cat > "$PROJECT_ROOT/chaincode-package/metadata.json" <<EOF
+{
+  "type": "ccaas",
+  "label": "coffee_${DEPLOYED_VERSION}"
+}
+EOF
+    print_success "Metadata synced to v${DEPLOYED_VERSION}"
     
-    # Use docker-compose to start the chaincode service
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d coffee-chaincode 2>/dev/null; then
-        print_success "Chaincode container started via docker-compose"
-    else
-        # Fallback: start manually with correct configuration
-        print_step "Starting chaincode manually..."
-        
-        # Check if binary exists
-        if [ ! -f "$CHAINCODE_DIR/coffee-chaincode" ]; then
-            print_error "Chaincode binary not found at $CHAINCODE_DIR/coffee-chaincode"
-            print_info "Run: cd $CHAINCODE_DIR && CGO_ENABLED=0 go build -o coffee-chaincode ."
-            return 1
-        fi
-        
-        # Start with the correct CCID for TLS package
-        docker run -d \
-            --name coffee-chaincode \
-            --network cecbs-network \
-            -e CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999 \
-            -e CORE_CHAINCODE_ID_NAME=coffee_1.9_tls:2b094adc2b1d5c848eacf297c7ab1c1bcd2af67cb7f763f8f11c8e303a951db4 \
-            -e CORE_CHAINCODE_LOGGING_LEVEL=INFO \
-            -p 9999:9999 \
-            -v "$CHAINCODE_DIR:/app" \
-            -w /app \
-            ubuntu:22.04 \
-            /app/coffee-chaincode
-        
-        if [ $? -eq 0 ]; then
-            print_success "Chaincode container started manually"
+    # Build chaincode Docker image if not exists
+    local IMAGE_TAG="coffee-chaincode:${DEPLOYED_VERSION}"
+    if ! docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${IMAGE_TAG}$"; then
+        print_step "Step 3: Building chaincode Docker image ${IMAGE_TAG}..."
+        cd "$CHAINCODE_DIR"
+        if docker build -t "$IMAGE_TAG" . 2>&1 | tail -10; then
+            print_success "Chaincode image ${IMAGE_TAG} built successfully"
         else
-            print_error "Failed to start chaincode container"
+            print_error "Failed to build chaincode image"
+            cd "$PROJECT_ROOT"
             return 1
         fi
+        cd "$PROJECT_ROOT"
+    else
+        print_success "Step 3: Chaincode image ${IMAGE_TAG} already exists"
+    fi
+    
+    # Calculate the correct CCID hash from the deployed package
+    print_step "Step 4: Calculate package hash for CCID..."
+    local CCID_HASH=""
+    
+    # Try to get hash from latest deployed package
+    if [ -f "$PROJECT_ROOT/blockchain/channel-artifacts/coffee_${DEPLOYED_VERSION}.tgz" ]; then
+        # Extract code.tar.gz and calculate hash
+        local TEMP_DIR=$(mktemp -d)
+        tar -xzf "$PROJECT_ROOT/blockchain/channel-artifacts/coffee_${DEPLOYED_VERSION}.tgz" -C "$TEMP_DIR" 2>/dev/null
+        if [ -f "$TEMP_DIR/code.tar.gz" ]; then
+            CCID_HASH=$(sha256sum "$TEMP_DIR/code.tar.gz" | awk '{print $1}')
+            print_success "Hash calculated from deployed package: ${CCID_HASH:0:16}..."
+        fi
+        rm -rf "$TEMP_DIR"
+    fi
+    
+    # Fallback: calculate from local package
+    if [ -z "$CCID_HASH" ] && [ -f "$PROJECT_ROOT/chaincode-package/code.tar.gz" ]; then
+        CCID_HASH=$(sha256sum "$PROJECT_ROOT/chaincode-package/code.tar.gz" | awk '{print $1}')
+        print_info "Hash calculated from local package: ${CCID_HASH:0:16}..."
+    fi
+    
+    # Last resort: query from peer (if chaincode is installed)
+    if [ -z "$CCID_HASH" ]; then
+        print_warning "Cannot calculate hash, will use label-only CCID"
+        # Fabric will use the label to find the package
+        CCID="coffee_${DEPLOYED_VERSION}"
+    else
+        CCID="coffee_${DEPLOYED_VERSION}:${CCID_HASH}"
+    fi
+    
+    print_success "CCID: $CCID"
+    
+    # Start chaincode container with correct configuration
+    print_step "Step 5: Starting chaincode container ${IMAGE_TAG}..."
+    docker run -d \
+        --name coffee-chaincode \
+        --network cecbs-network \
+        -p 9999:9999 \
+        -e CORE_CHAINCODE_ID_NAME="$CCID" \
+        -e CHAINCODE_SERVER_ADDRESS="0.0.0.0:9999" \
+        "$IMAGE_TAG"
+    
+    if [ $? -eq 0 ]; then
+        print_success "Chaincode container started"
+    else
+        print_error "Failed to start chaincode container"
+        return 1
     fi
     
     # Wait for chaincode to be ready
-    sleep 3
-    if docker logs coffee-chaincode 2>&1 | grep -q "Starting Coffee Chaincode"; then
-        print_success "Chaincode is running with TLS enabled"
+    print_step "Step 6: Waiting for chaincode to initialize..."
+    sleep 5
+    
+    # Verify chaincode started successfully
+    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        print_success "✓ Chaincode v${DEPLOYED_VERSION} is running"
         
-        # Check TLS status
-        if docker logs coffee-chaincode 2>&1 | grep -q "TLS=enabled\|with TLS"; then
-            print_success "✓ TLS encryption is ENABLED"
-        else
-            print_warning "⚠ TLS status unclear - check logs: docker logs coffee-chaincode"
+        # Check logs for confirmation
+        if docker logs coffee-chaincode 2>&1 | tail -10 | grep -q "Starting Coffee Chaincode"; then
+            print_success "✓ Chaincode initialized successfully"
         fi
+        
+        # Check TLS/CCAAS mode
+        if docker logs coffee-chaincode 2>&1 | grep -q "CCAAS Server Mode"; then
+            print_success "✓ Running in CCAAS mode with TLS"
+        fi
+        
+        # Export version for later use
+        export RUNNING_CHAINCODE_VERSION="$DEPLOYED_VERSION"
+        echo "$DEPLOYED_VERSION" > /tmp/cecbs-chaincode-version.txt
+        
     else
-        print_warning "Chaincode may not be ready yet"
+        print_error "Chaincode container exited unexpectedly"
+        print_info "Check logs: docker logs coffee-chaincode"
+        docker logs coffee-chaincode 2>&1 | tail -20
+        return 1
     fi
 }
 
@@ -676,6 +939,85 @@ start_sync_service() {
 }
 
 # ============================================================================
+# NGINX DEPLOYMENT
+# ============================================================================
+
+deploy_nginx() {
+    if [ "$ENABLE_NGINX" != true ]; then
+        return 0
+    fi
+    
+    print_header "Deploying Nginx Reverse Proxy"
+    
+    # Check if running as root
+    if [ "$EUID" -ne 0 ] && ! command -v sudo &> /dev/null; then
+        print_error "Nginx deployment requires root privileges"
+        print_warning "Skipping nginx deployment"
+        print_info "You can deploy nginx manually later with:"
+        print_info "  cd nginx-configs && sudo ./deploy-cecbs-nginx.sh --ip $NGINX_IP"
+        return 1
+    fi
+    
+    # Check if nginx deployment script exists
+    if [ ! -f "$PROJECT_ROOT/nginx-configs/deploy-cecbs-nginx.sh" ]; then
+        print_error "Nginx deployment script not found"
+        print_warning "Expected: $PROJECT_ROOT/nginx-configs/deploy-cecbs-nginx.sh"
+        return 1
+    fi
+    
+    print_step "Preparing nginx deployment..."
+    
+    # Build deployment command
+    local nginx_cmd="$PROJECT_ROOT/nginx-configs/deploy-cecbs-nginx.sh --ip $NGINX_IP"
+    
+    if [ -n "$NGINX_DOMAIN" ]; then
+        nginx_cmd="$nginx_cmd --domain $NGINX_DOMAIN"
+    fi
+    
+    if [ "$NGINX_SSL" != "none" ]; then
+        nginx_cmd="$nginx_cmd --ssl $NGINX_SSL"
+    fi
+    
+    print_info "Running: $nginx_cmd"
+    
+    # Make script executable
+    chmod +x "$PROJECT_ROOT/nginx-configs/deploy-cecbs-nginx.sh" 2>/dev/null || true
+    
+    # Run deployment
+    if [ "$EUID" -eq 0 ]; then
+        # Already root
+        bash $nginx_cmd
+    else
+        # Use sudo
+        sudo bash $nginx_cmd
+    fi
+    
+    local nginx_status=$?
+    
+    if [ $nginx_status -eq 0 ]; then
+        print_success "Nginx deployed successfully!"
+        echo ""
+        print_success "Access your application:"
+        if [ -n "$NGINX_DOMAIN" ]; then
+            if [ "$NGINX_SSL" = "letsencrypt" ] || [ "$NGINX_SSL" = "selfsigned" ]; then
+                echo "  • https://$NGINX_DOMAIN/"
+            else
+                echo "  • http://$NGINX_DOMAIN/"
+            fi
+        fi
+        echo "  • http://$NGINX_IP/"
+        echo ""
+    else
+        print_error "Nginx deployment failed"
+        print_warning "Backend services are running, but nginx is not configured"
+        print_info "You can deploy nginx manually later with:"
+        print_info "  cd nginx-configs && sudo ./deploy-cecbs-nginx.sh --ip $NGINX_IP"
+    fi
+    
+    return $nginx_status
+}
+
+# ============================================================================
 # TESTING FUNCTIONS
 # ============================================================================
 
@@ -737,18 +1079,41 @@ show_summary() {
     echo ""
     
     echo -e "${BOLD}${GREEN}Blockchain Status:${RESET}"
+    
+    # Get actual running chaincode version
+    local chaincode_version="unknown"
+    if [ -f /tmp/cecbs-chaincode-version.txt ]; then
+        chaincode_version=$(cat /tmp/cecbs-chaincode-version.txt)
+    fi
+    
+    local chaincode_image=$(docker inspect coffee-chaincode --format='{{.Config.Image}}' 2>/dev/null || echo "not running")
+    local chaincode_ccid=$(docker inspect coffee-chaincode -f '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep CORE_CHAINCODE_ID_NAME | cut -d'=' -f2 || echo "unknown")
+    
     if [ "$chaincode_deployed" = "0" ]; then
-        echo -e "  ${GREEN}✓ Chaincode:${RESET}       Deployed and operational with TLS"
+        echo -e "  ${GREEN}✓ Chaincode:${RESET}       v${chaincode_version} deployed and operational with TLS"
     else
         echo -e "  ${YELLOW}⚠ Chaincode:${RESET}       Deployment had issues (check logs)"
         echo -e "    ${CYAN}Manual fix:${RESET}        ./deploy-chaincode.sh"
     fi
     
-    # Check chaincode TLS status
-    if docker logs coffee-chaincode 2>&1 | grep -q "TLS=enabled\|with TLS"; then
-        echo -e "  ${GREEN}✓ TLS Security:${RESET}    Enabled (encrypted communication)"
+    if [[ "$chaincode_image" != "not running" ]]; then
+        echo -e "  ${GREEN}✓ Container:${RESET}       $chaincode_image"
+        if [[ "$chaincode_ccid" != "unknown" ]]; then
+            # Show just the label part (before the colon)
+            local ccid_label=$(echo "$chaincode_ccid" | cut -d':' -f1)
+            echo -e "  ${GREEN}✓ CCID Label:${RESET}      $ccid_label"
+        fi
     else
-        echo -e "  ${YELLOW}⚠ TLS Security:${RESET}    Status unknown"
+        echo -e "  ${RED}✗ Container:${RESET}       Not running"
+    fi
+    
+    # Check chaincode TLS status
+    if docker logs coffee-chaincode 2>&1 | grep -q "CCAAS Server Mode"; then
+        echo -e "  ${GREEN}✓ TLS Security:${RESET}    Enabled (CCAAS mode with encrypted communication)"
+    elif docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        echo -e "  ${GREEN}✓ Mode:${RESET}            Running (check logs for TLS status)"
+    else
+        echo -e "  ${YELLOW}⚠ TLS Security:${RESET}    Container not running"
     fi
     
     # Check sync service status
@@ -825,12 +1190,16 @@ main() {
     echo " Coffee Export Consortium Blockchain System"
     echo -e "${RESET}"
     
+    # Show interactive deployment menu
+    show_deployment_menu
+    
     # Run all steps
     check_prerequisites
     build_chaincode
     install_dependencies
     build_typescript
-    start_chaincode_container  # Start TLS chaincode before network
+    
+    # START NETWORK FIRST - peers must exist before we can query them!
     start_fabric_network
     
     # Run database migrations (automatic)
@@ -839,9 +1208,23 @@ main() {
     # Create channel before deploying chaincode
     create_channel
     
+    # NOW we can detect version (peers are running)
+    start_chaincode_container  # Will detect deployed version or skip if not deployed yet
+    
     # Deploy chaincode after network and channel are ready
     local chaincode_status=0
     deploy_chaincode || chaincode_status=$?
+    
+    # If chaincode was just deployed and container isn't running, start it now
+    if [ $chaincode_status -eq 0 ]; then
+        if ! docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+            print_header "Starting Chaincode Container After Deployment"
+            print_info "Chaincode was just deployed, starting container..."
+            start_chaincode_container
+        else
+            print_success "Chaincode container is already running"
+        fi
+    fi
     
     show_container_status
     
@@ -879,6 +1262,11 @@ main() {
         test_connections
     fi
     
+    # Deploy nginx if requested
+    if [ "$ENABLE_NGINX" = true ]; then
+        deploy_nginx
+    fi
+    
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     
@@ -900,6 +1288,30 @@ main() {
         fi
     else
         echo -e "${YELLOW}⚠ Skipping verification (nc or curl not available)${RESET}"
+    fi
+    
+    # Show final access information
+    echo ""
+    if [ "$ENABLE_NGINX" = true ] && [ -n "$NGINX_IP" ]; then
+        echo -e "${GREEN}${BOLD}🎉 System is ready!${RESET}"
+        echo ""
+        echo -e "${BOLD}Access your application:${RESET}"
+        if [ -n "$NGINX_DOMAIN" ]; then
+            if [ "$NGINX_SSL" = "letsencrypt" ] || [ "$NGINX_SSL" = "selfsigned" ]; then
+                echo -e "  ${CYAN}•${RESET} https://$NGINX_DOMAIN/"
+            else
+                echo -e "  ${CYAN}•${RESET} http://$NGINX_DOMAIN/"
+            fi
+        fi
+        echo -e "  ${CYAN}•${RESET} http://$NGINX_IP/"
+        echo ""
+    else
+        echo -e "${GREEN}${BOLD}🎉 System is ready!${RESET}"
+        echo ""
+        echo -e "${BOLD}Access your application:${RESET}"
+        echo -e "  ${CYAN}•${RESET} Frontend: http://localhost:3000"
+        echo -e "  ${CYAN}•${RESET} API: http://localhost:3001"
+        echo ""
     fi
     echo ""
 }

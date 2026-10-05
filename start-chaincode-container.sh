@@ -1,33 +1,37 @@
 #!/bin/bash
 
-# Start Chaincode Container for v1.62
+# Start the coffee chaincode container with correct configuration
 
-echo "Starting Coffee Chaincode v1.62 Container..."
+set -e
 
-# Remove existing container if any
-docker rm -f coffee-chaincode 2>/dev/null
+cd /home/guda/GoCBC
 
-# Start new container
+# Stop and remove any existing container
+docker rm -f coffee-chaincode 2>/dev/null || true
+
+# Calculate the chaincode ID hash
+CCID=$(cat chaincode-package/code.tar.gz | sha256sum | awk '{print $1}')
+
+echo "Starting coffee chaincode container..."
+echo "CCID: coffee_1.13:${CCID}"
+
 docker run -d \
   --name coffee-chaincode \
   --network cecbs-network \
   -p 9999:9999 \
-  -e CORE_CHAINCODE_ID_NAME="coffee_1.62:49263e3a4f3119a588510711e736a969a58fdf6bedddf7ac6a0125176756df99" \
-  -e CORE_PEER_TLS_ENABLED=true \
-  -e CORE_PEER_LOCALMSPID=ECTAMSP \
+  -e CORE_CHAINCODE_ID_NAME="coffee_1.13:${CCID}" \
   -e CHAINCODE_SERVER_ADDRESS="0.0.0.0:9999" \
-  coffee-chaincode:1.62
+  coffee-chaincode:1.13
 
-if [ $? -eq 0 ]; then
-    echo "✅ Chaincode container started successfully"
-    sleep 3
-    echo ""
-    echo "Container status:"
-    docker ps | grep coffee-chaincode
-    echo ""
-    echo "Container logs:"
-    docker logs coffee-chaincode
-else
-    echo "❌ Failed to start chaincode container"
-    exit 1
-fi
+echo "✓ Container started"
+echo ""
+echo "Waiting for chaincode to initialize..."
+sleep 3
+
+echo ""
+echo "Chaincode logs:"
+docker logs --tail 20 coffee-chaincode
+
+echo ""
+echo "Container status:"
+docker ps --filter name=coffee-chaincode --format "table {{.Names}}\t{{.Status}}"

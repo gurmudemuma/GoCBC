@@ -24,14 +24,14 @@ else
     echo "⚠️  Warning: Release script may need updating"
 fi
 
-# Get current committed version and sequence
+# Get current committed version and sequence with timeout
 echo ""
 echo "Detecting current chaincode version..."
-CURRENT_INFO=$(docker exec peer0.ecx.cecbs.et bash -c "
+CURRENT_INFO=$(timeout 15 docker exec peer0.ecx.cecbs.et bash -c "
 export FABRIC_CFG_PATH=/etc/hyperledger/fabric
 export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp
 peer lifecycle chaincode querycommitted --channelID coffeechannel --name coffee 2>/dev/null
-" || echo "")
+" 2>/dev/null || echo "")
 
 if [ -z "$CURRENT_INFO" ]; then
     echo "No chaincode deployed yet. Starting fresh..."
