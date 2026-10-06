@@ -677,12 +677,17 @@ start_fabric_network() {
     
     if [ "$running_containers" -gt 0 ]; then
         print_info "Network containers already running. Restarting gracefully..."
-        docker-compose -f "$DOCKER_COMPOSE_FILE" restart 2>/dev/null || true
+        # Stop coffee-chaincode if running (we'll restart it with correct version later)
+        docker stop coffee-chaincode 2>/dev/null || true
+        docker rm coffee-chaincode 2>/dev/null || true
+        # Restart other containers but exclude coffee-chaincode
+        docker-compose -f "$DOCKER_COMPOSE_FILE" restart $(docker-compose -f "$DOCKER_COMPOSE_FILE" ps --services | grep -v coffee-chaincode) 2>/dev/null || true
         print_success "Network containers restarted (data preserved)"
     else
         print_step "Starting fresh network containers..."
         # Start WITHOUT down to preserve all data
-        if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d; then
+        # Exclude coffee-chaincode from docker-compose - it's managed dynamically by this script
+        if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d --scale coffee-chaincode=0; then
             print_success "Fabric network containers started (data preserved)"
         else
             print_error "Failed to start Fabric network"
@@ -698,7 +703,7 @@ start_fabric_network() {
     wait_for_port $REDIS_PORT "Redis" 45
     wait_for_port $ORDERER_PORT "Orderer" 60
     wait_for_port $PEER_ECTA_PORT "Peer (ECTA)" 60
-    wait_for_port $CHAINCODE_PORT "Coffee Chaincode Service" 60
+    # Note: Chaincode container will be started later with correct version
     
     # Additional wait for full initialization
     print_info "Services started. Allowing extra time for full initialization..."

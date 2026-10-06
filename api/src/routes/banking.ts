@@ -3131,3 +3131,225 @@ router.post('/lc/:lcID/release-payment',
     }
   }
 );
+
+
+// ==================== LC DISCREPANCY ROUTES ====================
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/report — Report LC discrepancy
+router.post('/lc/:lcId/discrepancy/report', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    const { discrepancyId, document, issue } = req.body;
+
+    logger.info(`[BANKING] ⚠️  Reporting LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    const result = await fabricService.submitTransaction('ReportLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      document,
+      issue
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to report discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy reported: ${discrepancyId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'LC discrepancy reported successfully',
+      data: { lcId, discrepancyId },
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error reporting discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/:discrepancyId/resolve — Resolve discrepancy
+router.post('/lc/:lcId/discrepancy/:discrepancyId/resolve', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId, discrepancyId } = req.params;
+    const { resolution } = req.body;
+
+    logger.info(`[BANKING] ✅ Resolving LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    const result = await fabricService.submitTransaction('ResolveLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      resolution
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to resolve discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy resolved: ${discrepancyId}`);
+
+    res.json({
+      success: true,
+      message: 'LC discrepancy resolved successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error resolving discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/:discrepancyId/waive — Waive discrepancy
+router.post('/lc/:lcId/discrepancy/:discrepancyId/waive', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId, discrepancyId } = req.params;
+    const { waiverReason } = req.body;
+
+    logger.info(`[BANKING] 📋 Waiving LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    const result = await fabricService.submitTransaction('WaiveLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      waiverReason
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to waive discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy waived: ${discrepancyId}`);
+
+    res.json({
+      success: true,
+      message: 'LC discrepancy waived successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error waiving discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/documents/reject — Reject LC documents
+router.post('/lc/:lcId/documents/reject', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    const { rejectionReason } = req.body;
+
+    logger.info(`[BANKING] ❌ Rejecting LC documents: ${lcId}`);
+
+    const result = await fabricService.submitTransaction('RejectLCDocuments',
+      lcId,
+      rejectionReason
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to reject documents: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BANKING] ✅ LC documents rejected: ${lcId}`);
+
+    res.json({
+      success: true,
+      message: 'LC documents rejected successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error rejecting documents:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// GET /api/v1/banking/lc/:lcId/discrepancies — Get all discrepancies for an LC
+router.get('/lc/:lcId/discrepancies', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    logger.info(`[BANKING] 🔍 Fetching discrepancies for LC: ${lcId}`);
+
+    const result = await fabricService.evaluateTransaction('GetLCDiscrepancies', lcId);
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to fetch discrepancies: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    const discrepancies = result.data || [];
+
+    res.json({
+      success: true,
+      data: discrepancies,
+      count: discrepancies.length,
+      source: 'blockchain'
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error fetching discrepancies:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// GET /api/v1/banking/lc/discrepancies/pending — Get all LCs with unresolved discrepancies
+router.get('/lc/discrepancies/pending', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[BANKING] 🔍 Fetching LCs with pending discrepancies');
+
+    const result = await fabricService.evaluateTransaction('QueryLCsWithDiscrepancies');
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to fetch LCs: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    const lcs = result.data || [];
+
+    res.json({
+      success: true,
+      data: lcs,
+      count: lcs.length,
+      source: 'blockchain'
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error fetching LCs:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+

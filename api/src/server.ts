@@ -74,6 +74,9 @@ import notificationsRoutes from './routes/notifications';
 import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
 import blockchainSignaturesRoutes from './routes/blockchain-signatures';
 import statsRoutes from './routes/stats'; // Dual-source statistics (CouchDB + PostgreSQL)
+import repatriationRoutes from './routes/repatriation'; // Export proceeds repatriation (NBE compliance)
+import inspectionRoutes from './routes/inspection'; // Pre-shipment inspection (SGS/Intertek)
+import bordercrossingRoutes from './routes/bordercrossing'; // Border crossing documentation
 
 // Load environment variables
 dotenv.config();
@@ -255,6 +258,12 @@ class CECBSServer {
 
     // V3.3 Dual-Source Statistics - Fetch from BOTH CouchDB and PostgreSQL
     apiV1.use('/stats', authMiddleware, statsRoutes); // Bank portal stats from both blockchain and database
+
+    // V3.4 HIGH Priority Features - Missing Workflow Steps (October 2026)
+    apiV1.use('/repatriation', authMiddleware, repatriationRoutes); // Export proceeds repatriation (NBE 40% retention)
+    apiV1.use('/inspection', authMiddleware, inspectionRoutes); // Pre-shipment inspection (SGS/Intertek)
+    apiV1.use('/bordercrossing', authMiddleware, bordercrossingRoutes); // Border crossing documentation
+    // Note: LC discrepancy handling added to /banking routes above
 
     this.app.use('/api/v1', apiV1);
 

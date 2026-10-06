@@ -1311,3 +1311,375 @@ func (c *CoffeeContract) QueryLCsByContract(ctx contractapi.TransactionContextIn
 
 	return lcs, nil
 }
+
+
+// ==================== LC DISCREPANCY HANDLING FUNCTIONS ====================
+// UCP 600 Article 14: Bank has 5 banking days to examine documents
+// Discrepancies are common: incorrect dates, missing signatures, description mismatches, etc.
+
+// ReportLCDiscrepancy - Bank reports document discrepancy
+// TRIGGER: During document examination, bank finds issues
+func (c *CoffeeContract) ReportLCDiscrepancy(ctx contractapi.TransactionContextInterface,
+	lcID, discrepancyID, document, issue string) error {
+
+	fmt.Printf("=== ReportLCDiscrepancy called: lcID=%s, discrepancyID=%s ===\n", lcID, discrepancyID)
+
+	// Get existing LC
+	lcJSON, err := ctx.GetStub().GetState(lcID)
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("ReportLCDiscrepancy: LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to unmarshal LC: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to get MSP ID: %w", err)
+	}
+
+	// RBAC: Only banks can report discrepancies
+	if mspID != "BankMSP" && mspID != "CommercialBankOfEthiopiaMSP" && 
+	   mspID != "AwashBankMSP" && mspID != "DashenBankMSP" {
+		return fmt.Errorf("ReportLCDiscrepancy: unauthorized - only banks can report discrepancies (caller MSP: %s)", mspID)
+	}
+
+	// Create new discrepancy
+	discrepancy := LCDiscrepancy{
+		DiscrepancyID: discrepancyID,
+		Document:      document,
+		Issue:         issue,
+		ReportedDate:  time.Now(),
+		Status:        "OPEN",
+	}
+
+	// Add to LC discrepancies
+	lc.Discrepancies = append(lc.Discrepancies, discrepancy)
+	lc.DiscrepancyResolved = false
+
+	// Update LC status to indicate issues
+	if lc.Status == "ISSUED" {
+		lc.NegotiationStatus = "UNDER_NEGOTIATION"
+		lc.NegotiationDate = time.Now().Format("2006-01-02T15:04:05Z07:00")
+		lc.NegotiatingBank = mspID
+	}
+
+	lc.LastUpdatedBy = clientID
+	lc.LastUpdatedByMSP = mspID
+	lc.UpdatedAt = time.Now()
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("ReportLCDiscrepancy: failed to update state: %w", err)
+	}
+
+	log.Printf("⚠ LC Discrepancy reported: %s - Document: %s - Issue: %s\n", lcID, document, issue)
+
+	return nil
+}
+
+// ResolveLCDiscrepancy - Exporter/Bank resolves discrepancy
+// METHODS: Document correction, waiver request, LC amendment
+func (c *CoffeeContract) ResolveLCDiscrepancy(ctx contractapi.TransactionContextInterface,
+	lcID, discrepancyID, resolution string) error {
+
+	fmt.Printf("=== ResolveLCDiscrepancy called: lcID=%s, discrepancyID=%s ===\n", lcID, discrepancyID)
+
+	// Get existing LC
+	lcJSON, err := ctx.GetStub().GetState(lcID)
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to unmarshal LC: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to get MSP ID: %w", err)
+	}
+
+	// Find and update discrepancy
+	discrepancyFound := false
+	for i, disc := range lc.Discrepancies {
+		if disc.DiscrepancyID == discrepancyID {
+			lc.Discrepancies[i].Status = "RESOLVED"
+			lc.Discrepancies[i].Resolution = resolution
+			lc.Discrepancies[i].ResolvedDate = time.Now().Format("2006-01-02T15:04:05Z07:00")
+			discrepancyFound = true
+			break
+		}
+	}
+
+	if !discrepancyFound {
+		return fmt.Errorf("ResolveLCDiscrepancy: discrepancy %s not found in LC %s", discrepancyID, lcID)
+	}
+
+	// Check if all discrepancies are resolved
+	allResolved := true
+	for _, disc := range lc.Discrepancies {
+		if disc.Status == "OPEN" {
+			allResolved = false
+			break
+		}
+	}
+
+	if allResolved {
+		lc.DiscrepancyResolved = true
+		lc.NegotiationStatus = "ACCEPTED"
+		log.Printf("✅ All LC discrepancies resolved: %s\n", lcID)
+	}
+
+	lc.LastUpdatedBy = clientID
+	lc.LastUpdatedByMSP = mspID
+	lc.UpdatedAt = time.Now()
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("ResolveLCDiscrepancy: failed to update state: %w", err)
+	}
+
+	fmt.Printf("✅ LC Discrepancy resolved: %s - %s\n", discrepancyID, resolution)
+
+	return nil
+}
+
+// WaiveLCDiscrepancy - Bank waives discrepancy (accepts documents despite issue)
+// DECISION: Buyer/Bank decides to proceed despite minor discrepancy
+func (c *CoffeeContract) WaiveLCDiscrepancy(ctx contractapi.TransactionContextInterface,
+	lcID, discrepancyID, waiverReason string) error {
+
+	fmt.Printf("=== WaiveLCDiscrepancy called: lcID=%s, discrepancyID=%s ===\n", lcID, discrepancyID)
+
+	// Get existing LC
+	lcJSON, err := ctx.GetStub().GetState(lcID)
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to unmarshal LC: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to get MSP ID: %w", err)
+	}
+
+	// RBAC: Only issuing bank can waive discrepancies
+	if mspID != "BankMSP" && mspID != "CommercialBankOfEthiopiaMSP" && 
+	   mspID != "AwashBankMSP" && mspID != "DashenBankMSP" {
+		return fmt.Errorf("WaiveLCDiscrepancy: unauthorized - only banks can waive discrepancies")
+	}
+
+	// Find and waive discrepancy
+	discrepancyFound := false
+	for i, disc := range lc.Discrepancies {
+		if disc.DiscrepancyID == discrepancyID {
+			lc.Discrepancies[i].Status = "WAIVED"
+			lc.Discrepancies[i].Resolution = "WAIVED: " + waiverReason
+			lc.Discrepancies[i].ResolvedDate = time.Now().Format("2006-01-02T15:04:05Z07:00")
+			discrepancyFound = true
+			break
+		}
+	}
+
+	if !discrepancyFound {
+		return fmt.Errorf("WaiveLCDiscrepancy: discrepancy %s not found in LC %s", discrepancyID, lcID)
+	}
+
+	// Check if all discrepancies are resolved or waived
+	allResolved := true
+	for _, disc := range lc.Discrepancies {
+		if disc.Status == "OPEN" {
+			allResolved = false
+			break
+		}
+	}
+
+	if allResolved {
+		lc.DiscrepancyResolved = true
+		lc.NegotiationStatus = "ACCEPTED"
+		log.Printf("✅ All LC discrepancies resolved/waived: %s\n", lcID)
+	}
+
+	lc.LastUpdatedBy = clientID
+	lc.LastUpdatedByMSP = mspID
+	lc.UpdatedAt = time.Now()
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("WaiveLCDiscrepancy: failed to update state: %w", err)
+	}
+
+	fmt.Printf("✅ LC Discrepancy waived: %s - Reason: %s\n", discrepancyID, waiverReason)
+
+	return nil
+}
+
+// RejectLCDocuments - Bank rejects LC documents due to unresolved discrepancies
+// FINAL DECISION: Payment will not be released
+func (c *CoffeeContract) RejectLCDocuments(ctx contractapi.TransactionContextInterface,
+	lcID, rejectionReason string) error {
+
+	fmt.Printf("=== RejectLCDocuments called: lcID=%s ===\n", lcID)
+
+	// Get existing LC
+	lcJSON, err := ctx.GetStub().GetState(lcID)
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return fmt.Errorf("RejectLCDocuments: LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to unmarshal LC: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to get MSP ID: %w", err)
+	}
+
+	// RBAC: Only banks can reject documents
+	if mspID != "BankMSP" && mspID != "CommercialBankOfEthiopiaMSP" && 
+	   mspID != "AwashBankMSP" && mspID != "DashenBankMSP" {
+		return fmt.Errorf("RejectLCDocuments: unauthorized - only banks can reject documents")
+	}
+
+	// Update LC status
+	lc.NegotiationStatus = "REJECTED"
+	lc.Status = "EXPIRED" // LC cannot be used for payment
+	lc.LastUpdatedBy = clientID
+	lc.LastUpdatedByMSP = mspID
+	lc.UpdatedAt = time.Now()
+
+	// Add rejection as system comment
+	for i := range lc.Discrepancies {
+		if lc.Discrepancies[i].Status == "OPEN" {
+			lc.Discrepancies[i].Resolution = "REJECTED: " + rejectionReason
+		}
+	}
+
+	lcJSON, err = json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(lcID, lcJSON)
+	if err != nil {
+		return fmt.Errorf("RejectLCDocuments: failed to update state: %w", err)
+	}
+
+	log.Printf("❌ LC Documents rejected: %s - Reason: %s\n", lcID, rejectionReason)
+
+	return nil
+}
+
+// GetLCDiscrepancies - Query all discrepancies for an LC
+func (c *CoffeeContract) GetLCDiscrepancies(ctx contractapi.TransactionContextInterface,
+	lcID string) ([]LCDiscrepancy, error) {
+
+	// Get existing LC
+	lcJSON, err := ctx.GetStub().GetState(lcID)
+	if err != nil {
+		return nil, fmt.Errorf("GetLCDiscrepancies: failed to read LC: %w", err)
+	}
+	if lcJSON == nil {
+		return nil, fmt.Errorf("GetLCDiscrepancies: LC %s does not exist", lcID)
+	}
+
+	var lc LetterOfCredit
+	err = json.Unmarshal(lcJSON, &lc)
+	if err != nil {
+		return nil, fmt.Errorf("GetLCDiscrepancies: failed to unmarshal LC: %w", err)
+	}
+
+	return lc.Discrepancies, nil
+}
+
+// QueryLCsWithDiscrepancies - Get all LCs that have unresolved discrepancies
+func (c *CoffeeContract) QueryLCsWithDiscrepancies(ctx contractapi.TransactionContextInterface) ([]*LetterOfCredit, error) {
+
+	queryString := `{"selector":{"discrepancyResolved":false,"negotiationStatus":"UNDER_NEGOTIATION"}}`
+	
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, fmt.Errorf("QueryLCsWithDiscrepancies: query failed: %w", err)
+	}
+	defer resultsIterator.Close()
+
+	var lcs []*LetterOfCredit
+
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var lc LetterOfCredit
+		err = json.Unmarshal(queryResponse.Value, &lc)
+		if err != nil {
+			return nil, err
+		}
+
+		lcs = append(lcs, &lc)
+	}
+
+	return lcs, nil
+}
