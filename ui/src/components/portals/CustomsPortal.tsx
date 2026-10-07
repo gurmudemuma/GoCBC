@@ -80,6 +80,8 @@ import { DocumentManagementPanel } from '@/components/documents';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 
+// NEW: Border Crossing Documentation Tab
+import { BorderCrossingTab } from '@/components/bordercrossing';
 
 // Status types for chips
 type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | string;
@@ -147,8 +149,9 @@ const CustomsPortal: React.FC = () => {
       { index: 2, label: 'Under Review', icon: <Warning />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
       { index: 3, label: 'Cleared', icon: <CheckCircle />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Clearance Officer'] },
       { index: 4, label: 'Rejected', icon: <Cancel />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer'] },
-      { index: 5, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
-      { index: 6, label: 'Audit Trail', icon: <Assessment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer', 'Clearance Officer'] },
+      { index: 5, label: 'Border Crossing', icon: <DirectionsBoat />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Border Officer', 'Inspection Officer'] },
+      { index: 6, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'CUSTOMS', 'CUSTOMS Portal Administrator'] },
+      { index: 7, label: 'Audit Trail', icon: <Assessment />, roles: ['CUSTOMS', 'ADMIN', 'CUSTOMS Portal Administrator', 'Customs Officer', 'Inspection Officer', 'Clearance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -2244,11 +2247,21 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         </TabPanel>
 
         <TabPanel value={tabValue} index={5}>
+          {/* Border Crossing Tab */}
+          <Box>
+            <Typography variant="h5" gutterBottom sx={{ color: '#1565c0', fontWeight: 700, mb: 3 }}>
+              🚛 Border Crossing Documentation
+            </Typography>
+            <BorderCrossingTab />
+          </Box>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={7}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="Customs Portal - Complete Transaction History"

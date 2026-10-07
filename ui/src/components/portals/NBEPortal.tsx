@@ -65,6 +65,9 @@ import BlockchainSignatureVerification from '@/components/documents/BlockchainSi
 import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
+// NEW: Export Proceeds Repatriation Tab
+import { RepatriationManagementTab } from '@/components/repatriation';
+
 // Transport Mode Type
 type TransportMode = 'SEA' | 'AIR';
 
@@ -1813,60 +1816,10 @@ const NBEPortal: React.FC = () => {
         <TabPanel value={tabValue} index={7}>
           {/* Forex Repatriation Tab */}
           <Box>
-            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>
-              💵 Forex Repatriation Tracking
+            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700, mb: 3 }}>
+              💵 Export Proceeds Repatriation Compliance
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Monitor forex repatriation for delivered shipments per NBE regulations (30% retention requirement).
-            </Typography>
-            
-            {deliveredShipments.length === 0 ? (
-              <Alert severity="info">
-                No delivered shipments requiring forex repatriation tracking at this time.
-              </Alert>
-            ) : (
-              <Grid container spacing={3}>
-                {deliveredShipments.map((shipment: any) => {
-                  const shipmentId = shipment.shipmentId || shipment.shipmentID;
-                  const contractId = shipment.contractId || shipment.contractID;
-                  const contract = allContracts.find(c => c.contractId === contractId);
-                  
-                  return (
-                    <Grid item xs={12} key={shipmentId}>
-                      <Card sx={{ boxShadow: 3 }}>
-                        <CardContent>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                            <Box>
-                              <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                                {shipmentId}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                Contract: {contractId} | Exporter: {contract?.exporterId || 'N/A'} | Value: ${contract?.totalValue?.toLocaleString() || 'N/A'}
-                              </Typography>
-                            </Box>
-                            <Chip 
-                              label="Delivered" 
-                              color="success" 
-                              icon={<CheckCircle />}
-                            />
-                          </Box>
-                          
-                          <Divider sx={{ my: 2 }} />
-                          
-                          <PostDeliveryWorkflowPanel
-                            shipmentId={shipmentId}
-                            userRole="NBE"
-                            onRefresh={() => {
-                              loadData();
-                            }}
-                          />
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  );
-                })}
-              </Grid>
-            )}
+            <RepatriationManagementTab />
           </Box>
         </TabPanel>
       </Card>

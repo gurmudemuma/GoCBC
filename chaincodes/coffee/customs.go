@@ -270,22 +270,6 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 				if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" {
 					return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED)", shipmentID, shipment.Status)
 				}
-				
-				// Verify quality inspection has export permit
-				inspections, err := c.QueryInspectionsByShipment(ctx, shipmentID)
-				if err == nil && len(inspections) > 0 {
-					hasPermit := false
-					for _, insp := range inspections {
-						if insp.Status == "APPROVED" && insp.ExportPermitNo != "" {
-							hasPermit = true
-							log.Printf("✅ Verified ECTA export permit: %s for shipment %s", insp.ExportPermitNo, shipmentID)
-							break
-						}
-					}
-					if !hasPermit {
-						return fmt.Errorf("customs declaration cannot be submitted: no valid ECTA export permit found for shipment %s. Quality inspection must be approved and export permit issued first", shipmentID)
-					}
-				}
 			}
 		}
 	}

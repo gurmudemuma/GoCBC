@@ -1231,6 +1231,25 @@ main() {
         fi
     fi
     
+    # ADDITIONAL FIX: Ensure chaincode container is running via docker-compose
+    if ! docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        print_header "Ensuring Chaincode Container is Running"
+        print_step "Starting coffee-chaincode via docker-compose..."
+        if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d coffee-chaincode 2>&1 | tail -5; then
+            print_success "Chaincode container started successfully"
+            sleep 5  # Give it time to initialize
+            
+            # Verify it's running
+            if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+                print_success "✓ Chaincode container verified running"
+            else
+                print_warning "⚠ Chaincode container may have failed to start - check logs"
+            fi
+        else
+            print_warning "Failed to start chaincode container via docker-compose"
+        fi
+    fi
+    
     show_container_status
     
     if [ "$DEV_MODE" = true ]; then

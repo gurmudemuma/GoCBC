@@ -77,6 +77,7 @@ import {
   VerifiedUser,
   Verified,
   AccountTree,
+  Error,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 import AuditTrailTable from './AuditTrailTable';
@@ -108,6 +109,10 @@ import BlockchainSignatureVerification from '@/components/documents/BlockchainSi
 import BusinessActivityTimeline from '@/components/documents/BusinessActivityTimeline';
 import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
+
+// NEW: HIGH Priority Features UI Components
+import { RepatriationInitiationDialog } from '@/components/repatriation';
+import { LCDiscrepancyTab } from '@/components/lcdiscrepancy';
 
 interface SalesContract {
   contractId: string;
@@ -293,6 +298,9 @@ const BanksPortal: React.FC = () => {
   const [kpiDialogPage, setKpiDialogPage] = useState(0);
   const [kpiDialogRowsPerPage, setKpiDialogRowsPerPage] = useState(5);
   
+  // NEW: Repatriation Dialog state
+  const [repatriationDialogOpen, setRepatriationDialogOpen] = useState(false);
+  
   // LC Amendment Form
   const [amendmentForm, setAmendmentForm] = useState({
     amendmentReason: '',
@@ -427,6 +435,9 @@ const BanksPortal: React.FC = () => {
       
       // Tab 8: Audit Trail (Compliance)
       { index: 8, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
+      
+      // Tab 9: LC Discrepancies (NEW - HIGH Priority Feature)
+      { index: 9, label: 'LC Discrepancies', icon: <Error />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Document Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -3087,6 +3098,21 @@ const BanksPortal: React.FC = () => {
             >
               Clear Filters
             </Button>
+            
+            {/* NEW: Repatriation Button */}
+            <Button
+              variant="contained"
+              startIcon={<AttachMoney />}
+              onClick={() => setRepatriationDialogOpen(true)}
+              sx={{
+                bgcolor: '#9b30b7',
+                '&:hover': { bgcolor: '#7a2692' },
+                ml: 'auto',
+              }}
+            >
+              Forex Management / Repatriation
+            </Button>
+            
             <Button
               size="small"
               variant="outlined"
@@ -3351,6 +3377,13 @@ const BanksPortal: React.FC = () => {
             </Grid>
           </Box>
         </ModernCard>
+      )}
+
+      {/* Tab 9: LC Discrepancies - NEW */}
+      {activeTab === 9 && (
+        <Box sx={{ mt: 2 }}>
+          <LCDiscrepancyTab />
+        </Box>
       )}
 
       {/* Dialogs and Modals */}
@@ -6617,6 +6650,17 @@ const BanksPortal: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* NEW: Repatriation Initiation Dialog */}
+      <RepatriationInitiationDialog
+        open={repatriationDialogOpen}
+        onClose={() => setRepatriationDialogOpen(false)}
+        onSuccess={() => {
+          setRepatriationDialogOpen(false);
+          fetchForexAllocations(); // Refresh forex data
+        }}
+        preselectedPayment={null}
+      />
     </Box>
     </ThemeProvider>
   );

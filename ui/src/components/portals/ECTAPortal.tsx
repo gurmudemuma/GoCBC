@@ -78,6 +78,9 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
 import { InspectionManagement } from './InspectionManagement';
 import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
+
+// NEW: Pre-shipment Inspection Tab
+import { InspectionRequestsTab } from '@/components/inspection';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
@@ -395,9 +398,10 @@ const ECTAPortal: React.FC = () => {
       { index: 3, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
       { index: 4, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
       { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
-      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
-      { index: 7, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer'] },
-      { index: 8, label: 'Post-Delivery Audits', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
+      { index: 6, label: 'Pre-shipment Inspection', icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
+      { index: 7, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
+      { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer'] },
+      { index: 9, label: 'Post-Delivery Audits', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
     ];
     
     // Super Admin sees all tabs
@@ -2942,11 +2946,21 @@ The exporter can reapply once all requirements are met.`,
         </TabPanel>
 
         <TabPanel value={tabValue} index={6}>
+          {/* Pre-shipment Inspection Tab */}
+          <Box>
+            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700, mb: 3 }}>
+              🔍 Pre-shipment Inspection Management
+            </Typography>
+            <InspectionRequestsTab />
+          </Box>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={7}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <TabPanel value={tabValue} index={8}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="ECTA Portal - Complete Transaction History"
@@ -2957,62 +2971,7 @@ The exporter can reapply once all requirements are met.`,
           />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={7}>
-          {/* Reports Tab */}
-          <Typography variant="h6" gutterBottom>
-            ECTA Reports & Analytics
-          </Typography>
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
-              <Button
-                variant="outlined"
-                startIcon={<Download />}
-                fullWidth
-                sx={{ mb: 2 }}
-              >
-                Export Exporter Registry
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<Download />}
-                fullWidth
-                sx={{ mb: 2 }}
-              >
-                Quality Control Report
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<Download />}
-                fullWidth
-              >
-                License Compliance Report
-              </Button>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <ModernCard brandColor={BRAND_COLOR}>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Monthly Statistics
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    New Registrations: 12
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Quality Inspections: 45
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    License Renewals: 8
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Compliance Rate: 96.5%
-                  </Typography>
-                </CardContent>
-              </ModernCard>
-            </Grid>
-          </Grid>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={8}>
+        <TabPanel value={tabValue} index={9}>
           {/* Post-Delivery Audits Tab */}
           <Box>
             <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>

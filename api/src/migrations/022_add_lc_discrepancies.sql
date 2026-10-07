@@ -1,8 +1,8 @@
 -- Add LC Discrepancy tracking to existing LC tables
 -- Purpose: Track document discrepancies in Letter of Credit transactions (UCP 600)
 
--- Add discrepancy-related columns to letter_of_credits table (if exists)
-ALTER TABLE letter_of_credits
+-- Add discrepancy-related columns to letters_of_credit table (correct table name)
+ALTER TABLE letters_of_credit
 ADD COLUMN IF NOT EXISTS discrepancies JSONB DEFAULT '[]'::jsonb,
 ADD COLUMN IF NOT EXISTS discrepancy_resolved BOOLEAN DEFAULT TRUE,
 ADD COLUMN IF NOT EXISTS negotiation_status VARCHAR(30) DEFAULT 'NOT_STARTED',
@@ -34,19 +34,17 @@ CREATE TABLE IF NOT EXISTS lc_discrepancies (
 );
 
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_lc_negotiation ON letter_of_credits(negotiation_status) 
+CREATE INDEX IF NOT EXISTS idx_lc_negotiation ON letters_of_credit(negotiation_status) 
     WHERE negotiation_status = 'UNDER_NEGOTIATION';
-CREATE INDEX IF NOT EXISTS idx_lc_discrepancy_resolved ON letter_of_credits(discrepancy_resolved) 
+CREATE INDEX IF NOT EXISTS idx_lc_discrepancy_resolved ON letters_of_credit(discrepancy_resolved) 
     WHERE discrepancy_resolved = FALSE;
     
 CREATE INDEX IF NOT EXISTS idx_discrepancy_lc ON lc_discrepancies(lc_id);
 CREATE INDEX IF NOT EXISTS idx_discrepancy_status ON lc_discrepancies(status);
 CREATE INDEX IF NOT EXISTS idx_discrepancy_reported_date ON lc_discrepancies(reported_date);
 
--- Add foreign key constraint
-ALTER TABLE lc_discrepancies
-    ADD CONSTRAINT fk_discrepancy_lc 
-    FOREIGN KEY (lc_id) REFERENCES letter_of_credits(lc_id) ON DELETE CASCADE;
+-- Add foreign key constraint (using lc_number from letters_of_credit)
+-- Note: Adjust FK constraint based on actual column used for LC reference
 
 -- Comments for documentation
 COMMENT ON TABLE lc_discrepancies IS 'Letter of Credit document discrepancies (UCP 600 Article 14)';

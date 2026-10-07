@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -1116,18 +1115,6 @@ func (c *CoffeeContract) querySWIFTMessages(ctx contractapi.TransactionContextIn
 }
 
 // ==================== UTILITY FUNCTIONS ====================
-
-// parseFloat - Helper to parse float with error handling
-func parseFloat(s string) (float64, error) {
-	if s == "" {
-		return 0, fmt.Errorf("empty string")
-	}
-	val, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, err
-	}
-	return val, nil
-}
 
 // GetSWIFTMessageStatistics - Get statistics for SWIFT messages
 func (c *CoffeeContract) GetSWIFTMessageStatistics(ctx contractapi.TransactionContextInterface) (map[string]interface{}, error) {

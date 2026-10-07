@@ -11,6 +11,7 @@ export interface ChaincodeResponse {
   data?: any;
   error?: string;
   txId?: string;
+  transactionId?: string;  // ✅ Added for compatibility with routes
   signatureId?: string;  // ✅ Added for blockchain signature tracking
   endorsers?: Array<{
     mspId: string;
@@ -1972,18 +1973,53 @@ export class FabricService {
   // ==================== PASS-THROUGH METHODS ====================
   // These provide a lower-level interface for routes that call chaincode directly
 
-  public async submitTransaction(functionName: string, ...args: string[]): Promise<Buffer> {
+  public async submitTransaction(functionName: string, ...args: string[]): Promise<ChaincodeResponse> {
     if (!this.contract) {
       throw new Error('Not connected to Fabric network');
     }
-    return this.contract.submitTransaction(functionName, ...args);
+    
+    try {
+      // Create transaction to get transaction ID
+      const transaction = this.contract.createTransaction(functionName);
+      const buffer = await transaction.submit(...args);
+      const txId = transaction.getTransactionId();
+      const response = JSON.parse(buffer.toString());
+      
+      return {
+        success: true,
+        data: response,
+        transactionId: txId,
+        txId: txId  // Also set txId for backwards compatibility
+      };
+    } catch (error: any) {
+      logger.error(`Failed to submit transaction ${functionName}:`, error);
+      return {
+        success: false,
+        error: error.message || 'Transaction submission failed'
+      };
+    }
   }
 
-  public async evaluateTransaction(functionName: string, ...args: string[]): Promise<Buffer> {
+  public async evaluateTransaction(functionName: string, ...args: string[]): Promise<ChaincodeResponse> {
     if (!this.contract) {
       throw new Error('Not connected to Fabric network');
     }
-    return this.contract.evaluateTransaction(functionName, ...args);
+    
+    try {
+      const buffer = await this.contract.evaluateTransaction(functionName, ...args);
+      const response = JSON.parse(buffer.toString());
+      
+      return {
+        success: true,
+        data: response
+      };
+    } catch (error: any) {
+      logger.error(`Failed to evaluate transaction ${functionName}:`, error);
+      return {
+        success: false,
+        error: error.message || 'Transaction evaluation failed'
+      };
+    }
   }
 
   /**
