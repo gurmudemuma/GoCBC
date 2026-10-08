@@ -322,80 +322,68 @@ const ECXPortal: React.FC = () => {
         p: { xs: 2, md: 3 },
       }}
     >
-      {/* Actual ECX process steps banner */}
-      <Alert severity="info" icon={<Coffee />} sx={{ mb: 3 }}>
-        <Typography variant="body2" fontWeight="bold" gutterBottom>ECX Coffee Lot Lifecycle (4 Steps)</Typography>
-        <Box display="flex" gap={2} flexWrap="wrap">
-          {[
-            { n: 1, label: 'Warehouse Intake', desc: 'Exporter delivers to ECX warehouse → Warehouse Receipt + ECX Lot Number issued' },
-            { n: 2, label: 'ECX Grading', desc: 'ECX grader inspects moisture (≤12%), defects, cupping → Grade 1–5 assigned' },
-            { n: 3, label: 'Lot Assignment', desc: 'Exporter links graded lot to their NBE-registered sales contract + sets price' },
-            { n: 4, label: 'Lot Release', desc: 'After export permit & customs clearance confirmed, ECX releases lot for shipping' },
-          ].map(s => (
-            <Box key={s.n} sx={{ flex: '1 1 200px', p: 1, bgcolor: 'background.paper', borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="caption" fontWeight="bold" color="primary">Step {s.n}: {s.label}</Typography>
-              <Typography variant="caption" display="block" color="text.secondary">{s.desc}</Typography>
-            </Box>
-          ))}
-        </Box>
-      </Alert>
-
-      {/* Auto-Release Feature Banner */}
-      <Alert severity="success" icon={<CheckCircle />} sx={{ mb: 3 }}>
-        <Typography variant="body2" fontWeight="bold">🤖 Auto-Release Feature (NEW)</Typography>
-        <Typography variant="caption" display="block">
-          Lots are automatically released from ECX warehouse when linked shipment receives customs clearance. 
-          This reduces manual processing time and enables faster logistics. Blockchain verification ensures secure authorization.
-        </Typography>
-      </Alert>
-
-      {/* Professional KPI Cards - At the very top */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
+      {/* Dynamic KPI Cards - Compact design like Shipping Portal */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
         {(() => {
           const kpis = tabValue === 0 ? [
+            // Tab 0: Lot Management - Show lot status breakdown
             { icon: <Coffee />, label: 'Total Lots', value: allLots.length, color: BRAND_COLOR },
             { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
             { icon: <CheckCircle />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#4caf50' },
             { icon: <LocalShipping />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#2196f3' },
           ] : tabValue === 1 ? [
+            // Tab 1: Market Prices - Show price statistics
             { icon: <TrendingUp />, label: 'Market Active', value: 'OPEN', color: '#4caf50' },
             { icon: <AttachMoney />, label: 'Avg Price (ETB/kg)', value: '150', color: BRAND_COLOR },
             { icon: <Coffee />, label: 'Traded Today', value: '0', color: '#2196f3' },
             { icon: <Assessment />, label: 'Volume (tons)', value: '0', color: SECONDARY_COLOR },
-          ] : [
+          ] : tabValue === 2 ? [
+            // Tab 2: Grading Standards - Show quality metrics
             { icon: <Science />, label: 'Grade 1 (Premium)', value: allLots.filter(l => l.grade === 'Grade 1').length, color: '#4caf50' },
             { icon: <Coffee />, label: 'Grade 2 (High)', value: allLots.filter(l => l.grade === 'Grade 2').length, color: BRAND_COLOR },
             { icon: <Assignment />, label: 'Grade 3-4 (Good)', value: allLots.filter(l => ['Grade 3', 'Grade 4'].includes(l.grade || '')).length, color: '#ff9800' },
             { icon: <Warning />, label: 'Grade 5 (Fair)', value: allLots.filter(l => l.grade === 'Grade 5').length, color: '#f44336' },
+          ] : [
+            // Tab 3: User Management - Show user stats
+            { icon: <Person />, label: 'Total Users', value: '0', color: BRAND_COLOR },
+            { icon: <CheckCircle />, label: 'Active Users', value: '0', color: '#4caf50' },
+            { icon: <Assessment />, label: 'Admins', value: '0', color: '#ff9800' },
+            { icon: <Person />, label: 'Inactive', value: '0', color: '#9e9e9e' },
           ];
 
           return kpis.map((kpi, index) => (
             <Grid item xs={12} sm={6} md={3} key={index}>
               <Card sx={{ 
                 bgcolor: '#fff', 
-                border: `2px solid ${kpi.color}`,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                transition: 'all 0.3s ease',
+                border: `1px solid ${kpi.color}20`,
+                borderLeft: `4px solid ${kpi.color}`,
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                transition: 'all 0.2s ease',
                 '&:hover': {
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-                  transform: 'translateY(-4px)',
+                  boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                  transform: 'translateY(-2px)',
                 }
               }}>
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
-                  <Typography variant="caption" sx={{ 
-                    color: '#666', 
-                    textTransform: 'uppercase', 
-                    fontWeight: 700, 
-                    display: 'block',
-                    letterSpacing: '0.8px',
-                    mb: 1
-                  }}>
-                    {kpi.label}
-                  </Typography>
-                  <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color }}>
-                    {kpi.value}
-                  </Typography>
+                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                  <Box display="flex" alignItems="center" justifyContent="space-between">
+                    <Box>
+                      <Typography variant="caption" sx={{ 
+                        color: '#666', 
+                        textTransform: 'uppercase', 
+                        fontWeight: 600,
+                        fontSize: '0.7rem',
+                        letterSpacing: '0.5px',
+                        display: 'block',
+                        mb: 0.5
+                      }}>
+                        {kpi.label}
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, color: kpi.color }}>
+                        {kpi.value}
+                      </Typography>
+                    </Box>
+                    {React.cloneElement(kpi.icon, { sx: { fontSize: 32, color: kpi.color, opacity: 0.3 } })}
+                  </Box>
                 </CardContent>
               </Card>
             </Grid>
@@ -440,75 +428,6 @@ const ECXPortal: React.FC = () => {
                 icon={tab.icon} 
                 iconPosition="start" 
               />
-            ))}
-          </Tabs>
-        </Box>
-
-        {/* KPI Sub-Tabs - Dynamic based on active main tab */}
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs 
-            value={subTabValue} 
-            onChange={(e, newValue) => {
-              setSubTabValue(newValue);
-              const kpis = tabValue === 0 ? [
-                { key: 'ALL_LOTS', title: 'All Lots', value: allLots.length, color: BRAND_COLOR },
-                { key: 'WAREHOUSED', title: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
-                { key: 'GRADED', title: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#2196F3' },
-                { key: 'ASSIGNED', title: 'Assigned', value: allLots.filter(l => l.status === 'ASSIGNED').length, color: '#9c27b0' },
-                { key: 'RELEASED', title: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#4caf50' },
-              ] : [
-                { key: 'ALL_LOTS', title: 'All Lots', value: allLots.length, color: BRAND_COLOR },
-              ];
-              handleKPIFilter(kpis[newValue].key, kpis[newValue].title);
-            }}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{ 
-              borderBottom: 1,
-              borderColor: 'divider',
-              bgcolor: 'rgba(0,0,0,0.02)',
-              '& .MuiTab-root': {
-                minHeight: 70,
-                flexDirection: 'column',
-                gap: 0.5,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: BRAND_COLOR,
-                  bgcolor: 'rgba(15, 71, 175, 0.08)',
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(0,0,0,0.04)',
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 4,
-                backgroundColor: BRAND_COLOR,
-                borderRadius: '4px 4px 0 0',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              }
-            }}
-          >
-            {(tabValue === 0 ? [
-              { icon: <Coffee />, label: 'All Lots', value: allLots.length, color: BRAND_COLOR },
-              { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
-              { icon: <Assignment />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#2196F3' },
-              { icon: <LocalShipping />, label: 'Assigned', value: allLots.filter(l => l.status === 'ASSIGNED').length, color: '#9c27b0' },
-              { icon: <CheckCircle />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#4caf50' },
-            ] : [
-              { icon: <Coffee />, label: 'All Lots', value: allLots.length, color: BRAND_COLOR },
-            ]).map((kpi, index) => (
-              <Tab key={index} label={
-                <Box sx={{ textAlign: 'center' }}>
-                  <Box sx={{ color: kpi.color, mb: 0.5 }}>{kpi.icon}</Box>
-                  <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, fontSize: '0.7rem' }}>
-                    {kpi.label}
-                  </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 700, color: kpi.color }}>
-                    {kpi.value}
-                  </Typography>
-                </Box>
-              } />
             ))}
           </Tabs>
         </Box>
