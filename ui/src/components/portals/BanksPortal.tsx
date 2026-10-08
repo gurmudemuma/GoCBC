@@ -213,6 +213,8 @@ const BanksPortal: React.FC = () => {
   const { user } = useAuth();
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
+  const [activeParentTab, setActiveParentTab] = useState(0); // NEW: For parent tab navigation
+  const [activeChildTab, setActiveChildTab] = useState(0);   // NEW: For child tab navigation within parent
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('LC');
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [lcDetailsLoading, setLcDetailsLoading] = useState(false); // ✅ Loading state for LC details
@@ -403,41 +405,158 @@ const BanksPortal: React.FC = () => {
   // Get current user role from auth context (already imported at top)
   const userRole = user?.role || '';
 
-  // Role-based tab filtering
+  // NEW: Hierarchical Tab Structure with Parent/Child Navigation
+  const getHierarchicalTabStructure = () => {
+    const isSuperAdmin = userRole === 'ADMIN';
+    
+    // Define parent categories with their child tabs
+    const tabStructure = [
+      {
+        id: 'payment-operations',
+        label: 'Payment Operations',
+        icon: React.createElement(Payment),
+        roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Document Officer'],
+        children: [
+          { 
+            id: 'payment-methods', 
+            label: 'Payment Methods', 
+            icon: React.createElement(Payment),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'],
+            tabIndex: 0
+          },
+          { 
+            id: 'document-examination', 
+            label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, 
+            icon: React.createElement(Description),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'],
+            tabIndex: 2
+          },
+          { 
+            id: 'payment-release', 
+            label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, 
+            icon: React.createElement(AttachMoney),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'],
+            tabIndex: 3
+          },
+          { 
+            id: 'lc-discrepancies', 
+            label: 'LC Discrepancies', 
+            icon: React.createElement(Error),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Document Officer'],
+            tabIndex: 9
+          },
+        ]
+      },
+      {
+        id: 'forex-settlements',
+        label: 'Forex & Settlements',
+        icon: React.createElement(CurrencyExchange),
+        roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer', 'LC Officer', 'Payment Officer'],
+        children: [
+          { 
+            id: 'forex-allocations', 
+            label: `Forex Allocations${forexAllocations.length > 0 ? ` (${forexAllocations.length})` : ''}`, 
+            icon: React.createElement(CurrencyExchange),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'],
+            tabIndex: 1
+          },
+          { 
+            id: 'lc-settlements', 
+            label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, 
+            icon: React.createElement(CheckCircle),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'],
+            tabIndex: 5
+          },
+        ]
+      },
+      {
+        id: 'communication',
+        label: 'Communication & Issues',
+        icon: React.createElement(MessageOutlined),
+        roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer', 'LC Officer', 'Document Officer'],
+        children: [
+          { 
+            id: 'swift-messages', 
+            label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, 
+            icon: React.createElement(AccountBalance),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'],
+            tabIndex: 4
+          },
+        ]
+      },
+      {
+        id: 'system',
+        label: 'System Management',
+        icon: React.createElement(AdminPanelSettings),
+        roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'],
+        children: [
+          { 
+            id: 'analytics', 
+            label: 'Analytics', 
+            icon: React.createElement(Assessment),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'],
+            tabIndex: 6
+          },
+          { 
+            id: 'user-management', 
+            label: 'User Management', 
+            icon: React.createElement(Person),
+            roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'],
+            tabIndex: 7
+          },
+          { 
+            id: 'audit-trail', 
+            label: 'Audit Trail', 
+            icon: React.createElement(Assessment),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'],
+            tabIndex: 8
+          },
+        ]
+      },
+    ];
+    
+    // Filter by role
+    if (isSuperAdmin) return tabStructure;
+    
+    return tabStructure
+      .filter(parent => parent.roles.includes(userRole))
+      .map(parent => ({
+        ...parent,
+        children: parent.children.filter(child => child.roles.includes(userRole))
+      }))
+      .filter(parent => parent.children.length > 0); // Remove parents with no accessible children
+  };
+  
+  const tabStructure = getHierarchicalTabStructure();
+  
+  // Helper function to get the actual tab index from parent/child selection
+  const getActiveTabIndex = () => {
+    if (tabStructure[activeParentTab]?.children[activeChildTab]) {
+      return tabStructure[activeParentTab].children[activeChildTab].tabIndex;
+    }
+    return 0;
+  };
+  
+  // Update activeTab whenever parent/child tabs change
+  React.useEffect(() => {
+    setActiveTab(getActiveTabIndex());
+  }, [activeParentTab, activeChildTab]);
+
+  // Legacy compatibility - keep old visibleTabs for backward compatibility
   const getRoleBasedTabs = () => {
     const isSuperAdmin = userRole === 'ADMIN';
     
     const allTabs = [
-      // ✅ WORKFLOW ORDER: Follows the actual LC banking process lifecycle
-      // Tab 0: LC Request & Approval (START - Exporter Portal → Banks Portal)
-      { index: 0, label: 'Payment Methods', icon: <Payment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
-      
-      // Tab 1: Forex Allocation (After LC Approved/Issued)
-      { index: 1, label: `Forex Allocations${forexAllocations.length > 0 ? ` (${forexAllocations.length})` : ''}`, icon: <CurrencyExchange />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
-      
-      // Tab 2: Document Examination (Exporter submits → Bank examines)
-      { index: 2, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: <Description />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
-      
-      // Tab 3: Payment Release (After documents verified)
-      { index: 3, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: <AttachMoney />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
-      
-      // Tab 4: SWIFT Messages (Payment instructions)
-      { index: 4, label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, icon: <AccountBalance />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
-      
-      // Tab 5: LC Settlements (Final settlement after delivery)
-      { index: 5, label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, icon: <CheckCircle />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
-      
-      // Tab 6: Analytics (Reporting)
-      { index: 6, label: 'Analytics', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
-      
-      // Tab 7: User Management (Admin)
-      { index: 7, label: 'User Management', icon: <Person />, roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
-      
-      // Tab 8: Audit Trail (Compliance)
-      { index: 8, label: 'Audit Trail', icon: <Assessment />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
-      
-      // Tab 9: LC Discrepancies (NEW - HIGH Priority Feature)
-      { index: 9, label: 'LC Discrepancies', icon: <Error />, roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Document Officer'] },
+      { index: 0, label: 'Payment Methods', icon: React.createElement(Payment), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      { index: 1, label: `Forex Allocations${forexAllocations.length > 0 ? ` (${forexAllocations.length})` : ''}`, icon: React.createElement(CurrencyExchange), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Forex Officer'] },
+      { index: 2, label: `Document Examination${lcsForExamination.length > 0 ? ` (${lcsForExamination.length})` : ''}`, icon: React.createElement(Description), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Document Officer'] },
+      { index: 3, label: `Payment Release${lcsForPaymentRelease.length > 0 ? ` (${lcsForPaymentRelease.length})` : ''}`, icon: React.createElement(AttachMoney), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'Payment Officer'] },
+      { index: 4, label: `SWIFT Messages${swiftMessages.length > 0 ? ` (${swiftMessages.length})` : ''}`, icon: React.createElement(AccountBalance), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'SWIFT Officer'] },
+      { index: 5, label: `LC Settlements${deliveredShipments.length > 0 ? ` (${deliveredShipments.length})` : ''}`, icon: React.createElement(CheckCircle), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer'] },
+      { index: 6, label: 'Analytics', icon: React.createElement(Assessment), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer'] },
+      { index: 7, label: 'User Management', icon: React.createElement(Person), roles: ['ADMIN', 'BANKS', 'BANKS Portal Administrator'] },
+      { index: 8, label: 'Audit Trail', icon: React.createElement(Assessment), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Forex Officer', 'SWIFT Officer', 'Document Officer'] },
+      { index: 9, label: 'LC Discrepancies', icon: React.createElement(Error), roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Document Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -2692,26 +2811,30 @@ const BanksPortal: React.FC = () => {
           border: '1px solid #e0e0e0',
           overflow: 'hidden'
         }}>
+          {/* Parent Tabs */}
           <Tabs 
-            value={activeTab} 
+            value={activeParentTab} 
             onChange={(e, v) => {
-              setActiveTab(v);
-              setCurrentPage(0); // Reset pagination when switching tabs
+              setActiveParentTab(v);
+              setActiveChildTab(0); // Reset to first child when switching parent
+              setCurrentPage(0); // Reset pagination
             }}
             variant="fullWidth"
             sx={{
-              bgcolor: 'white',
+              bgcolor: '#f5f5f5',
+              borderBottom: '2px solid #e0e0e0',
               '& .MuiTab-root': {
-                fontSize: '0.9rem',
-                fontWeight: 600,
+                fontSize: '1rem',
+                fontWeight: 700,
                 textTransform: 'none',
-                minHeight: 64,
+                minHeight: 70,
                 px: 3,
-                color: '#666',
+                color: '#444',
                 transition: 'all 0.3s ease',
                 '&.Mui-selected': {
                   color: '#9b30b7',
-                  bgcolor: 'rgba(155, 48, 183, 0.04)',
+                  bgcolor: 'white',
+                  borderBottom: '3px solid #9b30b7',
                 },
                 '&:hover': {
                   bgcolor: 'rgba(155, 48, 183, 0.08)',
@@ -2719,21 +2842,67 @@ const BanksPortal: React.FC = () => {
                 },
               },
               '& .MuiTabs-indicator': {
-                height: 4,
-                bgcolor: '#9b30b7',
-                borderRadius: '4px 4px 0 0',
+                display: 'none', // Hide default indicator, using custom border
               },
             }}
           >
-            {visibleTabs.map(tab => (
+            {tabStructure.map((parent, idx) => (
               <Tab 
-                key={tab.index}
-                label={tab.label}
-                icon={tab.icon} 
+                key={parent.id}
+                label={parent.label}
+                icon={parent.icon} 
                 iconPosition="start" 
               />
             ))}
           </Tabs>
+          
+          {/* Child Tabs */}
+          {tabStructure[activeParentTab] && tabStructure[activeParentTab].children.length > 0 && (
+            <Tabs 
+              value={activeChildTab} 
+              onChange={(e, v) => {
+                setActiveChildTab(v);
+                setCurrentPage(0); // Reset pagination when switching child tabs
+              }}
+              variant="scrollable"
+              scrollButtons="auto"
+              sx={{
+                bgcolor: 'white',
+                borderBottom: '1px solid #e0e0e0',
+                '& .MuiTab-root': {
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  textTransform: 'none',
+                  minHeight: 56,
+                  px: 3,
+                  color: '#666',
+                  transition: 'all 0.3s ease',
+                  '&.Mui-selected': {
+                    color: '#9b30b7',
+                    bgcolor: 'rgba(155, 48, 183, 0.04)',
+                  },
+                  '&:hover': {
+                    bgcolor: 'rgba(155, 48, 183, 0.08)',
+                    color: '#9b30b7',
+                  },
+                },
+                '& .MuiTabs-indicator': {
+                  height: 3,
+                  bgcolor: '#9b30b7',
+                  borderRadius: '3px 3px 0 0',
+                },
+              }}
+            >
+              {tabStructure[activeParentTab].children.map((child, idx) => (
+                <Tab 
+                  key={child.id}
+                  label={child.label}
+                  icon={child.icon} 
+                  iconPosition="start" 
+                />
+              ))}
+            </Tabs>
+          )}
         </Paper>
 
         {/* Tab 0: Payment Methods Selection */}

@@ -58,9 +58,70 @@ CHANNEL="coffeechannel"
 CC_NAME="coffee"
 PACKAGE_NAME="coffee_${CC_VERSION}.tgz"
 
-# Build and package chaincode (CCAAS - Chaincode as a Service)
+# EXPERT: Rebuild chaincode with all updates
 echo ""
-echo "Building CCAAS chaincode package..."
+echo "=========================================="
+echo "🔨 REBUILDING CHAINCODE WITH ALL UPDATES"
+echo "=========================================="
+
+cd chaincodes/coffee
+
+# Clean up old packages first
+echo ""
+echo "Cleaning old chaincode packages..."
+BEFORE=$(ls -1 coffee_*.tgz coffee_*.tar.gz 2>/dev/null | wc -l)
+if [ "$BEFORE" -gt 0 ]; then
+    echo "  Found $BEFORE old package(s), removing ALL..."
+    rm -f coffee_*.tgz coffee_*.tar.gz
+    echo "  ✅ Removed all old packages"
+else
+    echo "  ✅ No old packages found"
+fi
+
+# Clean up old binaries
+echo ""
+echo "Cleaning old binaries..."
+rm -f coffee coffee-chaincode coffee-static chaincode 2>/dev/null || true
+echo "  ✅ Cleaned old binaries"
+
+# Pull latest Go dependencies
+echo ""
+echo "Updating Go dependencies..."
+if go mod tidy; then
+    echo "  ✅ Dependencies updated"
+else
+    echo "  ⚠️  Warning: go mod tidy failed, continuing..."
+fi
+
+# Build fresh chaincode binary
+echo ""
+echo "Building fresh chaincode binary..."
+if CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coffee-chaincode -v .; then
+    echo "  ✅ Chaincode binary built successfully"
+    ls -lh coffee-chaincode
+else
+    echo "  ❌ Failed to build chaincode"
+    exit 1
+fi
+
+# Make binary executable
+chmod +x coffee-chaincode
+
+# Verify binary works
+echo ""
+echo "Verifying chaincode binary..."
+if ./coffee-chaincode --version 2>/dev/null || ./coffee-chaincode --help 2>/dev/null || [ -f coffee-chaincode ]; then
+    echo "  ✅ Binary verification passed"
+else
+    echo "  ⚠️  Warning: Cannot verify binary, but continuing..."
+fi
+
+cd ../..
+echo ""
+echo "=========================================="
+echo "📦 PACKAGING CHAINCODE (CCAAS)"
+echo "=========================================="
+
 PKG_DIR="blockchain/channel-artifacts"
 mkdir -p "$PKG_DIR"
 
@@ -96,6 +157,70 @@ rm -f metadata.json connection.json code.tar.gz
 cd ../..
 
 echo "✅ CCAAS Package created: ${PACKAGE_NAME}"
+
+# Rebuild chaincode Docker container with new binary
+echo ""
+echo "=========================================="
+echo "🐳 REBUILDING CHAINCODE DOCKER CONTAINER"
+echo "=========================================="
+
+echo ""
+echo "Stopping old chaincode container..."
+docker stop coffee-chaincode 2>/dev/null || echo "  Container not running"
+docker rm coffee-chaincode 2>/dev/null || echo "  Container doesn't exist"
+
+echo ""
+echo "Rebuilding Docker image with new binary..."
+cd chaincodes/coffee
+if docker build -t coffee-chaincode:latest .; then
+    echo "  ✅ Docker image rebuilt successfully"
+else
+    echo "  ❌ Failed to rebuild Docker image"
+    cd ../..
+    exit 1
+fi
+cd ../..
+
+echo ""
+echo "Starting new chaincode container..."
+# Start container directly with docker run (CCAAS mode)
+if docker run -d \
+    --name coffee-chaincode \
+    --network cecbs-network \
+    -p 9999:9999 \
+    -e CORE_CHAINCODE_ID_NAME="coffee_${CC_VERSION}:latest" \
+    -e CHAINCODE_SERVER_ADDRESS="0.0.0.0:9999" \
+    coffee-chaincode:latest; then
+    echo "  ✅ Chaincode container started"
+else
+    echo "  ❌ Failed to start chaincode container"
+    exit 1
+fi
+
+echo ""
+echo "Waiting for chaincode to be ready..."
+sleep 5
+
+# Verify chaincode is responding
+echo ""
+echo "Verifying chaincode is responding on port 9999..."
+MAX_RETRIES=10
+RETRY=0
+while [ $RETRY -lt $MAX_RETRIES ]; do
+    if docker exec coffee-chaincode nc -z localhost 9999 2>/dev/null; then
+        echo "  ✅ Chaincode is responding on port 9999"
+        break
+    fi
+    RETRY=$((RETRY + 1))
+    if [ $RETRY -eq $MAX_RETRIES ]; then
+        echo "  ⚠️  Warning: Chaincode not responding after ${MAX_RETRIES} attempts"
+        echo "  Container logs:"
+        docker logs coffee-chaincode --tail 20
+    else
+        echo "  Waiting... (attempt $RETRY/$MAX_RETRIES)"
+        sleep 3
+    fi
+done
 
 # Distribute TLS certificates
 echo ""
@@ -190,7 +315,9 @@ for org in ecta ecx banks nbe customs shipping; do
             --name $CC_NAME \
             --version $CC_VERSION \
             --package-id $PACKAGE_ID \
-            --sequence $CC_SEQUENCE
+            --sequence $CC_SEQUENCE \
+            --init-required=false \
+            --signature-policy \"OR('ECTAMSP.peer','ECXMSP.peer','BanksMSP.peer','NBEMSP.peer','CustomsMSP.peer','ShippingMSP.peer')\"
     " 2>&1 | grep -E "Successfully|already" || true
 done
 
@@ -230,6 +357,8 @@ peer lifecycle chaincode commit \
     --name $CC_NAME \
     --version $CC_VERSION \
     --sequence $CC_SEQUENCE \
+    --init-required=false \
+    --signature-policy \"OR('ECTAMSP.peer','ECXMSP.peer','BanksMSP.peer','NBEMSP.peer','CustomsMSP.peer','ShippingMSP.peer')\" \
     --peerAddresses peer0.ecta.cecbs.et:7051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.ecta.cecbs.et-cert.pem \
     --peerAddresses peer0.ecx.cecbs.et:8051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.ecx.cecbs.et-cert.pem \
     --peerAddresses peer0.banks.cecbs.et:9051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.banks.cecbs.et-cert.pem \

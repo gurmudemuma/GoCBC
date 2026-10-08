@@ -326,7 +326,120 @@ CREATE TABLE IF NOT EXISTS post_delivery_tracking (
 );
 
 -- ============================================================================
--- INDEXES FOR PERFORMANCE
+-- BLOCKCHAIN SYNC TABLES
+-- ============================================================================
+
+-- Blockchain Shipments (synced from CouchDB state database)
+CREATE TABLE IF NOT EXISTS blockchain_shipments (
+    shipment_id VARCHAR(100) PRIMARY KEY,
+    contract_id VARCHAR(100),
+    exporter_id VARCHAR(100),
+    buyer_id VARCHAR(100),
+    origin VARCHAR(100),
+    quantity DECIMAL(10,2),
+    grade VARCHAR(50),
+    status VARCHAR(50),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    synced_from VARCHAR(20),
+    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_data JSONB
+);
+
+-- Blockchain Documents (synced from CouchDB)
+CREATE TABLE IF NOT EXISTS blockchain_documents (
+    document_id VARCHAR(100) PRIMARY KEY,
+    shipment_id VARCHAR(100),
+    document_type VARCHAR(50),
+    issuer VARCHAR(100),
+    status VARCHAR(50),
+    ipfs_hash VARCHAR(255),
+    verified BOOLEAN,
+    created_at TIMESTAMP,
+    synced_from VARCHAR(20),
+    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_data JSONB
+);
+
+-- Blockchain Contracts (synced from CouchDB)
+CREATE TABLE IF NOT EXISTS blockchain_contracts (
+    contract_id VARCHAR(100) PRIMARY KEY,
+    exporter_id VARCHAR(100),
+    buyer_id VARCHAR(100),
+    quantity DECIMAL(10,2),
+    total_value DECIMAL(15,2),
+    status VARCHAR(50),
+    created_at TIMESTAMP,
+    synced_from VARCHAR(20),
+    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_data JSONB
+);
+
+-- Blockchain Payments (synced from CouchDB)
+CREATE TABLE IF NOT EXISTS blockchain_payments (
+    payment_id VARCHAR(100) PRIMARY KEY,
+    shipment_id VARCHAR(100),
+    lc_number VARCHAR(100),
+    amount DECIMAL(15,2),
+    currency VARCHAR(10),
+    status VARCHAR(50),
+    payment_date TIMESTAMP,
+    created_at TIMESTAMP,
+    synced_from VARCHAR(20),
+    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_data JSONB
+);
+
+-- Blockchain Customs Clearances (synced from CouchDB)
+CREATE TABLE IF NOT EXISTS blockchain_customs (
+    clearance_id VARCHAR(100) PRIMARY KEY,
+    shipment_id VARCHAR(100),
+    declaration_number VARCHAR(100),
+    clearance_status VARCHAR(50),
+    clearance_date TIMESTAMP,
+    created_at TIMESTAMP,
+    synced_from VARCHAR(20),
+    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_data JSONB
+);
+
+-- Sync Status Tracking Table
+CREATE TABLE IF NOT EXISTS sync_status (
+    id SERIAL PRIMARY KEY,
+    couch_instance VARCHAR(50) NOT NULL,
+    database_name VARCHAR(100) NOT NULL,
+    last_sync TIMESTAMP,
+    last_seq VARCHAR(100),
+    documents_synced INTEGER,
+    status VARCHAR(50),
+    error_message TEXT,
+    UNIQUE(couch_instance, database_name)
+);
+
+-- ============================================================================
+-- COMMENTS (Before indexes to ensure all tables exist first)
+-- ============================================================================
+
+COMMENT ON TABLE users IS 'System users with roles and permissions';
+COMMENT ON TABLE shipments IS 'Coffee shipment records';
+COMMENT ON TABLE documents IS 'Shipping documents and certificates';
+COMMENT ON TABLE contracts IS 'Export contracts between parties';
+COMMENT ON TABLE letters_of_credit IS 'LC payment instruments';
+COMMENT ON TABLE payments IS 'Payment transactions';
+COMMENT ON TABLE forex_allocations IS 'Foreign exchange allocations';
+COMMENT ON TABLE customs_declarations IS 'Customs declaration records';
+COMMENT ON TABLE customs_clearances IS 'Customs clearance approvals';
+COMMENT ON TABLE audit_trail IS 'Complete audit trail of all system changes';
+COMMENT ON TABLE blockchain_shipments IS 'Synced copy of shipments from blockchain CouchDB';
+COMMENT ON TABLE blockchain_documents IS 'Synced copy of documents from blockchain CouchDB';
+COMMENT ON TABLE blockchain_contracts IS 'Synced copy of contracts from blockchain CouchDB';
+COMMENT ON TABLE blockchain_payments IS 'Synced copy of payments from blockchain CouchDB';
+COMMENT ON TABLE blockchain_customs IS 'Synced copy of customs clearances from blockchain CouchDB';
+COMMENT ON TABLE sync_status IS 'Tracks synchronization status between CouchDB and PostgreSQL';
+
+
+-- ============================================================================
+-- INDEXES FOR PERFORMANCE (Created AFTER all tables to avoid order issues)
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -361,17 +474,22 @@ CREATE INDEX IF NOT EXISTS idx_audit_trail_entity ON audit_trail(entity_type, en
 CREATE INDEX IF NOT EXISTS idx_audit_trail_user ON audit_trail(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_trail_timestamp ON audit_trail(timestamp DESC);
 
--- ============================================================================
--- COMMENTS
--- ============================================================================
+-- Blockchain Sync Indexes
+CREATE INDEX IF NOT EXISTS idx_blockchain_shipments_status ON blockchain_shipments(status);
+CREATE INDEX IF NOT EXISTS idx_blockchain_shipments_exporter ON blockchain_shipments(exporter_id);
+CREATE INDEX IF NOT EXISTS idx_blockchain_shipments_contract ON blockchain_shipments(contract_id);
+CREATE INDEX IF NOT EXISTS idx_blockchain_shipments_synced_from ON blockchain_shipments(synced_from);
 
-COMMENT ON TABLE users IS 'System users with roles and permissions';
-COMMENT ON TABLE shipments IS 'Coffee shipment records';
-COMMENT ON TABLE documents IS 'Shipping documents and certificates';
-COMMENT ON TABLE contracts IS 'Export contracts between parties';
-COMMENT ON TABLE letters_of_credit IS 'LC payment instruments';
-COMMENT ON TABLE payments IS 'Payment transactions';
-COMMENT ON TABLE forex_allocations IS 'Foreign exchange allocations';
-COMMENT ON TABLE customs_declarations IS 'Customs declaration records';
-COMMENT ON TABLE customs_clearances IS 'Customs clearance approvals';
-COMMENT ON TABLE audit_trail IS 'Complete audit trail of all system changes';
+CREATE INDEX IF NOT EXISTS idx_blockchain_documents_shipment ON blockchain_documents(shipment_id);
+CREATE INDEX IF NOT EXISTS idx_blockchain_documents_type ON blockchain_documents(document_type);
+
+CREATE INDEX IF NOT EXISTS idx_blockchain_contracts_exporter ON blockchain_contracts(exporter_id);
+CREATE INDEX IF NOT EXISTS idx_blockchain_contracts_status ON blockchain_contracts(status);
+
+CREATE INDEX IF NOT EXISTS idx_blockchain_payments_shipment ON blockchain_payments(shipment_id);
+CREATE INDEX IF NOT EXISTS idx_blockchain_payments_lc ON blockchain_payments(lc_number);
+
+CREATE INDEX IF NOT EXISTS idx_blockchain_customs_shipment ON blockchain_customs(shipment_id);
+
+CREATE INDEX IF NOT EXISTS idx_sync_status_instance ON sync_status(couch_instance);
+CREATE INDEX IF NOT EXISTS idx_sync_status_last_sync ON sync_status(last_sync DESC);

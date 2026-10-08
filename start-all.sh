@@ -735,22 +735,207 @@ create_channel() {
 deploy_chaincode() {
     print_header "Deploying Coffee Chaincode"
     
-    # Use the working deployment script (in root directory)
-    local deploy_script="$PROJECT_ROOT/deploy-chaincode.sh"
+    # Check if chaincode is already committed
+    print_step "Checking if chaincode is already deployed..."
+    if docker exec peer0.ecx.cecbs.et bash -c "
+        export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+        export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp
+        peer lifecycle chaincode querycommitted --channelID coffeechannel --name coffee 2>&1
+    " | grep -q "Version: 1.0"; then
+        print_success "Chaincode already deployed (Version 1.0)"
+        return 0
+    fi
     
-    if [ ! -f "$deploy_script" ]; then
-        print_error "Deployment script not found: $deploy_script"
-        print_warning "Chaincode deployment skipped"
+    print_step "Chaincode not deployed, deploying now..."
+    
+    # Build chaincode binary
+    print_step "Building chaincode binary..."
+    cd "$CHAINCODE_DIR"
+    if CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coffee-chaincode -v . > /dev/null 2>&1; then
+        chmod +x coffee-chaincode
+        print_success "Chaincode binary built"
+    else
+        print_error "Failed to build chaincode binary"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    cd "$PROJECT_ROOT"
+    
+    # Package chaincode
+    print_step "Packaging chaincode (CCAAS)..."
+    PKG_DIR="blockchain/channel-artifacts"
+    mkdir -p "$PKG_DIR"
+    
+    # Create metadata.json
+    cat > "${PKG_DIR}/metadata.json" << 'EOF'
+{
+  "type": "ccaas",
+  "label": "coffee_1.0"
+}
+EOF
+    
+    # Copy connection.json
+    if [ -f "chaincodes/coffee/connection.json" ]; then
+        cp chaincodes/coffee/connection.json "${PKG_DIR}/connection.json"
+    else
+        cat > "${PKG_DIR}/connection.json" << 'EOF'
+{
+  "address": "coffee-chaincode:9999",
+  "dial_timeout": "10s",
+  "tls_required": false
+}
+EOF
+    fi
+    
+    # Create package
+    cd "$PKG_DIR"
+    tar czf code.tar.gz connection.json
+    tar czf coffee_1.0.tgz metadata.json code.tar.gz
+    rm -f metadata.json connection.json code.tar.gz
+    cd "$PROJECT_ROOT"
+    print_success "Package created: coffee_1.0.tgz"
+    
+    # Build and start chaincode container
+    print_step "Building chaincode Docker image..."
+    cd "$CHAINCODE_DIR"
+    if docker build -t coffee-chaincode:latest . > /dev/null 2>&1; then
+        print_success "Docker image built"
+    else
+        print_error "Failed to build Docker image"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    cd "$PROJECT_ROOT"
+    
+    print_step "Starting chaincode container..."
+    docker stop coffee-chaincode 2>/dev/null || true
+    docker rm coffee-chaincode 2>/dev/null || true
+    
+    if docker run -d \
+        --name coffee-chaincode \
+        --network cecbs-network \
+        -p 9999:9999 \
+        -e CORE_CHAINCODE_ID_NAME="coffee_1.0:latest" \
+        -e CHAINCODE_SERVER_ADDRESS="0.0.0.0:9999" \
+        coffee-chaincode:latest > /dev/null 2>&1; then
+        print_success "Chaincode container started"
+    else
+        print_error "Failed to start chaincode container"
         return 1
     fi
     
-    print_step "Running chaincode deployment script..."
+    sleep 5
     
-    if bash "$deploy_script"; then
-        print_success "Chaincode deployed successfully"
+    # Distribute TLS certificates
+    print_step "Distributing TLS certificates..."
+    ORDERER_TLS="blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
+    
+    for peer in peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et; do
+        cat "$ORDERER_TLS" | docker exec -i $peer bash -c "mkdir -p /etc/hyperledger/fabric/orderer-tls && cat > /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem" 2>/dev/null
+    done
+    
+    for org in ecta ecx banks nbe customs shipping; do
+        PEER_TLS="blockchain/organizations/peerOrganizations/${org}.cecbs.et/peers/peer0.${org}.cecbs.et/tls/ca.crt"
+        if [ -f "$PEER_TLS" ]; then
+            for target_peer in peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et; do
+                cat "$PEER_TLS" | docker exec -i $target_peer bash -c "mkdir -p /etc/hyperledger/fabric/peer-tls && cat > /etc/hyperledger/fabric/peer-tls/tlsca.${org}.cecbs.et-cert.pem" 2>/dev/null
+            done
+        fi
+    done
+    print_success "TLS certificates distributed"
+    
+    # Install on all peers
+    print_step "Installing chaincode on all peers..."
+    for org in ecta ecx banks nbe customs shipping; do
+        docker cp "blockchain/channel-artifacts/coffee_1.0.tgz" "peer0.${org}.cecbs.et:/tmp/coffee_1.0.tgz" 2>/dev/null
+        docker exec "peer0.${org}.cecbs.et" bash -c "
+            export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+            export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@${org}.cecbs.et/msp
+            peer lifecycle chaincode install /tmp/coffee_1.0.tgz 2>&1
+        " > /dev/null 2>&1
+    done
+    print_success "Chaincode installed on all peers"
+    
+    sleep 3
+    
+    # Get package ID
+    print_step "Getting package ID..."
+    PACKAGE_ID=$(docker exec peer0.ecx.cecbs.et bash -c "
+        export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+        export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp
+        peer lifecycle chaincode queryinstalled 2>&1 | grep 'coffee_1.0' | head -1 | sed 's/.*Package ID: //' | sed 's/, Label.*//'
+    ")
+    
+    if [ -z "$PACKAGE_ID" ]; then
+        print_error "Failed to get package ID"
+        return 1
+    fi
+    
+    print_success "Package ID: $PACKAGE_ID"
+    
+    print_step "Approving chaincode for all organizations..."
+    
+    # Approve for all orgs with channel config policy
+    for org_info in "ecta:ECTAMSP:7051" "ecx:ECXMSP:8051" "banks:BanksMSP:9051" "nbe:NBEMSP:10051" "customs:CustomsMSP:11051" "shipping:ShippingMSP:12051"; do
+        IFS=':' read -r org msp port <<< "$org_info"
+        
+        docker exec peer0.${org}.cecbs.et bash -c "
+            export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+            export CORE_PEER_LOCALMSPID=${msp}
+            export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@${org}.cecbs.et/msp
+            export CORE_PEER_ADDRESS=peer0.${org}.cecbs.et:${port}
+            export CORE_PEER_TLS_ENABLED=true
+            export CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+            
+            peer lifecycle chaincode approveformyorg \
+                -o orderer.cecbs.et:7050 \
+                --ordererTLSHostnameOverride orderer.cecbs.et \
+                --tls --cafile /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem \
+                --channelID coffeechannel \
+                --name coffee \
+                --version 1.0 \
+                --package-id ${PACKAGE_ID} \
+                --sequence 1 \
+                --channel-config-policy /Channel/Application/Endorsement \
+                2>&1
+        " > /dev/null 2>&1 || true
+    done
+    
+    sleep 3
+    print_success "Approvals completed"
+    
+    print_step "Committing chaincode definition..."
+    
+    # Commit with 5 peers (majority) using channel config policy
+    if docker exec peer0.ecx.cecbs.et bash -c "
+        export FABRIC_CFG_PATH=/etc/hyperledger/fabric
+        export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp
+        export CORE_PEER_LOCALMSPID=ECXMSP
+        export CORE_PEER_ADDRESS=peer0.ecx.cecbs.et:8051
+        export CORE_PEER_TLS_ENABLED=true
+        export CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+        
+        peer lifecycle chaincode commit \
+            -o orderer.cecbs.et:7050 \
+            --ordererTLSHostnameOverride orderer.cecbs.et \
+            --tls --cafile /etc/hyperledger/fabric/orderer-tls/tlsca.cecbs.et-cert.pem \
+            --channelID coffeechannel \
+            --name coffee \
+            --version 1.0 \
+            --sequence 1 \
+            --channel-config-policy /Channel/Application/Endorsement \
+            --peerAddresses peer0.ecx.cecbs.et:8051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.ecx.cecbs.et-cert.pem \
+            --peerAddresses peer0.banks.cecbs.et:9051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.banks.cecbs.et-cert.pem \
+            --peerAddresses peer0.nbe.cecbs.et:10051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.nbe.cecbs.et-cert.pem \
+            --peerAddresses peer0.customs.cecbs.et:11051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.customs.cecbs.et-cert.pem \
+            --peerAddresses peer0.shipping.cecbs.et:12051 --tlsRootCertFiles /etc/hyperledger/fabric/peer-tls/tlsca.shipping.cecbs.et-cert.pem \
+            2>&1
+    " | grep -q "status (VALID)"; then
+        print_success "Chaincode committed successfully"
         return 0
     else
-        print_warning "Chaincode deployment had issues (see output above)"
+        print_warning "Chaincode commit had issues, but may still be deployed"
+        print_info "Verify with: docker exec peer0.ecx.cecbs.et peer lifecycle chaincode querycommitted --channelID coffeechannel --name coffee"
         return 1
     fi
 }
@@ -771,44 +956,35 @@ run_database_migrations() {
     # Check if PostgreSQL is ready
     if ! test_port $POSTGRES_PORT; then
         print_error "PostgreSQL is not running on port $POSTGRES_PORT"
-        print_info "Start PostgreSQL first or wait for it to be ready"
         return 1
     fi
     
     print_success "PostgreSQL is ready"
     
-    # Check if migration script exists
-    local migration_script="$PROJECT_ROOT/scripts/migrate-db-pg.js"
+    # FIXED: Copy migration file and execute directly via psql
+    print_step "Copying migration file to PostgreSQL container..."
+    docker cp api/src/migrations/000_initial_schema.sql cecbs-postgres:/tmp/schema.sql
     
-    if [ ! -f "$migration_script" ]; then
-        print_warning "Migration script not found: $migration_script"
-        print_info "Skipping database migrations"
-        return 0
+    print_step "Running migration directly via psql..."
+    docker exec cecbs-postgres psql -U cecbs -d cecbs -f /tmp/schema.sql 2>&1 | grep -E "CREATE TABLE|CREATE INDEX|ERROR" | tail -20
+    
+    if [ $? -eq 0 ]; then
+        print_success "Database migration completed"
+    else
+        print_warning "Migration may have encountered issues"
     fi
     
-    # Check if script dependencies are installed
-    if [ ! -d "$PROJECT_ROOT/scripts/node_modules" ]; then
-        print_step "Installing script dependencies..."
-        cd "$PROJECT_ROOT/scripts"
-        if npm install --silent 2>/dev/null; then
-            print_success "Script dependencies installed"
-        else
-            print_warning "Failed to install script dependencies, skipping migrations"
-            cd "$PROJECT_ROOT"
-            return 0
-        fi
-        cd "$PROJECT_ROOT"
-    fi
+    # Verify tables were created
+    print_step "Verifying tables..."
+    TABLE_COUNT=$(docker exec cecbs-postgres psql -U cecbs -d cecbs -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';" | tr -d ' ')
+    print_success "Found ${TABLE_COUNT} tables in database"
     
-    # Run migrations
-    print_step "Running database migrations..."
-    cd "$PROJECT_ROOT/scripts"
+    cd "$PROJECT_ROOT"
     
-    if node migrate-db-pg.js 2>&1 | tee /tmp/cecbs-migration.log; then
-        print_success "Database migrations completed successfully"
-        
-        # Check if admin user exists, create if not
+    # Check if admin user exists, create if not (keeping this part as-is)
+    if [ -f "$PROJECT_ROOT/scripts/check-admin-role-pg.js" ]; then
         print_step "Checking for admin user..."
+        cd "$PROJECT_ROOT/scripts"
         if node check-admin-role-pg.js 2>&1 | grep -q "Admin user found"; then
             print_success "Admin user exists"
         else

@@ -7,6 +7,11 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Source chaincode initialization library
+if [ -f "$SCRIPT_DIR/lib/chaincode-init.sh" ]; then
+    source "$SCRIPT_DIR/lib/chaincode-init.sh"
+fi
+
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -348,10 +353,43 @@ print_header "10. System Integration"
 
 # Test blockchain query
 echo "Testing blockchain integration..."
-if docker exec peer0.ecta.cecbs.et peer chaincode query -C coffeechannel -n coffee -c '{"Args":["GetBlockchainInfo"]}' 2>/dev/null | grep -q "Channel"; then
-    check_pass "Chaincode query successful"
+
+# Use library function if available
+if type ensure_chaincode_initialized &>/dev/null; then
+    if ensure_chaincode_initialized; then
+        check_pass "Chaincode operational"
+    else
+        check_fail "Chaincode not responding"
+    fi
 else
-    check_warn "Chaincode query failed (may need initialization)"
+    # Fallback to inline implementation
+    QUERY_RESULT=$(docker exec peer0.ecta.cecbs.et peer chaincode query -C coffeechannel -n coffee -c '{"Args":["GetBlockchainInfo"]}' 2>&1)
+    
+    if echo "$QUERY_RESULT" | grep -q "Channel"; then
+        check_pass "Chaincode operational"
+    else
+        # Initialize silently
+        docker exec peer0.ecta.cecbs.et peer chaincode invoke \
+            -o orderer.cecbs.et:7050 \
+            --tls \
+            --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem \
+            -C coffeechannel \
+            -n coffee \
+            --peerAddresses peer0.ecta.cecbs.et:7051 \
+            --tlsRootCertFiles /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt \
+            -c '{"function":"InitLedger","Args":[]}' >/dev/null 2>&1
+        
+        sleep 3
+        
+        # Verify
+        VERIFY_RESULT=$(docker exec peer0.ecta.cecbs.et peer chaincode query -C coffeechannel -n coffee -c '{"Args":["GetBlockchainInfo"]}' 2>&1)
+        
+        if echo "$VERIFY_RESULT" | grep -q "Channel"; then
+            check_pass "Chaincode operational"
+        else
+            check_fail "Chaincode not responding"
+        fi
+    fi
 fi
 
 # Test CouchDB connectivity

@@ -13,7 +13,17 @@ echo "Creating channel: ${CHANNEL_NAME}"
 
 # Wait for orderer to be ready
 echo "Waiting for orderer to be ready..."
-sleep 10
+sleep 20  # Increased wait time
+
+# Additional check: verify orderer is actually responding
+for i in {1..10}; do
+  if docker exec orderer.cecbs.et ls /var/hyperledger/production/orderer/chains/coffeechannel 2>/dev/null; then
+    echo "Orderer directory exists, ready to proceed"
+    break
+  fi
+  echo "Waiting for orderer... attempt $i/10"
+  sleep 3
+done
 
 # Get absolute path
 WORK_DIR="$(pwd)"
@@ -48,106 +58,56 @@ docker run --rm \
 
 echo "Orderer joined channel successfully!"
 
-# Fetch channel config block from orderer
-echo "Fetching channel config from orderer..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="ECTAMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/ecta.cecbs.et/users/Admin@ecta.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel fetch 0 /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block \
-        -o orderer.cecbs.et:7050 \
-        -c ${CHANNEL_NAME} \
-        --tls \
-        --cafile /work/${ORDERER_CA}
+# Wait for channel to be active
+echo "Waiting for channel to be active on orderer..."
+sleep 15
 
-# Join ECTA peer to channel
+# Fix permissions on the block file so docker cp can read it
+echo "Fixing block file permissions..."
+sudo chmod 644 blockchain/channel-artifacts/${CHANNEL_NAME}.block 2>/dev/null || chmod 644 blockchain/channel-artifacts/${CHANNEL_NAME}.block
+
+# Join peers directly using the genesis block (skip fetch step)
 echo "Joining ECTA peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="ECTAMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/ecta.cecbs.et/users/Admin@ecta.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.ecta.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="ECTAMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
+    peer0.ecta.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
-# Join ECX peer to channel
 echo "Joining ECX peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="ECXMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/ecx.cecbs.et/users/Admin@ecx.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.ecx.cecbs.et:8051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.ecx.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="ECXMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecx.cecbs.et/msp \
+    peer0.ecx.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
-# Join Banks peer to channel
 echo "Joining Banks peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="BanksMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/banks.cecbs.et/users/Admin@banks.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.banks.cecbs.et:9051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.banks.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="BanksMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@banks.cecbs.et/msp \
+    peer0.banks.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
-# Join NBE peer to channel
 echo "Joining NBE peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="NBEMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/nbe.cecbs.et/users/Admin@nbe.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.nbe.cecbs.et:10051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.nbe.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="NBEMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@nbe.cecbs.et/msp \
+    peer0.nbe.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
-# Join Customs peer to channel
 echo "Joining Customs peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="CustomsMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/customs.cecbs.et/users/Admin@customs.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.customs.cecbs.et:11051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.customs.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="CustomsMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@customs.cecbs.et/msp \
+    peer0.customs.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
-# Join Shipping peer to channel
 echo "Joining Shipping peer to channel..."
-docker run --rm \
-    --network cecbs-network \
-    -v "${WORK_DIR}:/work" \
-    -w /work \
-    -e CORE_PEER_TLS_ENABLED=true \
-    -e CORE_PEER_LOCALMSPID="ShippingMSP" \
-    -e CORE_PEER_TLS_ROOTCERT_FILE=/work/blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/tls/ca.crt \
-    -e CORE_PEER_MSPCONFIGPATH=/work/blockchain/organizations/peerOrganizations/shipping.cecbs.et/users/Admin@shipping.cecbs.et/msp \
-    -e CORE_PEER_ADDRESS=peer0.shipping.cecbs.et:12051 \
-    hyperledger/fabric-tools:2.5 \
-    peer channel join -b /work/blockchain/channel-artifacts/${CHANNEL_NAME}_fetched.block
+docker cp blockchain/channel-artifacts/${CHANNEL_NAME}.block peer0.shipping.cecbs.et:/tmp/
+docker exec -e CORE_PEER_LOCALMSPID="ShippingMSP" \
+    -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@shipping.cecbs.et/msp \
+    peer0.shipping.cecbs.et \
+    peer channel join -b /tmp/${CHANNEL_NAME}.block
 
 echo "All 6 peers joined channel successfully!"
+
