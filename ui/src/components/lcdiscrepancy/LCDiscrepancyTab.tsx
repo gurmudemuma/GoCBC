@@ -31,7 +31,11 @@ interface Discrepancy {
   txId?: string;
 }
 
-const LCDiscrepancyTab: React.FC = () => {
+interface LCDiscrepancyTabProps {
+  onStatsUpdate?: (stats: { total: number; open: number; resolved: number; resolutionRate: number; avgTime: number }) => void;
+}
+
+const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) => {
   const { showSuccess, showError } = useNotification();
   const [discrepancies, setDiscrepancies] = useState<Discrepancy[]>([]);
   const [filtered, setFiltered] = useState<Discrepancy[]>([]);
@@ -70,6 +74,14 @@ const LCDiscrepancyTab: React.FC = () => {
   };
 
   useEffect(() => { fetchDiscrepancies(); }, []);
+  
+  // Pass stats to parent component for top-level KPIs
+  useEffect(() => {
+    if (onStatsUpdate) {
+      onStatsUpdate(stats);
+    }
+  }, [stats, onStatsUpdate]);
+  
   useEffect(() => {
     let f = [...discrepancies];
     if (statusFilter !== 'ALL') f = f.filter(d => d.status === statusFilter);
@@ -130,13 +142,8 @@ const LCDiscrepancyTab: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Total Discrepancies" value={stats.total} icon={<Assessment />} color={CBE_COLORS.purple} subtitle="All records" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Open Cases" value={stats.open} icon={<Warning />} color={CBE_COLORS.warning} subtitle="Requiring action" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Resolved" value={stats.resolved} icon={<CheckCircle />} color={CBE_COLORS.success} subtitle={`${stats.resolutionRate}% resolution rate`} /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Avg Resolution" value={`${stats.avgTime.toFixed(1)}`} icon={<TrendingUp />} color="#ff9800" subtitle="days to resolve" /></Grid>
-      </Grid>
-
+      {/* KPI cards removed - data now shown in top-level portal KPIs above tabs */}
+      
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Grid container spacing={2} alignItems="center">

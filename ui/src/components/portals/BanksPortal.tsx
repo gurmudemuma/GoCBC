@@ -388,6 +388,13 @@ const BanksPortal: React.FC = () => {
     bankRoles: 0,
     administrators: 0,
   });
+  const [lcDiscrepancyStats, setLcDiscrepancyStats] = useState({
+    total: 0,
+    open: 0,
+    resolved: 0,
+    resolutionRate: 0,
+    avgTime: 0,
+  });
 
   // Search and Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -2605,6 +2612,44 @@ const BanksPortal: React.FC = () => {
                 description: 'Organizations involved in transactions.',
                 clickable: false,
               },
+            ] : activeTab === 9 ? [
+              // Tab 9: LC Discrepancies KPIs
+              { 
+                icon: <Assessment />, 
+                label: 'Total Discrepancies', 
+                value: lcDiscrepancyStats.total, 
+                color: CBE_COLORS.purple,
+                subtitle: 'All Records',
+                description: 'Total LC discrepancies reported.',
+                clickable: false,
+              },
+              { 
+                icon: <Warning />, 
+                label: 'Open Cases', 
+                value: lcDiscrepancyStats.open, 
+                color: '#f57c00',
+                subtitle: 'Requiring Action',
+                description: 'Discrepancies that need attention.',
+                clickable: false,
+              },
+              { 
+                icon: <CheckCircle />, 
+                label: 'Resolved', 
+                value: lcDiscrepancyStats.resolved, 
+                color: '#4caf50',
+                subtitle: `${lcDiscrepancyStats.resolutionRate}% Resolution Rate`,
+                description: 'Successfully resolved discrepancies.',
+                clickable: false,
+              },
+              { 
+                icon: <TrendingUp />, 
+                label: 'Avg Resolution', 
+                value: `${lcDiscrepancyStats.avgTime.toFixed(1)}d`, 
+                color: '#ff9800',
+                subtitle: 'Days to Resolve',
+                description: 'Average time to resolve discrepancies.',
+                clickable: false,
+              },
             ] : activeTab === 5 ? [
               // Tab 5: LC Settlements KPIs
               { 
@@ -3551,7 +3596,7 @@ const BanksPortal: React.FC = () => {
       {/* Tab 9: LC Discrepancies - NEW */}
       {activeTab === 9 && (
         <Box sx={{ mt: 2 }}>
-          <LCDiscrepancyTab />
+          <LCDiscrepancyTab onStatsUpdate={setLcDiscrepancyStats} />
         </Box>
       )}
 
