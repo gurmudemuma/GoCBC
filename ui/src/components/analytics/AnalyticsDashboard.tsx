@@ -76,14 +76,21 @@ const KPICard: React.FC<KPICardProps> = ({ title, value, change, icon, color = '
 
 const COLORS = ['#1976d2', '#dc004e', '#ff9800', '#4caf50', '#9c27b0', '#00bcd4'];
 
-const AnalyticsDashboard: React.FC = () => {
+const AnalyticsDashboard: React.FC<{
+  activeSubTab?: number;
+  onSubTabChange?: (value: number) => void;
+}> = ({ activeSubTab: externalActiveTab, onSubTabChange }) => {
   const [loading, setLoading] = useState(false);
   const [kpis, setKpis] = useState<any>(null);
   const [timeSeriesData, setTimeSeriesData] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState('30days');
   const [selectedMetric, setSelectedMetric] = useState('contracts');
   const [timePeriod, setTimePeriod] = useState<'day' | 'week' | 'month'>('day');
-  const [activeTab, setActiveTab] = useState(0);
+  
+  // Use external activeTab if provided, otherwise use internal state
+  const [internalActiveTab, setInternalActiveTab] = useState(0);
+  const activeTab = externalActiveTab !== undefined ? externalActiveTab : internalActiveTab;
+  const setActiveTab = onSubTabChange || setInternalActiveTab;
 
   useEffect(() => {
     loadDashboardData();
@@ -205,10 +212,7 @@ const AnalyticsDashboard: React.FC = () => {
   return (
     <Box sx={{ p: 3 }}>
       {/* Header Controls */}
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-          Analytics Dashboard
-        </Typography>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
         <Box sx={{ display: 'flex', gap: 2 }}>
           <FormControl size="small" sx={{ minWidth: 150 }}>
             <InputLabel>Date Range</InputLabel>
@@ -255,132 +259,9 @@ const AnalyticsDashboard: React.FC = () => {
         <Tab label="Breakdown" />
       </Tabs>
 
-      {/* Tab 0: Overview - KPI Cards */}
-      {activeTab === 0 && kpis && (
-        <Box>
-          {/* ECTA KPIs */}
-          {kpis.applications && (
-            <>
-              <Typography variant="h6" sx={{ mb: 2, mt: 3 }}>ECTA - Applications & Approvals</Typography>
-              <Grid container spacing={3} sx={{ mb: 4 }}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Total Applications"
-                    value={kpis.applications.total}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#1976d2"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Pending Review"
-                    value={kpis.applications.pending}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#ff9800"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Approved"
-                    value={kpis.applications.approved}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#4caf50"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Avg Processing Days"
-                    value={kpis.applications.avgProcessingDays}
-                    icon={<DateRange sx={{ fontSize: 40 }} />}
-                    color="#9c27b0"
-                  />
-                </Grid>
-              </Grid>
-            </>
-          )}
-
-          {/* Banks KPIs */}
-          {kpis.lcs && (
-            <>
-              <Typography variant="h6" sx={{ mb: 2, mt: 3 }}>Banks - LC & Forex</Typography>
-              <Grid container spacing={3} sx={{ mb: 4 }}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Letters of Credit"
-                    value={kpis.lcs.total}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#1976d2"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="LC Amount (USD)"
-                    value={`$${(kpis.lcs.totalAmount / 1000000).toFixed(1)}M`}
-                    icon={<TrendingUp sx={{ fontSize: 40 }} />}
-                    color="#4caf50"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Forex Allocated"
-                    value={kpis.forex.total}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#ff9800"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Avg Retention"
-                    value={`${kpis.forex.avgRetention}%`}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#9c27b0"
-                  />
-                </Grid>
-              </Grid>
-            </>
-          )}
-
-          {/* NBE KPIs */}
-          {kpis.forexCompliance && (
-            <>
-              <Typography variant="h6" sx={{ mb: 2, mt: 3 }}>NBE - Forex Compliance</Typography>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Total Forex (USD)"
-                    value={`$${(kpis.forexCompliance.totalForex / 1000000).toFixed(1)}M`}
-                    icon={<TrendingUp sx={{ fontSize: 40 }} />}
-                    color="#1976d2"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Retention Rate"
-                    value={`${kpis.forexCompliance.avgRetentionRate}%`}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#9c27b0"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Retained (USD)"
-                    value={`$${(kpis.forexCompliance.totalRetained / 1000000).toFixed(1)}M`}
-                    icon={<TrendingUp sx={{ fontSize: 40 }} />}
-                    color="#ff9800"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <KPICard
-                    title="Compliance Rate"
-                    value={`${kpis.forexCompliance.complianceRate}%`}
-                    icon={<Assessment sx={{ fontSize: 40 }} />}
-                    color="#4caf50"
-                  />
-                </Grid>
-              </Grid>
-            </>
-          )}
-        </Box>
+      {/* Tab 0: Overview - Summary metrics shown in KPI cards above */}
+      {activeTab === 0 && (
+        <Box />
       )}
 
       {/* Tab 1: Trends - Time Series Charts */}

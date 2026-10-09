@@ -1054,7 +1054,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // ✅ NORMALIZE and CALCULATE fields
-    const NBE_EXCHANGE_RATE = 57.5; // ETB per USD (should be dynamic in production)
+    const exchangeRateService = require('../services/exchangeRateService').exchangeRateService;
+    const NBE_EXCHANGE_RATE = await exchangeRateService.getCurrentRate('USD'); // Dynamic rate from NBE
     payments = payments.map((payment: any) => {
       const amount = payment.amount || 0;
       const exchangeRate = payment.exchangeRate || NBE_EXCHANGE_RATE;

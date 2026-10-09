@@ -428,46 +428,6 @@ const RepatriationManagementTab: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      {/* KPI Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Total Repatriations"
-            value={stats.total}
-            icon={<Assessment />}
-            color={NBE_COLORS.bronze}
-            subtitle="All records"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Pending Verification"
-            value={stats.pending}
-            icon={<Schedule />}
-            color="#1976d2"
-            subtitle="Awaiting NBE action"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Compliant"
-            value={stats.compliant}
-            icon={<CheckCircle />}
-            color={NBE_COLORS.success}
-            subtitle={`${stats.complianceRate.toFixed(1)}% compliance rate`}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Overdue"
-            value={stats.overdue}
-            icon={<Warning />}
-            color={NBE_COLORS.error}
-            subtitle="Requires attention"
-          />
-        </Grid>
-      </Grid>
-
       {/* Filters and Actions */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -552,25 +512,6 @@ const RepatriationManagementTab: React.FC = () => {
               </Button>
             </Grid>
           </Grid>
-          
-          {stats.overdue > 0 && (
-            <Box sx={{ mt: 2 }}>
-              <Alert
-                severity="warning"
-                action={
-                  <Button
-                    color="inherit"
-                    size="small"
-                    onClick={() => setCompliancePanelOpen(true)}
-                  >
-                    View Details
-                  </Button>
-                }
-              >
-                {stats.overdue} repatriation(s) are overdue. Compliance action required.
-              </Alert>
-            </Box>
-          )}
         </CardContent>
       </Card>
 

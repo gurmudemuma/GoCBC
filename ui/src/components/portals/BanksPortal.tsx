@@ -3261,12 +3261,6 @@ const BanksPortal: React.FC = () => {
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
             Forex Allocation Management
           </Typography>
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <strong>Forex Allocation Workflow:</strong> LC ISSUED → BANK ALLOCATES FOREX → NBE MONITORS COMPLIANCE<br />
-            Banks allocate forex for issued LCs per NBE policy (40% USD retention, 60% ETB conversion) after LC issuance. NBE monitors compliance.<br />
-            <strong>REQUESTED status:</strong> LC has been issued and is awaiting forex allocation by the bank.
-          </Alert>
-
           {/* Search and Filter Controls */}
           <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
             <TextField

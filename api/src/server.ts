@@ -75,6 +75,7 @@ import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
 import blockchainSignaturesRoutes from './routes/blockchain-signatures';
 import statsRoutes from './routes/stats'; // Dual-source statistics (CouchDB + PostgreSQL)
 import repatriationRoutes from './routes/repatriation'; // Export proceeds repatriation (NBE compliance)
+import exchangeRatesRoutes from './routes/exchange-rates'; // Dynamic exchange rates management
 import inspectionRoutes from './routes/inspection'; // Pre-shipment inspection (SGS/Intertek)
 import bordercrossingRoutes from './routes/bordercrossing'; // Border crossing documentation
 
@@ -261,6 +262,7 @@ class CECBSServer {
 
     // V3.4 HIGH Priority Features - Missing Workflow Steps (October 2026)
     apiV1.use('/repatriation', authMiddleware, repatriationRoutes); // Export proceeds repatriation (NBE 40% retention)
+    apiV1.use('/exchange-rates', authMiddleware, exchangeRatesRoutes); // Dynamic exchange rates management
     apiV1.use('/inspection', authMiddleware, inspectionRoutes); // Pre-shipment inspection (SGS/Intertek)
     apiV1.use('/bordercrossing', authMiddleware, bordercrossingRoutes); // Border crossing documentation
     // Note: LC discrepancy handling added to /banking routes above

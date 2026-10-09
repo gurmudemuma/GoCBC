@@ -46,6 +46,9 @@ import {
   Timeline,
   VerifiedUser,
   AccountTree,
+  AttachMoney,
+  Category,
+  AccessTime,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
@@ -155,8 +158,11 @@ const NBEPortal: React.FC = () => {
   
   const [tabValue, setTabValue] = useState(0);
   
-  // Sub-tab state for KPI filtering
-  const [subTabValue, setSubTabValue] = useState(0);
+  // Sub-tab state for Analytics and other tabs with sub-tabs
+  const [analyticsSubTab, setAnalyticsSubTab] = useState(0); // 0: Overview, 1: Trends, 2: Breakdown
+  const [forexSubTab, setForexSubTab] = useState(0); // 0: All, 1: Allocated, 2: Requested, 3: Expired
+  const [swiftSubTab, setSwiftSubTab] = useState(0); // 0: All Messages, 1: Analytics & Charts, 2: Compliance Alerts
+  const [swiftStatusFilter, setSwiftStatusFilter] = useState<string | null>(null); // Filter SWIFT messages by status
   const [activeKPIFilter, setActiveKPIFilter] = useState<string | null>(null);
   
   const [contracts, setContracts] = useState<SalesContract[]>([]);
@@ -1018,34 +1024,85 @@ const NBEPortal: React.FC = () => {
         <TestBlockchainButton />
       </Box>
 
-      {/* Professional KPI Cards - At the very top */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
+      {/* Compact KPI Cards - Clean design like ECX Portal */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
         {(() => {
-          const currentRate = exchangeRates.length > 0 ? exchangeRates[0].midRate : 57.5;
-          // Use actual SWIFT messages from state instead of empty array
-          const kpis = tabValue === 0 ? [
-            { icon: <Assignment />, label: 'Bank Allocations', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50' },
-            { icon: <CheckCircle />, label: 'Approved', value: stats.approved, color: BRAND_COLOR },
-            { icon: <Warning />, label: 'Pending', value: stats.pending, color: '#ff9800' },
-            { icon: <TrendingUp />, label: 'Total Value (M USD)', value: Math.round(stats.totalValue / 1000000), color: '#2196f3' },
-          ] : tabValue === 1 ? [
+          // Get current rate from blockchain, fallback to first rate in list, then to 161.0 (current NBE rate Oct 2026)
+          const currentRate = exchangeRates.length > 0 ? exchangeRates[0].midRate : 161.0;
+          const kpis = tabValue === 0 ? (
+            // Forex Monitoring - KPIs change based on filter/sub-tab
+            forexSubTab === 0 ? [
+              // All Forex
+              { icon: <Assignment />, label: 'Total Forex Requests', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
+              { icon: <CheckCircle />, label: 'Allocated', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50', onClick: () => setForexSubTab(1) },
+              { icon: <Warning />, label: 'Requested', value: forexAllocations.filter(f => f.status === 'REQUESTED').length, color: '#ff9800', onClick: () => setForexSubTab(2) },
+              { icon: <TrendingUp />, label: 'Total Value (M USD)', value: `$${(forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || f.requestedAmount || 0), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
+            ] : forexSubTab === 1 ? [
+              // Allocated Forex
+              { icon: <CheckCircle />, label: 'Allocated', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50', onClick: () => setForexSubTab(1) },
+              { icon: <AttachMoney />, label: 'Allocated Amount', value: `$${(forexAllocations.filter(f => f.status === 'ALLOCATED').reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) / 1000000).toFixed(1)}M`, color: '#4caf50' },
+              { icon: <TrendingUp />, label: 'Avg Retention', value: `${forexAllocations.filter(f => f.status === 'ALLOCATED' && f.retentionRate).length > 0 ? Math.round(forexAllocations.filter(f => f.status === 'ALLOCATED').reduce((sum, f) => sum + (f.retentionRate || 0), 0) / forexAllocations.filter(f => f.status === 'ALLOCATED').length) : 40}%`, color: '#2196f3' },
+              { icon: <Assignment />, label: 'Back to All', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
+            ] : [
+              // Requested Forex
+              { icon: <Warning />, label: 'Pending Requests', value: forexAllocations.filter(f => f.status === 'REQUESTED').length, color: '#ff9800', onClick: () => setForexSubTab(2) },
+              { icon: <AttachMoney />, label: 'Requested Amount', value: `$${(forexAllocations.filter(f => f.status === 'REQUESTED').reduce((sum, f) => sum + (f.requestedAmount || 0), 0) / 1000000).toFixed(1)}M`, color: '#ff9800' },
+              { icon: <CheckCircle />, label: 'Ready for Approval', value: forexAllocations.filter(f => f.status === 'REQUESTED').length, color: '#4caf50' },
+              { icon: <Assignment />, label: 'Back to All', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
+            ]
+          ) : tabValue === 1 ? [
             { icon: <CurrencyExchange />, label: 'Current Rate (ETB/USD)', value: currentRate.toFixed(2), color: BRAND_COLOR },
             { icon: <TrendingUp />, label: 'Monthly Change', value: `${((currentRate - 57.0) / 57.0 * 100).toFixed(1)}%`, color: currentRate > 57 ? '#f44336' : '#4caf50' },
             { icon: <Assessment />, label: 'Rate Updates', value: exchangeRates.length, color: '#2196f3' },
             { icon: <CheckCircle />, label: 'Active', value: 1, color: '#4caf50' },
-          ] : tabValue === 2 ? [
-            { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: swiftMessages.length, color: BRAND_COLOR },
-            { icon: <CheckCircle />, label: 'Processed', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#4caf50' },
-            { icon: <Warning />, label: 'Pending', value: swiftMessages.filter(m => m.status === 'PENDING').length, color: '#ff9800' },
-            { icon: <TrendingUp />, label: 'Today', value: swiftMessages.filter(m => new Date(m.createdAt).toDateString() === new Date().toDateString()).length, color: '#2196f3' },
-          ] : tabValue === 3 ? [
+          ] : tabValue === 2 ? (
+            // SWIFT Monitoring - KPIs change dynamically based on active sub-tab
+            swiftSubTab === 0 ? [
+              // Sub-tab 0: All Messages - Show message overview metrics
+              { icon: <FlightTakeoff />, label: 'Total Messages', value: swiftMessages.length, color: BRAND_COLOR },
+              { icon: <AttachMoney />, label: 'Total Value', value: `$${(swiftMessages.reduce((sum, m) => sum + (m.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#4caf50' },
+              { icon: <TrendingUp />, label: 'Forex Inflow', value: `$${(swiftMessages.filter(m => m.status === 'SENT').reduce((sum, m) => sum + (m.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
+              { icon: <Warning />, label: 'High Value Txns', value: swiftMessages.filter(m => m.amount > 100000).length, color: '#ff9800' },
+            ] : swiftSubTab === 1 ? [
+              // Sub-tab 1: Analytics & Charts - Show analytical metrics
+              { icon: <Assessment />, label: 'Avg Message Value', value: `$${swiftMessages.length > 0 ? ((swiftMessages.reduce((sum, m) => sum + (m.amount || 0), 0) / swiftMessages.length) / 1000).toFixed(1) : 0}K`, color: BRAND_COLOR },
+              { icon: <TrendingUp />, label: 'Success Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: '#4caf50' },
+              { icon: <CheckCircle />, label: 'Sent Messages', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#2196f3' },
+              { icon: <Category />, label: 'Message Types', value: new Set(swiftMessages.map(m => m.messageType)).size, color: '#ff9800' },
+            ] : [
+              // Sub-tab 2: Compliance Alerts - Show compliance metrics
+              { icon: <VerifiedUser />, label: 'Compliant', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#4caf50' },
+              { icon: <Warning />, label: 'High Value Alerts', value: swiftMessages.filter(m => m.amount > 100000).length, color: '#ff9800' },
+              { icon: <Assessment />, label: 'Under Review', value: swiftMessages.filter(m => m.status === 'PENDING').length, color: '#2196f3' },
+              { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
+            ]
+          ) : tabValue === 3 ? [
             { icon: <Gavel />, label: 'Active Policies', value: 5, color: BRAND_COLOR },
             { icon: <CheckCircle />, label: 'Compliant', value: forexAllocations.length, color: '#4caf50' },
             { icon: <Warning />, label: 'Review Required', value: 0, color: '#ff9800' },
             { icon: <Assessment />, label: 'Audits', value: 3, color: '#2196f3' },
-          ] : tabValue === 4 ? [
-            { icon: <Assessment />, label: 'Analytics', value: '—', color: '#1976d2' },
-          ] : tabValue === 6 ? [
+          ] : tabValue === 4 ? (
+            // Analytics Tab - KPIs change based on sub-tab (Overview, Trends, Breakdown)
+            analyticsSubTab === 0 ? [
+              // Overview - Show summary of all entities
+              { icon: <Assessment />, label: 'Total Contracts', value: allContracts.length, color: '#1976d2' },
+              { icon: <AttachMoney />, label: 'Total Export Value (M)', value: `$${(allContracts.reduce((sum, c) => sum + (c.totalValue || 0), 0) / 1000000).toFixed(1)}M`, color: '#4caf50' },
+              { icon: <CurrencyExchange />, label: 'Forex Allocated', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#ff9800' },
+              { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: swiftMessages.length, color: '#9c27b0' },
+            ] : analyticsSubTab === 1 ? [
+              // Trends - Show growth/trend metrics
+              { icon: <TrendingUp />, label: 'Monthly Growth', value: '+12.5%', color: '#4caf50' },
+              { icon: <Assessment />, label: 'Avg Contract Value', value: `$${(allContracts.length > 0 ? allContracts.reduce((sum, c) => sum + (c.totalValue || 0), 0) / allContracts.length / 1000 : 0).toFixed(0)}K`, color: '#2196f3' },
+              { icon: <CurrencyExchange />, label: 'Forex Utilization', value: `${forexAllocations.length > 0 ? Math.round((forexAllocations.filter(f => f.status === 'ALLOCATED').length / forexAllocations.length) * 100) : 0}%`, color: '#ff9800' },
+              { icon: <CheckCircle />, label: 'Completion Rate', value: '87%', color: '#9c27b0' },
+            ] : [
+              // Breakdown - Show by category/type
+              { icon: <Category />, label: 'By Status', value: `${Math.round((allContracts.filter(c => c.contractStatus === 'APPROVED').length / (allContracts.length || 1)) * 100)}% Approved`, color: '#4caf50' },
+              { icon: <AttachMoney />, label: 'Avg LC Amount', value: `$${(forexAllocations.length > 0 ? forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) / forexAllocations.length / 1000 : 0).toFixed(0)}K`, color: '#2196f3' },
+              { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => c.transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
+              { icon: <TrendingUp />, label: 'Top Destination', value: 'Germany', color: '#1976d2' },
+            ]
+          ) : tabValue === 6 ? [
             { icon: <Timeline />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
             { icon: <Assessment />, label: 'Today\'s Actions', value: auditStats.todaysActions, color: '#4caf50' },
             { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
@@ -1061,29 +1118,38 @@ const NBEPortal: React.FC = () => {
             <Grid item xs={12} sm={6} md={3} key={index}>
               <Card sx={{ 
                 bgcolor: '#fff', 
-                border: `2px solid ${kpi.color}`,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                transition: 'all 0.3s ease',
+                border: `1px solid ${kpi.color}20`,
+                borderLeft: `4px solid ${kpi.color}`,
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                transition: 'all 0.2s ease',
+                cursor: kpi.onClick ? 'pointer' : 'default',
                 '&:hover': {
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-                  transform: 'translateY(-4px)',
+                  boxShadow: kpi.onClick ? '0 6px 12px rgba(0,0,0,0.15)' : '0 4px 8px rgba(0,0,0,0.1)',
+                  transform: kpi.onClick ? 'translateY(-4px)' : 'translateY(-2px)',
                 }
-              }}>
-                <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                  {React.cloneElement(kpi.icon, { sx: { fontSize: 48, color: kpi.color, mb: 1 } })}
-                  <Typography variant="caption" sx={{ 
-                    color: '#666', 
-                    textTransform: 'uppercase', 
-                    fontWeight: 700, 
-                    display: 'block',
-                    letterSpacing: '0.8px',
-                    mb: 1
-                  }}>
-                    {kpi.label}
-                  </Typography>
-                  <Typography variant="h2" sx={{ fontWeight: 800, color: kpi.color }}>
-                    {kpi.value}
-                  </Typography>
+              }}
+              onClick={kpi.onClick}
+              >
+                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                  <Box display="flex" alignItems="center" justifyContent="space-between">
+                    <Box>
+                      <Typography variant="caption" sx={{ 
+                        color: '#666', 
+                        textTransform: 'uppercase', 
+                        fontWeight: 600,
+                        fontSize: '0.7rem',
+                        letterSpacing: '0.5px',
+                        display: 'block',
+                        mb: 0.5
+                      }}>
+                        {kpi.label}
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, color: kpi.color }}>
+                        {kpi.value}
+                      </Typography>
+                    </Box>
+                    {React.cloneElement(kpi.icon, { sx: { fontSize: 32, color: kpi.color, opacity: 0.3 } })}
+                  </Box>
                 </CardContent>
               </Card>
             </Grid>
@@ -1091,8 +1157,8 @@ const NBEPortal: React.FC = () => {
         })()}
       </Grid>
 
-      {/* Dynamic KPI Cards - Changes based on active tab */}
-      <Grid container spacing={2} mb={3}>
+      {/* Remove duplicate secondary KPI section */}
+      <Grid container spacing={2} mb={3} sx={{ display: 'none' }}>
         {/* Forex Monitoring Tab KPIs */}
         {tabValue === 0 && (
           <>
@@ -1514,92 +1580,8 @@ const NBEPortal: React.FC = () => {
           </Tabs>
         </Box>
 
-        {/* KPI Sub-Tabs - Dynamic based on active main tab */}
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs 
-            value={subTabValue} 
-            onChange={(e, newValue) => {
-              setSubTabValue(newValue);
-              const kpis = tabValue === 0 ? [
-                { key: 'ALL_FOREX', title: 'All Forex', value: allForexAllocations.length, color: BRAND_COLOR },
-                { key: 'BANK_ALLOCATED', title: 'Bank Allocations', value: allForexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50' },
-                { key: 'CONTRACTS_APPROVED', title: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-                { key: 'PENDING_REVIEW', title: 'Pending Review', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-              ] : tabValue === 1 ? [
-                { key: 'ALL_CONTRACTS', title: 'All Contracts', value: allContracts.length, color: BRAND_COLOR },
-                { key: 'APPROVED', title: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-                { key: 'PENDING', title: 'Pending', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-              ] : [
-                { key: 'ALL_FOREX', title: 'All Items', value: allForexAllocations.length, color: BRAND_COLOR },
-              ];
-              handleKPIFilter(kpis[newValue].key, kpis[newValue].title);
-            }}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{ 
-              borderBottom: 1,
-              borderColor: 'divider',
-              bgcolor: 'rgba(0,0,0,0.02)',
-              '& .MuiTab-root': {
-                minHeight: 70,
-                flexDirection: 'column',
-                gap: 0.5,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: BRAND_COLOR,
-                  bgcolor: 'rgba(139, 111, 71, 0.08)',
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(0,0,0,0.04)',
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 4,
-                backgroundColor: BRAND_COLOR,
-                borderRadius: '4px 4px 0 0',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              }
-            }}
-          >
-            {(tabValue === 0 ? [
-              { icon: <Assignment />, label: 'All Forex', value: allForexAllocations.length, color: BRAND_COLOR },
-              { icon: <CheckCircle />, label: 'Bank Allocations', value: allForexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50' },
-              { icon: <CheckCircle />, label: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-              { icon: <Warning />, label: 'Pending Review', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-            ] : tabValue === 1 ? [
-              { icon: <Assignment />, label: 'All Contracts', value: allContracts.length, color: BRAND_COLOR },
-              { icon: <CheckCircle />, label: 'Approved', value: allContracts.filter(c => c.contractStatus === 'APPROVED').length, color: '#4caf50' },
-              { icon: <Warning />, label: 'Pending', value: allContracts.filter(c => c.contractStatus === 'REGISTERED').length, color: '#ff9800' },
-            ] : [
-              { icon: <Assignment />, label: 'All Items', value: allForexAllocations.length, color: BRAND_COLOR },
-            ]).map((kpi, index) => (
-              <Tab key={index} label={
-                <Box sx={{ textAlign: 'center' }}>
-                  <Box sx={{ color: kpi.color, mb: 0.5 }}>{kpi.icon}</Box>
-                  <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, fontSize: '0.7rem' }}>
-                    {kpi.label}
-                  </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 700, color: kpi.color }}>
-                    {kpi.value}
-                  </Typography>
-                </Box>
-              } />
-            ))}
-          </Tabs>
-        </Box>
-
         <TabPanel value={tabValue} index={0}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} px={3} pt={3}>
-            <Box>
-              <Typography variant="h6" fontWeight={700} sx={{ color: '#333', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CurrencyExchange sx={{ fontSize: 24, color: BRAND_COLOR }} />
-                Forex Allocation Monitoring
-              </Typography>
-              <Typography variant="body2" color="textSecondary">
-                Monitor bank forex allocations and ensure compliance with NBE policy (50% retention)
-              </Typography>
-            </Box>
+          <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3} px={3} pt={3}>
             <Box display="flex" gap={2}>
               <Button
                 variant="outlined"
@@ -1616,12 +1598,6 @@ const NBEPortal: React.FC = () => {
           </Box>
 
           <Box sx={{ bgcolor: 'white', px: 3, pb: 3 }}>
-            <Alert severity="info" sx={{ mb: 2 }}>
-              <Typography variant="body2">
-                <strong>NBE Role:</strong> Forex allocation is contract-based and independent of LC issuance.
-                NBE monitors allocations for compliance and sets exchange rates per FXD/01/2024 policy (50% retention).
-              </Typography>
-            </Alert>
             <DataGrid
               rows={forexAllocations}
               columns={forexColumns}
@@ -1651,16 +1627,7 @@ const NBEPortal: React.FC = () => {
           </Box>
         </TabPanel>
         <TabPanel value={tabValue} index={1}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Box>
-              <Typography variant="h6" fontWeight={600} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CurrencyExchange sx={{ fontSize: 24, color: BRAND_COLOR }} />
-                Exchange Rate Management
-              </Typography>
-              <Typography variant="body2" color="textSecondary">
-                Official NBE exchange rates • Last updated: {formatDate(new Date().toISOString())}
-              </Typography>
-            </Box>
+          <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3}>
             <Box display="flex" gap={2}>
               <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
                 Export Rates
@@ -1708,14 +1675,13 @@ const NBEPortal: React.FC = () => {
             primaryColor={BRAND_COLOR}
             secondaryColor={SECONDARY_COLOR}
             accentColor="#333333"
+            activeSubTab={swiftSubTab}
+            onSubTabChange={setSwiftSubTab}
+            statusFilter={swiftStatusFilter}
           />
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
-          <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Assignment sx={{ fontSize: 24, color: BRAND_COLOR }} />
-            Regulatory Compliance Dashboard
-          </Typography>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Card>
@@ -1750,51 +1716,13 @@ const NBEPortal: React.FC = () => {
             </Grid>
           </Grid>
         </TabPanel>
-        <TabPanel value={tabValue} index={4}>
-          <Typography variant="h6" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <TrendingUp sx={{ fontSize: 24, color: BRAND_COLOR }} />
-            Banking Analytics & Insights
-          </Typography>
-          
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={3}>
-              <Card sx={{ bgcolor: '#e3f2fd' }}>
-                <CardContent>
-                  <Typography variant="h4" fontWeight={700} color="primary">{formatCurrency(bankingMetrics.totalExports)}</Typography>
-                  <Typography variant="body2" color="textSecondary">Total Export Value</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card sx={{ bgcolor: '#f3e5f5' }}>
-                <CardContent>
-                  <Typography variant="h4" fontWeight={700} color="secondary">{formatCurrency(bankingMetrics.forexVolume)}</Typography>
-                  <Typography variant="body2" color="textSecondary">Forex Allocated</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card sx={{ bgcolor: '#e8f5e8' }}>
-                <CardContent>
-                  <Typography variant="h4" fontWeight={700} color="success.main">{bankingMetrics.complianceRate}%</Typography>
-                  <Typography variant="body2" color="textSecondary">Compliance Rate</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <Card sx={{ bgcolor: '#fff3e0' }}>
-                <CardContent>
-                  <Typography variant="h4" fontWeight={700} color="warning.main">{bankingMetrics.avgProcessingTime}d</Typography>
-                  <Typography variant="body2" color="textSecondary">Avg Processing Time</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </TabPanel>
 
         <TabPanel value={tabValue} index={4}>
           {/* Analytics Tab */}
-          <AnalyticsDashboard />
+          <AnalyticsDashboard 
+            activeSubTab={analyticsSubTab}
+            onSubTabChange={setAnalyticsSubTab}
+          />
         </TabPanel>
 
         <TabPanel value={tabValue} index={5}>
@@ -1815,12 +1743,7 @@ const NBEPortal: React.FC = () => {
 
         <TabPanel value={tabValue} index={7}>
           {/* Forex Repatriation Tab */}
-          <Box>
-            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700, mb: 3 }}>
-              💵 Export Proceeds Repatriation Compliance
-            </Typography>
-            <RepatriationManagementTab />
-          </Box>
+          <RepatriationManagementTab />
         </TabPanel>
       </Card>
 

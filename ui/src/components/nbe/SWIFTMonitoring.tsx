@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  Card,
+  Card as AntCard,
   Row,
   Col,
   Statistic,
@@ -13,18 +13,25 @@ import {
   Space,
   Select,
   DatePicker,
-  Alert,
-  Tabs,
+  Alert as AntAlert,
   Progress,
   List,
   Badge,
-  Tooltip,
+  Tooltip as AntTooltip,
   Modal,
   Form,
   Input,
   notification,
   Descriptions,
 } from 'antd';
+import {
+  Box,
+  Card,
+  CardContent,
+  Typography,
+  Grid,
+  Alert,
+} from '@mui/material';
 import {
   DollarOutlined,
   RiseOutlined,
@@ -61,7 +68,6 @@ import {
 
 const { RangePicker } = DatePicker;
 const { Option } = Select;
-const { TabPane } = Tabs;
 
 interface SWIFTMessage {
   messageId: string;
@@ -101,12 +107,16 @@ export interface SWIFTMonitoringProps {
   primaryColor?: string;
   secondaryColor?: string;
   accentColor?: string;
+  activeSubTab?: number;
+  statusFilter?: string | null; // Filter by status: 'SENT', 'PENDING', 'FAILED', etc.
 }
 
 const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({ 
   primaryColor = '#9b30b7',
   secondaryColor = '#FFD700',
-  accentColor = '#000000'
+  accentColor = '#000000',
+  activeSubTab = 0,
+  statusFilter = null,
 }) => {
   // Dynamic color palette based on props
   const CHART_COLORS = [primaryColor, secondaryColor, '#00C49F', '#FF8042', accentColor];
@@ -364,13 +374,8 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
 
   return (
     <div style={{ padding: '24px' }}>
-      <Card
-        title={
-          <Space>
-            <SafetyOutlined />
-            <span>SWIFT Message Monitoring & Compliance</span>
-          </Space>
-        }
+      <AntCard
+        title={null}
         extra={
           <Space>
             <RangePicker
@@ -386,134 +391,27 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
           </Space>
         }
       >
-        {/* Compliance Alerts */}
-        {alerts.length > 0 && (
-          <Alert
-            message={`${alerts.length} Compliance Alert${alerts.length > 1 ? 's' : ''}`}
-            description={
-              <List
-                size="small"
-                dataSource={alerts.slice(0, 3)}
-                renderItem={(alert) => (
-                  <List.Item>
-                    <Badge
-                      status={alert.severity === 'HIGH' ? 'error' : 'warning'}
-                      text={alert.description}
-                    />
-                  </List.Item>
-                )}
-              />
-            }
-            type="warning"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
-        {/* Key Statistics */}
-        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
-              <Statistic
-                title="Total Messages"
-                value={stats?.totalMessages || 0}
-                prefix={<BankOutlined />}
-                valueStyle={{ color: primaryColor }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
-              <Statistic
-                title="Total Value"
-                value={stats?.totalValue || 0}
-                precision={2}
-                prefix={<DollarOutlined />}
-                suffix="USD"
-                valueStyle={{ color: primaryColor }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
-              <Statistic
-                title="Forex Inflow"
-                value={stats?.forexInflow || 0}
-                precision={2}
-                prefix={<RiseOutlined />}
-                suffix="USD"
-                valueStyle={{ color: secondaryColor }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
-              <Statistic
-                title="High Value Txns"
-                value={stats?.highValueTransactions || 0}
-                prefix={<WarningOutlined />}
-                valueStyle={{ color: secondaryColor }}
-                suffix={
-                  stats?.pendingApproval ? (
-                    <Tooltip title="Pending approval">
-                      <Badge count={stats.pendingApproval} />
-                    </Tooltip>
-                  ) : undefined
-                }
-              />
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Forex Retention */}
-        <Row gutter={16} style={{ marginBottom: 24 }}>
-          <Col span={24}>
-            <Card size="small" title="Forex Retention Compliance">
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Statistic
-                    title="100% Retention Policy"
-                    value={stats?.forexRetention || 0}
-                    precision={2}
-                    prefix={<SafetyOutlined />}
-                    suffix="USD"
-                  />
-                </Col>
-                <Col span={12}>
-                  <Progress
-                    percent={100}
-                    status="success"
-                    format={() => '100% Compliance'}
-                  />
-                  <div style={{ marginTop: 8, fontSize: '12px', color: '#999' }}>
-                    All coffee export proceeds retained per NBE directive FXD/01/2024
-                  </div>
-                </Col>
-              </Row>
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Charts */}
-        <Tabs defaultActiveKey="messages">
-          <TabPane tab="All Messages" key="messages">
-            <Table
+        {/* Content based on active sub-tab */}
+        <div style={{ display: activeSubTab === 0 ? 'block' : 'none' }}>
+          {/* All Messages Tab */}
+          <Table
               columns={columns}
-              dataSource={messages}
+              dataSource={statusFilter ? messages.filter(m => m.status === statusFilter) : messages}
               rowKey="messageId"
               loading={loading}
               pagination={{
                 pageSize: 20,
                 showSizeChanger: true,
-                showTotal: (total) => `Total ${total} messages`,
+                showTotal: (total) => `Total ${total} messages${statusFilter ? ` (filtered by ${statusFilter})` : ''}`,
               }}
             />
-          </TabPane>
+        </div>
 
-          <TabPane tab="Analytics" key="analytics">
-            <Row gutter={16}>
+        <div style={{ display: activeSubTab === 1 ? 'block' : 'none' }}>
+          {/* Analytics Tab */}
+          <Row gutter={16}>
               <Col span={12}>
-                <Card title="Messages by Type" size="small">
+                <AntCard title="Messages by Type" size="small">
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
                       <Pie
@@ -533,10 +431,10 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
                       <RechartsTooltip />
                     </PieChart>
                   </ResponsiveContainer>
-                </Card>
+                </AntCard>
               </Col>
               <Col span={12}>
-                <Card title="Messages by Status" size="small">
+                <AntCard title="Messages by Status" size="small">
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={getStatusData()}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -547,13 +445,14 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
                       <Bar dataKey="value" fill={primaryColor} />
                     </BarChart>
                   </ResponsiveContainer>
-                </Card>
+                </AntCard>
               </Col>
             </Row>
-          </TabPane>
+        </div>
 
-          <TabPane tab="Compliance" key="compliance">
-            <List
+        <div style={{ display: activeSubTab === 2 ? 'block' : 'none' }}>
+          {/* Compliance Tab */}
+          <List
               dataSource={alerts}
               renderItem={(alert) => (
                 <List.Item
@@ -576,9 +475,8 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
                 </List.Item>
               )}
             />
-          </TabPane>
-        </Tabs>
-      </Card>
+        </div>
+      </AntCard>
 
       {/* Approval Modal */}
       <Modal

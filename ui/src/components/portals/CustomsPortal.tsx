@@ -2053,17 +2053,6 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Grid>
         ))}
       </Grid>
-      {/* Workflow Progress Alert */}
-      <Alert severity="info" sx={{ mb: 2 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Typography variant="body2">
-            <strong>Customs Workflow:</strong> Click KPI cards above or tabs below to navigate through workflow stages
-          </Typography>
-        </Box>
-      </Alert>
-
-
-
       {/* Tabs - Customs Workflow (Banks/ECTA Portal Style) */}
       <Paper sx={{ 
         mb: 3, 

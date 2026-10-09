@@ -2347,11 +2347,6 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="h6" gutterBottom>
             Sales Contracts - Export Compliance Approval
           </Typography>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            <strong>ECTA Role:</strong> Review and approve sales contracts for export compliance.  
-            Approved contracts can proceed to banks for LC issuance. Forex is allocated separately per NBE policy (50% retention).
-          </Alert>
-          
           {contracts.filter(c => {
             if (!contractStatusFilter) return true; // Show all when no filter
             // Check both status and contractStatus fields
