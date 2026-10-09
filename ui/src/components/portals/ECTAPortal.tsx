@@ -40,6 +40,7 @@ import {
   ListItemIcon,
   ListItemText,
   MenuItem,
+  Stack,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
@@ -68,6 +69,8 @@ import {
   Pending,
   Assessment,
   People,
+  InsertDriveFile,
+  WarningAmber,
 } from '@mui/icons-material';
 import AuditTrailViewer from './AuditTrailViewer';
 import AuditTrailTable from './AuditTrailTable';
@@ -213,6 +216,8 @@ const ECTAPortal: React.FC = () => {
   const [selectedApplication, setSelectedApplication] = useState<ExporterApplication | null>(null);
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [approvalData, setApprovalData] = useState({
     exporterId: '',
     ectaLicenseNumber: '',
@@ -1007,6 +1012,7 @@ Contact system administrator if the issue persists.`,
       
       if (response.data?.success) {
         setRejectDialogOpen(false);
+        setRejectConfirmOpen(false);
         
         // Show detailed notification
         setNotificationContent({
@@ -3150,153 +3156,214 @@ The exporter can reapply once all requirements are met.`,
 
       {/* Application Details Dialog */}
       <Dialog 
-        open={!!selectedApplication && !approveDialogOpen && !rejectDialogOpen} 
+        open={!!selectedApplication && !approveDialogOpen && !rejectDialogOpen && !approveConfirmOpen && !rejectConfirmOpen} 
         onClose={() => setSelectedApplication(null)} 
         maxWidth="md" 
         fullWidth
       >
-        <DialogTitle>Application Details</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={{ 
+          borderBottom: '1px solid #e0e0e0',
+          background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
+          color: 'white',
+          py: 2
+        }}>
+          <Typography variant="h6" fontWeight={700}>Application Details</Typography>
           {selectedApplication && (
-            <Grid container spacing={3}>
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom>Company Information</Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Application ID:</Typography>
-                <Typography variant="body1">{selectedApplication.application_id}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Company Name:</Typography>
-                <Typography variant="body1">{selectedApplication.company_name}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">TIN Number:</Typography>
-                <Typography variant="body1">{selectedApplication.tin_number}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Business License:</Typography>
-                <Typography variant="body1">{selectedApplication.business_license_number}</Typography>
-              </Grid>
-              
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Requirements</Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Capital:</Typography>
-                <Typography variant="body1">{formatCurrency(parseFloat(selectedApplication.capital_requirement), 'ETB')}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Professional Taster:</Typography>
-                <Typography variant="body1">{selectedApplication.professional_taster}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Taster Certificate:</Typography>
-                <Typography variant="body1">{selectedApplication.taster_certificate}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Laboratory:</Typography>
-                <Typography variant="body1">{selectedApplication.laboratory_facility === 'yes' ? 'Yes' : 'No'}</Typography>
-              </Grid>
-              
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Contact Details</Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Contact Person:</Typography>
-                <Typography variant="body1">{selectedApplication.contact_person}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Email:</Typography>
-                <Typography variant="body1">{selectedApplication.email}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">Phone:</Typography>
-                <Typography variant="body1">{selectedApplication.phone}</Typography>
-              </Grid>
-              <Grid item xs={6}>
-                <Typography variant="body2" color="textSecondary">City:</Typography>
-                <Typography variant="body1">{selectedApplication.city}</Typography>
-              </Grid>
-              <Grid item xs={12}>
-                <Typography variant="body2" color="textSecondary">Address:</Typography>
-                <Typography variant="body1">{selectedApplication.address}</Typography>
-              </Grid>
-              {selectedApplication.comments && (
-                <Grid item xs={12}>
-                  <Typography variant="body2" color="textSecondary">Comments:</Typography>
-                  <Typography variant="body1">{selectedApplication.comments}</Typography>
-                </Grid>
-              )}
+            <Typography variant="caption" sx={{ opacity: 0.9 }}>
+              {selectedApplication.application_id} — {selectedApplication.company_name}
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent sx={{ p: 3, bgcolor: '#f8f9fa' }}>
+          {selectedApplication && (
+            <Stack spacing={2.5}>
 
-              {/* Uploaded Documents Section */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Uploaded Documents</Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-              <Grid item xs={12}>
-                {/* Document Management Panel for Application Review */}
-                <DocumentManagementPanel
-                  entityType="EXPORTER_APPLICATION"
-                  entityId={selectedApplication.application_id}
-                  title="Application Documents"
-                  allowUpload={false}
-                  allowSign={true}
-                  allowedSignatureTypes={['VERIFY', 'APPROVE', 'REJECT']}
-                  defaultSignatureType="VERIFY"
-                  showSignatureTracker={true}
-                  requiredDocuments={[
-                    'TRADE_LICENSE',
-                    'TAX_CLEARANCE',
-                    'BUSINESS_REGISTRATION',
-                    'ECTA_MEMBERSHIP_CERTIFICATE'
-                  ]}
-                  onDocumentSigned={(docId, data) => {
-                    console.log('Application document signed:', docId, data);
-                    // Reload application data after signature
-                    loadData();
-                  }}
-                />
-              </Grid>
-
-              {/* Blockchain Verification */}
-              <Grid item xs={12}>
-                <Box sx={{ mt: 2 }}>
-                  <BlockchainSignatureVerification
-                    entityType="EXPORTER_APPLICATION"
-                    entityId={selectedApplication.application_id}
-                  />
+              {/* Company Information */}
+              <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #e0e0e0' }}>
+                <Box sx={{ px: 2.5, py: 1.5, borderLeft: '4px solid #9b30b7', bgcolor: alpha('#9b30b7', 0.05), display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography fontWeight={700} color="#9b30b7">Company Information</Typography>
                 </Box>
-              </Grid>
-            </Grid>
+                <Box sx={{ p: 2.5 }}>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Application ID</Typography><Typography variant="body2" fontWeight={600}>{selectedApplication.application_id}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Company Name</Typography><Typography variant="body2" fontWeight={600}>{selectedApplication.company_name}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">TIN Number</Typography><Typography variant="body2">{selectedApplication.tin_number}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Business License</Typography><Typography variant="body2">{selectedApplication.business_license_number}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Registration Date</Typography><Typography variant="body2">{selectedApplication.registration_date ? new Date(selectedApplication.registration_date).toLocaleDateString() : 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Exporter Type</Typography><Typography variant="body2">{selectedApplication.exporter_type || 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Capital</Typography><Typography variant="body2">{formatCurrency(parseFloat(selectedApplication.capital_requirement), 'ETB')}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Region</Typography><Typography variant="body2">{selectedApplication.region || 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{selectedApplication.city}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Address</Typography><Typography variant="body2">{selectedApplication.address}</Typography></Grid>
+                  </Grid>
+                </Box>
+              </Paper>
+
+              {/* Requirements & Certification */}
+              <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #e0e0e0' }}>
+                <Box sx={{ px: 2.5, py: 1.5, borderLeft: '4px solid #2e7d32', bgcolor: alpha('#2e7d32', 0.05), display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography fontWeight={700} color="#2e7d32">Requirements &amp; Certification</Typography>
+                </Box>
+                <Box sx={{ p: 2.5 }}>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Professional Taster</Typography><Typography variant="body2">{selectedApplication.professional_taster}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Taster Certificate</Typography><Typography variant="body2">{selectedApplication.taster_certificate}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Laboratory Facility</Typography><Typography variant="body2">{selectedApplication.laboratory_facility}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Lab Certificate Number</Typography><Typography variant="body2">{selectedApplication.laboratory_certificate_number || 'N/A'}</Typography></Grid>
+                  </Grid>
+                </Box>
+              </Paper>
+
+              {/* Contact Details */}
+              <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #e0e0e0' }}>
+                <Box sx={{ px: 2.5, py: 1.5, borderLeft: '4px solid #1565c0', bgcolor: alpha('#1565c0', 0.05), display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography fontWeight={700} color="#1565c0">Contact Details</Typography>
+                </Box>
+                <Box sx={{ p: 2.5 }}>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Contact Person</Typography><Typography variant="body2">{selectedApplication.contact_person}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Email</Typography><Typography variant="body2">{selectedApplication.email}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{selectedApplication.phone}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Bank Name</Typography><Typography variant="body2">{selectedApplication.bank_name || 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Branch</Typography><Typography variant="body2">{selectedApplication.bank_branch_name || 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Number</Typography><Typography variant="body2">{selectedApplication.bank_account_number || 'N/A'}</Typography></Grid>
+                  </Grid>
+                </Box>
+              </Paper>
+
+              {/* Documents */}
+              <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #e0e0e0' }}>
+                <Box sx={{ px: 2.5, py: 1.5, borderLeft: '4px solid #00838f', bgcolor: alpha('#00838f', 0.05), display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography fontWeight={700} color="#00838f">Documents</Typography>
+                </Box>
+                <Box sx={{ p: 2.5 }}>
+                  {(() => {
+                    const DOC_LABELS: Record<string, string> = {
+                      tinDoc: 'TIN Certificate',
+                      TINDOC: 'TIN Certificate',
+                      businessLicenseDoc: 'Business License',
+                      BUSINESSLICENSEDOC: 'Business License',
+                      bankStatementDoc: 'Bank Statement',
+                      BANKSTATEMENTDOC: 'Bank Statement',
+                      tasterCertDoc: 'Taster Proficiency Certificate',
+                      TASTERCERTDOC: 'Taster Proficiency Certificate',
+                      labCertDoc: 'Lab Certificate',
+                      LABCERTDOC: 'Lab Certificate',
+                      historyDoc: 'Company History/References',
+                      HISTORYDOC: 'Company History/References',
+                    };
+                    const DOC_ORDER = [
+                      { key: 'TIN Certificate', color: '#9b30b7' },
+                      { key: 'Business License', color: '#2e7d32' },
+                      { key: 'Bank Statement', color: '#1565c0' },
+                      { key: 'Taster Proficiency Certificate', color: '#e65100' },
+                      { key: 'Lab Certificate', color: '#00838f' },
+                      { key: 'Company History/References', color: '#6d4c41' },
+                    ];
+
+                    const docs: any[] = validationData?.documents || [];
+
+                    const getLabelForDoc = (doc: any): string => {
+                      // Try document_type / category
+                      const rawType = (doc.category || doc.type || '').toUpperCase();
+                      const rawName = (doc.name || '').toLowerCase();
+                      if (rawType.includes('TIN') || rawName.includes('tin')) return 'TIN Certificate';
+                      if (rawType.includes('LICENSE') || rawName.includes('license') || rawName.includes('business')) return 'Business License';
+                      if (rawType.includes('BANK') || rawName.includes('bank') || rawName.includes('statement')) return 'Bank Statement';
+                      if (rawType.includes('TASTER') || rawName.includes('taster')) return 'Taster Proficiency Certificate';
+                      if (rawType.includes('LAB') || rawName.includes('lab')) return 'Lab Certificate';
+                      if (rawType.includes('HISTORY') || rawName.includes('history')) return 'Company History/References';
+                      return DOC_LABELS[rawType] || DOC_LABELS[doc.category] || doc.name || rawType;
+                    };
+
+                    const labeledDocs = docs.map(d => ({ ...d, friendlyLabel: getLabelForDoc(d) }));
+
+                    return (
+                      <Stack spacing={1.5}>
+                        {DOC_ORDER.map(({ key: label, color }) => {
+                          const match = labeledDocs.find(d => d.friendlyLabel === label);
+                          return (
+                            <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 1.5, bgcolor: '#fafafa', border: '1px solid #f0f0f0' }}>
+                              <InsertDriveFile sx={{ color, fontSize: 28, flexShrink: 0 }} />
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography variant="body2" fontWeight={700}>{label}</Typography>
+                                {match && match.status === 'AVAILABLE' ? (
+                                  <Typography variant="caption" color="text.secondary" noWrap>{match.name}</Typography>
+                                ) : null}
+                              </Box>
+                              {match && match.status === 'AVAILABLE' && match.url ? (
+                                <Button size="small" variant="outlined" sx={{ color, borderColor: color, fontWeight: 700, minWidth: 70 }}
+                                  onClick={() => window.open('http://localhost:3001' + match.url, '_blank')}>
+                                  VIEW
+                                </Button>
+                              ) : (
+                                <Chip label="Not uploaded" size="small" sx={{ bgcolor: '#e0e0e0', color: '#757575', fontWeight: 600 }} />
+                              )}
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    );
+                  })()}
+                </Box>
+              </Paper>
+
+            </Stack>
           )}
         </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setSelectedApplication(null)} variant="outlined">
+        <DialogActions sx={{ px: 3, py: 2, borderTop: '1px solid #e0e0e0', gap: 1 }}>
+          <Button variant="outlined" color="inherit" onClick={() => setSelectedApplication(null)} sx={{ borderColor: '#bdbdbd', color: '#616161' }}>
             Close
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="outlined" 
-            onClick={() => {
-              setRejectDialogOpen(true);
-            }}
-            brandColor="#f44336"
-          >
+          </Button>
+          <Button variant="outlined" color="error" onClick={() => setRejectDialogOpen(true)}>
             Reject
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="contained"
-            brandColor="#4caf50"
-            onClick={() => {
-              generateApprovalData();
-              setApproveDialogOpen(true);
-            }}
-          >
+          </Button>
+          <Button variant="contained" sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
+            onClick={() => setApproveConfirmOpen(true)}>
             Approve
-          </AnimatedButton>
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Approve Confirmation Dialog */}
+      <Dialog open={approveConfirmOpen} onClose={() => setApproveConfirmOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ borderBottom: '1px solid #e0e0e0' }}>Confirm Approval</DialogTitle>
+        <DialogContent sx={{ pt: 3 }}>
+          <Typography variant="body1">
+            Are you sure you want to approve <strong>{selectedApplication?.company_name}</strong>? This will register them as a licensed exporter and send login credentials to their email.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
+          <Button variant="outlined" color="inherit" sx={{ borderColor: '#bdbdbd', color: '#616161' }} onClick={() => setApproveConfirmOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="contained" sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
+            onClick={() => { setApproveConfirmOpen(false); generateApprovalData(); setApproveDialogOpen(true); }}>
+            Yes, Approve
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reject Confirmation Dialog */}
+      <Dialog open={rejectConfirmOpen} onClose={() => setRejectConfirmOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ borderBottom: '1px solid #e0e0e0', color: '#d32f2f' }}>⚠️ This Cannot Be Undone</DialogTitle>
+        <DialogContent sx={{ pt: 3 }}>
+          <Alert severity="error" sx={{ mb: 2 }}>Once rejected, this decision is final.</Alert>
+          <Typography variant="body1" paragraph>
+            You are about to permanently reject <strong>{selectedApplication?.company_name}</strong>'s application. This action cannot be undone.
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            The exporter will be notified with the rejection reason and may reapply.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
+          <Button variant="outlined" color="inherit" sx={{ borderColor: '#bdbdbd', color: '#616161' }} onClick={() => setRejectConfirmOpen(false)}>
+            Go Back
+          </Button>
+          <Button variant="contained" color="error" startIcon={<WarningAmber />}
+            onClick={() => { setRejectConfirmOpen(false); handleRejectApplication(); }}>
+            Yes, Reject Permanently
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -3479,7 +3546,7 @@ The exporter can reapply once all requirements are met.`,
           <AnimatedButton 
             variant="contained"
             brandColor="#f44336"
-            onClick={handleRejectApplication}
+            onClick={() => setRejectConfirmOpen(true)}
             disabled={!rejectionReason}
           >
             Reject Application

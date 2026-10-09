@@ -30,11 +30,6 @@ import {
   Lock,
   Person,
   Coffee,
-  Security,
-  CheckCircle,
-  Verified,
-  Shield,
-  TrendingUp,
 } from '@mui/icons-material';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/router';
@@ -87,27 +82,6 @@ const ProfessionalLoginPage: React.FC = () => {
       setLoading(false);
     }
   };
-
-  const features = [
-    { 
-      icon: <Shield sx={{ fontSize: 32 }} />, 
-      title: 'Enterprise Security', 
-      desc: 'Bank-grade encryption and blockchain immutability',
-      color: '#9b30b7'
-    },
-    { 
-      icon: <Verified sx={{ fontSize: 32 }} />, 
-      title: 'EUDR Compliant', 
-      desc: '2026 regulations ready with full traceability',
-      color: '#FFD700'
-    },
-    { 
-      icon: <TrendingUp sx={{ fontSize: 32 }} />, 
-      title: 'Real-Time Analytics', 
-      desc: 'Live insights across entire supply chain',
-      color: '#9b30b7'
-    },
-  ];
 
   return (
     <Box
@@ -258,101 +232,6 @@ const ProfessionalLoginPage: React.FC = () => {
                   A unified digital ecosystem connecting all stakeholders with transparent, 
                   compliant, and efficient coffee trade operations.
                 </Typography>
-
-                <Grid container spacing={{ xs: 1.5, md: 2 }} mb={{ xs: 2, md: 3 }}>
-                  {features.map((feature, index) => (
-                    <Grid item xs={12} sm={4} key={index}>
-                      <Zoom in={mounted} timeout={1200 + index * 200}>
-                        <Paper
-                          elevation={0}
-                          sx={{
-                            p: { xs: 1.5, sm: 2, md: 2.5 },
-                            height: '100%',
-                            background: 'rgba(255, 255, 255, 0.9)',
-                            backdropFilter: 'blur(10px)',
-                            border: '1px solid',
-                            borderColor: alpha(feature.color, 0.2),
-                            borderRadius: 2,
-                            transition: 'all 0.3s ease',
-                            '&:hover': {
-                              transform: 'translateY(-4px)',
-                              boxShadow: `0 12px 24px ${alpha(feature.color, 0.15)}`,
-                              borderColor: alpha(feature.color, 0.4),
-                            },
-                          }}
-                        >
-                          <Box 
-                            sx={{ 
-                              color: feature.color,
-                              mb: { xs: 0.5, md: 1.5 },
-                              '& svg': { fontSize: { xs: 24, md: 32 } }
-                            }}
-                          >
-                            {feature.icon}
-                          </Box>
-                          <Typography 
-                            variant="body2" 
-                            fontWeight="700" 
-                            gutterBottom
-                            sx={{ 
-                              color: '#1a1a1a',
-                              fontSize: { xs: '0.8rem', sm: '0.85rem', md: '0.875rem' }
-                            }}
-                          >
-                            {feature.title}
-                          </Typography>
-                          <Typography 
-                            variant="caption" 
-                            sx={{ 
-                              color: '#616161', 
-                              lineHeight: 1.5,
-                              fontSize: { xs: '0.7rem', sm: '0.75rem' }
-                            }}
-                          >
-                            {feature.desc}
-                          </Typography>
-                        </Paper>
-                      </Zoom>
-                    </Grid>
-                  ))}
-                </Grid>
-
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: { xs: 2, sm: 2.5, md: 3 },
-                    background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
-                    borderRadius: 2,
-                    color: 'white',
-                  }}
-                >
-                  <Grid container spacing={2}>
-                    <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
-                        8
-                      </Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
-                        Organizations
-                      </Typography>
-                    </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
-                        100%
-                      </Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
-                        Traceable
-                      </Typography>
-                    </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="h4" fontWeight="700" sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' } }}>
-                        2026
-                      </Typography>
-                      <Typography variant="caption" sx={{ opacity: 0.9, fontSize: { xs: '0.65rem', sm: '0.75rem' } }}>
-                        EUDR Ready
-                      </Typography>
-                    </Grid>
-                  </Grid>
-                </Paper>
 
               </Box>
             </Fade>
