@@ -113,7 +113,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Global check: If user is rejected and tries to access any page other than resubmit, redirect
   useEffect(() => {
-    if (!loading && user && user.status === 'rejected') {
+    if (!loading && user && user.role === 'EXPORTER' && user.status === 'rejected') {
       const allowedPaths = ['/resubmit-application', '/login'];
       if (!allowedPaths.includes(router.pathname)) {
         console.warn(`Rejected user blocked from accessing ${router.pathname} - redirecting to resubmit page`);
@@ -254,8 +254,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
 
-      // Check if user has rejected status - redirect to resubmission page
-      if (userData.status === 'rejected') {
+      // Check if user has rejected status - redirect to resubmission page (EXPORTER role only)
+      if (userData.role === 'EXPORTER' && userData.status === 'rejected') {
         console.log('User has rejected status, redirecting to resubmission page');
         router.push('/resubmit-application');
         return;
