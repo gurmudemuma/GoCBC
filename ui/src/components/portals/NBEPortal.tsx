@@ -728,14 +728,16 @@ const NBEPortal: React.FC = () => {
     const isSuperAdmin = userRole === 'ADMIN';
     
     const allTabs = [
+      // Operational Tabs (like Banks Portal)
       { index: 0, label: `Forex Monitoring`, icon: <CurrencyExchange sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer'] },
       { index: 1, label: `Exchange Rates`, icon: <TrendingUp sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Exchange Rate Officer'] },
       { index: 2, label: 'SWIFT Monitoring', icon: <FlightTakeoff sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Settlement Officer'] },
-      { index: 3, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
-      { index: 4, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
-      { index: 5, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
-      { index: 6, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
-      { index: 7, label: 'Forex Repatriation', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Settlement Officer'] },
+      { index: 3, label: 'Forex Repatriation', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Settlement Officer'] },
+      { index: 4, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
+      // Analytics & Admin Tabs
+      { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
+      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
+      { index: 7, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -1682,6 +1684,11 @@ const NBEPortal: React.FC = () => {
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
+          {/* Forex Repatriation Tab */}
+          <RepatriationManagementTab />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={4}>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Card>
@@ -1717,7 +1724,7 @@ const NBEPortal: React.FC = () => {
           </Grid>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={4}>
+        <TabPanel value={tabValue} index={5}>
           {/* Analytics Tab */}
           <AnalyticsDashboard 
             activeSubTab={analyticsSubTab}
@@ -1725,12 +1732,12 @@ const NBEPortal: React.FC = () => {
           />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <TabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={7}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="NBE Portal - Complete Transaction History"
@@ -1739,11 +1746,6 @@ const NBEPortal: React.FC = () => {
             showStats={false}
             maxHeight={700}
           />
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={7}>
-          {/* Forex Repatriation Tab */}
-          <RepatriationManagementTab />
         </TabPanel>
       </Card>
 

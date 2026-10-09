@@ -34,6 +34,8 @@ import {
   ListItem,
   ListItemText,
   ListItemIcon,
+  Stack,
+  alpha,
 } from '@mui/material';
 import {
   Person,
@@ -200,7 +202,7 @@ const AdminPortal: React.FC = () => {
     timestamp: Date.now() // Add timestamp to force updates
   });
 
-  const BRAND_COLOR = '#1976d2'; // Admin blue
+  const BRAND_COLOR = '#9b30b7'; // Admin purple
 
   useEffect(() => {
     loadSystemStats();
@@ -299,13 +301,13 @@ const AdminPortal: React.FC = () => {
         }
         
         const orgColors: Record<string, string> = {
-          ECTA: '#1976d2',
-          ECX: '#388e3c',
-          NBE: '#d32f2f',
-          BANKS: '#f57c00',
-          CUSTOMS: '#7b1fa2',
-          SHIPPING: '#0097a7',
-          EXPORTERS: '#689f38',
+          ECTA: '#9b30b7',
+          ECX: '#FFD700',
+          NBE: '#9b30b7',
+          BANKS: '#FFD700',
+          CUSTOMS: '#9b30b7',
+          SHIPPING: '#FFD700',
+          EXPORTERS: '#9b30b7',
         };
 
         const organizations = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING', 'EXPORTERS'];
@@ -595,29 +597,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Total Users',
             value: stats.totalUsers,
-            icon: <Group color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <Group sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: `${stats.activeUsers} active`,
           },
           {
             title: 'Active Users',
             value: stats.activeUsers,
-            icon: <CheckCircle color="success" />,
-            bgcolor: '#e8f5e9',
+            icon: <CheckCircle sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: `${Math.round((stats.activeUsers / stats.totalUsers) * 100 || 0)}% active rate`,
           },
           {
             title: 'Exporters',
             value: stats.totalExporters,
-            icon: <Coffee color="warning" />,
-            bgcolor: '#fff3e0',
+            icon: <Coffee sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Licensed exporters',
           },
           {
             title: 'Organizations',
             value: stats.totalOrganizations,
-            icon: <Business color="secondary" />,
-            bgcolor: '#f3e5f5',
+            icon: <Business sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Consortium members',
           },
         ];
@@ -626,29 +628,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Block Height',
             value: blockchainHealth.blockHeight.toLocaleString(),
-            icon: <Storage color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <Storage sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Current block',
           },
           {
             title: 'TPS',
             value: blockchainHealth.transactionsPerSecond,
-            icon: <Speed color="success" />,
-            bgcolor: '#e8f5e9',
+            icon: <Speed sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Transactions/sec',
           },
           {
             title: 'Peers',
             value: blockchainHealth.peers,
-            icon: <CloudQueue color="info" />,
-            bgcolor: '#e1f5fe',
+            icon: <CloudQueue sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Network nodes',
           },
           {
             title: 'Status',
             value: blockchainHealth.status.toUpperCase(),
-            icon: blockchainHealth.status === 'healthy' ? <CheckCircle color="success" /> : <Warning color="warning" />,
-            bgcolor: blockchainHealth.status === 'healthy' ? '#e8f5e9' : '#fff3e0',
+            icon: blockchainHealth.status === 'healthy' ? <CheckCircle sx={{ color: '#FFD700' }} /> : <Warning sx={{ color: '#1a1a1a' }} />,
+            bgcolor: blockchainHealth.status === 'healthy' ? 'rgba(255, 215, 0, 0.08)' : 'rgba(26, 26, 26, 0.08)',
             subtitle: 'Network health',
           },
         ];
@@ -657,29 +659,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Transactions',
             value: stats.totalTransactions.toLocaleString(),
-            icon: <DataUsage color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <DataUsage sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'On blockchain',
           },
           {
             title: 'Contracts',
             value: stats.totalContracts,
-            icon: <Description color="success" />,
-            bgcolor: '#e8f5e9',
+            icon: <Description sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Total contracts',
           },
           {
             title: 'Shipments',
             value: stats.totalShipments,
-            icon: <LocalShipping color="warning" />,
-            bgcolor: '#fff3e0',
+            icon: <LocalShipping sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Total shipments',
           },
           {
             title: 'Avg Block Time',
             value: `${blockchainHealth.averageBlockTime}s`,
-            icon: <Timeline color="secondary" />,
-            bgcolor: '#f3e5f5',
+            icon: <Timeline sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Block creation',
           },
         ];
@@ -688,29 +690,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Identities',
             value: stats.enrolledIdentities,
-            icon: <VerifiedUser color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <VerifiedUser sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Blockchain IDs',
           },
           {
             title: 'Expiring Soon',
             value: stats.expiringCertificates,
-            icon: <Warning color="error" />,
-            bgcolor: stats.expiringCertificates > 0 ? '#ffebee' : '#e8f5e9',
+            icon: <Warning sx={{ color: stats.expiringCertificates > 0 ? '#1a1a1a' : '#FFD700' }} />,
+            bgcolor: stats.expiringCertificates > 0 ? 'rgba(26, 26, 26, 0.08)' : 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Certificates',
           },
           {
             title: 'Chaincodes',
             value: blockchainHealth.chaincodes,
-            icon: <Gavel color="info" />,
-            bgcolor: '#e1f5fe',
+            icon: <Gavel sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Deployed',
           },
           {
             title: 'Orderers',
             value: blockchainHealth.orderers,
-            icon: <AccountBalance color="secondary" />,
-            bgcolor: '#f3e5f5',
+            icon: <AccountBalance sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Consensus nodes',
           },
         ];
@@ -719,29 +721,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Total Activities',
             value: traceabilityStats.totalActivities,
-            icon: <Timeline color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <Timeline sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'All system actions',
           },
           {
             title: 'Unique Entities',
             value: traceabilityStats.uniqueEntities,
-            icon: <Category color="success" />,
-            bgcolor: '#e8f5e9',
+            icon: <Category sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Items traced',
           },
           {
             title: 'Unique Users',
             value: traceabilityStats.uniqueUsers,
-            icon: <Person color="warning" />,
-            bgcolor: '#fff3e0',
+            icon: <Person sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Active performers',
           },
           {
             title: 'Blockchain Verified',
             value: traceabilityStats.blockchainVerified,
-            icon: <VerifiedUser color="info" />,
-            bgcolor: '#e1f5fe',
+            icon: <VerifiedUser sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Cryptographically signed',
           },
         ];
@@ -750,29 +752,29 @@ const AdminPortal: React.FC = () => {
           {
             title: 'Total Users',
             value: stats.totalUsers,
-            icon: <Group color="primary" />,
-            bgcolor: '#e3f2fd',
+            icon: <Group sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: `${stats.activeUsers} active`,
           },
           {
             title: 'Organizations',
             value: stats.totalOrganizations,
-            icon: <Business color="success" />,
-            bgcolor: '#e8f5e9',
+            icon: <Business sx={{ color: '#FFD700' }} />,
+            bgcolor: 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Consortium members',
           },
           {
             title: 'Blockchain IDs',
             value: stats.enrolledIdentities,
-            icon: <VerifiedUser color="warning" />,
-            bgcolor: '#fff3e0',
+            icon: <VerifiedUser sx={{ color: '#9b30b7' }} />,
+            bgcolor: 'rgba(155, 48, 183, 0.08)',
             subtitle: 'Enrolled identities',
           },
           {
             title: 'Certificates',
             value: stats.expiringCertificates,
-            icon: <Assessment color={stats.expiringCertificates > 0 ? 'error' : 'action'} />,
-            bgcolor: stats.expiringCertificates > 0 ? '#ffebee' : '#f5f5f5',
+            icon: <Assessment sx={{ color: stats.expiringCertificates > 0 ? '#1a1a1a' : '#FFD700' }} />,
+            bgcolor: stats.expiringCertificates > 0 ? 'rgba(26, 26, 26, 0.08)' : 'rgba(255, 215, 0, 0.08)',
             subtitle: 'Expiring soon',
           },
         ];
@@ -785,38 +787,11 @@ const AdminPortal: React.FC = () => {
     <Box
       sx={{
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+        background: 'linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%)',
         p: { xs: 2, md: 3 },
       }}
     >
-      {/* Header */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Security sx={{ fontSize: 32, color: BRAND_COLOR }} />
-          System Administrator Portal
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Manage all users, organizations, and blockchain identities across the CECBS consortium
-        </Typography>
-        {user && (
-          <Box sx={{ mt: 1 }}>
-            <Chip 
-              label={`Logged in as: ${user.username}`} 
-              color="primary" 
-              icon={<Person />}
-              size="small"
-            />
-            <Chip 
-              label="SUPER ADMIN" 
-              color="error" 
-              sx={{ ml: 1 }}
-              size="small"
-            />
-          </Box>
-        )}
-      </Box>
-
-      {/* Dynamic KPI Cards - Change based on active tab */}
+      {/* Professional KPI Cards with Glassmorphism */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {kpiCards.map((card, index) => {
           // Determine if this card is clickable based on tab and card index
@@ -829,15 +804,40 @@ const AdminPortal: React.FC = () => {
           
           return (
             <Grid item xs={12} sm={6} md={3} key={index}>
-              <Card 
-                sx={{ 
-                  bgcolor: card.bgcolor, 
-                  transition: 'all 0.3s ease', 
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 3,
+                  background: 'rgba(255, 255, 255, 0.9)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid',
+                  borderColor: alpha('#9b30b7', 0.1),
+                  borderRadius: 2,
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                   cursor: isClickable ? 'pointer' : 'default',
-                  '&:hover': { 
-                    transform: isClickable ? 'translateY(-6px)' : 'translateY(-2px)', 
-                    boxShadow: isClickable ? 6 : 4 
-                  } 
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: '4px',
+                    background: 'linear-gradient(90deg, #9b30b7 0%, #FFD700 100%)',
+                    opacity: 0,
+                    transition: 'opacity 0.3s ease',
+                  },
+                  '&:hover': {
+                    transform: isClickable ? 'translateY(-8px)' : 'translateY(-4px)',
+                    boxShadow: isClickable
+                      ? '0 12px 24px rgba(155, 48, 183, 0.15)'
+                      : '0 8px 16px rgba(0, 0, 0, 0.08)',
+                    borderColor: alpha('#9b30b7', 0.3),
+                    '&::before': {
+                      opacity: 1,
+                    },
+                  },
                 }}
                 onClick={() => {
                   if (isClickable) {
@@ -845,56 +845,100 @@ const AdminPortal: React.FC = () => {
                   }
                 }}
               >
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Stack direction="row" spacing={2} alignItems="flex-start">
+                  <Box
+                    sx={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 1.5,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: card.bgcolor || alpha('#9b30b7', 0.1),
+                      flexShrink: 0,
+                    }}
+                  >
                     {card.icon}
-                    <Typography variant="h6" fontWeight={600}>
+                  </Box>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography
+                      variant="h4"
+                      sx={{
+                        fontWeight: 700,
+                        color: '#1a1a1a',
+                        mb: 0.5,
+                        lineHeight: 1.2,
+                      }}
+                    >
                       {card.value}
                     </Typography>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 600,
+                        color: '#616161',
+                        mb: 0.5,
+                      }}
+                    >
+                      {card.title}
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: '#9e9e9e',
+                        display: 'block',
+                      }}
+                    >
+                      {card.subtitle}
+                    </Typography>
                   </Box>
-                  <Typography variant="body2" fontWeight={600} color="text.primary" gutterBottom>
-                    {card.title}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {card.subtitle}
-                  </Typography>
-                </CardContent>
-              </Card>
+                </Stack>
+              </Paper>
             </Grid>
           );
         })}
       </Grid>
 
-      {/* Alert for Admin */}
-      <Alert severity="info" sx={{ mb: 3 }}>
-        <Typography variant="body2">
-          <strong>Super Admin Access:</strong> You can view and manage users from ALL organizations. 
-          Use this power responsibly. All actions are logged in the audit trail.
-        </Typography>
-      </Alert>
-
-      {/* Navigation Tabs */}
-      <Paper sx={{ mb: 3 }}>
+      {/* Professional Navigation Tabs - Purple Theme */}
+      <Paper
+        elevation={0}
+        sx={{
+          mb: 3,
+          background: 'rgba(255, 255, 255, 0.9)',
+          backdropFilter: 'blur(20px)',
+          border: '1px solid',
+          borderColor: alpha('#9b30b7', 0.1),
+          borderRadius: 2,
+          overflow: 'hidden',
+        }}
+      >
         <Tabs
           value={tabValue}
           onChange={(e, newValue) => setTabValue(newValue)}
           variant="scrollable"
           scrollButtons="auto"
           sx={{
+            minHeight: 64,
             '& .MuiTab-root': {
               textTransform: 'none',
               minHeight: 64,
-              fontSize: '1rem',
+              fontSize: '0.95rem',
               fontWeight: 500,
+              color: '#616161',
+              transition: 'all 0.3s ease',
+              '&:hover': {
+                color: '#9b30b7',
+                bgcolor: alpha('#9b30b7', 0.04),
+              },
             },
             '& .Mui-selected': {
-              color: BRAND_COLOR,
-              fontWeight: 700,
+              color: '#9b30b7 !important',
+              fontWeight: 600,
             },
             '& .MuiTabs-indicator': {
-              height: 4,
-              backgroundColor: BRAND_COLOR,
-              borderRadius: '4px 4px 0 0',
+              height: 3,
+              background: 'linear-gradient(90deg, #9b30b7 0%, #FFD700 100%)',
+              borderRadius: '3px 3px 0 0',
             },
           }}
         >
@@ -1000,8 +1044,8 @@ const AdminPortal: React.FC = () => {
                     <YAxis />
                     <RechartsTooltip />
                     <Legend />
-                    <Area type="monotone" dataKey="users" stroke="#1976d2" fill="#1976d2" fillOpacity={0.6} name="Total Users" />
-                    <Area type="monotone" dataKey="active" stroke="#4caf50" fill="#4caf50" fillOpacity={0.6} name="Active Users" />
+                    <Area type="monotone" dataKey="users" stroke="#9b30b7" fill="#9b30b7" fillOpacity={0.6} name="Total Users" />
+                    <Area type="monotone" dataKey="active" stroke="#FFD700" fill="#FFD700" fillOpacity={0.6} name="Active Users" />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -1108,9 +1152,9 @@ const AdminPortal: React.FC = () => {
                     <YAxis />
                     <RechartsTooltip />
                     <Legend />
-                    <Bar dataKey="transactions" fill="#1976d2" name="Total Transactions" />
-                    <Bar dataKey="contracts" fill="#4caf50" name="Contracts" />
-                    <Bar dataKey="shipments" fill="#ff9800" name="Shipments" />
+                    <Bar dataKey="transactions" fill="#9b30b7" name="Total Transactions" />
+                    <Bar dataKey="contracts" fill="#FFD700" name="Contracts" />
+                    <Bar dataKey="shipments" fill="#1a1a1a" name="Shipments" />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -1406,22 +1450,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#e3f2fd', 
+                bgcolor: 'rgba(155, 48, 183, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#bbdefb'
+                  bgcolor: 'rgba(155, 48, 183, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/ecta')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <Coffee sx={{ fontSize: 48, color: '#1976d2' }} />
+                  <Coffee sx={{ fontSize: 48, color: '#9b30b7' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#1976d2">
+                    <Typography variant="h6" fontWeight="bold" color="#9b30b7">
                       ECTA Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1441,7 +1485,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#1976d2', '&:hover': { bgcolor: '#1565c0' } }}
+                  sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2596' } }}
                 >
                   Access ECTA Portal
                 </Button>
@@ -1453,22 +1497,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#e8f5e9', 
+                bgcolor: 'rgba(255, 215, 0, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#c8e6c9'
+                  bgcolor: 'rgba(255, 215, 0, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/ecx')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <TrendingUp sx={{ fontSize: 48, color: '#388e3c' }} />
+                  <TrendingUp sx={{ fontSize: 48, color: '#FFD700' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#388e3c">
+                    <Typography variant="h6" fontWeight="bold" color="#FFD700">
                       ECX Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1488,7 +1532,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#388e3c', '&:hover': { bgcolor: '#2e7d32' } }}
+                  sx={{ bgcolor: '#FFD700', color: '#1a1a1a', '&:hover': { bgcolor: '#FFA500' } }}
                 >
                   Access ECX Portal
                 </Button>
@@ -1500,22 +1544,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#ffebee', 
+                bgcolor: 'rgba(155, 48, 183, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#ffcdd2'
+                  bgcolor: 'rgba(155, 48, 183, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/nbe')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <AccountBalance sx={{ fontSize: 48, color: '#d32f2f' }} />
+                  <AccountBalance sx={{ fontSize: 48, color: '#9b30b7' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#d32f2f">
+                    <Typography variant="h6" fontWeight="bold" color="#9b30b7">
                       NBE Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1535,7 +1579,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#d32f2f', '&:hover': { bgcolor: '#c62828' } }}
+                  sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2596' } }}
                 >
                   Access NBE Portal
                 </Button>
@@ -1547,22 +1591,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#fff3e0', 
+                bgcolor: 'rgba(255, 215, 0, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#ffe0b2'
+                  bgcolor: 'rgba(255, 215, 0, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/banks')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <AccountBalance sx={{ fontSize: 48, color: '#f57c00' }} />
+                  <AccountBalance sx={{ fontSize: 48, color: '#FFD700' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#f57c00">
+                    <Typography variant="h6" fontWeight="bold" color="#FFD700">
                       Banks Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1582,7 +1626,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#f57c00', '&:hover': { bgcolor: '#ef6c00' } }}
+                  sx={{ bgcolor: '#FFD700', color: '#1a1a1a', '&:hover': { bgcolor: '#FFA500' } }}
                 >
                   Access Banks Portal
                 </Button>
@@ -1594,22 +1638,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#f3e5f5', 
+                bgcolor: 'rgba(155, 48, 183, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#e1bee7'
+                  bgcolor: 'rgba(155, 48, 183, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/customs')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <Gavel sx={{ fontSize: 48, color: '#7b1fa2' }} />
+                  <Gavel sx={{ fontSize: 48, color: '#9b30b7' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#7b1fa2">
+                    <Typography variant="h6" fontWeight="bold" color="#9b30b7">
                       Customs Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1629,7 +1673,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#7b1fa2', '&:hover': { bgcolor: '#6a1b9a' } }}
+                  sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2596' } }}
                 >
                   Access Customs Portal
                 </Button>
@@ -1641,22 +1685,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#e0f7fa', 
+                bgcolor: 'rgba(255, 215, 0, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#b2ebf2'
+                  bgcolor: 'rgba(255, 215, 0, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/shipping')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <LocalShipping sx={{ fontSize: 48, color: '#0097a7' }} />
+                  <LocalShipping sx={{ fontSize: 48, color: '#FFD700' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#0097a7">
+                    <Typography variant="h6" fontWeight="bold" color="#FFD700">
                       Shipping Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1676,7 +1720,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#0097a7', '&:hover': { bgcolor: '#00838f' } }}
+                  sx={{ bgcolor: '#FFD700', color: '#1a1a1a', '&:hover': { bgcolor: '#FFA500' } }}
                 >
                   Access Shipping Portal
                 </Button>
@@ -1688,22 +1732,22 @@ const AdminPortal: React.FC = () => {
           <Grid item xs={12} md={6} lg={4}>
             <Card 
               sx={{ 
-                bgcolor: '#f1f8e9', 
+                bgcolor: 'rgba(155, 48, 183, 0.08)', 
                 cursor: 'pointer',
                 transition: 'all 0.3s ease',
                 '&:hover': { 
                   transform: 'translateY(-8px)', 
                   boxShadow: 6,
-                  bgcolor: '#dcedc8'
+                  bgcolor: 'rgba(155, 48, 183, 0.15)'
                 } 
               }}
               onClick={() => router.push('/portals/exporter')}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <Business sx={{ fontSize: 48, color: '#689f38' }} />
+                  <Business sx={{ fontSize: 48, color: '#9b30b7' }} />
                   <Box>
-                    <Typography variant="h6" fontWeight="bold" color="#689f38">
+                    <Typography variant="h6" fontWeight="bold" color="#9b30b7">
                       Exporter Portal
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -1723,7 +1767,7 @@ const AdminPortal: React.FC = () => {
                   variant="contained" 
                   fullWidth 
                   endIcon={<OpenInNew />}
-                  sx={{ bgcolor: '#689f38', '&:hover': { bgcolor: '#558b2f' } }}
+                  sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2596' } }}
                 >
                   Access Exporter Portal
                 </Button>
@@ -1733,34 +1777,34 @@ const AdminPortal: React.FC = () => {
 
           {/* Quick Stats */}
           <Grid item xs={12}>
-            <Card sx={{ bgcolor: '#fafafa' }}>
+            <Card sx={{ bgcolor: 'rgba(255, 255, 255, 0.9)' }}>
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Visibility color="primary" />
+                  <Visibility sx={{ color: '#9b30b7' }} />
                   Portal Access Summary
                 </Typography>
                 <Grid container spacing={2} sx={{ mt: 1 }}>
                   <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
-                      <Typography variant="h4" fontWeight="bold" color="primary">7</Typography>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid rgba(155, 48, 183, 0.2)' }}>
+                      <Typography variant="h4" fontWeight="bold" sx={{ color: '#9b30b7' }}>7</Typography>
                       <Typography variant="body2" color="text.secondary">Total Portals</Typography>
                     </Box>
                   </Grid>
                   <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
-                      <Typography variant="h4" fontWeight="bold" color="success.main">{stats.totalOrganizations}</Typography>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid rgba(255, 215, 0, 0.3)' }}>
+                      <Typography variant="h4" fontWeight="bold" sx={{ color: '#FFD700' }}>{stats.totalOrganizations}</Typography>
                       <Typography variant="body2" color="text.secondary">Organizations</Typography>
                     </Box>
                   </Grid>
                   <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
-                      <Typography variant="h4" fontWeight="bold" color="warning.main">{stats.totalUsers}</Typography>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid rgba(155, 48, 183, 0.2)' }}>
+                      <Typography variant="h4" fontWeight="bold" sx={{ color: '#9b30b7' }}>{stats.totalUsers}</Typography>
                       <Typography variant="body2" color="text.secondary">Total Users</Typography>
                     </Box>
                   </Grid>
                   <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
-                      <Typography variant="h4" fontWeight="bold" color="error.main">FULL</Typography>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'white', borderRadius: 1, border: '1px solid rgba(26, 26, 26, 0.2)' }}>
+                      <Typography variant="h4" fontWeight="bold" sx={{ color: '#1a1a1a' }}>FULL</Typography>
                       <Typography variant="body2" color="text.secondary">Admin Access</Typography>
                     </Box>
                   </Grid>
