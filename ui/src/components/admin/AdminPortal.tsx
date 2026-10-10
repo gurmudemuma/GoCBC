@@ -1132,11 +1132,11 @@ const AdminPortal: React.FC = () => {
             <Card>
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Block color="primary" />
+                  <Block sx={{ color: '#9b30b7' }} />
                   Blockchain Transaction Activity (Last 7 Days)
                 </Typography>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart
                     data={[
                       { day: 'Mon', transactions: 125, contracts: 12, shipments: 8 },
                       { day: 'Tue', transactions: 142, contracts: 15, shipments: 10 },
@@ -1146,16 +1146,75 @@ const AdminPortal: React.FC = () => {
                       { day: 'Sat', transactions: 98, contracts: 8, shipments: 5 },
                       { day: 'Sun', transactions: 105, contracts: 9, shipments: 6 },
                     ]}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <RechartsTooltip />
-                    <Legend />
-                    <Bar dataKey="transactions" fill="#9b30b7" name="Total Transactions" />
-                    <Bar dataKey="contracts" fill="#FFD700" name="Contracts" />
-                    <Bar dataKey="shipments" fill="#1a1a1a" name="Shipments" />
-                  </BarChart>
+                    <defs>
+                      <linearGradient id="colorTransactions" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#9b30b7" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#9b30b7" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorContracts" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#FFD700" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#FFD700" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorShipments" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#1a1a1a" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#1a1a1a" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" opacity={0.5} />
+                    <XAxis 
+                      dataKey="day" 
+                      stroke="#616161"
+                      style={{ fontSize: '14px', fontWeight: 500 }}
+                    />
+                    <YAxis 
+                      stroke="#616161"
+                      style={{ fontSize: '14px', fontWeight: 500 }}
+                    />
+                    <RechartsTooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        border: '1px solid #9b30b7',
+                        borderRadius: 8,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                      }}
+                    />
+                    <Legend 
+                      wrapperStyle={{ paddingTop: '20px' }}
+                      iconType="line"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="transactions" 
+                      stroke="#9b30b7" 
+                      strokeWidth={3}
+                      fill="url(#colorTransactions)"
+                      name="Total Transactions"
+                      dot={{ fill: '#9b30b7', strokeWidth: 2, r: 5 }}
+                      activeDot={{ r: 8, fill: '#9b30b7', stroke: '#fff', strokeWidth: 2 }}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="contracts" 
+                      stroke="#FFD700" 
+                      strokeWidth={3}
+                      fill="url(#colorContracts)"
+                      name="Contracts"
+                      dot={{ fill: '#FFD700', strokeWidth: 2, r: 5 }}
+                      activeDot={{ r: 8, fill: '#FFD700', stroke: '#fff', strokeWidth: 2 }}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="shipments" 
+                      stroke="#1a1a1a" 
+                      strokeWidth={3}
+                      fill="url(#colorShipments)"
+                      name="Shipments"
+                      dot={{ fill: '#1a1a1a', strokeWidth: 2, r: 5 }}
+                      activeDot={{ r: 8, fill: '#1a1a1a', stroke: '#fff', strokeWidth: 2 }}
+                    />
+                  </LineChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>

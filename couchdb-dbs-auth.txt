@@ -1,0 +1,15 @@
+[
+    "_replicator",
+    "_users",
+    "coffeechannel_",
+    "coffeechannel__lifecycle",
+    "coffeechannel__lifecycle$$h_implicit_org_$banks$m$s$p",
+    "coffeechannel__lifecycle$$h_implicit_org_$customs$m$s$p",
+    "coffeechannel__lifecycle$$h_implicit_org_$e$c$t$a$m$s$p",
+    "coffeechannel__lifecycle$$h_implicit_org_$e$c$x$m$s$p",
+    "coffeechannel__lifecycle$$h_implicit_org_$n$b$e$m$s$p",
+    "coffeechannel__lifecycle$$h_implicit_org_$shipping$m$s$p",
+    "coffeechannel__lifecycle$$p_implicit_org_$e$c$t$a$m$s$p",
+    "coffeechannel_lscc",
+    "fabric__internal"
+]

@@ -1,0 +1,19 @@
+NAMES                     PORTS
+coffee-chaincode          0.0.0.0:9999->9999/tcp, [::]:9999->9999/tcp
+peer0.nbe.cecbs.et        7051/tcp, 0.0.0.0:10051->10051/tcp, [::]:10051->10051/tcp
+cecbs-kafka               0.0.0.0:9092->9092/tcp, [::]:9092->9092/tcp
+peer0.customs.cecbs.et    7051/tcp, 0.0.0.0:11051->11051/tcp, [::]:11051->11051/tcp
+peer0.shipping.cecbs.et   7051/tcp, 0.0.0.0:12051->12051/tcp, [::]:12051->12051/tcp
+peer0.ecta.cecbs.et       0.0.0.0:7051->7051/tcp, [::]:7051->7051/tcp
+peer0.ecx.cecbs.et        7051/tcp, 0.0.0.0:8051->8051/tcp, [::]:8051->8051/tcp
+peer0.banks.cecbs.et      7051/tcp, 0.0.0.0:9051->9051/tcp, [::]:9051->9051/tcp
+couchdb.nbe               4369/tcp, 9100/tcp, 0.0.0.0:8984->5984/tcp, [::]:8984->5984/tcp
+cecbs-zookeeper           2181/tcp, 2888/tcp, 3888/tcp
+couchdb.customs           4369/tcp, 9100/tcp, 0.0.0.0:9984->5984/tcp, [::]:9984->5984/tcp
+couchdb.shipping          4369/tcp, 9100/tcp, 0.0.0.0:10984->5984/tcp, [::]:10984->5984/tcp
+cecbs-postgres            0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+cecbs-redis               0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+orderer.cecbs.et          0.0.0.0:7050->7050/tcp, [::]:7050->7050/tcp, 0.0.0.0:7053->7053/tcp, [::]:7053->7053/tcp
+couchdb.ecta              4369/tcp, 9100/tcp, 0.0.0.0:5984->5984/tcp, [::]:5984->5984/tcp
+couchdb.ecx               4369/tcp, 9100/tcp, 0.0.0.0:6984->5984/tcp, [::]:6984->5984/tcp
+couchdb.banks             4369/tcp, 9100/tcp, 0.0.0.0:7984->5984/tcp, [::]:7984->5984/tcp

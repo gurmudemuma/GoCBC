@@ -1,0 +1,87 @@
+================================================================================
+GOCBC EXPERT SYSTEM TEST - Sat Oct 10 11:11:27 AM EAT 2026
+================================================================================
+
+TEST 1: DOCKER CONTAINERS
+--------------------------------------------------------------------------------
+NAMES                     STATUS
+coffee-chaincode          Up 22 hours
+peer0.nbe.cecbs.et        Up 22 hours
+cecbs-kafka               Up 22 hours
+peer0.customs.cecbs.et    Up 22 hours
+peer0.shipping.cecbs.et   Up 22 hours
+peer0.ecta.cecbs.et       Up 22 hours
+peer0.ecx.cecbs.et        Up 22 hours
+peer0.banks.cecbs.et      Up 22 hours
+couchdb.nbe               Up 22 hours
+cecbs-zookeeper           Up 22 hours
+couchdb.customs           Up 22 hours
+couchdb.shipping          Up 22 hours
+cecbs-postgres            Up 22 hours
+cecbs-redis               Up 22 hours
+orderer.cecbs.et          Up 22 hours
+couchdb.ecta              Up 22 hours
+couchdb.ecx               Up 22 hours
+couchdb.banks             Up 22 hours
+
+Total Running Containers: 18
+
+TEST 2: API PORT CHECK
+--------------------------------------------------------------------------------
+❌ Port 3001: CLOSED (API not running)
+
+TEST 3: UI PORT CHECK
+--------------------------------------------------------------------------------
+❌ Port 3000: CLOSED (UI not running)
+
+TEST 4: POSTGRESQL CHECK
+--------------------------------------------------------------------------------
+❌ Port 5432: CLOSED (PostgreSQL not running)
+
+TEST 5: BLOCKCHAIN ORDERER CHECK
+--------------------------------------------------------------------------------
+❌ Port 7050: CLOSED (Orderer not running)
+
+TEST 6: ECTA PEER CHECK
+--------------------------------------------------------------------------------
+❌ Port 7051: CLOSED (ECTA peer not running)
+
+TEST 7: COUCHDB CHECK
+--------------------------------------------------------------------------------
+❌ Port 5984: CLOSED (CouchDB not running)
+
+TEST 8: API HEALTH ENDPOINT
+--------------------------------------------------------------------------------
+❌ API Health: NOT RESPONDING (HTTP 404)
+
+TEST 9: API AUTHENTICATION CHECK
+--------------------------------------------------------------------------------
+✅ Authentication: WORKING (HTTP 401 - Unauthorized as expected)
+
+TEST 10: ALL BLOCKCHAIN PEER PORTS
+--------------------------------------------------------------------------------
+❌ Port 7051: CLOSED
+❌ Port 8051: CLOSED
+❌ Port 9051: CLOSED
+❌ Port 10051: CLOSED
+❌ Port 11051: CLOSED
+❌ Port 12051: CLOSED
+
+================================================================================
+SUMMARY
+================================================================================
+
+Critical Ports Open: 0 / 5
+Containers Running: 18
+
+❌ VERDICT: SYSTEM NOT RUNNING
+
+No critical ports are open. System needs to be started.
+Run: ./start-all.sh
+
+================================================================================
+Test completed: Sat Oct 10 11:11:27 AM EAT 2026
+Results saved to: /home/guda/GoCBC/test-results-20261010-111127.txt
+================================================================================
+
+Test results saved to: /home/guda/GoCBC/test-results-20261010-111127.txt

@@ -1,0 +1,27 @@
+{
+    "total_rows": 3,
+    "offset": 0,
+    "rows": [
+        {
+            "id": "CHANNEL_CONFIG_ENV_BYTES",
+            "key": "CHANNEL_CONFIG_ENV_BYTES",
+            "value": {
+                "rev": "1-d677fb85a9ad7bbc176ce32fe700ef81"
+            }
+        },
+        {
+            "id": "channel_metadata",
+            "key": "channel_metadata",
+            "value": {
+                "rev": "11-8608780659f02b489e2896b1281274c3"
+            }
+        },
+        {
+            "id": "statedb_savepoint",
+            "key": "statedb_savepoint",
+            "value": {
+                "rev": "8-b1a2e6239f24878022280d8b8e459367"
+            }
+        }
+    ]
+}

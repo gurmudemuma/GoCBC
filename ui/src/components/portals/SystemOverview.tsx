@@ -118,7 +118,7 @@ const SystemOverview: React.FC = () => {
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
-      <Paper sx={{ p: 3, mb: 3, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      <Paper sx={{ p: 3, mb: 3, background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)' }}>
         <Typography variant="h4" sx={{ color: 'white', fontWeight: 'bold', mb: 1 }}>
           System Overview - Aggregate Statistics
         </Typography>

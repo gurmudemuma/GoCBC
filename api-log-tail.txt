@@ -1,0 +1,39 @@
+
+> cecbs-api@1.2.0 dev
+> ts-node-dev --respawn --transpile-only src/server.ts
+
+[INFO] 16:15:51 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.9.3)
+[32minfo[39m: 📋 Environment Configuration: {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.739Z"}
+[32minfo[39m:   Node Environment: development {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.741Z"}
+[32minfo[39m:   Port: 3001 {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.741Z"}
+[32minfo[39m:   Database: postgresql://cecbs:cecbs123@localhost:5432/cecbs {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.741Z"}
+[32minfo[39m:   Fabric Enabled: true {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.741Z"}
+[32minfo[39m:   Fabric MSP: ECTAMSP {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   Fabric Channel: coffeechannel {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   Fabric Chaincode: coffee {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   IPFS Enabled: true {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   IPFS Host: localhost:5001 {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   JWT Secret: cecbs-se... (64 chars) {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m:   Encryption Key: cecbs_do... (63 chars) {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[32minfo[39m: ✅ Environment variables validated successfully {"service":"cecbs-api","timestamp":"2026-10-09T13:15:51.742Z"}
+[33mwarn[39m: ⚠️  Email service not configured. Set SMTP_USER and SMTP_PASSWORD in .env {"service":"cecbs-api","timestamp":"2026-10-09T13:15:52.487Z"}
+[32minfo[39m: 🔄 Checking for database migrations... {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.312Z"}
+[32minfo[39m: ✅ PostgreSQL connected {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.324Z"}
+[32minfo[39m: ✅ PostgreSQL connected {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.325Z"}
+[32minfo[39m: Loaded 0 active webhooks {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.327Z"}
+[32minfo[39m: 📋 Found 3 migration file(s) {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.328Z"}
+[32minfo[39m:    ⏭️  Skipping already applied: 000_initial_schema {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.328Z"}
+[32minfo[39m:    ⏭️  Skipping already applied: 017_create_blockchain_sync_tables {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.328Z"}
+[32minfo[39m:    ⏭️  Skipping already applied: 019_create_repatriation_table {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.329Z"}
+[32minfo[39m: ✅ All migrations up to date {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.329Z"}
+[32minfo[39m: Connecting to Hyperledger Fabric network as ECTAMSP... {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.329Z"}
+[32minfo[39m: ✅ Successfully connected to Hyperledger Fabric network as ECTAMSP {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.479Z"}
+[32minfo[39m: WebSocket server initialized {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.480Z"}
+[32minfo[39m: 🚀 CECBS API Gateway started on port 3001 {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.480Z"}
+[32minfo[39m: 📚 API Documentation: http://localhost:3001/api-docs {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.480Z"}
+[32minfo[39m: 🏥 Health Check: http://localhost:3001/health {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.480Z"}
+[32minfo[39m: 🌐 Environment: development {"service":"cecbs-api","timestamp":"2026-10-09T13:15:53.480Z"}
+[32minfo[39m: Shutting down server... {"service":"cecbs-api","timestamp":"2026-10-09T13:16:09.663Z"}
+[32minfo[39m: Disconnected from Hyperledger Fabric network {"service":"cecbs-api","timestamp":"2026-10-09T13:16:09.664Z"}
+[32minfo[39m: Database connection closed {"service":"cecbs-api","timestamp":"2026-10-09T13:16:09.664Z"}
+[32minfo[39m: Server shutdown complete {"service":"cecbs-api","timestamp":"2026-10-09T13:16:09.664Z"}
