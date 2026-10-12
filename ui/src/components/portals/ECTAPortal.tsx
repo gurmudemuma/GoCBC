@@ -506,7 +506,7 @@ const ECTAPortal: React.FC = () => {
       
       // Set database applications
       console.log('[ECTA] Applications API response:', applicationsRes);
-      const appsData = applicationsRes.data?.data;
+      const appsData = applicationsRes.data?.data?.applications || applicationsRes.data?.data;
       console.log('[ECTA] Applications data:', appsData);
       
       if (appsData && Array.isArray(appsData)) {
@@ -514,13 +514,13 @@ const ECTAPortal: React.FC = () => {
         setApplications(appsData);
         setAllApplications(appsData);
       } else {
-        console.warn('[ECTA] ⚠️ No applications data or invalid format');
+        console.warn('[ECTA] ⚠️ No applications data or invalid format:', appsData);
         setApplications([]);
         setAllApplications([]);
       }
 
       // Set approved applications (source of truth for exporter count)
-      const approvedAppsData = approvedApplicationsRes.data?.data;
+      const approvedAppsData = approvedApplicationsRes.data?.data?.applications || approvedApplicationsRes.data?.data;
       if (approvedAppsData && Array.isArray(approvedAppsData)) {
         console.log(`[ECTA] ✅ Loaded ${approvedAppsData.length} approved applications`);
         setApprovedApplications(approvedAppsData);

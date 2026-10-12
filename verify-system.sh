@@ -78,7 +78,8 @@ test_service "UI Access" "curl -s -o /dev/null -w '%{http_code}' http://localhos
 echo ""
 
 echo -e "${BOLD}5. Blockchain Channel${RESET}"
-test_service "Channel Data" "curl -s http://localhost:5984/coffeechannel/_all_docs | grep -q total_rows"
+test_service "Channel Data" "curl -s http://admin:adminpw@localhost:5984/_all_dbs | grep -q coffeechannel"
+test_service "Channel Height" "docker exec peer0.ecta.cecbs.et peer channel getinfo -c coffeechannel 2>&1 | grep -q height"
 echo ""
 
 echo -e "${CYAN}${BOLD}"

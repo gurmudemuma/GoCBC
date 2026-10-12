@@ -336,12 +336,13 @@ router.post('/',
       }
 
       // Validate exporter-specific fields
-      if (role === 'EXPORTER' && (!exporterId || !ectaLicense)) {
+      // ✅ FIX: Make ectaLicense optional - it will be generated during application approval
+      if (role === 'EXPORTER' && !exporterId) {
         return res.status(400).json({
           success: false,
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'Exporter users require exporterId and ectaLicense',
+            message: 'Exporter users require exporterId',
           },
           timestamp: new Date().toISOString(),
         });
@@ -380,7 +381,7 @@ router.post('/',
           fullName,
           role,
           organization,
-          exporterId || null,
+          exporterId || null,  // ✅ FIX: Store as exporter_id (snake_case) in database
           ectaLicense || null,
           phone || null,
           JSON.stringify(permissions || []),

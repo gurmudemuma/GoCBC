@@ -1,0 +1,9 @@
+===================================================================
+GoCBC Complete Workflow Test - FULLY CORRECTED
+Testing with proper authentication, roles, and endpoint paths
+===================================================================
+
+
+===================================================================
+STEP 1: Submit Exporter Application (Public Endpoint)
+===================================================================

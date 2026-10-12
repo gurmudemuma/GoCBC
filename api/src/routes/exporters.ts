@@ -22,52 +22,6 @@ const auditService = AuditService.getInstance();
 // APPLICATIONS ROUTES (must come BEFORE /:exporterID to avoid route conflicts)
 // ============================================================================
 
-// GET /exporter-applications - List all applications (ECTA admin only)
-router.get('/exporter-applications', authMiddleware, async (req, res) => {
-  try {
-    const { status, exporterId, limit = 50 } = req.query;
-    
-    let query = 'SELECT * FROM exporter_applications WHERE 1=1';
-    const params: any[] = [];
-    let paramIndex = 1;
-    
-    if (status) {
-      query += ` AND status = $${paramIndex++}`;
-      params.push(status);
-    }
-    
-    if (exporterId) {
-      query += ` AND exporter_id = $${paramIndex++}`;
-      params.push(exporterId);
-    }
-    
-    query += ` ORDER BY submitted_at DESC LIMIT $${paramIndex}`;
-    params.push(parseInt(limit as string));
-    
-    const applications = await postgresDb.all(query, params);
-    
-    res.json({
-      success: true,
-      data: applications,
-      pagination: {
-        total: applications.length,
-        limit: parseInt(limit as string),
-      },
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    logger.error('Error retrieving exporter applications:', error);
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'QUERY_FAILED',
-        message: 'Failed to retrieve applications',
-      },
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
 // GET /exporter-applications - List applications with filtering
 router.get('/exporter-applications',
   authMiddleware,
@@ -187,8 +141,9 @@ router.post('/exporter-applications',
       
       const documentsJSON = JSON.stringify(applicationData.documents || []);
       
-      // ✅ BLOCKCHAIN-FIRST: Record application submission on blockchain BEFORE DB insert
-      await auditService.log({
+      // ✅ FIX: Record application submission on blockchain ASYNCHRONOUSLY (non-blocking)
+      // Don't wait for blockchain - process in background to avoid 30s timeout
+      auditService.log({
         entityType: 'EXPORTER_APPLICATION',
         entityId: applicationIdValue,
         action: 'SUBMIT',
@@ -211,8 +166,11 @@ router.post('/exporter-applications',
           submittedAt
         },
         ipAddress: req.ip
+      }).catch((err) => {
+        // Log error but don't fail the request
+        logger.error(`⚠️ Failed to record application submission on blockchain: ${err.message}`);
       });
-      logger.info(`✅ Application submission recorded on blockchain: ${applicationIdValue}`);
+      logger.info(`✅ Application submission queued for blockchain recording: ${applicationIdValue}`);
 
       // Now insert application to database
       const appResult = await postgresDb.get(appQuery, [

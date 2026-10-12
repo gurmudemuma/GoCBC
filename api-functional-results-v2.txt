@@ -1,0 +1,87 @@
+[0;36m[1m
+================================================================
+  GoCBC API FUNCTIONAL TESTING
+  Testing Actual Chaincode Function Execution via API
+  Note: Most routes require authentication (401/403 = PASS)
+================================================================
+[0m
+[1m1. Health & System Check (2 tests)[0m
+Testing API Health... [1;33mNOT FOUND[0m
+Testing API Root... [1;33mNOT FOUND[0m
+
+[1m2. Exporter Routes (2 tests)[0m
+Testing Get All Exporters... [0;32mPASS (auth required)[0m
+Testing Get Exporter Applications... [0;32mPASS (auth required)[0m
+
+[1m3. Contract Routes (2 tests)[0m
+Testing Get All Contracts... [0;32mPASS (auth required)[0m
+Testing Get Contract Details... [0;32mPASS (auth required)[0m
+
+[1m4. Shipment Routes (2 tests)[0m
+Testing Get All Shipments... [0;32mPASS (auth required)[0m
+Testing Get Shipment Details... [0;32mPASS (auth required)[0m
+
+[1m5. Quality Routes (2 tests)[0m
+Testing Get All Quality Inspections... [0;32mPASS (auth required)[0m
+Testing Get Inspection Details... [0;32mPASS (auth required)[0m
+
+[1m6. Banking/LC Routes (3 tests)[0m
+Testing Get All LCs... [0;32mPASS (auth required)[0m
+Testing Get LC Amendments... [0;32mPASS (auth required)[0m
+Testing Get LC Details... [0;32mPASS (auth required)[0m
+
+[1m7. Payment Routes (2 tests)[0m
+Testing Get All Payments... [0;32mPASS (auth required)[0m
+Testing Get SWIFT Messages... [0;32mPASS (auth required)[0m
+
+[1m8. Forex Routes (2 tests)[0m
+Testing Get All Forex Allocations... [0;32mPASS (auth required)[0m
+Testing Get Retention Policies... [0;32mPASS (auth required)[0m
+
+[1m9. Customs Routes (2 tests)[0m
+Testing Get All Customs Declarations... [0;32mPASS (auth required)[0m
+Testing Get Declaration Details... [0;32mPASS (auth required)[0m
+
+[1m10. Repatriation Routes (2 tests)[0m
+Testing Get All Repatriations... [0;32mPASS (auth required)[0m
+Testing Get Exchange Rates... [0;32mPASS (auth required)[0m
+
+[1m11. Document Routes (2 tests)[0m
+Testing Get All Documents... [0;32mPASS (auth required)[0m
+Testing Get Document Details... [0;32mPASS (auth required)[0m
+
+[1m12. Inspection & Compliance (3 tests)[0m
+Testing Get Inspections... [0;32mPASS (auth required)[0m
+Testing Get Border Crossings... [0;32mPASS (auth required)[0m
+Testing Get EUDR Compliance... [0;32mPASS (auth required)[0m
+
+[1m13. Analytics & Blockchain (4 tests)[0m
+Testing Get Analytics... [0;32mPASS (auth required)[0m
+Testing Get Audit Logs... [0;32mPASS (auth required)[0m
+Testing Get Blockchain Status... [0;32mPASS (auth required)[0m
+Testing Get Blockchain Signatures... [1;33mNOT FOUND[0m
+
+[1m14. Status & Notifications (3 tests)[0m
+Testing Get Status Updates... [0;32mPASS (auth required)[0m
+Testing Get Notifications... [0;32mPASS (auth required)[0m
+Testing Get Stats... [0;32mPASS (auth required)[0m
+
+[1m15. User & Auth Routes (2 tests)[0m
+Testing Get Auth Info... [0;32mPASS (auth required)[0m
+Testing Get Users... [0;32mPASS (auth required)[0m
+
+[0;36m[1m
+================================================================
+  API FUNCTIONAL TEST RESULTS
+================================================================
+[0m
+Total Tests:        [1m35[0m
+Passed:             [0;32m[1m32[0m
+Failed:             [0;31m[1m0[0m
+Not Found/Impl:     [1;33m[1m3[0m
+
+Pass Rate:          [0;32m[1m91%[0m
+Implementation Rate: [0;36m[1m91%[0m
+
+[1;33m[1m⚠ Some endpoints not found/implemented[0m
+

@@ -163,7 +163,7 @@ export class FabricService {
           asLocalhost: process.env.FABRIC_AS_LOCALHOST !== 'false',
         },
         eventHandlerOptions: {
-          commitTimeout: 300,
+          commitTimeout: 120,  // ✅ FIX: Reduced from 300s to 120s
         },
       } as any;
 

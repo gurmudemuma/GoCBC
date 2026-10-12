@@ -1,0 +1,28 @@
+[0;36m[1m
+================================================================
+  GoCBC REAL TRANSACTION EXECUTION TEST
+  Actually Creating Data and Verifying Functions Work
+================================================================
+[0m
+
+[1mStep 1: Authentication[0m
+
+Logging in... [0;32m✓ Logged in successfully[0m
+
+[1mStep 2: Creating Real Test Data[0m
+
+1. Register Exporter... [0;31m✗ FAIL (HTTP 404)[0m
+   Response: {"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/v1/exporters/register not found"},"timestamp":"2026-10-11T13:19:15.901Z"}
+2. Retrieve Created Exporter... [0;31m✗ FAIL (HTTP 404)[0m
+   Response: {"success":false,"error":{"code":"NOT_FOUND","message":"Query failed. Errors: [\"Error: REQUEST TIMEOUT\"]"},"timestamp":"2026-10-11T13:19:45.933Z"}
+3. Create Sales Contract... [0;31m✗ FAIL (HTTP 400)[0m
+   Response: {"success":false,"error":{"code":"VALIDATION_ERROR","message":"Invalid input data","details":[{"field":"contractID","message":"Contract ID is required
+4. Retrieve Created Contract... [0;31m✗ FAIL (HTTP 404)[0m
+   Response: {"success":false,"error":{"code":"NOT_FOUND","message":"Query failed. Errors: [\"Error: REQUEST TIMEOUT\"]"},"timestamp":"2026-10-11T13:20:15.974Z"}
+5. Approve Contract... [0;31m✗ FAIL (HTTP 403)[0m
+   Response: {"success":false,"error":{"code":"FORBIDDEN","message":"Only ECTA users can approve sales contracts for export compliance"},"timestamp":"2026-10-11T13
+6. Create Shipment... [0;31m✗ FAIL (HTTP 400)[0m
+   Response: {"success":false,"error":{"code":"VALIDATION_ERROR","message":"Invalid input data","details":[{"field":"shipmentID","message":"Shipment ID is required
+7. Retrieve Created Shipment... [0;31m✗ FAIL (HTTP 404)[0m
+   Response: {"success":false,"error":{"code":"NOT_FOUND","message":"Query failed. Errors: [\"Error: REQUEST TIMEOUT\"]"},"timestamp":"2026-10-11T13:20:46.020Z"}
+8. Update Shipment Status... 

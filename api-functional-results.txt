@@ -1,0 +1,79 @@
+[0;36m[1m
+================================================================
+  GoCBC API FUNCTIONAL TESTING
+  Testing Actual Chaincode Function Execution via API
+================================================================
+[0m
+[1m1. Health & System Check (2 tests)[0m
+Testing API Health... [0;32mPASS (200)[0m
+Testing API Root... [0;32mPASS (200)[0m
+
+[1m2. Exporter Routes (3 tests)[0m
+Testing Get All Exporters... [1;33mNOT FOUND[0m
+Testing Get All Exporters (blockchain)... [1;33mNOT FOUND[0m
+Testing Get Exporter Details... [1;33mNOT FOUND[0m
+
+[1m3. Contract Routes (3 tests)[0m
+Testing Get All Contracts... [1;33mNOT FOUND[0m
+Testing Get All Contracts (blockchain)... [1;33mNOT FOUND[0m
+Testing Get Contract Details... [1;33mNOT FOUND[0m
+
+[1m4. Shipment Routes (3 tests)[0m
+Testing Get All Shipments... [1;33mNOT FOUND[0m
+Testing Get All Shipments (blockchain)... [1;33mNOT FOUND[0m
+Testing Get Shipment Details... [1;33mNOT FOUND[0m
+
+[1m5. Quality Routes (2 tests)[0m
+Testing Get All Quality Inspections... [1;33mNOT FOUND[0m
+Testing Get Inspection Details... [1;33mNOT FOUND[0m
+
+[1m6. Banking/LC Routes (3 tests)[0m
+Testing Get All LCs... [1;33mNOT FOUND[0m
+Testing Get LC List... [1;33mNOT FOUND[0m
+Testing Get LC Details... [1;33mNOT FOUND[0m
+
+[1m7. Payment Routes (3 tests)[0m
+Testing Get All Payments... [1;33mNOT FOUND[0m
+Testing Get Payment Details... [1;33mNOT FOUND[0m
+Testing Get SWIFT Messages... [1;33mNOT FOUND[0m
+
+[1m8. Forex Routes (2 tests)[0m
+Testing Get All Forex Allocations... [1;33mNOT FOUND[0m
+Testing Get Forex Details... [1;33mNOT FOUND[0m
+
+[1m9. Customs Routes (2 tests)[0m
+Testing Get All Customs Declarations... [1;33mNOT FOUND[0m
+Testing Get Declaration Details... [1;33mNOT FOUND[0m
+
+[1m10. Repatriation Routes (2 tests)[0m
+Testing Get All Repatriations... [1;33mNOT FOUND[0m
+Testing Get Repatriation Details... [1;33mNOT FOUND[0m
+
+[1m11. Document Routes (2 tests)[0m
+Testing Get All Documents... [1;33mNOT FOUND[0m
+Testing Get Document Details... [1;33mNOT FOUND[0m
+
+[1m12. Analytics & Audit Routes (3 tests)[0m
+Testing Get Analytics... [1;33mNOT FOUND[0m
+Testing Get Audit Logs... [1;33mNOT FOUND[0m
+Testing Get Blockchain Status... [1;33mNOT FOUND[0m
+
+[1m13. User & Auth Routes (2 tests)[0m
+Testing Get Users... [1;33mNOT FOUND[0m
+Testing Get Current User... [1;33mNOT FOUND[0m
+
+[0;36m[1m
+================================================================
+  API FUNCTIONAL TEST RESULTS
+================================================================
+[0m
+Total Tests:        [1m32[0m
+Passed:             [0;32m[1m2[0m
+Failed:             [0;31m[1m0[0m
+Not Found/Impl:     [1;33m[1m30[0m
+
+Pass Rate:          [0;32m[1m6%[0m
+Implementation Rate: [0;36m[1m6%[0m
+
+[1;33m[1m⚠ Some endpoints not found/implemented[0m
+

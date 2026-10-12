@@ -258,24 +258,86 @@ router.post('/',
         logger.info(`Shipment ${shipmentID}: Linking ${documentIDs.length} documents to blockchain`);
       }
 
-      const result = await fabricService.createShipment(
-        shipmentID,
-        contractID,
-        finalExporterID,
-        finalBuyerID,
-        origin,
-        finalQuantity.toString(),
-        finalGrade,
-        icoNumber,
-        ecxLotNumber || '', // Default to empty string if not provided
-        channel,
-        forexRate.toString(),
-        finalValueUSD.toString(),
-        eudrCompliant.toString(),
-        JSON.stringify(documentIDs)
-      );
+      let result;
+      let blockchainWriteSuccessful = false;
+      
+      try {
+        result = await fabricService.createShipment(
+          shipmentID,
+          contractID,
+          finalExporterID,
+          finalBuyerID,
+          origin,
+          finalQuantity.toString(),
+          finalGrade,
+          icoNumber,
+          ecxLotNumber || '', // Default to empty string if not provided
+          channel,
+          forexRate.toString(),
+          finalValueUSD.toString(),
+          eudrCompliant.toString(),
+          JSON.stringify(documentIDs)
+        );
+        blockchainWriteSuccessful = result.success;
+      } catch (blockchainError: any) {
+        // ✅ FIX: Don't fail the entire request if blockchain times out
+        logger.error(`⚠️ Blockchain write failed for shipment ${shipmentID}: ${blockchainError.message}`);
+        result = {
+          success: false,
+          error: blockchainError.message,
+          txId: null
+        };
+      }
 
-      if (result.success) {
+      // ✅ FIX: Always save to PostgreSQL regardless of blockchain status
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      try {
+        await db.run(
+          `INSERT INTO shipments (
+            shipment_id, contract_id, exporter_id, buyer_id, origin, quantity, grade,
+            ico_number, ecx_lot_number, channel, forex_rate, value_usd, eudr_compliant,
+            status, blockchain_tx_id, blockchain_synced, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)`,
+          [
+            shipmentID,
+            contractID,
+            finalExporterID,
+            finalBuyerID,
+            origin,
+            finalQuantity,
+            finalGrade,
+            icoNumber,
+            ecxLotNumber || '',
+            channel,
+            forexRate,
+            finalValueUSD,
+            eudrCompliant,
+            'pending', // Initial status
+            result.txId || null,
+            blockchainWriteSuccessful,
+          ]
+        );
+        logger.info(`✅ Shipment ${shipmentID} saved to PostgreSQL (blockchain: ${blockchainWriteSuccessful ? 'synced' : 'pending'})`);
+        
+        // ✅ OPTIMIZATION: Invalidate cache for this shipment and related queries
+        const { CacheInvalidation } = await import('../services/blockchainCacheService');
+        CacheInvalidation.shipment(shipmentID, contractID);
+        
+      } catch (dbError: any) {
+        logger.error(`❌ Failed to save shipment ${shipmentID} to PostgreSQL: ${dbError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'DATABASE_ERROR',
+            message: 'Failed to save shipment to database'
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (blockchainWriteSuccessful) {
         logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
         
         // DON'T link shipment to LC yet - this will be done after ECTA quality approval
@@ -284,7 +346,7 @@ router.post('/',
         
         res.status(201).json({
           success: true,
-          data: result.data,
+          data: { shipmentID, status: 'pending', blockchainSynced: true },
           autoMapped: {
             exporterID: finalExporterID,
             buyerID: finalBuyerID,
@@ -297,12 +359,21 @@ router.post('/',
           timestamp: new Date().toISOString(),
         });
       } else {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'CREATION_FAILED',
-            message: result.error || 'Failed to create shipment',
+        // ✅ FIX: Return 202 Accepted instead of 400
+        logger.warn(`Shipment ${shipmentID} saved to database but blockchain write failed. Will retry later.`);
+        res.status(202).json({
+          success: true,
+          warning: 'Shipment saved but blockchain sync pending',
+          data: { shipmentID, status: 'pending', blockchainSynced: false },
+          autoMapped: {
+            exporterID: finalExporterID,
+            buyerID: finalBuyerID,
+            quantity: finalQuantity,
+            grade: finalGrade,
+            valueUSD: finalValueUSD,
           },
+          documentsLinked: documentIDs.length,
+          txId: null,
           timestamp: new Date().toISOString(),
         });
       }
@@ -626,22 +697,82 @@ router.get('/:shipmentID',
   async (req, res) => {
     try {
       const { shipmentID } = req.params;
-      const result = await fabricService.getShipment(shipmentID);
-
-      if (result.success) {
-        // FIX: Handle null ecxLots from blockchain (convert to empty array)
-        if (result.data) {
-          if (result.data.ecxLots === null || result.data.ecxLots === undefined) {
-            result.data.ecxLots = [];
-          }
-          if (result.data.documents === null || result.data.documents === undefined) {
-            result.data.documents = [];
-          }
-        }
+      const { blockchainCache, CacheKeys } = await import('../services/blockchainCacheService');
+      
+      // ✅ OPTIMIZATION: Try cache first, then blockchain, then PostgreSQL
+      let shipmentData = null;
+      let source = 'cache';
+      
+      try {
+        shipmentData = await blockchainCache.get(
+          CacheKeys.shipment(shipmentID),
+          async () => {
+            const result = await fabricService.getShipment(shipmentID);
+            if (result.success) {
+              const data = result.data;
+              // Handle null values
+              if (data) {
+                if (data.ecxLots === null || data.ecxLots === undefined) {
+                  data.ecxLots = [];
+                }
+                if (data.documents === null || data.documents === undefined) {
+                  data.documents = [];
+                }
+              }
+              return data;
+            }
+            throw new Error('Shipment not found on blockchain');
+          },
+          5 * 60 * 1000 // 5 minute cache
+        );
         
+        source = 'blockchain'; // Either cache hit or fresh fetch
+      } catch (blockchainError: any) {
+        logger.warn(`Blockchain query failed for shipment ${shipmentID}, falling back to PostgreSQL: ${blockchainError.message}`);
+      }
+      
+      // Fall back to PostgreSQL if blockchain failed
+      if (!shipmentData) {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        
+        const shipment = await db.get(
+          `SELECT * FROM shipments WHERE shipment_id = $1`,
+          [shipmentID]
+        );
+        
+        if (shipment) {
+          source = 'database';
+          shipmentData = {
+            shipmentID: shipment.shipment_id,
+            contractID: shipment.contract_id,
+            exporterID: shipment.exporter_id,
+            buyerID: shipment.buyer_id,
+            origin: shipment.origin,
+            destination: shipment.destination,
+            quantity: shipment.quantity,
+            grade: shipment.grade,
+            icoNumber: shipment.ico_number,
+            ecxLotNumber: shipment.ecx_lot_number,
+            channel: shipment.channel,
+            forexRate: shipment.forex_rate,
+            valueUSD: shipment.value_usd,
+            eudrCompliant: shipment.eudr_compliant,
+            status: shipment.status,
+            blockchainTxId: shipment.blockchain_tx_id,
+            blockchainSynced: shipment.blockchain_synced || false,
+            createdAt: shipment.created_at,
+            ecxLots: [],
+            documents: []
+          } as any;
+        }
+      }
+
+      if (shipmentData) {
         res.json({
           success: true,
-          data: result.data,
+          data: shipmentData,
+          source: source,
           timestamp: new Date().toISOString(),
         });
       } else {
@@ -649,7 +780,7 @@ router.get('/:shipmentID',
           success: false,
           error: {
             code: 'NOT_FOUND',
-            message: result.error || 'Shipment not found',
+            message: 'Shipment not found in blockchain or database',
           },
           timestamp: new Date().toISOString(),
         });

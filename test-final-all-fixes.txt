@@ -1,0 +1,185 @@
+======================================================================
+GoCBC Complete Workflow Test - Python Implementation
+======================================================================
+Timestamp: 1791782049
+Date: 2026-10-12T08:14:09.764780
+
+======================================================================
+STEP 1: Health Check
+======================================================================
+
+======================================================================
+[94mTEST: Health Check[0m
+Endpoint: GET http://localhost:3001/health
+HTTP Status: 200
+Response: {
+  "status": "healthy",
+  "timestamp": "2026-10-12T05:14:09.767Z",
+  "version": "1.2.0",
+  "services": {
+    "database": true,
+    "blockchain": true
+  }
+}...
+[92m✓ PASS[0m
+
+======================================================================
+STEP 2: Admin Login
+======================================================================
+
+======================================================================
+[94mTEST: Admin Login[0m
+Endpoint: POST http://localhost:3001/api/v1/auth/login
+HTTP Status: 200
+Response: {
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJJZCI6MSwidXNlcm5hbWUiOiJhZG1pbiIsInJvbGUiOiJBRE1JTiIsIm9yZyI6IkNFQ0JTIiwib3JnYW5pemF0aW9uIjoiQ0VDQlMiLCJwZXJtaXNzaW9ucyI6WyJhZG1pbjpzeXN0ZW0iLCJ1c2VyczpjcmVhdGUiLCJ1c2VyczpyZWFkIiwidXNlcnM6dXBkYXRl...
+[92m✓ PASS[0m
+[92mAdmin Token: eyJhbGciOiJIUzI1NiIsInR5cCI6Ik...[0m
+
+======================================================================
+STEP 3: Submit Exporter Application
+======================================================================
+[93m✓ Using CORRECTED path: /api/v1/exporters/exporter-applications[0m
+
+======================================================================
+[94mTEST: Submit Exporter Application[0m
+Endpoint: POST http://localhost:3001/api/v1/exporters/exporter-applications
+HTTP Status: 500
+Response: {
+  "success": false,
+  "error": {
+    "code": "SUBMISSION_FAILED",
+    "message": "column \"registration_date\" of relation \"exporter_applications\" does not exist"
+  },
+  "timestamp": "2026-10-12T05:14:09.842Z"
+}...
+[91m✗ FAIL (HTTP 500)[0m
+Application ID: None
+Application Email: exporter_1791782049@test.com
+
+======================================================================
+STEP 4: Create Exporter User
+======================================================================
+
+======================================================================
+[94mTEST: Create Exporter User[0m
+Endpoint: POST http://localhost:3001/api/v1/users
+HTTP Status: 201
+Response: {
+  "success": true,
+  "data": {
+    "id": 4,
+    "username": "exporter_1791782049",
+    "email": "exporter_1791782049@test.com",
+    "fullName": "Test Coffee Ltd 1791782049",
+    "role": "EXPORTER",
+    "organization": "EXPORTER",
+    "status": "active"
+  },
+  "timestamp": "2026-10-12T05:14:09.905Z...
+[92m✓ PASS[0m
+
+======================================================================
+STEP 5: Login as Exporter
+======================================================================
+
+======================================================================
+[94mTEST: Exporter Login[0m
+Endpoint: POST http://localhost:3001/api/v1/auth/login
+HTTP Status: 200
+Response: {
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjQsInVzZXJJZCI6NCwidXNlcm5hbWUiOiJleHBvcnRlcl8xNzkxNzgyMDQ5Iiwicm9sZSI6IkVYUE9SVEVSIiwib3JnIjoiRVhQT1JURVIiLCJvcmdhbml6YXRpb24iOiJFWFBPUlRFUiIsInBlcm1pc3Npb25zIjpbImNvbnRyYWN0czpjcmVhdGUiLCJjb250cmFjdHM6dmll...
+[92m✓ PASS[0m
+[92mExporter Token: eyJhbGciOiJIUzI1NiIsInR5cCI6Ik...[0m
+
+======================================================================
+STEP 6: Create Sales Contract
+======================================================================
+[93m✓ Using CORRECTED field names: contractID, exporterID, buyerID (uppercase)[0m
+
+======================================================================
+[94mTEST: Create Sales Contract[0m
+Endpoint: POST http://localhost:3001/api/v1/contracts
+HTTP Status: 403
+Response: {
+  "success": false,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "You can only register contracts for your own organization"
+  },
+  "timestamp": "2026-10-12T05:14:09.967Z"
+}...
+[91m✗ FAIL (HTTP 403)[0m
+Contract ID: CNT-1791782049
+Blockchain TX: N/A
+
+======================================================================
+STEP 7: Create Shipment
+======================================================================
+
+======================================================================
+[94mTEST: Create Shipment[0m
+Endpoint: POST http://localhost:3001/api/v1/shipments
+[91m✗ FAIL: HTTPConnectionPool(host='localhost', port=3001): Read timed out. (read timeout=30)[0m
+Shipment ID: SHP-1791782049
+Blockchain TX: N/A
+
+======================================================================
+STEP 8: Query Blockchain Data
+======================================================================
+
+Querying contract from blockchain...
+
+======================================================================
+[94mTEST: Query Contract[0m
+Endpoint: GET http://localhost:3001/api/v1/contracts/CNT-1791782049
+HTTP Status: 404
+Response: {
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Query failed. Errors: [\"Error: REQUEST TIMEOUT\"]"
+  },
+  "timestamp": "2026-10-12T05:15:10.004Z"
+}...
+[91m✗ FAIL (HTTP 404)[0m
+
+Querying shipment from blockchain...
+
+======================================================================
+[94mTEST: Query Shipment[0m
+Endpoint: GET http://localhost:3001/api/v1/shipments/SHP-1791782049
+HTTP Status: 404
+Response: {
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Query failed. Errors: [\"Error: REQUEST TIMEOUT\"]"
+  },
+  "timestamp": "2026-10-12T05:15:40.010Z"
+}...
+[91m✗ FAIL (HTTP 404)[0m
+
+======================================================================
+TEST SUMMARY
+======================================================================
+[92m✓ Tests Passed: 4[0m
+[91m✗ Tests Failed: 5[0m
+
+Test Data Created:
+  Application ID: None
+  Exporter ID: EXP-1791782049
+  Contract ID: CNT-1791782049
+  Shipment ID: SHP-1791782049
+  Contract TX: N/A
+  Shipment TX: N/A
+
+[93m⚠ SOME TESTS FAILED[0m
+Tests passed: 4/9
+
+Log saved to: workflow-test-python.log
+Results saved to: workflow-test-results.json

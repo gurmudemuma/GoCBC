@@ -1,0 +1,94 @@
+======================================================================
+GoCBC Complete Workflow Test - Python Implementation
+======================================================================
+Timestamp: 1791742112
+Date: 2026-10-11T21:08:32.691336
+
+======================================================================
+STEP 1: Health Check
+======================================================================
+
+======================================================================
+[94mTEST: Health Check[0m
+Endpoint: GET http://localhost:3001/health
+HTTP Status: 200
+Response: {
+  "status": "healthy",
+  "timestamp": "2026-10-11T18:08:32.693Z",
+  "version": "1.2.0",
+  "services": {
+    "database": true,
+    "blockchain": true
+  }
+}...
+[92m✓ PASS[0m
+
+======================================================================
+STEP 2: Admin Login
+======================================================================
+
+======================================================================
+[94mTEST: Admin Login[0m
+Endpoint: POST http://localhost:3001/api/v1/auth/login
+HTTP Status: 200
+Response: {
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJJZCI6MSwidXNlcm5hbWUiOiJhZG1pbiIsInJvbGUiOiJBRE1JTiIsIm9yZyI6IkNFQ0JTIiwib3JnYW5pemF0aW9uIjoiQ0VDQlMiLCJwZXJtaXNzaW9ucyI6WyJhZG1pbjpzeXN0ZW0iLCJ1c2VyczpjcmVhdGUiLCJ1c2VyczpyZWFkIiwidXNlcnM6dXBkYXRl...
+[92m✓ PASS[0m
+[92mAdmin Token: eyJhbGciOiJIUzI1NiIsInR5cCI6Ik...[0m
+
+======================================================================
+STEP 3: Submit Exporter Application
+======================================================================
+[93m✓ Using CORRECTED path: /api/v1/exporters/exporter-applications[0m
+
+======================================================================
+[94mTEST: Submit Exporter Application[0m
+Endpoint: POST http://localhost:3001/api/v1/exporters/exporter-applications
+[91m✗ FAIL: HTTPConnectionPool(host='localhost', port=3001): Read timed out. (read timeout=30)[0m
+Application ID: None
+Application Email: exporter_1791742112@test.com
+
+======================================================================
+STEP 4: Create Exporter User
+======================================================================
+
+======================================================================
+[94mTEST: Create Exporter User[0m
+Endpoint: POST http://localhost:3001/api/v1/users
+HTTP Status: 400
+Response: {
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Exporter users require exporterId and ectaLicense"
+  },
+  "timestamp": "2026-10-11T18:09:02.788Z"
+}...
+[91m✗ FAIL (HTTP 400)[0m
+
+======================================================================
+STEP 5: Login as Exporter
+======================================================================
+
+======================================================================
+[94mTEST: Exporter Login[0m
+Endpoint: POST http://localhost:3001/api/v1/auth/login
+HTTP Status: 401
+Response: {
+  "success": false,
+  "error": {
+    "code": "INVALID_CREDENTIALS",
+    "message": "Invalid username or password"
+  }
+}...
+[91m✗ FAIL (HTTP 401)[0m
+
+[91mCRITICAL ERROR: 'NoneType' object is not subscriptable[0m
+Traceback (most recent call last):
+  File "/home/guda/GoCBC/test_workflow_complete.py", line 204, in main
+    log(f"{Colors.GREEN}Exporter Token: {exporter_token[:30]}...{Colors.END}")
+                                         ~~~~~~~~~~~~~~^^^^^
+TypeError: 'NoneType' object is not subscriptable
+

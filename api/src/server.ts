@@ -37,6 +37,7 @@ import { auditCaptureMiddleware } from './middleware/auditCapture';
 import { FabricService } from './services/fabricService';
 import { DatabaseService } from './services/databaseService';
 import { WebSocketService } from './services/websocketService';
+import { blockchainSyncService } from './services/blockchainSyncService';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -47,6 +48,9 @@ import contractRoutes from './routes/contracts';
 import shipmentRoutes from './routes/shipments';
 import analyticsRoutes from './routes/analytics';
 import blockchainRoutes from './routes/blockchain';
+import blockchainSyncRoutes from './routes/blockchain-sync';
+import monitoringRoutes from './routes/monitoring';
+import cacheRoutes from './routes/cache';
 import fileRoutes from './routes/files';
 import bankingRoutes from './routes/banking';
 import qualityRoutes from './routes/quality';
@@ -256,6 +260,9 @@ class CECBSServer {
     // V3.3 Blockchain Statistics & Health Monitoring
     const blockchainStatsRoutes = require('./routes/blockchain-stats').default;
     apiV1.use('/blockchain', authMiddleware, blockchainStatsRoutes); // Blockchain network statistics
+    apiV1.use('/blockchain-sync', authMiddleware, blockchainSyncRoutes); // Blockchain sync management (Admin only)
+    apiV1.use('/monitoring', authMiddleware, monitoringRoutes); // System monitoring dashboard (Admin only)
+    apiV1.use('/cache', authMiddleware, cacheRoutes); // Cache management (Admin only)
 
     // V3.3 Dual-Source Statistics - Fetch from BOTH CouchDB and PostgreSQL
     apiV1.use('/stats', authMiddleware, statsRoutes); // Bank portal stats from both blockchain and database
@@ -377,6 +384,9 @@ class CECBSServer {
         logger.info(`📚 API Documentation: http://localhost:${port}/api-docs`);
         logger.info(`🏥 Health Check: http://localhost:${port}/health`);
         logger.info(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+        
+        // Start blockchain sync service
+        blockchainSyncService.start();
       });
 
       // Graceful shutdown
@@ -391,6 +401,9 @@ class CECBSServer {
 
   private async shutdown(): Promise<void> {
     logger.info('Shutting down server...');
+    
+    // Stop blockchain sync service
+    blockchainSyncService.stop();
     
     if (this.server) {
       this.server.close();

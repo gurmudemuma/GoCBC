@@ -103,10 +103,12 @@ router.post('/',
         documents,
       } = req.body;
 
-      // ✅ FIX: Authorization check - only exporter can create their own contracts
+      // ✅ FIX: Authorization check - handle both field names (exporterId and exporter_id)
       const user = (req as any).user;
-      if (user.exporterId !== exporterID && user.username !== exporterID) {
-        logger.warn(`Unauthorized contract creation attempt: ${user.exporterId || user.username} tried to create contract for ${exporterID}`);
+      const userExporterId = user.exporterId || user.exporter_id || user.username;
+      
+      if (userExporterId !== exporterID && user.username !== exporterID && user.role !== 'ADMIN') {
+        logger.warn(`Unauthorized contract creation attempt: ${userExporterId} tried to create contract for ${exporterID}`);
         return res.status(403).json({
           success: false,
           error: {
@@ -151,41 +153,104 @@ router.post('/',
 
       // Use new function if payment method is provided, otherwise use old function (backward compatibility)
       let result;
-      if (paymentMethod) {
-        result = await fabricService.invokeChaincode('RegisterSalesContractWithPaymentMethod', [
-          contractID,
-          exporterID,
-          buyerID,
-          req.body.buyerName || buyerID, // ✅ FIX: Add buyerName parameter
-          buyerCountry,
-          coffeeType,
-          quantity.toString(),
-          pricePerKg.toString(),
-          currency,
-          eudrRequired.toString(),
-          buyerBank || '',
-          exporterBank || '',
-          paymentMethod,
-          JSON.stringify(documentIDs)
-        ]);
-      } else {
-        result = await fabricService.registerSalesContract(
-          contractID,
-          exporterID,
-          buyerID,
-          buyerCountry,
-          coffeeType,
-          quantity.toString(),
-          pricePerKg.toString(),
-          currency,
-          eudrRequired.toString(),
-          buyerBank || '',
-          exporterBank || '',
-          JSON.stringify(documentIDs)
-        );
+      let blockchainWriteSuccessful = false;
+      
+      try {
+        if (paymentMethod) {
+          result = await fabricService.invokeChaincode('RegisterSalesContractWithPaymentMethod', [
+            contractID,
+            exporterID,
+            buyerID,
+            req.body.buyerName || buyerID, // ✅ FIX: Add buyerName parameter
+            buyerCountry,
+            coffeeType,
+            quantity.toString(),
+            pricePerKg.toString(),
+            currency,
+            eudrRequired.toString(),
+            buyerBank || '',
+            exporterBank || '',
+            paymentMethod,
+            JSON.stringify(documentIDs)
+          ]);
+        } else {
+          result = await fabricService.registerSalesContract(
+            contractID,
+            exporterID,
+            buyerID,
+            buyerCountry,
+            coffeeType,
+            quantity.toString(),
+            pricePerKg.toString(),
+            currency,
+            eudrRequired.toString(),
+            buyerBank || '',
+            exporterBank || '',
+            JSON.stringify(documentIDs)
+          );
+        }
+        blockchainWriteSuccessful = result.success;
+      } catch (blockchainError: any) {
+        // ✅ FIX: Don't fail the entire request if blockchain times out
+        // Log error and continue with PostgreSQL storage
+        logger.error(`⚠️ Blockchain write failed for contract ${contractID}: ${blockchainError.message}`);
+        result = {
+          success: false,
+          error: blockchainError.message,
+          txId: null
+        };
       }
 
-      if (result.success) {
+      // ✅ FIX: Always save to PostgreSQL regardless of blockchain status
+      // This ensures data is never lost even if blockchain is slow/down
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      try {
+        await db.run(
+          `INSERT INTO contracts (
+            contract_id, exporter_id, buyer_id, buyer_country, buyer_bank, exporter_bank,
+            coffee_type, quantity, price_per_kg, currency, payment_method, eudr_required,
+            status, blockchain_tx_id, blockchain_synced, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)`,
+          [
+            contractID,
+            exporterID,
+            buyerID,
+            buyerCountry,
+            buyerBank || '',
+            exporterBank || '',
+            coffeeType,
+            quantity,
+            pricePerKg,
+            currency,
+            paymentMethod || 'LC',
+            eudrRequired,
+            'pending', // Initial status
+            result.txId || null,
+            blockchainWriteSuccessful,
+          ]
+        );
+        logger.info(`✅ Contract ${contractID} saved to PostgreSQL (blockchain: ${blockchainWriteSuccessful ? 'synced' : 'pending'})`);
+        
+        // ✅ OPTIMIZATION: Invalidate cache for this contract and related queries
+        const { CacheInvalidation } = await import('../services/blockchainCacheService');
+        CacheInvalidation.contract(contractID, exporterID);
+        
+      } catch (dbError: any) {
+        logger.error(`❌ Failed to save contract ${contractID} to PostgreSQL: ${dbError.message}`);
+        // This is a critical error - data must be in database
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'DATABASE_ERROR',
+            message: 'Failed to save contract to database'
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (blockchainWriteSuccessful) {
         logger.info(`Sales contract registered successfully: ${contractID}, paymentMethod: ${paymentMethod || 'LC (default)'}, txId: ${result.txId}, documents: ${documentIDs.length}`);
         
         // Try to read back the contract immediately to verify
@@ -196,19 +261,23 @@ router.post('/',
         
         res.status(201).json({
           success: true,
-          data: result.data,
+          data: { contractID, status: 'pending', blockchainSynced: true },
           txId: result.txId,
           documentsLinked: documentIDs.length,
           paymentMethod: paymentMethod || 'LC',
           timestamp: new Date().toISOString(),
         });
       } else {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'REGISTRATION_FAILED',
-            message: result.error || 'Failed to register sales contract',
-          },
+        // ✅ FIX: Return 202 Accepted instead of 400
+        // Contract is saved but blockchain sync is pending
+        logger.warn(`Contract ${contractID} saved to database but blockchain write failed. Will retry later.`);
+        res.status(202).json({
+          success: true,
+          warning: 'Contract saved but blockchain sync pending',
+          data: { contractID, status: 'pending', blockchainSynced: false },
+          txId: null,
+          documentsLinked: documentIDs.length,
+          paymentMethod: paymentMethod || 'LC',
           timestamp: new Date().toISOString(),
         });
       }
@@ -656,12 +725,70 @@ router.get('/:contractID',
   async (req, res) => {
     try {
       const { contractID } = req.params;
-      const result = await fabricService.getSalesContract(contractID);
+      const { blockchainCache, CacheKeys } = await import('../services/blockchainCacheService');
+      
+      // ✅ OPTIMIZATION: Try cache first, then blockchain, then PostgreSQL
+      let blockchainData = null;
+      let source = 'cache';
+      
+      try {
+        blockchainData = await blockchainCache.get(
+          CacheKeys.contract(contractID),
+          async () => {
+            const result = await fabricService.getSalesContract(contractID);
+            if (result.success) {
+              return result.data;
+            }
+            throw new Error('Contract not found on blockchain');
+          },
+          5 * 60 * 1000 // 5 minute cache
+        );
+        
+        // If we got here without throwing, check if it came from cache or blockchain
+        const cached = blockchainCache.getStats();
+        source = 'blockchain'; // Since get() returns data, it was either cache hit or fresh fetch
+      } catch (blockchainError: any) {
+        logger.warn(`Blockchain query failed for contract ${contractID}, falling back to PostgreSQL: ${blockchainError.message}`);
+      }
+      
+      // Fall back to PostgreSQL if blockchain failed
+      if (!blockchainData) {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        
+        const contract = await db.get(
+          `SELECT * FROM contracts WHERE contract_id = $1`,
+          [contractID]
+        );
+        
+        if (contract) {
+          source = 'database';
+          blockchainData = {
+            contractID: contract.contract_id,
+            exporterID: contract.exporter_id,
+            buyerID: contract.buyer_id,
+            buyerCountry: contract.buyer_country,
+            buyerBank: contract.buyer_bank,
+            exporterBank: contract.exporter_bank,
+            coffeeType: contract.coffee_type,
+            quantity: contract.quantity,
+            pricePerKg: contract.price_per_kg,
+            currency: contract.currency,
+            paymentMethod: contract.payment_method,
+            eudrRequired: contract.eudr_required,
+            status: contract.status,
+            blockchainTxId: contract.blockchain_tx_id,
+            blockchainSynced: contract.blockchain_synced || false,
+            createdAt: contract.created_at
+          } as any;
+        }
+      }
 
-      if (result.success) {
+      if (blockchainData) {
         res.json({
           success: true,
-          data: result.data,
+          data: blockchainData,
+          source: source,
           timestamp: new Date().toISOString(),
         });
       } else {
@@ -669,7 +796,7 @@ router.get('/:contractID',
           success: false,
           error: {
             code: 'NOT_FOUND',
-            message: result.error || 'Contract not found',
+            message: 'Contract not found in blockchain or database',
           },
           timestamp: new Date().toISOString(),
         });

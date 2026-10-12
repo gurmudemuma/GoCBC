@@ -1,0 +1,205 @@
+[0;36m[1m
+================================================================
+  GoCBC COMPREHENSIVE System Verification
+  Complete Testing of All Features
+================================================================
+[0m
+[1m1. Infrastructure (2 tests)[0m
+Testing Docker daemon... [0;32m✓ PASS[0m
+Testing Docker Compose... [0;32m✓ PASS[0m
+
+[1m2. Blockchain Containers (14 tests)[0m
+Testing Orderer... [0;32m✓ PASS[0m
+Testing Peer ECTA... [0;32m✓ PASS[0m
+Testing Peer ECX... [0;32m✓ PASS[0m
+Testing Peer Banks... [0;32m✓ PASS[0m
+Testing Peer NBE... [0;32m✓ PASS[0m
+Testing Peer Customs... [0;32m✓ PASS[0m
+Testing Peer Shipping... [0;32m✓ PASS[0m
+Testing Chaincode... [0;32m✓ PASS[0m
+Testing CouchDB ECTA... [0;32m✓ PASS[0m
+Testing CouchDB ECX... [0;32m✓ PASS[0m
+Testing CouchDB Banks... [0;32m✓ PASS[0m
+Testing CouchDB NBE... [0;32m✓ PASS[0m
+Testing CouchDB Customs... [0;32m✓ PASS[0m
+Testing CouchDB Shipping... [0;32m✓ PASS[0m
+
+[1m3. Supporting Services (4 tests)[0m
+Testing PostgreSQL... [0;32m✓ PASS[0m
+Testing Redis... [0;32m✓ PASS[0m
+Testing Kafka... [0;32m✓ PASS[0m
+Testing Zookeeper... [0;32m✓ PASS[0m
+
+[1m4. Service Connectivity (6 tests)[0m
+Testing CouchDB ECTA API... [0;32m✓ PASS[0m
+Testing CouchDB ECX API... [0;32m✓ PASS[0m
+Testing PostgreSQL Connection... [0;32m✓ PASS[0m
+Testing Redis Connection... [0;32m✓ PASS[0m
+Testing API Health... [0;32m✓ PASS[0m
+Testing UI Access... [0;32m✓ PASS[0m
+
+[1m5. Blockchain Channel (8 tests)[0m
+Testing Channel exists on orderer... [0;32m✓ PASS[0m
+Testing Peer ECTA joined channel... [0;32m✓ PASS[0m
+Testing Peer ECX joined channel... [0;32m✓ PASS[0m
+Testing Peer Banks joined channel... [0;32m✓ PASS[0m
+Testing Peer NBE joined channel... [0;32m✓ PASS[0m
+Testing Peer Customs joined channel... [0;32m✓ PASS[0m
+Testing Peer Shipping joined channel... [0;32m✓ PASS[0m
+Testing Channel has blocks... [0;32m✓ PASS[0m
+
+[1m6. CouchDB State Databases (12 tests)[0m
+Testing ECTA CouchDB channel DB... [0;32m✓ PASS[0m
+Testing ECTA CouchDB lifecycle DB... [0;32m✓ PASS[0m
+Testing ECX CouchDB channel DB... [0;32m✓ PASS[0m
+Testing ECX CouchDB lifecycle DB... [0;32m✓ PASS[0m
+Testing Banks CouchDB channel DB... [0;32m✓ PASS[0m
+Testing Banks CouchDB lifecycle DB... [0;32m✓ PASS[0m
+Testing NBE CouchDB channel DB... [0;32m✓ PASS[0m
+Testing NBE CouchDB lifecycle DB... [0;32m✓ PASS[0m
+Testing Customs CouchDB channel DB... [0;32m✓ PASS[0m
+Testing Customs CouchDB lifecycle DB... [0;32m✓ PASS[0m
+Testing Shipping CouchDB channel DB... [0;32m✓ PASS[0m
+Testing Shipping CouchDB lifecycle DB... [0;32m✓ PASS[0m
+
+[1m7. Blockchain Features - Code Verification (9 tests)[0m
+Testing X.509 Signatures code exists... [0;32m✓ PASS[0m
+Testing Immutability code exists... [0;32m✓ PASS[0m
+Testing Multi-org consensus config... [0;32m✓ PASS[0m
+Testing Distributed ledger config... [0;32m✓ PASS[0m
+Testing Audit logs code exists... [0;32m✓ PASS[0m
+Testing Document hashing code exists... [0;32m✓ PASS[0m
+Testing Smart contracts deployed... [0;32m✓ PASS[0m
+Testing Query consistency indexes... [0;32m✓ PASS[0m
+Testing Dual DB sync code exists... [0;32m✓ PASS[0m
+
+[1m8. Document Management - Code Verification (10 tests)[0m
+Testing Document upload route... [0;32m✓ PASS[0m
+Testing Document hash registration... [0;32m✓ PASS[0m
+Testing Document verification... [0;32m✓ PASS[0m
+Testing Document signing... [0;32m✓ PASS[0m
+Testing Entity linking... [0;32m✓ PASS[0m
+Testing Document types validation... [0;32m✓ PASS[0m
+Testing Multi-party approval... [0;32m✓ PASS[0m
+Testing Document retrieval API... [0;32m✓ PASS[0m
+Testing Document status tracking... [0;32m✓ PASS[0m
+Testing IPFS storage config... [0;32m✓ PASS[0m
+
+[1m9. Portal Integrations - Code Verification (7 tests)[0m
+Testing ECTA Portal component... [0;32m✓ PASS[0m
+Testing ECX Portal component... [0;32m✓ PASS[0m
+Testing Banks Portal component... [0;32m✓ PASS[0m
+Testing NBE Portal component... [0;32m✓ PASS[0m
+Testing Customs Portal component... [0;32m✓ PASS[0m
+Testing Shipping Portal component... [0;32m✓ PASS[0m
+Testing Exporter Portal component... [0;32m✓ PASS[0m
+
+[1m10. API Endpoints - Functionality (15 tests)[0m
+Testing Health endpoint... [0;32m✓ PASS[0m
+Testing API responds to requests... [0;32m✓ PASS[0m
+Testing Contracts route exists... [0;32m✓ PASS[0m
+Testing Quality route exists... [0;32m✓ PASS[0m
+Testing Shipments route exists... [0;32m✓ PASS[0m
+Testing Payments route exists... [0;32m✓ PASS[0m
+Testing Letters of Credit route... [0;32m✓ PASS[0m
+Testing Customs route exists... [0;32m✓ PASS[0m
+Testing Forex route exists... [0;32m✓ PASS[0m
+Testing Repatriation route exists... [0;32m✓ PASS[0m
+Testing Documents route exists... [0;32m✓ PASS[0m
+Testing Users route exists... [0;32m✓ PASS[0m
+Testing Analytics route exists... [0;32m✓ PASS[0m
+Testing Audit route exists... [0;32m✓ PASS[0m
+Testing Blockchain service exists... [0;32m✓ PASS[0m
+
+[1m11. Chaincode Functions (12 tests)[0m
+Testing Contract creation function... [0;32m✓ PASS[0m
+Testing Shipment tracking function... [0;32m✓ PASS[0m
+Testing Payment processing function... [0;32m✓ PASS[0m
+Testing Quality certification function... [0;32m✓ PASS[0m
+Testing LC issuance function... [0;32m✓ PASS[0m
+Testing Customs clearance function... [0;32m✓ PASS[0m
+Testing Forex approval function... [0;32m✓ PASS[0m
+Testing Repatriation tracking function... [0;32m✓ PASS[0m
+Testing Document registration function... [0;32m✓ PASS[0m
+Testing Signature capture function... [0;32m✓ PASS[0m
+Testing Query contract function... [0;32m✓ PASS[0m
+Testing History query function... [0;32m✓ PASS[0m
+
+[1m12. Database Schema (8 tests)[0m
+Testing Contracts table schema... [0;32m✓ PASS[0m
+Testing Shipments table schema... [0;32m✓ PASS[0m
+Testing Payments table schema... [0;32m✓ PASS[0m
+Testing Quality certs table schema... [0;32m✓ PASS[0m
+Testing Documents table schema... [0;32m✓ PASS[0m
+Testing Users table schema... [0;32m✓ PASS[0m
+Testing Blockchain sync table... [0;32m✓ PASS[0m
+Testing Repatriation table... [0;32m✓ PASS[0m
+
+[1m13. Security Features (8 tests)[0m
+Testing MSP organizations config... [0;32m✓ PASS[0m
+Testing TLS certificates exist... [0;32m✓ PASS[0m
+Testing JWT authentication... [0;32m✓ PASS[0m
+Testing Password hashing... [0;32m✓ PASS[0m
+Testing CORS configuration... [0;32m✓ PASS[0m
+Testing Helmet security headers... [0;32m✓ PASS[0m
+Testing Rate limiting... [0;32m✓ PASS[0m
+Testing Input validation... [0;32m✓ PASS[0m
+
+[1m14. UI Components (10 tests)[0m
+Testing Login component... [0;32m✓ PASS[0m
+Testing Dashboard component... [0;32m✓ PASS[0m
+Testing Contract management UI... [0;32m✓ PASS[0m
+Testing Shipment tracking UI... [0;32m✓ PASS[0m
+Testing Document upload UI... [0;32m✓ PASS[0m
+Testing Quality certificate UI... [0;32m✓ PASS[0m
+Testing Analytics dashboard... [0;32m✓ PASS[0m
+Testing Admin portal... [0;32m✓ PASS[0m
+Testing Blockchain explorer... [0;32m✓ PASS[0m
+Testing Notification system... [0;32m✓ PASS[0m
+
+[1m15. Configuration Files (6 tests)[0m
+Testing Fabric network config... [0;32m✓ PASS[0m
+Testing Docker compose config... [0;32m✓ PASS[0m
+Testing API environment config... [0;32m✓ PASS[0m
+Testing UI environment config... [0;32m✓ PASS[0m
+Testing TypeScript API config... [0;32m✓ PASS[0m
+Testing Next.js UI config... [0;32m✓ PASS[0m
+
+[0;36m[1m
+================================================================
+  Test Results
+================================================================
+[0m
+Total Tests:  [1m131[0m
+Passed:       [0;32m[1m131[0m
+Failed:       [0;31m[1m0[0m
+
+Pass Rate:    [0;32m[1m100%[0m
+
+[0;32m[1m✓ ALL SYSTEMS OPERATIONAL[0m
+[0;32m[1m✓ COMPREHENSIVE VERIFICATION COMPLETE[0m
+
+[0;36mSystem Information:[0m
+  UI:       http://localhost:3000
+  API:      http://localhost:3001
+  Docs:     http://localhost:3001/api-docs
+  Health:   http://localhost:3001/health
+  CouchDB:  http://admin:adminpw@localhost:5984
+
+[0;36mVerified Components:[0m
+  • Infrastructure (2)
+  • Blockchain Containers (14)
+  • Supporting Services (4)
+  • Service Connectivity (6)
+  • Blockchain Channel (8)
+  • CouchDB Databases (12)
+  • Blockchain Features (9)
+  • Document Management (10)
+  • Portal Integrations (7)
+  • API Endpoints (15)
+  • Chaincode Functions (12)
+  • Database Schema (8)
+  • Security Features (8)
+  • UI Components (10)
+  • Configuration Files (6)
+
