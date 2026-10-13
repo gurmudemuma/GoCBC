@@ -416,139 +416,130 @@ const ECTAPortal: React.FC = () => {
   const visibleTabs = getRoleBasedTabs();
 
   const loadData = async () => {
-    setLoading(true);
-    try {
-      // Load blockchain exporters (may be empty if blockchain not connected)
-      const exportersPromise = api.getExporters().catch(err => {
-        // Silently handle blockchain timeout - not critical for UI
-        return { success: false, data: [] };
-      });
-      
-      const shipmentsPromise = api.getShipments({ limit: 100 }).catch(err => {
-        // Silently handle shipments timeout - not critical for UI
-        return { success: false, data: [] };
-      });
-      
-      // Load database applications
-      const applicationsPromise = api.get('/exporters/exporter-applications?status=pending').catch(err => {
-        // Database calls should not fail - log if they do
-        console.error('Failed to load applications:', err);
-        return { data: { success: false, data: [] } };
-      });
-
-      const approvedApplicationsPromise = api.get('/exporters/exporter-applications?status=approved').catch(err => {
-        console.error('Failed to load approved applications:', err);
-        return { data: { success: false, data: [] } };
-      });
-
-      const inspectionsPromise = api.get('/quality/inspections?limit=500').catch(err => {
-        // Quality inspections may timeout - handle gracefully
-        return { data: { success: false, data: [] } };
-      });
-
-      const [exportersRes, shipmentsRes, applicationsRes, approvedApplicationsRes, inspectionsRes] = await Promise.all([
-        exportersPromise,
-        shipmentsPromise,
-        applicationsPromise,
-        approvedApplicationsPromise,
-        inspectionsPromise,
-      ]);
-
-      // Set blockchain data (if available)
-      if (exportersRes.success) {
-        setExporters(exportersRes.data || []);
-        setAllExporters(exportersRes.data || []);
-      }
-      
-      // ✅ FILTER SHIPMENTS: Only show shipments needing quality inspection
-      // ECTA should ONLY see shipments with status: CREATED, INSPECTION_PENDING, or QUALITY_APPROVED (needing permit)
-      if (shipmentsRes.success && shipmentsRes.data) {
-        const ectaRelevantShipments = shipmentsRes.data.filter((s: any) => {
-          const status = s.Status || s.status || s.shipmentStatus || '';
-          return status === 'CREATED' || 
-                 status === 'INSPECTION_PENDING' || 
-                 status === 'QUALITY_APPROVED' ||
-                 status === 'INSPECTED'; // Waiting for approval/rejection
-        });
-        console.log(`[ECTA] Filtered ${ectaRelevantShipments.length}/${shipmentsRes.data.length} shipments needing ECTA action`);
-        setShipments(ectaRelevantShipments);
-        setAllShipments(ectaRelevantShipments);
-        
-        // Filter delivered shipments for post-delivery audits
-        const delivered = shipmentsRes.data.filter((s: any) => {
-          const status = s.Status || s.status || s.shipmentStatus || '';
-          return status === 'DELIVERED' || status === 'COMPLETED';
-        });
-        console.log(`[ECTA] Found ${delivered.length} delivered shipments for post-delivery audit`);
-        setDeliveredShipments(delivered);
-      }
-      
-      // Load contracts
-      try {
-        const contractsRes = await api.getContracts();
-        console.log('[ECTA] Contracts API response:', contractsRes);
-        console.log('[ECTA] First contract (raw):', contractsRes.data?.[0]);
-        
-        if (contractsRes.success && contractsRes.data) {
-          // Store all contracts first for KPI calculations
-          setAllContracts(contractsRes.data);
-          
-          // ✅ SHOW ALL CONTRACTS in the table, not just REGISTERED
-          // ECTA can see all contracts to track the full lifecycle
-          console.log(`[ECTA] Showing ${contractsRes.data.length} total contracts in table`);
-          setContracts(contractsRes.data); // Show ALL contracts
+    console.log('[ECTA] ⚡ Starting PARALLEL data loading (zero waits)...');
+    console.time('[ECTA] Total load time');
+    
+    // ⚡ PARALLEL LOADING - NO WAITS!
+    // All requests fire simultaneously, data appears as each completes
+    // UI never blocks, shows data progressively
+    
+    // Immediately hide initial loading spinner
+    setTimeout(() => setLoading(false), 100);
+    
+    // 1️⃣ Pending Applications - Load independently
+    api.get('/exporters/exporter-applications?status=pending')
+      .then(applicationsRes => {
+        const appsData = applicationsRes.data?.data?.applications || applicationsRes.data?.data;
+        if (appsData && Array.isArray(appsData)) {
+          console.log(`[ECTA] ✅ Pending applications loaded: ${appsData.length} items (${performance.now().toFixed(0)}ms)`);
+          setApplications(appsData);
+          setAllApplications(appsData);
+        } else {
+          setApplications([]);
+          setAllApplications([]);
         }
-      } catch (err) {
-        console.warn('Failed to load contracts:', err);
-        setContracts([]);
-        setAllContracts([]);
-      }
-      
-      // Set database applications
-      console.log('[ECTA] Applications API response:', applicationsRes);
-      const appsData = applicationsRes.data?.data?.applications || applicationsRes.data?.data;
-      console.log('[ECTA] Applications data:', appsData);
-      
-      if (appsData && Array.isArray(appsData)) {
-        console.log(`[ECTA] ✅ Loaded ${appsData.length} pending applications`);
-        setApplications(appsData);
-        setAllApplications(appsData);
-      } else {
-        console.warn('[ECTA] ⚠️ No applications data or invalid format:', appsData);
+      })
+      .catch(err => {
+        console.error('[ECTA] ❌ Failed to load pending applications:', err.message);
         setApplications([]);
         setAllApplications([]);
-      }
-
-      // Set approved applications (source of truth for exporter count)
-      const approvedAppsData = approvedApplicationsRes.data?.data?.applications || approvedApplicationsRes.data?.data;
-      if (approvedAppsData && Array.isArray(approvedAppsData)) {
-        console.log(`[ECTA] ✅ Loaded ${approvedAppsData.length} approved applications`);
-        setApprovedApplications(approvedAppsData);
-      } else {
+      });
+    
+    // 2️⃣ Approved Applications - Load independently
+    api.get('/exporters/exporter-applications?status=approved')
+      .then(approvedApplicationsRes => {
+        const approvedAppsData = approvedApplicationsRes.data?.data?.applications || approvedApplicationsRes.data?.data;
+        if (approvedAppsData && Array.isArray(approvedAppsData)) {
+          console.log(`[ECTA] ✅ Approved applications loaded: ${approvedAppsData.length} items (${performance.now().toFixed(0)}ms)`);
+          setApprovedApplications(approvedAppsData);
+        } else {
+          setApprovedApplications([]);
+        }
+      })
+      .catch(err => {
+        console.error('[ECTA] ❌ Failed to load approved applications:', err.message);
         setApprovedApplications([]);
-      }
-
-      // Set inspection records for the Quality Control KPI row
-      const inspectionData = inspectionsRes.data?.data?.inspections;
-      if (inspectionData && Array.isArray(inspectionData)) {
-        setInspectionRecords(inspectionData);
-        setAllInspectionRecords(inspectionData);
-      } else {
+      });
+    
+    // 3️⃣ Contracts - Load independently
+    api.getContracts()
+      .then(contractsRes => {
+        if (contractsRes.success && contractsRes.data) {
+          console.log(`[ECTA] ✅ Contracts loaded: ${contractsRes.data.length} items (${performance.now().toFixed(0)}ms)`);
+          setAllContracts(contractsRes.data);
+          setContracts(contractsRes.data);
+        } else {
+          setContracts([]);
+          setAllContracts([]);
+        }
+      })
+      .catch(err => {
+        console.warn('[ECTA] ⚠️ Failed to load contracts:', err.message);
+        setContracts([]);
+        setAllContracts([]);
+      });
+    
+    // 4️⃣ Blockchain Exporters - Load independently
+    api.getExporters()
+      .then(exportersRes => {
+        if (exportersRes.success) {
+          console.log(`[ECTA] ✅ Blockchain exporters loaded: ${exportersRes.data?.length || 0} items (${performance.now().toFixed(0)}ms)`);
+          setExporters(exportersRes.data || []);
+          setAllExporters(exportersRes.data || []);
+        }
+      })
+      .catch(err => {
+        console.warn('[ECTA] ⚠️ Failed to load blockchain exporters:', err.message);
+      });
+    
+    // 5️⃣ Shipments - Load independently
+    api.getShipments({ limit: 100 })
+      .then(shipmentsRes => {
+        if (shipmentsRes.success && shipmentsRes.data) {
+          const ectaRelevantShipments = shipmentsRes.data.filter((s: any) => {
+            const status = s.Status || s.status || s.shipmentStatus || '';
+            return status === 'CREATED' || 
+                   status === 'INSPECTION_PENDING' || 
+                   status === 'QUALITY_APPROVED' ||
+                   status === 'INSPECTED';
+          });
+          
+          const delivered = shipmentsRes.data.filter((s: any) => {
+            const status = s.Status || s.status || s.shipmentStatus || '';
+            return status === 'DELIVERED' || status === 'COMPLETED';
+          });
+          
+          console.log(`[ECTA] ✅ Shipments loaded: ${ectaRelevantShipments.length} ECTA-relevant, ${delivered.length} delivered (${performance.now().toFixed(0)}ms)`);
+          setShipments(ectaRelevantShipments);
+          setAllShipments(ectaRelevantShipments);
+          setDeliveredShipments(delivered);
+        }
+      })
+      .catch(err => {
+        console.warn('[ECTA] ⚠️ Failed to load shipments:', err.message);
+      });
+    
+    // 6️⃣ Quality Inspections - Load independently
+    api.get('/quality/inspections?limit=500')
+      .then(inspectionsRes => {
+        const inspectionData = inspectionsRes.data?.data?.inspections;
+        if (inspectionData && Array.isArray(inspectionData)) {
+          console.log(`[ECTA] ✅ Inspections loaded: ${inspectionData.length} items (${performance.now().toFixed(0)}ms)`);
+          setInspectionRecords(inspectionData);
+          setAllInspectionRecords(inspectionData);
+        } else {
+          setInspectionRecords([]);
+          setAllInspectionRecords([]);
+        }
+      })
+      .catch(err => {
+        console.warn('[ECTA] ⚠️ Failed to load inspections:', err.message);
         setInspectionRecords([]);
         setAllInspectionRecords([]);
-      }
-
-      // Log data sync status
-      const blockchainCount = exportersRes.data?.length || 0;
-      const approvedCount = approvedAppsData?.length || 0;
-      if (blockchainCount !== approvedCount) {
-        console.warn(`⚠️ Data sync issue: ${approvedCount} approved in DB, ${blockchainCount} on blockchain`);
-      }
-    } catch (error) {
-      console.error('Failed to load data:', error);
-    } finally {
-      setLoading(false);
-    }
+      });
+    
+    console.log('[ECTA] ⚡ All 6 parallel requests fired! Data will appear as each completes.');
+    console.timeEnd('[ECTA] Total load time');
   };
 
   const loadAuditStats = async () => {

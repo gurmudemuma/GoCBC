@@ -997,23 +997,30 @@ const AdminPortal: React.FC = () => {
                   <Business color="primary" />
                   Users by Organization
                 </Typography>
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={350}>
                   <PieChart>
                     <Pie
                       data={organizationStats}
                       dataKey="userCount"
                       nameKey="organization"
                       cx="50%"
-                      cy="50%"
-                      outerRadius={100}
-                      label={({ organization, userCount }) => `${organization}: ${userCount}`}
+                      cy="40%"
+                      outerRadius={90}
+                      label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                      labelLine={false}
                     >
                       {organizationStats.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
-                    <RechartsTooltip />
-                    <Legend />
+                    <RechartsTooltip 
+                      formatter={(value: number, name: string) => [`${value} users`, name]}
+                    />
+                    <Legend 
+                      verticalAlign="bottom" 
+                      height={80}
+                      formatter={(value: string, entry: any) => `${value}: ${entry.payload.userCount} users`}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </CardContent>

@@ -1040,14 +1040,14 @@ router.get('/entity/:entityType/:entityId',
       // Query both databases and merge results
       let allDocuments: any[] = [];
       
-      // 1. Try PostgreSQL first
+      // 1. Try PostgreSQL first (case-insensitive for entity_type)
       try {
         const pgDocs = await postgresDb.all(
           `SELECT 
             document_id, entity_type, entity_id, document_type, file_name,
             file_hash, mime_type, file_size, uploaded_by, status, uploaded_at
           FROM documents 
-          WHERE entity_type = $1 AND entity_id = $2
+          WHERE UPPER(entity_type) = UPPER($1) AND entity_id = $2
           ORDER BY uploaded_at DESC`,
           [entityType, entityId]
         );

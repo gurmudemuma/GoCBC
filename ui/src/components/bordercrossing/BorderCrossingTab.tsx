@@ -60,10 +60,10 @@ const BorderCrossingTab: React.FC = () => {
           cleared: data.filter((c: BorderCrossing) => c.status === 'CLEARED').length,
           avgTime: 4.5
         });
-        showSuccess(`Loaded ${data.length} border crossing records`);
+        showSuccess('Success', `Loaded ${data.length} border crossing records`);
       }
     } catch (error) {
-      showError('Failed to load data');
+      showError('Error', 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -96,7 +96,7 @@ const BorderCrossingTab: React.FC = () => {
     { field: 'borderCrossingId', headerName: 'Crossing ID', width: 150, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography variant="body2" fontWeight={600}>{p.value}</Typography>
-        {p.row.txId && <BlockchainStatusIcon verified={true} size="small" />}
+        {p.row.txId && <BlockchainStatusIcon status="VERIFIED" txId={p.row.txId} size="small" />}
       </Box>
     )},
     { field: 'shipmentId', headerName: 'Shipment', width: 130 },
@@ -125,10 +125,10 @@ const BorderCrossingTab: React.FC = () => {
   return (
     <Box sx={{ p: 3 }}>
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Total Crossings" value={stats.total} icon={<Assessment />} color={CUSTOMS_COLORS.navy} subtitle="All records" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Active Crossings" value={stats.active} icon={<LocalShipping />} color="#ff9800" subtitle="In progress" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Cleared Today" value={stats.cleared} icon={<CheckCircle />} color={CUSTOMS_COLORS.success} subtitle="Successful clearances" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Avg Processing" value={`${stats.avgTime.toFixed(1)}h`} icon={<Warning />} color="#f57c00" subtitle="hours per crossing" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Total Crossings" value={stats.total} icon={<Assessment />} brandColor={CUSTOMS_COLORS.navy} /></Grid>
+        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Active Crossings" value={stats.active} icon={<LocalShipping />} brandColor="#ff9800" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Cleared Today" value={stats.cleared} icon={<CheckCircle />} brandColor={CUSTOMS_COLORS.success} /></Grid>
+        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Avg Processing" value={`${stats.avgTime.toFixed(1)}h`} icon={<Warning />} brandColor="#f57c00" /></Grid>
       </Grid>
 
       <Card sx={{ mb: 3 }}>
@@ -158,7 +158,15 @@ const BorderCrossingTab: React.FC = () => {
       </Card>
 
       <Paper sx={{ height: 600, width: '100%' }}>
-        <DataGrid rows={filtered} columns={columns} getRowId={(r) => r.borderCrossingId} loading={loading} pagination page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} rowsPerPageOptions={[5, 10, 25]} disableSelectionOnClick sx={{ '& .MuiDataGrid-columnHeaders': { backgroundColor: CUSTOMS_COLORS.lightBlue, color: 'white', fontWeight: 600 } }} />
+        <DataGrid 
+          rows={filtered} 
+          columns={columns} 
+          getRowId={(r) => r.borderCrossingId} 
+          loading={loading} 
+          pageSizeOptions={[5, 10, 25]} 
+          disableRowSelectionOnClick 
+          sx={{ '& .MuiDataGrid-columnHeaders': { backgroundColor: CUSTOMS_COLORS.lightBlue, color: 'white', fontWeight: 600 } }} 
+        />
       </Paper>
 
       <BorderCrossingInitiationDialog open={initiateDialogOpen} onClose={() => setInitiateDialogOpen(false)} onSuccess={fetchCrossings} />

@@ -344,7 +344,9 @@ const RegisterExporterPage = () => {
 
       // Step 2: Upload documents with the application ID
       if (uploadedDocuments.length > 0) {
-        const uploadPromises = uploadedDocuments.map(async (doc) => {
+        console.log(`Uploading ${uploadedDocuments.length} documents for application ${applicationId}...`);
+        
+        const uploadPromises = uploadedDocuments.map(async (doc, index) => {
           try {
             const formData = new FormData();
             formData.append('file', doc.file);
@@ -354,20 +356,42 @@ const RegisterExporterPage = () => {
             formData.append('entityType', 'EXPORTER_APPLICATION');
             formData.append('entityId', applicationId);
 
+            console.log(`Uploading document ${index + 1}: ${doc.file.name} (${doc.category || 'OTHER'})`);
+
             const uploadResponse = await fetch('http://localhost:3001/api/v1/documents/upload-registration', {
               method: 'POST',
               body: formData,
             });
 
+            if (!uploadResponse.ok) {
+              console.error(`Document ${index + 1} upload failed: HTTP ${uploadResponse.status}`);
+              const errorText = await uploadResponse.text();
+              console.error(`Error response: ${errorText}`);
+              return { success: false, fileName: doc.file.name };
+            }
+
             const result = await uploadResponse.json();
-            return result.success;
+            console.log(`Document ${index + 1} uploaded: ${result.success ? 'SUCCESS' : 'FAILED'}`, result);
+            return { success: result.success, fileName: doc.file.name };
           } catch (error) {
-            console.error('Document upload error:', error);
-            return false;
+            console.error(`Document ${index + 1} upload error:`, error);
+            return { success: false, fileName: doc.file.name };
           }
         });
 
-        await Promise.all(uploadPromises);
+        const uploadResults = await Promise.all(uploadPromises);
+        const failedUploads = uploadResults.filter(r => !r.success);
+        
+        if (failedUploads.length > 0) {
+          console.warn(`${failedUploads.length} document(s) failed to upload:`, failedUploads);
+          // Show warning but don't fail the whole application
+          setError(`Application submitted successfully, but ${failedUploads.length} document(s) failed to upload. Please contact support.`);
+          setLoading(false);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+        
+        console.log(`All ${uploadResults.length} documents uploaded successfully!`);
       }
       
       setSuccess(true);

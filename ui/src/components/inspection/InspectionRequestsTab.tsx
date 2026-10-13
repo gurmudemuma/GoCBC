@@ -131,13 +131,13 @@ const InspectionRequestsTab: React.FC = () => {
         setInspections(data);
         setFilteredInspections(data);
         calculateStats(data);
-        showSuccess(`Loaded ${data.length} inspection records`);
+        showSuccess('Success', `Loaded ${data.length} inspection records`);
       } else {
-        showError(result.error || 'Failed to fetch inspections');
+        showError('Error', result.error || 'Failed to fetch inspections');
       }
     } catch (error: any) {
       console.error('[INSPECTION] Error fetching data:', error);
-      showError('Failed to load inspection data');
+      showError('Error', 'Failed to load inspection data');
     } finally {
       setLoading(false);
     }
@@ -246,12 +246,10 @@ const InspectionRequestsTab: React.FC = () => {
       <Chip
         label={config.label}
         size="small"
-        icon={config.icon}
         sx={{
           backgroundColor: config.color,
           color: 'white',
-          fontWeight: 600,
-          '& .MuiChip-icon': { color: 'white' }
+          fontWeight: 600
         }}
       />
     );
@@ -271,7 +269,7 @@ const InspectionRequestsTab: React.FC = () => {
           <Typography variant="body2" fontWeight={600}>
             {params.value}
           </Typography>
-          {params.row.txId && <BlockchainStatusIcon verified={true} size="small" />}
+          {params.row.txId && <BlockchainStatusIcon status="VERIFIED" txId={params.row.txId} size="small" />}
         </Box>
       ),
     },
@@ -404,8 +402,7 @@ const InspectionRequestsTab: React.FC = () => {
             title="Total Inspections"
             value={stats.total}
             icon={<Assessment />}
-            color={ECTA_COLORS.green}
-            subtitle="All records"
+            brandColor={ECTA_COLORS.green}
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -413,8 +410,7 @@ const InspectionRequestsTab: React.FC = () => {
             title="Pending Inspections"
             value={stats.pending}
             icon={<Schedule />}
-            color="#1976d2"
-            subtitle="Awaiting action"
+            brandColor="#1976d2"
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -422,8 +418,7 @@ const InspectionRequestsTab: React.FC = () => {
             title="Completed Today"
             value={stats.completedToday}
             icon={<CheckCircle />}
-            color={ECTA_COLORS.success}
-            subtitle={`${stats.passRate.toFixed(1)}% pass rate`}
+            brandColor={ECTA_COLORS.success}
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -431,8 +426,7 @@ const InspectionRequestsTab: React.FC = () => {
             title="Avg Duration"
             value={`${stats.avgDuration.toFixed(1)}`}
             icon={<TrendingUp />}
-            color="#ff9800"
-            subtitle="days per inspection"
+            brandColor="#ff9800"
           />
         </Grid>
       </Grid>

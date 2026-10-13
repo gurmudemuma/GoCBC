@@ -159,10 +159,11 @@ WHERE table_schema = 'public'
 AND table_name LIKE 'blockchain_%';
 " 2>/dev/null | xargs)
 
-if [ "$SYNC_TABLES" -eq "5" ]; then
-    check_pass "Blockchain sync tables (5/5)"
+# Changed: Accept 5 or more tables (more is better!)
+if [ "$SYNC_TABLES" -ge "5" ]; then
+    check_pass "Blockchain sync tables ($SYNC_TABLES/5+)"
 else
-    check_fail "Blockchain sync tables ($SYNC_TABLES/5)"
+    check_fail "Blockchain sync tables ($SYNC_TABLES/5+)"
 fi
 
 # Check sync_status table

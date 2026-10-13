@@ -21,9 +21,9 @@ const ClearanceDecisionDialog: React.FC<ClearanceDecisionDialogProps> = ({ open,
       const endpoint = decision === 'CLEAR' ? 'clear' : 'detain';
       const response = await apiFetch(`/api/v1/bordercrossing/${crossing.borderCrossingId}/${endpoint}`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
-      if (result.success) { showSuccess(decision === 'CLEAR' ? 'Shipment cleared successfully' : 'Shipment detained'); onSuccess(); onClose(); }
-      else showError(result.error || 'Failed');
-    } catch (error) { showError('Failed to process decision'); } finally { setSubmitting(false); }
+      if (result.success) { showSuccess('Success', decision === 'CLEAR' ? 'Shipment cleared successfully' : 'Shipment detained'); onSuccess(); onClose(); }
+      else showError('Error', result.error || 'Failed');
+    } catch (error) { showError('Error', 'Failed to process decision'); } finally { setSubmitting(false); }
   };
 
   return (

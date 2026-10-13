@@ -82,14 +82,14 @@ const InspectionConductDialog: React.FC<InspectionConductDialogProps> = ({
 
       const result = await response.json();
       if (result.success) {
-        showSuccess('Inspection conducted successfully');
+        showSuccess('Success', 'Inspection conducted successfully');
         onSuccess();
         onClose();
       } else {
-        showError(result.error || 'Failed to record inspection');
+        showError('Error', result.error || 'Failed to record inspection');
       }
     } catch (error) {
-      showError('Failed to conduct inspection');
+      showError('Error', 'Failed to conduct inspection');
     } finally {
       setSubmitting(false);
     }

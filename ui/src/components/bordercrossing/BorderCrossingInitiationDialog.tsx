@@ -31,9 +31,9 @@ const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogPro
       setSubmitting(true);
       const response = await apiFetch('/api/v1/bordercrossing/initiate', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
-      if (result.success) { showSuccess('Border crossing initiated'); onSuccess(); onClose(); setForm({ ...form, borderCrossingId: `BC${Date.now()}` }); }
-      else showError(result.error || 'Failed');
-    } catch (error) { showError('Failed to initiate'); } finally { setSubmitting(false); }
+      if (result.success) { showSuccess('Success', 'Border crossing initiated'); onSuccess(); onClose(); setForm({ ...form, borderCrossingId: `BC${Date.now()}` }); }
+      else showError('Error', result.error || 'Failed');
+    } catch (error) { showError('Error', 'Failed to initiate'); } finally { setSubmitting(false); }
   };
 
   return (

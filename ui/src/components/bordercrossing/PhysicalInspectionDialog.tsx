@@ -19,9 +19,9 @@ const PhysicalInspectionDialog: React.FC<PhysicalInspectionDialogProps> = ({ ope
       setSubmitting(true);
       const response = await apiFetch(`/api/v1/bordercrossing/${crossing.borderCrossingId}/inspect`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
-      if (result.success) { showSuccess('Physical inspection completed'); onSuccess(); onClose(); }
-      else showError(result.error || 'Failed');
-    } catch (error) { showError('Failed to record inspection'); } finally { setSubmitting(false); }
+      if (result.success) { showSuccess('Success', 'Physical inspection completed'); onSuccess(); onClose(); }
+      else showError('Error', result.error || 'Failed');
+    } catch (error) { showError('Error', 'Failed to record inspection'); } finally { setSubmitting(false); }
   };
 
   return (
