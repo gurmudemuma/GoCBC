@@ -55,6 +55,11 @@ const C = {
 };
 const purpleGrad = `linear-gradient(135deg, ${C.purple} 0%, ${C.purpleDark} 100%)`;
 const btnSx = { textTransform: 'none' as const, fontWeight: 700, borderRadius: 2, px: 4, py: 1.5 };
+const MIN_CAPITAL_BY_EXPORTER_TYPE: Record<string, number> = {
+  private: 15_000_000,
+  company: 20_000_000,
+  individual: 10_000_000,
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -246,19 +251,13 @@ const RegisterExporterPage = () => {
     const v = e.target.value;
     if (field === 'region') { setFormData(p => ({ ...p, region: v, city: '' })); }
     else if (field === 'phone') { setFormData(p => ({ ...p, phone: v.replace(/\D/g, '').slice(0, 9) })); }
+    else if (field === 'bankAccountNumber') { setFormData(p => ({ ...p, bankAccountNumber: v.replace(/\D/g, '').slice(0, 13) })); }
     else { setFormData(p => ({ ...p, [field]: v })); }
   };
 
   const handleDoc = (key: DocKey, file: File | null) => setDocFiles(p => ({ ...p, [key]: file }));
 
-  // ── absolute minimum across all types
-  const ABS_MIN_CAPITAL = 50_000_000;
-  const minCapital = Math.max(
-    ABS_MIN_CAPITAL,
-    formData.exporterType === 'private' ? 50_000_000
-      : formData.exporterType === 'company' ? 50_000_000
-      : formData.exporterType === 'individual' ? 50_000_000 : ABS_MIN_CAPITAL
-  );
+  const minCapital = MIN_CAPITAL_BY_EXPORTER_TYPE[formData.exporterType];
 
   const validate = (): string | null => {
     if (!formData.companyName.trim())           return 'Company name is required';
@@ -270,8 +269,8 @@ const RegisterExporterPage = () => {
     if (!formData.exporterType)                 return 'Exporter type is required';
     if (!formData.capitalRequirement || Number(formData.capitalRequirement) <= 0)
       return 'Valid capital amount is required';
-    if (Number(formData.capitalRequirement) < ABS_MIN_CAPITAL)
-      return `Minimum capital requirement is ${ABS_MIN_CAPITAL.toLocaleString()} ETB`;
+    if (minCapital && Number(formData.capitalRequirement) < minCapital)
+      return `Minimum capital requirement for ${formData.exporterType} exporters is ${minCapital.toLocaleString()} ETB`;
     if (!docFiles.bankStatementDoc)             return 'Please upload your Bank Statement';
     if (!formData.professionalTaster.trim())    return 'Professional taster name is required';
     if (!formData.tasterCertificate.trim())     return 'Taster certificate number is required';
@@ -284,6 +283,8 @@ const RegisterExporterPage = () => {
       return 'Valid email address is required';
     if (!formData.phone || formData.phone.length !== 9)
       return 'Phone number must be exactly 9 digits after +251';
+    if (formData.bankAccountNumber.length > 13)
+      return 'Bank account number must not exceed 13 digits';
     if (!formData.address.trim())              return 'Physical address is required';
     if (!formData.region)                      return 'Region is required';
     if (!formData.city)                        return 'City is required';
@@ -641,7 +642,9 @@ const RegisterExporterPage = () => {
                   <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
                     <Typography variant="caption" fontWeight={700}>Minimum Capital Requirements:</Typography>
                     <Stack direction="row" spacing={1} flexWrap="wrap" mt={0.5}>
-                      <Chip label="All types: minimum 50,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Private: 15,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Company: 20,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Individual: 10,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
                     </Stack>
                   </Alert>
 
@@ -660,17 +663,19 @@ const RegisterExporterPage = () => {
                     <Grid item xs={12} md={6}>
                       <TextField fullWidth required type="number" label="Capital Requirement (ETB)" value={formData.capitalRequirement} onChange={handleChange('capitalRequirement')} size="small"
                         error={
-                          (!!formData.capitalRequirement && Number(formData.capitalRequirement) < 50_000_000) ||
+                          (!!formData.capitalRequirement && !!minCapital && Number(formData.capitalRequirement) < minCapital) ||
                           (docsTouched && !docFiles.bankStatementDoc)
                         }
                         helperText={
-                          formData.capitalRequirement && Number(formData.capitalRequirement) < 50_000_000
-                            ? 'Minimum is 50,000,000 ETB'
+                          formData.capitalRequirement && minCapital && Number(formData.capitalRequirement) < minCapital
+                            ? `Minimum is ${minCapital.toLocaleString()} ETB for ${formData.exporterType} exporters`
                             : docsTouched && !docFiles.bankStatementDoc
                             ? 'Bank statement upload required'
-                            : 'Minimum: 50,000,000 ETB'
+                            : minCapital
+                            ? `Minimum: ${minCapital.toLocaleString()} ETB`
+                            : 'Select exporter type to see the minimum capital requirement'
                         }
-                        inputProps={{ min: 50_000_000 }}
+                        inputProps={{ min: minCapital, step: 1 }}
                         InputProps={{
                           startAdornment: <InputAdornment position="start"><AttachMoney sx={{ color: C.green, fontSize: 18 }} /></InputAdornment>,
                           endAdornment: <UploadAdornment docKey="bankStatementDoc" file={docFiles.bankStatementDoc} color={C.blue} touched={docsTouched && !docFiles.bankStatementDoc} onChange={handleDoc} />,
@@ -790,6 +795,8 @@ const RegisterExporterPage = () => {
 
                     <Grid item xs={12} md={6}>
                       <TextField fullWidth label="Bank Account Number" value={formData.bankAccountNumber} onChange={handleChange('bankAccountNumber')} size="small"
+                        inputProps={{ inputMode: 'numeric', maxLength: 13, pattern: '[0-9]*' }}
+                        helperText="Enter up to 13 digits"
                         InputProps={{ startAdornment: <InputAdornment position="start"><AccountBalance sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 
