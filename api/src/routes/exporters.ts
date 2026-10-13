@@ -121,7 +121,10 @@ router.post('/exporter-applications',
     body('city').notEmpty().withMessage('City is required'),
     body('region').optional().isString().withMessage('Region must be a string'),
     body('bankName').optional().isString().withMessage('Bank name must be a string'),
-    body('bankAccountNumber').optional().isString().withMessage('Bank account number must be a string'),
+    body('bankAccountNumber')
+      .optional({ values: 'falsy' })
+      .isString().withMessage('Bank account number must be a string')
+      .matches(/^\d{1,13}$/).withMessage('Bank account number must contain no more than 13 digits'),
     body('bankBranchName').optional().isString().withMessage('Bank branch name must be a string'),
     body('bankBranchCode').optional().isString().withMessage('Bank branch code must be a string'),
     body('comments').optional().isString().withMessage('Comments must be a string'),
