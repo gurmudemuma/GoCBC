@@ -303,7 +303,7 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
         title={
           <Space>
             <BankOutlined />
-            <span>My Letter of Credits & SWIFT Messages</span>
+            <span>Letters of Credit & Payments</span>
           </Space>
         }
         extra={
@@ -316,13 +316,15 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
           </Button>
         }
       >
-        <Alert
-          message="Read-Only View"
-          description="You can track the status of your LCs and related SWIFT messages. For any questions, contact your bank."
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
+        {lcStatuses.length === 0 && (
+          <Alert
+            message="No LCs yet"
+            description="Letters of Credit will appear here once issued by your bank."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
 
         {/* Filters */}
         <Space style={{ marginBottom: 16 }}>

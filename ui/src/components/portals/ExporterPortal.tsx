@@ -208,9 +208,13 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
 );
 
 const ExporterPortal: React.FC = () => {
-  // Brand colors for Exporter Portal - Purple and Golden theme
-  const brandPrimary = '#9b30b7'; // Purple (primary accent)
-  const brandSecondary = '#FFD700'; // Golden (secondary accent)
+  // Professional Brand Colors - Matching Login Page Theme
+  const brandPrimary = '#9b30b7'; // Purple (matching login page)
+  const brandSecondary = '#FFD700'; // Gold (matching login page)
+  const brandSuccess = '#10B981'; // Emerald (positive actions)
+  const brandWarning = '#F59E0B'; // Amber (alerts)
+  const brandError = '#EF4444'; // Red (critical)
+  const brandInfo = '#3B82F6'; // Blue (informational)
   const BRAND_COLOR = brandPrimary; // Primary brand color for components
   
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
@@ -2120,21 +2124,6 @@ const ExporterPortal: React.FC = () => {
       renderCell: (params) => <StatusChip status={params.value === 'NBE_APPROVED' ? 'APPROVED' : params.value} />,
     },
     {
-      field: 'blockchain',
-      headerName: '🔐 Blockchain',
-      width: 140,
-      sortable: false,
-      renderCell: (params) => (
-        <BlockchainStatusIcon
-          status="VERIFIED" // TODO: Fetch real status from API
-          txId={`0x${params.row.contractId.substring(0, 16)}`} // TODO: Use real TX ID
-          entityType="CONTRACT"
-          entityId={params.row.contractId}
-          showLabel={false}
-        />
-      ),
-    },
-    {
       field: 'actions',
       headerName: 'Actions',
       width: 250,
@@ -2289,26 +2278,6 @@ const ExporterPortal: React.FC = () => {
       },
     },
     {
-      field: 'blockchain',
-      headerName: '🔐 Blockchain',
-      width: 120,
-      sortable: false,
-      renderCell: (params) => (
-        <BlockchainStatusIcon
-          status="VERIFIED"
-          txId={`0x${params.row.shipmentId?.substring(0, 16) || 'pending'}`}
-          entityType="SHIPMENT"
-          entityId={params.row.shipmentId}
-          onClick={() => {
-            console.log('[SHIPMENT DETAIL] Opening dialog with blockchain data:', params.row);
-            console.log('[SHIPMENT DETAIL] Data source: CouchDB (Blockchain State Database)');
-            setSelectedShipmentForDetail(params.row);
-            setShipmentDetailDialogOpen(true);
-          }}
-        />
-      ),
-    },
-    {
       field: 'transportMode',
       headerName: 'Transport',
       width: 120,
@@ -2356,6 +2325,24 @@ const ExporterPortal: React.FC = () => {
       sortable: false,
       renderCell: (params) => {
         const shipment = params.row;
+        
+        // Check if this is a pending contract (ready for shipment)
+        if (shipment._isPending) {
+          return (
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<Add />}
+              sx={{ bgcolor: brandPrimary }}
+              onClick={() => {
+                // Pre-fill the dialog with contract data
+                setCreateShipmentDialogOpen(true);
+              }}
+            >
+              Register New Shipment
+            </Button>
+          );
+        }
         
         // Shipments tab only shows actual shipments (no pending contracts)
         const status = shipment.status || shipment.Status;
@@ -2498,35 +2485,13 @@ const ExporterPortal: React.FC = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={8}>
-              <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Exporter Portal
+            <Grid item xs={12}>
+              <Typography variant="h4" fontWeight="700" gutterBottom sx={{ color: brandPrimary }}>
+                {(profile?.companyName && profile.companyName !== 'CECBS') ? profile.companyName : 'Export Dashboard'}
               </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Welcome, {profile?.companyName || 'Loading...'}
+              <Typography variant="body2" color="text.secondary">
+                Track your contracts, shipments, and payments
               </Typography>
-            </Grid>
-            <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
-              <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'flex-start', md: 'flex-end' }, alignItems: 'center', flexWrap: 'wrap' }}>
-                {profile && (
-                  <>
-                    <Card sx={{ display: 'inline-block', px: 2, py: 1 }}>
-                      <Typography variant="caption" color="text.secondary" display="block">
-                        ECTA License
-                      </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <StatusChip status={profile.licenseStatus} brandColor={brandPrimary} />
-                        <Typography variant="body2" fontWeight="bold">
-                          {profile.ectaLicenseNumber}
-                        </Typography>
-                      </Box>
-                      <Typography variant="caption" color="text.secondary">
-                        Expires: {new Date(profile.licenseExpiryDate).toLocaleDateString()}
-                      </Typography>
-                    </Card>
-                  </>
-                )}
-              </Box>
             </Grid>
           </Grid>
         </Box>
@@ -2578,8 +2543,8 @@ const ExporterPortal: React.FC = () => {
             // LC & Payments - Payment Status
             [
               { icon: <Assessment />, label: 'Pending', value: stats.paymentsPending, color: '#FF9800' },
-              { icon: <History />, label: 'Processing', value: stats.paymentsProcessing, color: '#2196F3' },
-              { icon: <AttachMoney />, label: 'Received', value: stats.paymentsReceived, color: brandPrimary },
+              { icon: <History />, label: 'In Progress', value: stats.paymentsProcessing, color: '#2196F3' },
+              { icon: <AttachMoney />, label: 'Completed', value: stats.paymentsReceived, color: brandPrimary },
               { icon: <CheckCircle />, label: 'Settled', value: stats.paymentsSettled, color: '#4CAF50' },
             ]
           ) : tabValue === 6 ? (
@@ -2702,54 +2667,34 @@ const ExporterPortal: React.FC = () => {
               }
             }}
           >
-            <Tab label={`Dashboard`} icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab label="Dashboard" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  My Contracts ({contracts.length})
-                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
-                </Box>
-              } 
+              label={`Contracts (${contracts.length})`}
               icon={<Description sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
             <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Forex & Banking ({(() => {
-                    const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
-                    const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
-                    const pendingLCContracts = contracts.filter(c => {
-                      const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
-                      const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
-                      return isApproved && !hasLC;
-                    }).length;
-                    return allocatedForex + issuedLCs + pendingLCContracts;
-                  })()})
-                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
-                </Box>
-              }
+              label={`Forex & Banking (${(() => {
+                const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
+                const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
+                const pendingLCContracts = contracts.filter(c => {
+                  const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+                  const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
+                  return isApproved && !hasLC;
+                }).length;
+                return allocatedForex + issuedLCs + pendingLCContracts;
+              })()})`}
               icon={<AccountBalance sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
             <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Shipments ({shipments.length})
-                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
-                </Box>
-              }
+              label={`Shipments (${shipments.length})`}
               icon={<LocalShipping sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
             <Tab label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  LC & Payments ({lcStatuses.length})
-                  <Chip label="⛓️ Blockchain" size="small" sx={{ height: 18, fontSize: '0.65rem' }} color="success" />
-                </Box>
-              }
+              label={`LC & Payments (${lcStatuses.length})`}
               icon={<AttachMoney sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
@@ -4273,26 +4218,12 @@ const ExporterPortal: React.FC = () => {
       <TabPanel value={tabValue} index={3}>
         {/* Shipments Tab */}
         <Box>
-          {/* Header with Ready Contracts on Right */}
-          <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
-            <Box>
-              <Typography variant="h6">Shipment Tracking & Management</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                Register and track shipments through quality inspection, customs, and shipping
-              </Typography>
-            </Box>
-            
-            {/* Register Shipment Button */}
-            <Button
-              variant="contained"
-              startIcon={<Add />}
-              sx={{ bgcolor: brandPrimary }}
-              onClick={() => {
-                setCreateShipmentDialogOpen(true);
-              }}
-            >
-              Register New Shipment
-            </Button>
+          {/* Header */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6">Shipment Tracking & Management</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Register and track shipments through quality inspection, customs, and shipping
+            </Typography>
           </Box>
 
           {/* Contracts Ready for Shipment Alert */}
@@ -4365,56 +4296,46 @@ const ExporterPortal: React.FC = () => {
             
             console.log('[SHIPMENTS TAB] Displaying shipments:', shipments.length, 'pending:', contractsReadyForShipment.length);
             
-            if (allRows.length === 0) {
-              return (
-                <Alert severity="info">
-                  <Typography variant="body2">
-                    <strong>No shipments yet.</strong> To create a shipment, you must first complete the LC workflow.
-                    <br /><br />
-                    <strong>NBE Export Workflow:</strong>
-                    <br />1. Go to <strong>"My Contracts"</strong> tab → Find your approved contract
-                    <br />2. Click <strong>"Request LC"</strong> (Letter of Credit)
-                    <br />3. Bank reviews and issues LC + allocates forex
-                    <br />4. After forex allocated, you can create a shipment
-                    <br />5. Shipment creation automatically requests ECTA quality inspection
-                    <br />6. ECTA inspector performs physical & cupping inspection
-                    <br />7. ECTA approves quality and issues Export Permit
-                    <br />8. After permit issued, proceed to customs clearance and shipping
-                  </Typography>
-                </Alert>
-              );
-            }
-            
             return (
-              <DataGrid
-                rows={allRows}
-                columns={shipmentColumns}
-                getRowId={(row) => row.shipmentId}
-                autoHeight
-                pageSizeOptions={[10, 25, 50]}
-                initialState={{
-                  pagination: { paginationModel: { pageSize: 10 } },
-                }}
-                getRowClassName={(params) => params.row.isPending ? 'pending-shipment-row' : ''}
-                sx={{
-                  '& .MuiDataGrid-row:hover': {
-                    bgcolor: 'action.hover',
-                  },
-                  '& .MuiDataGrid-cell': {
-                    borderColor: 'rgba(0, 0, 0, 0.08)',
-                  },
-                  '& .MuiDataGrid-columnHeaders': {
-                    bgcolor: 'rgba(0, 0, 0, 0.04)',
-                    fontWeight: 700,
-                  },
-                  '& .pending-shipment-row': {
-                    bgcolor: 'rgba(76, 175, 80, 0.1)',
-                    '&:hover': {
-                      bgcolor: 'rgba(76, 175, 80, 0.2)',
+              <Box>
+                {allRows.length === 0 && (
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>No shipments yet.</strong> Create your first shipment by going to <strong>Contracts</strong> tab, then request an LC for an approved contract.
+                    </Typography>
+                  </Alert>
+                )}
+                
+                <DataGrid
+                  rows={allRows}
+                  columns={shipmentColumns}
+                  getRowId={(row) => row.shipmentId}
+                  autoHeight
+                  pageSizeOptions={[10, 25, 50]}
+                  initialState={{
+                    pagination: { paginationModel: { pageSize: 10 } },
+                  }}
+                  getRowClassName={(params) => params.row.isPending ? 'pending-shipment-row' : ''}
+                  sx={{
+                    '& .MuiDataGrid-row:hover': {
+                      bgcolor: 'action.hover',
                     },
-                  },
-                }}
-              />
+                    '& .MuiDataGrid-cell': {
+                      borderColor: 'rgba(0, 0, 0, 0.08)',
+                    },
+                    '& .MuiDataGrid-columnHeaders': {
+                      bgcolor: 'rgba(0, 0, 0, 0.04)',
+                      fontWeight: 700,
+                    },
+                    '& .pending-shipment-row': {
+                      bgcolor: 'rgba(76, 175, 80, 0.1)',
+                      '&:hover': {
+                        bgcolor: 'rgba(76, 175, 80, 0.2)',
+                      },
+                    },
+                  }}
+                />
+              </Box>
             );
           })()}
         </Box>
@@ -4718,142 +4639,84 @@ const ExporterPortal: React.FC = () => {
       <TabPanel value={tabValue} index={6}>
         {/* Reports Tab */}
         <Grid container spacing={3}>
+          
+          {/* Generate Report Section - Simplified */}
           <Grid item xs={12}>
-            <Typography variant="h6" gutterBottom>Export Reports & Analytics</Typography>
-          </Grid>
-          
-          {/* Summary Cards */}
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: 'primary.main', color: 'white' }}>
+            <Card>
               <CardContent>
-                <Typography variant="caption">Total Contracts</Typography>
-                <Typography variant="h4" fontWeight="bold">{contracts.length}</Typography>
-                <Typography variant="body2">This year</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: 'success.main', color: 'white' }}>
-              <CardContent>
-                <Typography variant="caption">Approval Rate</Typography>
-                <Typography variant="h4" fontWeight="bold">
-                  {Math.round((contracts.filter(c => c.status !== 'DRAFT').length / contracts.length) * 100)}%
-                </Typography>
-                <Typography variant="body2">Success rate</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: 'warning.main', color: 'white' }}>
-              <CardContent>
-                <Typography variant="caption">Avg. Approval Time</Typography>
-                <Typography variant="h4" fontWeight="bold">2.5</Typography>
-                <Typography variant="body2">Days</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ bgcolor: 'info.main', color: 'white' }}>
-              <CardContent>
-                <Typography variant="caption">Total Volume</Typography>
-                <Typography variant="h4" fontWeight="bold">
-                  {(contracts.reduce((sum, c) => sum + c.quantity, 0) / 1000).toFixed(1)}
-                </Typography>
-                <Typography variant="body2">Metric tons</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          
-          {/* Generate Report Section */}
-          <Grid item xs={12}>
-            <ModernCard>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>Generate Custom Report</Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6} md={3}>
+                <Typography variant="h6" gutterBottom>Generate Report</Typography>
+                <Grid container spacing={2} alignItems="center">
+                  <Grid item xs={12} sm={3}>
                     <TextField
                       fullWidth
                       label="Start Date"
                       type="date"
+                      size="small"
                       InputLabelProps={{ shrink: true }}
                       defaultValue="2026-01-01"
                     />
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
+                  <Grid item xs={12} sm={3}>
                     <TextField
                       fullWidth
                       label="End Date"
                       type="date"
+                      size="small"
                       InputLabelProps={{ shrink: true }}
                       defaultValue="2026-12-31"
                     />
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <FormControl fullWidth>
+                  <Grid item xs={12} sm={3}>
+                    <FormControl fullWidth size="small">
                       <InputLabel>Report Type</InputLabel>
                       <Select defaultValue="all">
                         <MenuItem value="all">All Activities</MenuItem>
-                        <MenuItem value="contracts">Contracts Only</MenuItem>
-                        <MenuItem value="financial">Financial Summary</MenuItem>
+                        <MenuItem value="contracts">Contracts</MenuItem>
+                        <MenuItem value="financial">Financial</MenuItem>
                         <MenuItem value="shipments">Shipments</MenuItem>
                       </Select>
                     </FormControl>
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
+                  <Grid item xs={12} sm={3}>
                     <Button 
                       fullWidth 
                       variant="contained" 
-                      sx={{ height: '100%', bgcolor: brandPrimary }}
+                      sx={{ bgcolor: brandPrimary }}
                       startIcon={<Download />}
                     >
-                      Generate Report
+                      Generate
                     </Button>
                   </Grid>
                 </Grid>
               </CardContent>
-            </ModernCard>
+            </Card>
           </Grid>
           
-          {/* Compliance Dashboard */}
+          {/* Quick Stats */}
           <Grid item xs={12}>
-            <ModernCard>
+            <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom>Compliance Dashboard</Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <CheckCircle sx={{ fontSize: 60, color: 'success.main' }} />
-                      <Typography variant="h4" fontWeight="bold">100%</Typography>
-                      <Typography variant="body2" color="text.secondary">EUDR Compliance</Typography>
-                    </Box>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Quick Stats</Typography>
+                <Grid container spacing={3}>
+                  <Grid item xs={6} sm={3}>
+                    <Typography variant="body2" color="text.secondary">EUDR Compliance</Typography>
+                    <Typography variant="h6" fontWeight="600">100%</Typography>
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <CheckCircle sx={{ fontSize: 60, color: 'success.main' }} />
-                      <Typography variant="h4" fontWeight="bold">0</Typography>
-                      <Typography variant="body2" color="text.secondary">Customs Rejections</Typography>
-                    </Box>
+                  <Grid item xs={6} sm={3}>
+                    <Typography variant="body2" color="text.secondary">Customs Rejections</Typography>
+                    <Typography variant="h6" fontWeight="600">0</Typography>
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <CheckCircle sx={{ fontSize: 60, color: 'success.main' }} />
-                      <Typography variant="h4" fontWeight="bold">98%</Typography>
-                      <Typography variant="body2" color="text.secondary">On-Time Delivery</Typography>
-                    </Box>
+                  <Grid item xs={6} sm={3}>
+                    <Typography variant="body2" color="text.secondary">On-Time Delivery</Typography>
+                    <Typography variant="h6" fontWeight="600">98%</Typography>
                   </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <CheckCircle sx={{ fontSize: 60, color: 'primary.main' }} />
-                      <Typography variant="h4" fontWeight="bold">A+</Typography>
-                      <Typography variant="body2" color="text.secondary">Quality Rating</Typography>
-                    </Box>
+                  <Grid item xs={6} sm={3}>
+                    <Typography variant="body2" color="text.secondary">Quality Rating</Typography>
+                    <Typography variant="h6" fontWeight="600">A+</Typography>
                   </Grid>
                 </Grid>
               </CardContent>
-            </ModernCard>
+            </Card>
           </Grid>
         </Grid>
       </TabPanel>
