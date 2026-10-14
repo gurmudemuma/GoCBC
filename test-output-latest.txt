@@ -1,0 +1,148 @@
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 0: SERVICE CHECK & ADMIN LOGIN[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+Checking if services are running...
+[0;32m✓ API is running[0m
+[0;32m✓ CouchDB is running[0m
+
+[1;33m[STEP 1] Login as Admin (existing user)[0m
+[0;32m✓ Admin login[0m
+  Token: eyJhbGciOiJIUzI1NiIs...
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 1: USER CREATION (BY ADMIN)[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 2] Admin Creates ECTA Officer[0m
+[0;32m✓ ECTA user created[0m
+  ECTA Token: eyJhbGciOiJIUzI1NiIs...
+
+[1;33m[STEP 3] Admin Creates Bank Officer[0m
+[0;32m✓ Bank user created[0m
+  Bank Token: eyJhbGciOiJIUzI1NiIs...
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 2: EXPORTER APPLICATION & APPROVAL[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 4] Submit Exporter Application[0m
+[0;32m✓ Application submitted[0m
+  Application ID: APP-1791921022637-NIFRB5
+  Temporary Username: applicant_exportere2e1791921022_34
+
+[1;33m[STEP 5] ECTA Reviews Application[0m
+=== DEBUG: Approval Response ===
+{
+  "success": true,
+  "data": {
+    "applicationId": "APP-1791921022637-NIFRB5",
+    "exporterId": "EXP-1791921022",
+    "status": "approved",
+    "txId": "e777884e95c3246aa3372e0d7fc4d1fad221324fb4028eaa95f00a9629e9bf5a",
+    "credentials": {
+      "username": "EXP-1791921022",
+      "passwordNote": "Use the password from your application confirmation email"
+    },
+    "license": {
+      "licenseNumber": "ECTA-LIC-1791921022",
+      "verificationCode": "36421FF9D29BCE55",
+      "issuedDate": "2026-10-13T19:50:24.877Z",
+      "expiryDate": "2028-10-13T00:00:00.000Z",
+      "downloadUrl": "/api/v1/exporters/licenses/ECTA-LIC-1791921022/download"
+    },
+    "message": "Application approved. License generated and email sent to exporter."
+  },
+  "timestamp": "2026-10-13T19:50:26.954Z"
+}
+=================================
+[0;32m✓ Application approved by ECTA[0m
+  Exporter ID: EXP-1791921022
+  License Number: ECTA-LIC-1791921022
+
+[1;33m[STEP 6] Reset Exporter Password for Testing[0m
+[0;32m✓ Password reset[0m
+  Password reset to: password123
+
+[1;33m[STEP 7] Login as Approved Exporter[0m
+[0;32m✓ Exporter login successful[0m
+  Exporter Token: eyJhbGciOiJIUzI1NiIs...
+
+[1;33m[STEP 8] Verify Application Status[0m
+[0;32m✓ Applications query successful - 0 approved[0m
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 3: LICENSE ISSUANCE[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 9] Verify License Created from Application Approval[0m
+[1;33m⚠ License number not found in exporter details[0m
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 4: SALES CONTRACT CREATION[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 10] Create Sales Contract[0m
+[0;32m✓ Sales contract created[0m
+  Contract ID: SC-1791921022-647065
+
+[1;33m[STEP 11] ECTA Approves Sales Contract[0m
+[0;32m✓ Contract approved by ECTA[0m
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 5: DOCUMENT EXAMINATION[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 12] Submit Documents for Examination[0m
+[0;31m✗ Documents submitted[0m
+{"success":false,"error":{"code":"NO_FILE","message":"No file uploaded"},"timestamp":"2026-10-13T19:51:03.362Z"}
+
+[1;33m[STEP 13] ECTA Examines Documents[0m
+[0;31m✗ No examination ID available[0m
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 6: BANK PROCESSING[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 14] Exporter Requests Letter of Credit[0m
+[0;32m✓ Letter of Credit requested[0m
+  LC Number: LC-1791921022-63A604
+  LC ID: LC-1791921022-63A604
+
+[1;33m[STEP 15] Bank Approves Letter of Credit Request[0m
+[0;32m✓ Letter of Credit approved by bank[0m
+
+[1;33m[STEP 16] Bank Issues Letter of Credit[0m
+[0;32m✓ Letter of Credit issued by bank[0m
+
+[1;33m[STEP 17] Bank Examines Export Documents[0m
+[1;33m⚠ Skipping LC document examination due to endorsement consensus issue[0m
+  Note: This is a known blockchain consensus issue being investigated
+
+[1;33m[STEP 18] Bank Processes Payment[0m
+[1;33m⚠ Skipping payment processing - focusing on core blockchain workflow[0m
+  Note: Payment endpoints require additional setup
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 7: SHIPMENT & TRACKING[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 19] Create Shipment Record[0m
+[0;32m✓ Shipment created[0m
+  Shipment ID: SHIP-1791921022-619A1A
+
+[1;33m[STEP 20] Update Shipment Status - In Transit[0m
+
+[1;33m[STEP 21] Verify Shipment Exists[0m
+  Shipment found in blockchain
+[0;31m✗ Shipment status updated[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Shipment not found"},"timestamp":"2026-10-13T19:51:20.921Z"}
+Exit code: 1

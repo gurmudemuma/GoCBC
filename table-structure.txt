@@ -1,0 +1,54 @@
+                                               Table "public.exporter_applications"
+         Column          |            Type             | Collation | Nullable |                      Default                      
+-------------------------+-----------------------------+-----------+----------+---------------------------------------------------
+ id                      | integer                     |           | not null | nextval('exporter_applications_id_seq'::regclass)
+ application_id          | character varying(100)      |           |          | 
+ company_name            | character varying(255)      |           | not null | 
+ tin_number              | character varying(100)      |           |          | 
+ business_license_number | character varying(100)      |           |          | 
+ capital_requirement     | character varying(100)      |           |          | 
+ professional_taster     | character varying(50)       |           |          | 
+ taster_certificate      | character varying(100)      |           |          | 
+ laboratory_facility     | character varying(50)       |           |          | 'no'::character varying
+ contact_person          | character varying(255)      |           |          | 
+ email                   | character varying(255)      |           | not null | 
+ phone                   | character varying(50)       |           |          | 
+ address                 | text                        |           |          | 
+ city                    | character varying(100)      |           |          | 
+ region                  | character varying(100)      |           |          | 
+ bank_name               | character varying(255)      |           |          | 
+ bank_account_number     | character varying(100)      |           |          | 
+ bank_branch             | character varying(100)      |           |          | 
+ bank_branch_code        | character varying(50)       |           |          | 
+ comments                | text                        |           |          | 
+ documents               | text                        |           |          | 
+ exporter_type           | character varying(50)       |           |          | 'company'::character varying
+ status                  | character varying(50)       |           |          | 'pending'::character varying
+ submitted_at            | timestamp without time zone |           |          | CURRENT_TIMESTAMP
+ reviewed_at             | timestamp without time zone |           |          | 
+ reviewed_by             | integer                     |           |          | 
+ rejection_reason        | text                        |           |          | 
+ created_at              | timestamp without time zone |           |          | CURRENT_TIMESTAMP
+ updated_at              | timestamp without time zone |           |          | CURRENT_TIMESTAMP
+ registration_date       | timestamp without time zone |           |          | 
+ temp_username           | character varying(255)      |           |          | 
+ temp_password           | character varying(255)      |           |          | 
+ temp_password_sent      | boolean                     |           |          | false
+ temp_credentials_sent   | boolean                     |           |          | false
+ account_created         | boolean                     |           |          | false
+ license_number          | character varying(100)      |           |          | 
+ ecta_license_number     | character varying(100)      |           |          | 
+ license_issued_date     | timestamp without time zone |           |          | 
+ license_expiry_date     | timestamp without time zone |           |          | 
+ digital_signature       | text                        |           |          | 
+ verification_code       | character varying(50)       |           |          | 
+Indexes:
+    "exporter_applications_pkey" PRIMARY KEY, btree (id)
+    "exporter_applications_application_id_key" UNIQUE CONSTRAINT, btree (application_id)
+    "idx_exporter_applications_account_created" btree (account_created)
+    "idx_exporter_applications_application_id" btree (application_id)
+    "idx_exporter_applications_email" btree (email)
+    "idx_exporter_applications_license_number" btree (license_number)
+    "idx_exporter_applications_status" btree (status)
+
+Query completed

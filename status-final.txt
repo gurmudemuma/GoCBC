@@ -1,0 +1,28 @@
+=== CECBS System Status ===
+
+1. CouchDB:
+   ✅ Running on port 5984
+null - null documents
+
+2. PostgreSQL:
+   ✅ Running on port 5432
+
+3. API Server:
+   ✅ Running on port 3001
+
+4. UI Server:
+   ✅ Running on port 3000
+
+5. Docker Containers:
+peer0.nbe.cecbs.et: Up About an hour
+peer0.customs.cecbs.et: Up About an hour
+peer0.shipping.cecbs.et: Up About an hour
+peer0.ecta.cecbs.et: Up About an hour
+peer0.ecx.cecbs.et: Up About an hour
+peer0.banks.cecbs.et: Up About an hour
+couchdb.nbe: Up About an hour
+cecbs-zookeeper: Up About an hour
+couchdb.customs: Up About an hour
+couchdb.shipping: Up About an hour
+
+=== End Status ===

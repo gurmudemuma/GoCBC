@@ -120,7 +120,7 @@ services:
     volumes:
       - couchdb.ecta-data:/opt/couchdb/data
     ports:
-      - 5984:5984
+      - 5985:5984
     networks:
       - cecbs
 

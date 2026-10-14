@@ -284,6 +284,11 @@ router.post('/exporter-applications/:applicationId/approve',
 
       // Step 1: Register exporter on blockchain (CRITICAL - must succeed)
       logger.info(`Attempting to register exporter ${exporterId} on blockchain...`);
+      logger.info(`Application data for ${exporterId}:`, {
+        capital_requirement: application.capital_requirement,
+        exporter_type: application.exporter_type,
+        company_name: application.company_name
+      });
       
       const result = await fabricService.registerExporter(
         exporterId,
@@ -459,6 +464,10 @@ router.post('/exporter-applications/:applicationId/approve',
           exporterId, 
           status: 'approved', 
           txId: result.txId,
+          credentials: {
+            username: exporterId,  // New username after approval
+            passwordNote: 'Use the password from your application confirmation email'
+          },
           license: {
             licenseNumber: ectaLicenseNumber,
             verificationCode: licenseResult.verificationCode,

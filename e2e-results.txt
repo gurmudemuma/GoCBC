@@ -1,0 +1,34 @@
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 1: USER REGISTRATION & LOGIN[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 1] Register ECTA Officer[0m
+[0;31m✗ ECTA user registered[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/auth/register not found"},"timestamp":"2026-10-13T09:58:26.132Z"}
+
+[1;33m[STEP 2] Register Test Exporter[0m
+[0;31m✗ Exporter registered[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/auth/register not found"},"timestamp":"2026-10-13T09:58:26.143Z"}
+
+[1;33m[STEP 3] Register Bank Officer[0m
+[0;31m✗ Bank user registered[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/auth/register not found"},"timestamp":"2026-10-13T09:58:26.154Z"}
+
+[1;33m[STEP 4] Login as Admin[0m
+[0;31m✗ Admin login[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/auth/login not found"},"timestamp":"2026-10-13T09:58:26.164Z"}
+
+[0;34m═══════════════════════════════════════════════════════════[0m
+[0;34mPHASE 2: EXPORTER APPLICATION & APPROVAL[0m
+[0;34m═══════════════════════════════════════════════════════════[0m
+
+
+[1;33m[STEP 5] Submit Exporter Application[0m
+[0;31m✗ Application submitted[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/exporter-applications not found"},"timestamp":"2026-10-13T09:58:26.175Z"}
+
+[1;33m[STEP 6] ECTA Reviews Application[0m
+[0;31m✗ Application approved by ECTA[0m
+{"success":false,"error":{"code":"NOT_FOUND","message":"Route /api/exporter-applications//review not found"},"timestamp":"2026-10-13T09:58:28.186Z"}

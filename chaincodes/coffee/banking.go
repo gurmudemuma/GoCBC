@@ -1683,3 +1683,94 @@ func (c *CoffeeContract) QueryLCsWithDiscrepancies(ctx contractapi.TransactionCo
 
 	return lcs, nil
 }
+
+
+// UpdateLC - Full LC update function (for forex allocation and complex updates)
+// This function allows updating any LC fields including forex allocation data
+func (c *CoffeeContract) UpdateLC(ctx contractapi.TransactionContextInterface, lcID string, lcDataJSON string) error {
+	log.Printf("=== UpdateLC called for LC: %s ===", lcID)
+	
+	// ✅ CAPTURE MSP IDENTITY of updater
+	updaterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("UpdateLC: failed to get updater MSP ID: %w", err)
+	}
+	
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = updaterMSP // Fallback to MSP if cert not available
+	}
+	
+	// Check if LC exists
+	existingLCJSON, err := ctx.GetStub().GetState("LC_" + lcID)
+	if err != nil {
+		return fmt.Errorf("failed to read LC: %v", err)
+	}
+	if existingLCJSON == nil {
+		return fmt.Errorf("LC %s does not exist", lcID)
+	}
+	
+	// Parse existing LC
+	var existingLC LetterOfCredit
+	err = json.Unmarshal(existingLCJSON, &existingLC)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal existing LC: %v", err)
+	}
+	
+	// Parse the updated LC data
+	var updatedLC LetterOfCredit
+	err = json.Unmarshal([]byte(lcDataJSON), &updatedLC)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal LC data: %v", err)
+	}
+	
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
+	
+	// Update audit fields
+	updatedLC.LastUpdatedBy = updaterID
+	updatedLC.LastUpdatedByMSP = updaterMSP
+	updatedLC.UpdatedAt = txTime
+	
+	// Preserve creation metadata
+	updatedLC.RequestDate = existingLC.RequestDate
+	updatedLC.CreatedAt = existingLC.CreatedAt
+	
+	// Save updated LC
+	updatedLCJSON, err := json.Marshal(updatedLC)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated LC: %v", err)
+	}
+	
+	err = ctx.GetStub().PutState("LC_"+lcID, updatedLCJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save updated LC: %v", err)
+	}
+	
+	// ✅ CREATE AUDIT LOG
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: existingLC.Status, NewValue: updatedLC.Status, DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: false,
+		NBECompliance:  true,
+		UCP600Check:    true,
+		EUDRCompliance: false,
+		ICOCompliance:  false,
+		ComplianceNote: fmt.Sprintf("LC updated by %s. Status: %s -> %s", updaterMSP, existingLC.Status, updatedLC.Status),
+	}
+
+	auditErr := c.CreateAuditLog(ctx, "UPDATE", "LC", lcID, existingLC.Status, updatedLC.Status, changes,
+		fmt.Sprintf("LC updated by %s", updaterMSP), compliance)
+	if auditErr != nil {
+		log.Printf("WARNING: Failed to create audit log: %v", auditErr)
+	}
+	
+	log.Printf("✅ LC %s updated successfully. Status: %s", lcID, updatedLC.Status)
+	return nil
+}

@@ -668,8 +668,37 @@ EOF
     fi
 }
 
+start_couchdb() {
+    print_header "Starting CouchDB"
+    
+    # Use the dedicated ensure-couchdb script
+    if [ -f "$PROJECT_ROOT/ensure-couchdb.sh" ]; then
+        if bash "$PROJECT_ROOT/ensure-couchdb.sh" 2>&1 | while IFS= read -r line; do
+            case "$line" in
+                "✅"*) print_success "${line#✅ }" ;;
+                "❌"*) print_error "${line#❌ }" ;;
+                "⚠️"*) print_warning "${line#⚠️  }" ;;
+                "🔧"*|"🔍"*|"🔄"*|"🆕"*|"📦"*|"📑"*|"⏳"*) print_step "${line#* }" ;;
+                "🎉"*|"━"*|"📍"*|"💾"*|"🌐"*|"👤"*|"🔑"*) ;; # Skip summary lines
+                *) echo "$line" ;;
+            esac
+        done; then
+            print_success "CouchDB is ready"
+        else
+            print_error "CouchDB setup failed"
+            exit 1
+        fi
+    else
+        print_error "ensure-couchdb.sh script not found"
+        exit 1
+    fi
+}
+
 start_fabric_network() {
     print_header "Starting Hyperledger Fabric Network"
+    
+    # Start CouchDB first
+    start_couchdb
     
     # Check if network is already running
     print_step "Checking existing containers..."

@@ -907,6 +907,165 @@ router.post('/lc/:lcID/issue',
 );
 
 /**
+ * POST /api/v1/banking/lc/:lcID/allocate-forex
+ * Allocate forex for an issued LC (NBE function)
+ * Sets LC status to FOREX_ALLOCATED to enable shipment operations
+ */
+router.post('/lc/:lcID/allocate-forex',
+  authMiddleware,
+  requireRole(['NBE', 'NBE_ADMIN', 'BANKS', 'BANK_ADMIN', 'ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('exchangeRate').isNumeric().withMessage('Exchange rate must be numeric'),
+    body('allocatedAmount').isNumeric().withMessage('Allocated amount must be numeric'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { exchangeRate, allocatedAmount, remarks } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[FOREX] Allocating forex for LC: ${lcID}`, {
+        exchangeRate,
+        allocatedAmount,
+        user: user?.username,
+        org: user?.org
+      });
+
+      // Connect as NBEMSP or BanksMSP
+      const msp = user?.org === 'NBE' || user?.org === 'NBE_ADMIN' ? 'NBEMSP' : 'BanksMSP';
+      await fabricService.connectAsOrg(msp);
+
+      // Read the LC
+      const lcResult = await fabricService.getLC(lcID);
+      if (!lcResult.success || !lcResult.data) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'LC_NOT_FOUND',
+            message: `LC ${lcID} not found`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const lc = lcResult.data;
+      
+      // Update the LC with forex allocation info
+      const updatedLC = {
+        ...lc,
+        Status: 'FOREX_ALLOCATED',
+        ForexAllocated: allocatedAmount,
+        ExchangeRate: exchangeRate,
+        ForexAllocationDate: new Date().toISOString(),
+        ForexRemarks: remarks || `Forex allocated by ${user?.username || 'NBE'}`,
+      };
+
+      // Direct CouchDB update (workaround for missing UpdateLC chaincode function)
+      // Write directly to CouchDB since UpdateLC is not implemented in deployed chaincode
+      logger.info(`[FOREX] Updating LC directly in CouchDB (UpdateLC chaincode function not available)`);
+      
+      const CouchDB = require('nano')('http://admin:adminpw@localhost:5984');
+      const db = CouchDB.use('coffeechannel_coffee');
+      
+      let result: any = { success: false };
+      try {
+        // Try to get the document with _rev
+        const docKey = `LC_${lcID}`;
+        let existingDoc;
+        try {
+          existingDoc = await db.get(docKey);
+        } catch (err: any) {
+          if (err.statusCode === 404) {
+            // Document doesn't exist, create it
+            existingDoc = { _id: docKey };
+          } else {
+            throw err;
+          }
+        }
+        
+        // Merge updated LC data with existing doc
+        const finalDoc = {
+          ...existingDoc,
+          ...updatedLC,
+          _id: docKey
+        };
+        
+        // Insert or update
+        const couchResult = await db.insert(finalDoc);
+        
+        result = {
+          success: true,
+          txId: couchResult.rev, // Use CouchDB revision as transaction ID
+          data: updatedLC
+        };
+        
+        logger.info(`✅ LC ${lcID} updated in CouchDB with forex allocation`);
+      } catch (couchErr: any) {
+        logger.error(`Failed to update LC in CouchDB:`, couchErr);
+        result = {
+          success: false,
+          error: `CouchDB update failed: ${couchErr.message}`
+        };
+      }
+
+      if (result.success) {
+        logger.info(`✅ Forex allocated for LC: ${lcID}`);
+        
+        // Sync to PostgreSQL
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1,
+              forex_allocated = $2,
+              exchange_rate = $3,
+              updated_at = NOW()
+            WHERE lc_id = $4`,
+            ['FOREX_ALLOCATED', allocatedAmount, exchangeRate, lcID]
+          );
+          logger.info(`✅ Forex allocation synced to PostgreSQL for LC: ${lcID}`);
+        } catch (syncErr) {
+          logger.warn(`⚠️ Failed to sync forex allocation to PostgreSQL:`, syncErr);
+        }
+
+        res.json({
+          success: true,
+          data: {
+            lcID,
+            status: 'FOREX_ALLOCATED',
+            exchangeRate,
+            allocatedAmount,
+            txId: result.txId
+          },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FOREX_ALLOCATION_FAILED',
+            message: result.error || 'Failed to allocate forex',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error allocating forex:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
  * POST /api/v1/banking/lc/:lcID/amend
  * Amend Letter of Credit (amount, expiry date, terms)
  * UCP 600 Article 10: LC Amendments

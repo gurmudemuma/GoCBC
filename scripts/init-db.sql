@@ -153,7 +153,15 @@ CREATE TABLE IF NOT EXISTS exporter_applications (
     rejected_at TIMESTAMP,
     rejection_reason TEXT,
     exporter_id VARCHAR(100), -- Assigned after approval
-    reviewed_by VARCHAR(100)
+    reviewed_by VARCHAR(100),
+    -- Approval workflow fields
+    account_created BOOLEAN DEFAULT false,
+    license_number VARCHAR(100),
+    ecta_license_number VARCHAR(100),
+    license_issued_date TIMESTAMP,
+    license_expiry_date TIMESTAMP,
+    digital_signature TEXT,
+    verification_code VARCHAR(50)
 );
 
 -- Audit Trail
