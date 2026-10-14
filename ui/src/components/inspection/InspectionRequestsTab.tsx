@@ -395,42 +395,6 @@ const InspectionRequestsTab: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      {/* KPI Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Total Inspections"
-            value={stats.total}
-            icon={<Assessment />}
-            brandColor={ECTA_COLORS.green}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Pending Inspections"
-            value={stats.pending}
-            icon={<Schedule />}
-            brandColor="#1976d2"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Completed Today"
-            value={stats.completedToday}
-            icon={<CheckCircle />}
-            brandColor={ECTA_COLORS.success}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <DashboardKPI
-            title="Avg Duration"
-            value={`${stats.avgDuration.toFixed(1)}`}
-            icon={<TrendingUp />}
-            brandColor="#ff9800"
-          />
-        </Grid>
-      </Grid>
-
       {/* Filters and Actions */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
