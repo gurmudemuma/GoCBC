@@ -64,7 +64,7 @@ sleep 15
 
 # Fix permissions on the block file so docker cp can read it
 echo "Fixing block file permissions..."
-sudo chmod 644 blockchain/channel-artifacts/${CHANNEL_NAME}.block 2>/dev/null || chmod 644 blockchain/channel-artifacts/${CHANNEL_NAME}.block
+chmod 644 blockchain/channel-artifacts/${CHANNEL_NAME}.block 2>/dev/null || true
 
 # Join peers directly using the genesis block (skip fetch step)
 echo "Joining ECTA peer to channel..."

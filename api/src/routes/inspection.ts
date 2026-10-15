@@ -13,6 +13,91 @@ const postgresDb = DatabaseService.getInstance();
 
 // ==================== PRE-SHIPMENT INSPECTION ROUTES ====================
 
+// POST /api/v1/inspection — Create inspection (wrapper for /request endpoint)
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const {
+      inspectionID,
+      shipmentID,
+      contractID,
+      exporterID,
+      inspectorID,
+      coffeeType,
+      quantity,
+      qualityGrade,
+      moistureContent,
+      defectPercentage,
+      cuppingScore,
+      result: inspectionResult,
+      status
+    } = req.body;
+
+    logger.info(`[INSPECTION] 📝 Creating inspection: ${inspectionID}`);
+
+    // Map workflow test parameters to blockchain function parameters
+    const inspectionId = inspectionID || req.body.inspectionId;
+    const contractId = contractID || req.body.contractId || '';
+    const shipmentId = shipmentID || req.body.shipmentId || '';
+    const exporterId = exporterID || req.body.exporterId || '';
+    const inspectionAgency = 'SGS'; // Default inspection agency
+    const inspectionLocation = 'Addis Ababa Warehouse';
+    const contractQuantity = quantity || 10000;
+    const contractGrade = qualityGrade || coffeeType || 'Grade 2';
+    const contractType = coffeeType || 'Arabica';
+    const packagingType = 'JUTE_BAGS';
+
+    if (!inspectionId || !shipmentId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Missing required fields: inspectionID, shipmentID',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = await fabricService.submitTransaction('RequestPreShipmentInspection',
+      inspectionId,
+      contractId,
+      shipmentId,
+      exporterId,
+      inspectionAgency,
+      inspectionLocation,
+      String(contractQuantity),
+      contractGrade,
+      contractType,
+      packagingType
+    );
+
+    if (!result.success) {
+      logger.error(`[INSPECTION] ❌ Failed to create: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error,
+        timestamp: new Date().toISOString() 
+      });
+    }
+
+    logger.info(`[INSPECTION] ✅ Created: ${inspectionId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Inspection created successfully',
+      data: { inspectionID: inspectionId, inspectionId, status: 'pending' },
+      txId: result.transactionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[INSPECTION] ❌ Error creating:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      timestamp: new Date().toISOString() 
+    });
+  }
+});
+
 // GET /api/v1/inspection — Get all inspections
 router.get('/', authMiddleware, async (req, res) => {
   try {

@@ -1,28 +1,39 @@
 #!/bin/bash
-#############################################################################
-# Restart API Server
-# Kills existing API process and starts fresh
-#############################################################################
 
-echo "Stopping API server..."
-pkill -f "ts-node.*api/src/server.ts" || pkill -f "node.*api.*server" || true
+echo "=== Restarting CECBS API ==="
+
+cd /home/guda/GoCBC/api
+
+# Kill any existing API processes
+echo "Stopping any running API processes..."
+pkill -f "node.*dist/index.js" || true
+pkill -f "ts-node.*src/index.ts" || true
 sleep 2
 
-echo "Starting API server..."
-cd /home/guda/GoCBC/api
-npm run dev > ../logs/api.log 2>&1 &
+# Rebuild
+echo "Rebuilding API..."
+npm run build
+
+# Start
+echo "Starting API..."
+NODE_ENV=production node dist/server.js > /tmp/cecbs-api.log 2>&1 &
+
 API_PID=$!
 echo "API started with PID: $API_PID"
 
-# Wait for API to be ready
-echo "Waiting for API to be ready..."
-for i in {1..30}; do
-  if curl -s http://localhost:3001/api/v1/health > /dev/null 2>&1; then
-    echo "✅ API is ready!"
-    exit 0
-  fi
-  sleep 1
-done
+# Wait and check
+sleep 5
 
-echo "❌ API failed to start within 30 seconds"
-exit 1
+if ps -p $API_PID > /dev/null; then
+   echo "✅ API is running (PID: $API_PID)"
+   echo "Checking health endpoint..."
+   curl -s http://localhost:3001/api/v1/health || echo "Health check failed"
+else
+   echo "❌ API failed to start"
+   echo "Last 20 lines of log:"
+   tail -20 /tmp/cecbs-api.log
+   exit 1
+fi
+
+echo ""
+echo "API logs: tail -f /tmp/cecbs-api.log"

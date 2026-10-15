@@ -608,6 +608,99 @@ router.post('/inspections/:inspectionID/reject',
 );
 
 /**
+ * @route POST /api/v1/quality/issue
+ * @desc Issue quality certificate (wrapper endpoint)
+ * @access ECTA Quality Director
+ */
+router.post('/issue',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { certificateID, shipmentID, inspectionID, qualityGrade, status } = req.body;
+
+      logger.info(`[QUALITY] 📜 Issuing quality certificate: ${certificateID}`);
+
+      const certId = certificateID || req.body.certificateId || `QC-${Date.now()}`;
+      const inspectionId = inspectionID || req.body.inspectionId || '';
+      const shipmentId = shipmentID || req.body.shipmentId || '';
+
+      if (!certId || !inspectionId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Missing required fields: certificateID, inspectionID',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Check inspection exists and passed
+      const inspection = await postgresDb.get(
+        'SELECT id, status, shipment_id, exporter_id, passed, grade FROM quality_inspections WHERE inspection_id = $1',
+        [inspectionId]
+      );
+
+      if (!inspection) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // ✅ BLOCKCHAIN-FIRST: Call IssueCertificate chaincode
+      const blockchainResult = await fabricService.invokeChaincode(
+        'IssueCertificate',
+        [
+          certId,
+          inspectionId,
+          shipmentId || inspection.shipment_id || '',
+          qualityGrade || inspection.grade || 'Grade 2',
+          new Date().toISOString().split('T')[0]
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Quality certificate recorded on blockchain: ${certId}, TX: ${blockchain_tx_id}`);
+
+      // Update inspection with certificate number
+      await postgresDb.run(
+        `UPDATE quality_inspections SET
+          certification_number = $1,
+          status = 'certificate_issued',
+          blockchain_tx_id = $2,
+          updated_at = NOW()
+        WHERE inspection_id = $3`,
+        [certId, blockchain_tx_id, inspectionId]
+      );
+
+      logger.info(`Quality certificate issued: ${certId} for inspection ${inspectionId}`);
+
+      res.status(201).json({
+        success: true,
+        message: 'Quality certificate issued successfully',
+        data: { 
+          certificateID: certId, 
+          certificateId: certId,
+          inspectionID: inspectionId,
+          status: 'issued',
+          blockchain_tx_id
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[QUALITY] Quality certificate issuance error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
  * @route POST /api/v1/quality/inspections/:inspectionID/issue-permit
  * @desc Issue export permit after inspection approval (status: approved → permit_issued)
  * @access ECTA Export Permit Office

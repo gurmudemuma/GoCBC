@@ -97,6 +97,7 @@ router.post('/',
       .if(body('channel').equals('Union'))
       .notEmpty().withMessage('Union approval reference is required when channel is Union/Cooperative'),
     body('bondReference')
+      .optional()
       .if(body('channel').equals('Direct Export'))
       .notEmpty().withMessage('Bond reference is required when channel is Direct Export'),
     body('forexRate').isNumeric().withMessage('Forex rate must be a number'),

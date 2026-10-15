@@ -147,6 +147,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           // Token is valid, restore session
           if (response.data.success) {
             const userData = JSON.parse(storedUser);
+            
+            // Normalize role to uppercase (fix for case sensitivity issues)
+            if (userData.role && typeof userData.role === 'string') {
+              userData.role = userData.role.toUpperCase() as UserRole;
+            }
+            
             setUser(userData);
             
             // Check if token is about to expire and refresh it
@@ -234,6 +240,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       if (!token || !userData) {
         throw new Error('Login failed - missing token or user data');
+      }
+      
+      // Normalize role to uppercase (fix for case sensitivity issues)
+      if (userData.role && typeof userData.role === 'string') {
+        userData.role = userData.role.toUpperCase() as UserRole;
       }
       
       console.log('Login successful for user:', userData.username, 'Role:', userData.role);

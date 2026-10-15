@@ -1547,9 +1547,9 @@ router.post('/',
       // Now persist to database with blockchain TX ID
       await postgresDb.run(
         `INSERT INTO payments (
-          payment_id, lc_number, contract_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [paymentID, lcNumber || null, contractID, exporterID, amount, currency, paymentMethod, paymentDate, blockchain_tx_id]
+          payment_id, lc_number, contract_id, shipment_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [paymentID, lcNumber || null, contractID, req.body.shipmentID || null, exporterID, amount, currency, paymentMethod, paymentDate, blockchain_tx_id]
       );
 
       res.json({

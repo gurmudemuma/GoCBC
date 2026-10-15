@@ -16,6 +16,92 @@ const signatureService = BlockchainSignatureService.getInstance();
 
 // ==================== FOREX ALLOCATION ROUTES ====================
 
+// POST /api/v1/forex — Create forex request (wrapper for /request endpoint)
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const { forexID, contractID, exporterID, lcNumber, amount, currency, status } = req.body;
+    
+    logger.info(`[FOREX] Creating forex request: ${forexID || req.body.forexId}`);
+    
+    // Map workflow test parameters to actual API parameters
+    const forexId = forexID || req.body.forexId;
+    const contractId = contractID || req.body.contractId;
+    const exporterId = exporterID || req.body.exporterId;
+    
+    if (!forexId || !contractId || !exporterId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Missing required fields: forexID, contractID, exporterID, amount',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+    
+    // Forward to the actual /request endpoint logic
+    // AUTO-MAPPING: Fetch contract data to auto-populate forex fields
+    let autoMappedData: any = {};
+    try {
+      const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractId]);
+      if (contractResult.success && contractResult.data) {
+        const contract = contractResult.data;
+        autoMappedData.exporterId = contract.ExporterID || contract.exporterId || exporterId;
+        autoMappedData.currency = contract.Currency || contract.currency || 'USD';
+        
+        // Calculate forex amount from contract value if not provided
+        const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+        const quantity = parseFloat(contract.Quantity || contract.quantity || '0');
+        autoMappedData.calculatedAmount = (pricePerKg * quantity).toFixed(2);
+        
+        logger.info(`[FOREX] Auto-mapped from contract: exporterId=${autoMappedData.exporterId}, amount=${autoMappedData.calculatedAmount}, currency=${autoMappedData.currency}`);
+      }
+    } catch (error) {
+      logger.warn('[FOREX] Could not fetch contract for auto-mapping:', error);
+    }
+
+    // Use provided values or auto-mapped values
+    const finalExporterId = exporterId || autoMappedData.exporterId || '';
+    const finalAmount = amount || autoMappedData.calculatedAmount || '0';
+    const finalCurrency = currency || autoMappedData.currency || 'USD';
+
+    const result = await fabricService.invokeChaincode('RequestForex', [
+      forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency,
+    ]);
+    
+    if (result.success) {
+      logger.info(`✅ [FOREX] Forex request created successfully: ${forexId}`);
+      res.status(201).json({
+        success: true,
+        message: 'Forex request created successfully',
+        data: { forexID: forexId, forexId, status: 'pending' },
+        txId: result.txId,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      logger.error(`❌ [FOREX] Failed to create forex request: ${result.error}`);
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'REQUEST_FAILED',
+          message: result.error || 'Failed to create forex request',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error: any) {
+    logger.error('[FOREX] Error creating forex request:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
       // GET /api/v1/forex — all forex allocations (BLOCKCHAIN ONLY - NO CACHE)
 router.get('/', authMiddleware, async (req, res) => {
   try {

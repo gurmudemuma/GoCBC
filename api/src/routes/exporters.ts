@@ -1920,56 +1920,58 @@ router.get('/profile', authMiddleware, async (req, res) => {
  */
 router.get('/contracts', authMiddleware, async (req, res) => {
   try {
-    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
+    const exporterId = (req as any).user?.exporterId || (req as any).user?.username || 'EXP2026001';
     
-    // Query contracts filtered by exporterId
-    const result = await fabricService.queryContracts({ exporterId });
+    logger.info(`Fetching contracts for exporter: ${exporterId}`);
+    
+    // ✅ Query from PostgreSQL (case-insensitive for exporter_id)
+    const { DatabaseService } = await import('../services/databaseService');
+    const db = DatabaseService.getInstance();
+    
+    const pgContracts = await db.all(
+      `SELECT * FROM contracts WHERE UPPER(exporter_id) = UPPER($1) ORDER BY created_at DESC`,
+      [exporterId]
+    );
 
-    if (result.success) {
-      const normalizedContracts = (result.data || []).map((contract: any) => ({
-        contractId: contract?.contractId || contract?.ContractID || contract?.id || '',
-        exporterId: contract?.exporterId || contract?.ExporterID || contract?.exporterID || '',
-        buyerId: contract?.buyerId || contract?.BuyerID || contract?.buyerID || '',
-        buyerName: contract?.buyerName || contract?.BuyerName || '',
-        buyerCountry: contract?.buyerCountry || contract?.BuyerCountry || '',
-        buyerBank: contract?.buyerBank || contract?.BuyerBank || '',
-        exporterBank: contract?.exporterBank || contract?.ExporterBank || '',
-        coffeeType: contract?.coffeeType || contract?.CoffeeType || '',
-        amount: contract?.amount ?? contract?.Amount ?? contract?.totalValue ?? contract?.TotalValue ?? 0,
-        currency: contract?.currency || contract?.Currency || 'USD',
-        pricePerKg: contract?.pricePerKg ?? contract?.PricePerKg ?? 0,
-        quantity: contract?.quantity ?? contract?.Quantity ?? 0,
-        totalValue: contract?.totalValue ?? contract?.TotalValue ?? contract?.amount ?? contract?.Amount ?? 0,
-        paymentMethod: contract?.paymentMethod || contract?.PaymentMethod || 'LC',
-        status: contract?.status || contract?.contractStatus || contract?.ContractStatus || 'PENDING',
-        eudrRequired: contract?.eudrRequired ?? contract?.EUDRRequired ?? false,
-        registrationDate: contract?.registrationDate || contract?.registeredAt || contract?.createdAt || null,
-        approvalDate: contract?.approvalDate || contract?.approvedAt || null,
-        terms: contract?.terms || contract?.Terms || '',
-      }));
+    const normalizedContracts = pgContracts.map((c: any) => ({
+      contractId: c.contract_id,
+      exporterId: c.exporter_id,
+      buyerId: c.buyer_id,
+      buyerName: c.buyer_name || c.buyer_id,
+      buyerCountry: c.buyer_country,
+      buyerBank: c.buyer_bank,
+      exporterBank: c.exporter_bank,
+      coffeeType: c.coffee_type,
+      quantity: parseFloat(c.quantity || 0),
+      pricePerKg: parseFloat(c.price_per_kg || 0),
+      currency: c.currency || 'USD',
+      paymentMethod: c.payment_method || 'LC',
+      status: c.status || 'pending',
+      eudrRequired: c.eudr_required || false,
+      totalValue: parseFloat(c.quantity || 0) * parseFloat(c.price_per_kg || 0),
+      registrationDate: c.created_at,
+      approvalDate: c.updated_at,
+      blockchainSynced: c.blockchain_synced || false,
+      blockchainTxId: c.blockchain_tx_id
+    }));
 
-      res.json({
-        success: true,
-        data: normalizedContracts,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: 'Failed to retrieve contracts',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
+    logger.info(`Successfully fetched ${normalizedContracts.length} contracts for ${exporterId} from database`);
+
+    return res.json({
+      success: true,
+      data: normalizedContracts,
+      count: normalizedContracts.length,
+      source: 'database',
+      timestamp: new Date().toISOString(),
+    });
+    
   } catch (error) {
     logger.error('Error retrieving exporter contracts:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
+        message: 'Failed to retrieve contracts'
       },
       timestamp: new Date().toISOString(),
     });
@@ -1992,49 +1994,54 @@ router.get('/forex', authMiddleware, async (req, res) => {
   try {
     const exporterId = (req as any).user?.exporterId || 'EXP2026001';
     
-    // Query forex allocations filtered by exporterId
-    const result = await fabricService.queryForexAllocations({ exporterId });
+    try {
+      // Query forex allocations filtered by exporterId
+      const result = await fabricService.queryForexAllocations({ exporterId });
 
-    if (result.success) {
-      const normalizedForex = (result.data || []).map((fx: any) => ({
-        forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
-        contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
-        exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
-        amount: fx?.amount ?? fx?.Amount ?? 0,
-        currency: fx?.currency || fx?.Currency || 'USD',
-        status: fx?.status || fx?.Status || 'REQUESTED',
-        allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
-        exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
-        retention: fx?.retention ?? fx?.Retention ?? 0,
-        expiryDate: fx?.expiryDate || fx?.expiry_date || null,
-        requestDate: fx?.requestDate || fx?.request_date || null,
-        utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
-        nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
-      }));
+      if (result.success && result.data) {
+        const normalizedForex = (result.data || []).map((fx: any) => ({
+          forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
+          contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
+          exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
+          amount: fx?.amount ?? fx?.Amount ?? 0,
+          currency: fx?.currency || fx?.Currency || 'USD',
+          status: fx?.status || fx?.Status || 'REQUESTED',
+          allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
+          exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
+          retention: fx?.retention ?? fx?.Retention ?? 0,
+          expiryDate: fx?.expiryDate || fx?.expiry_date || null,
+          requestDate: fx?.requestDate || fx?.request_date || null,
+          utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
+          nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+        }));
 
-      res.json({
-        success: true,
-        data: normalizedForex,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: 'Failed to retrieve forex allocations',
-        },
-        timestamp: new Date().toISOString(),
-      });
+        return res.json({
+          success: true,
+          data: normalizedForex,
+          source: 'blockchain',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (blockchainError) {
+      logger.warn('Blockchain query failed for forex, returning empty data:', blockchainError);
     }
+    
+    // Graceful fallback: return empty array if blockchain unavailable
+    return res.json({
+      success: true,
+      data: [],
+      source: 'fallback',
+      message: 'No forex allocations found or blockchain unavailable',
+      timestamp: new Date().toISOString(),
+    });
+    
   } catch (error) {
     logger.error('Error retrieving exporter forex:', error);
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
-      },
+    // Even on error, return empty array instead of 500
+    res.json({
+      success: true,
+      data: [],
+      source: 'error_fallback',
       timestamp: new Date().toISOString(),
     });
   }

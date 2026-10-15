@@ -1,153 +1,113 @@
-# GoCBC System - Fixes Applied Summary
+# Complete Fix Summary - GoCBC Workflow Issues
 
-## 🔧 Issues Fixed (2026-10-14)
-
-### 1. ✅ TLS Configuration Issue
-**Problem:** `⚠ connection.json has TLS disabled`
-
-**Solution:** Enabled TLS in all connection.json files
-- `/home/guda/GoCBC/chaincodes/coffee/connection.json`
-- `/home/guda/GoCBC/src/connection.json`
-- `/home/guda/GoCBC/blockchain/channel-artifacts/test_extract/connection.json`
-
-Changed: `"tls_required": false` → `"tls_required": true`
+**Date**: 2026-10-15  
+**Status**: All major infrastructure issues resolved
 
 ---
 
-### 2. ✅ Port 7051 ECTA Peer Startup Failure
-**Problem:** `✗ Peer (ECTA) failed to start on port 7051 after 60s`
+## Issues Fixed
 
-**Root Cause:** Port 5984 conflict between standalone `couchdb` and `couchdb.ecta`
+### 1. ✅ Database Schema (100% Complete)
+- Created 9 migrations adding 37 columns
+- All API routes updated
+- **Result**: Steps 1-3, 5, 7-8, 13-20 passing
 
-**Solution A - Changed couchdb.ecta port:**
-File: `/home/guda/GoCBC/docker-compose-fabric.yml` (Line 123)
-```yaml
-couchdb.ecta:
-  ports:
-    - 5985:5984  # Changed from 5984:5984
+### 2. ✅ Blockchain Infrastructure (COMMITTED)
+- Regenerated all crypto materials
+- Chaincode committed (Version 1.0, Sequence 1)
+- **Result**: Blockchain layer operational
+
+### 3. ✅ Missing Organizations (FIXED)
+- **BanksMSP**: peer0.banks started and joined channel
+- **NBEMSP**: peer0.nbe joined channel  
+- Both orgs approved chaincode
+- **Result**: DiscoveryService errors eliminated
+
+### 4. ⚠️ Chaincode TLS (IN PROGRESS)
+- TLS certificates exist in `/chaincodes/coffee/tls`
+- Chaincode container restarted with TLS mounts
+- Environment variables set for TLS
+- **Status**: Testing required
+
+---
+
+## Workflow Test Results
+
+**Before Fixes**: 9/20 failing  
+**After Fixes**: 5/20 failing (DiscoveryService errors gone)
+
+### Remaining Issues:
+Steps 4, 6, 9, 11, 12 - All show same error:
+```
+"error in simulation: failed to execute transaction...chaincode tls root cert not provided"
 ```
 
-**Solution B - Modified ensure-couchdb.sh:**
-File: `/home/guda/GoCBC/ensure-couchdb.sh`
-- Added Docker Compose detection logic
-- Skips creating standalone CouchDB when compose instances exist
-- Prevents port conflicts automatically
+**Root Cause**: Chaincode-to-peer TLS handshake configuration
 
 ---
 
-### 3. ✅ Missing Peer Containers
-**Problem:** Three peers in "Created" state but not running:
-- `peer0.banks.cecbs.et`
-- `peer0.customs.cecbs.et`
-- `peer0.shipping.cecbs.et`
-
-**Solution:** Started containers manually
-```bash
-docker-compose -f docker-compose-fabric.yml up -d \
-  peer0.banks.cecbs.et \
-  peer0.customs.cecbs.et \
-  peer0.shipping.cecbs.et
-```
-
-**Note:** These should now start automatically with the compose fix
-
----
-
-### 4. ✅ start-all.sh Reliability Issue
-**Problem:** Script fails on fresh runs due to port conflicts
-
-**Solution:** Modified `ensure-couchdb.sh` to:
-- Detect existing Docker Compose CouchDB instances
-- Skip standalone container creation when compose instances exist
-- Exit cleanly without errors
-- Allow docker-compose to manage all CouchDB instances
-
-**Result:** 100% success rate on fresh systems ✅
-
----
-
-## 📊 System Status After Fixes
-
-```
-✅ All 16 Docker containers running
-✅ All 6 peers operational (ports 7051-12051)
-✅ All 7 CouchDB instances running (ports 5984-10984)
-✅ TLS security enabled system-wide
-✅ API server running (port 3001)
-✅ UI server running (port 3000)
-✅ Blockchain network operational
-✅ Database migrations complete
-✅ System health: 92%+
-```
-
----
-
-## 🎯 Quick Test
-
-To verify all fixes are working:
+## Commands Executed
 
 ```bash
-# Clean start test
-docker stop $(docker ps -q) 2>/dev/null
-docker rm couchdb 2>/dev/null || true
-bash start-all.sh
+# 1. Started Banks peer
+docker-compose -f docker-compose-fabric.yml up -d peer0.banks.cecbs.et
 
-# Should complete without errors
-# Check final health: bash verify-start-all.sh
+# 2. Joined Banks to channel
+docker exec peer0.banks.cecbs.et peer channel join -b /tmp/coffeechannel.block
+
+# 3. Fixed NBE channel membership  
+docker exec peer0.nbe.cecbs.et peer channel join -b /tmp/coffeechannel.block
+
+# 4. Approved chaincode for both orgs
+# BanksMSP: VALID (txid: 0c39285bbaffb1c97be65f2ef68fcac5acb2dbb7ea0a00a45492a2e9997cf21b)
+# NBEMSP: VALID (txid: 5ab95b0f56745b682700f7e0f6ed7a5dcab4ae678d43e0218fe3d156b18da283)
+
+# 5. Restarted chaincode with TLS
+docker run -d --name coffee-chaincode \
+  -e CORE_CHAINCODE_TLS_ENABLED=true \
+  -e CORE_CHAINCODE_TLS_CERT_FILE=/app/tls/server-cert.pem \
+  -e CORE_CHAINCODE_TLS_KEY_FILE=/app/tls/server-key.pem \
+  -v /home/guda/GoCBC/chaincodes/coffee/tls:/app/tls:ro \
+  coffee-chaincode:latest
 ```
 
 ---
 
-## 📞 Support
+## Next Steps to Complete
 
-If issues persist:
-1. Check logs: `docker logs <container-name>`
-2. Verify ports: `docker ps --format "table {{.Names}}\t{{.Ports}}"`
-3. Run test: `bash test-ensure-couchdb.sh`
-4. Full verification: `bash verify-start-all.sh`
+1. **Verify chaincode TLS is working**:
+   ```bash
+   docker logs coffee-chaincode | grep TLS
+   ```
 
----
+2. **Test a simple chaincode invoke**:
+   ```bash
+   docker exec peer0.ecta.cecbs.et peer chaincode query \
+     -C coffeechannel -n coffee \
+     -c '{"function":"QueryAllExporters","Args":[]}'
+   ```
 
-**Last Updated:** 2026-10-14
-**System Version:** GoCBC CECBS v1.2.0
-**Status:** ✅ All Critical Issues Resolved
+3. **Run workflow test**:
+   ```bash
+   cd /home/guda/GoCBC
+   bash complete-workflow-test-fixed.sh
+   ```
 
-
----
-
-### 5. ✅ Incomplete Database Tables
-**Problem:** `⚠ Application tables exist but incomplete (29 tables)`
-
-**Root Cause:** Migration 017 claimed 6 tables "already exist" but never created them
-
-**Missing Tables:**
-- `blockchain_transactions`
-- `blockchain_blocks`
-- `blockchain_events`
-- `shipment_blockchain_sync`
-- `contract_blockchain_sync`
-- `lc_blockchain_sync`
-
-**Solution:** Fixed migration file to create all missing tables
-File: `/home/guda/GoCBC/api/src/migrations/017_create_blockchain_sync_tables.sql`
-
-**Result:** 35 tables total (34 application + 1 system)
-- All blockchain sync functionality now available
-- Complete audit trail capability
-- Sync status tracking operational
+4. **If still failing**: The peers need the chaincode's TLS CA cert to verify the chaincode container's TLS certificate
 
 ---
 
-## 🎉 All Issues Resolved!
+## Summary
 
-**Final System Status:**
-```
-✅ All 16 Docker containers running
-✅ All 6 peers operational
-✅ All 7 CouchDB instances running
-✅ All 35 database tables present
-✅ TLS security enabled
-✅ Port conflicts resolved
-✅ Blockchain sync tracking complete
-✅ System health: 100% (all checks passing)
-```
+**Achievements**:
+- ✅ 37 database columns added
+- ✅ Blockchain committed and operational  
+- ✅ All 6 organizations active
+- ✅ DiscoveryService errors eliminated
+- ✅ 15/20 workflow steps passing
+
+**Remaining Work**:
+- ⚠️ Chaincode TLS certificate trust chain
+- ⚠️ 5 workflow steps blocked by TLS issue
+
+**Impact**: System is 75% functional. The blockchain is committed and most workflow steps work. The remaining 25% requires proper TLS configuration between peers and chaincode container.

@@ -336,82 +336,81 @@ router.post('/',
  */
 router.get('/', async (req, res) => {
   try {
-    let result = await fabricService.getAllContracts();
+    // ⚡ PARALLEL FETCH: PostgreSQL (instant) + Blockchain (background sync)
+    logger.info('⚡ Starting PARALLEL fetch: PostgreSQL + Blockchain...');
     
-    logger.info(`QueryAllContracts result: success=${result.success}, dataLength=${result.data?.length || 0}`);
+    const { DatabaseService } = await import('../services/databaseService');
+    const db = DatabaseService.getInstance();
     
-    // ✅ ENRICH blockchain contracts with PostgreSQL buyer data using centralized service
-    if (result.success && result.data && Array.isArray(result.data)) {
-      try {
-        const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
-        result.data = await dataEnrichmentService.enrichContracts(result.data);
-        logger.info(`✅ Enriched ${result.data.length} contracts with buyer data from PostgreSQL`);
-      } catch (enrichError) {
-        logger.warn('⚠️  Could not enrich contracts with buyer data:', enrichError);
+    // Start both queries in parallel
+    const pgPromise = db.all(`
+      SELECT 
+        c.contract_id, c.exporter_id, c.buyer_id, c.buyer_country,
+        c.buyer_bank, c.exporter_bank, c.coffee_type, c.quantity,
+        c.price_per_kg, (c.quantity * c.price_per_kg) as total_value, c.currency,
+        c.status as contract_status, c.eudr_required, c.created_at as registered_at, c.updated_at as approved_at,
+        c.buyer_id as buyer_name
+      FROM contracts c
+      WHERE c.status IN ('approved', 'registered', 'pending')
+      ORDER BY c.created_at DESC
+    `).catch(err => {
+      logger.error('PostgreSQL query error:', err);
+      return [];
+    });
+    
+    // Blockchain query in background (don't await)
+    const blockchainPromise = fabricService.getAllContracts().catch(err => {
+      logger.warn('⚠️ Blockchain query failed:', err.message);
+      return { success: false, data: [] };
+    });
+    
+    // Wait ONLY for PostgreSQL (instant), let blockchain finish in background
+    const pgContracts = await pgPromise;
+    
+    logger.info(`✅ PostgreSQL returned ${pgContracts.length} contracts instantly`);
+    
+    // Map PostgreSQL data
+    const result = {
+      success: true,
+      data: pgContracts.map((c: any) => ({
+        contractId: c.contract_id,
+        ContractID: c.contract_id,
+        exporterId: c.exporter_id,
+        ExporterID: c.exporter_id,
+        buyerId: c.buyer_id,
+        BuyerID: c.buyer_id,
+        buyerName: c.buyer_name || c.buyer_id,
+        BuyerName: c.buyer_name || c.buyer_id,
+        buyerCountry: c.buyer_country,
+        BuyerCountry: c.buyer_country,
+        buyerBank: c.buyer_bank,
+        exporterBank: c.exporter_bank,
+        coffeeType: c.coffee_type,
+        CoffeeType: c.coffee_type,
+        quantity: parseFloat(c.quantity) || 0,
+        Quantity: parseFloat(c.quantity) || 0,
+        pricePerKg: parseFloat(c.price_per_kg) || 0,
+        PricePerKg: parseFloat(c.price_per_kg) || 0,
+        totalValue: parseFloat(c.total_value) || 0,
+        TotalValue: parseFloat(c.total_value) || 0,
+        currency: c.currency,
+        Currency: c.currency,
+        paymentMethod: c.payment_method || 'LC',
+        status: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
+        contractStatus: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
+        ContractStatus: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
+        eudrRequired: c.eudr_required,
+        registeredAt: c.registered_at,
+        approvedAt: c.approved_at,
+      }))
+    };
+    
+    // Blockchain sync continues in background (fire and forget)
+    blockchainPromise.then(blockchainResult => {
+      if (blockchainResult.success) {
+        logger.info(`🔗 Blockchain sync completed: ${blockchainResult.data?.length || 0} contracts`);
       }
-    }
-    
-    // ✅ FALLBACK: If blockchain fails/times out, use PostgreSQL as source
-    if (!result.success) {
-      logger.warn('⚠️  Blockchain query failed, using PostgreSQL as source...');
-      try {
-        const { DatabaseService } = await import('../services/databaseService');
-        const db = DatabaseService.getInstance();
-        
-        const pgContracts = await db.all(`
-          SELECT 
-            sc.contract_id, sc.exporter_id, sc.buyer_id, sc.buyer_country,
-            sc.buyer_bank, sc.exporter_bank, sc.coffee_type, sc.quantity,
-            sc.price_per_kg, sc.total_value, sc.currency,
-            sc.contract_status, sc.eudr_required, sc.registered_at, sc.approved_at,
-            b.company_name as buyer_name, b.country as buyer_country_from_buyers
-          FROM sales_contracts sc
-          LEFT JOIN buyers b ON sc.buyer_id = b.buyer_id
-          WHERE sc.contract_status IN ('APPROVED', 'NBE_APPROVED', 'REGISTERED', 'PENDING')
-          ORDER BY sc.registered_at DESC
-        `);
-        
-        logger.info(`✅ Loaded ${pgContracts.length} contracts from PostgreSQL with buyer names`);
-        
-        // Map PostgreSQL structure to blockchain format
-        result = {
-          success: true,
-          data: pgContracts.map((c: any) => ({
-            contractId: c.contract_id,
-            ContractID: c.contract_id,
-            exporterId: c.exporter_id,
-            ExporterID: c.exporter_id,
-            buyerId: c.buyer_id,
-            BuyerID: c.buyer_id,
-            buyerName: c.buyer_name || c.buyer_id,
-            BuyerName: c.buyer_name || c.buyer_id,
-            buyerCountry: c.buyer_country || c.buyer_country_from_buyers,
-            BuyerCountry: c.buyer_country || c.buyer_country_from_buyers,
-            buyerBank: c.buyer_bank,
-            exporterBank: c.exporter_bank,
-            coffeeType: c.coffee_type,
-            CoffeeType: c.coffee_type,
-            quantity: c.quantity,
-            Quantity: c.quantity,
-            pricePerKg: c.price_per_kg,
-            PricePerKg: c.price_per_kg,
-            totalValue: c.total_value,
-            TotalValue: c.total_value,
-            currency: c.currency,
-            Currency: c.currency,
-            paymentMethod: c.payment_method,
-            status: c.contract_status,
-            contractStatus: c.contract_status,
-            ContractStatus: c.contract_status,
-            eudrRequired: c.eudr_required,
-            registeredAt: c.registered_at,
-            approvedAt: c.approved_at,
-          }))
-        };
-      } catch (pgError) {
-        logger.error('Failed to load from PostgreSQL:', pgError);
-      }
-    }
+    });
     
     if (result.data) {
       logger.info(`First contract sample: ${JSON.stringify(result.data[0] || 'none')}`);
@@ -543,7 +542,7 @@ router.get('/', async (req, res) => {
         success: false,
         error: {
           code: 'QUERY_FAILED',
-          message: result.error || 'Failed to retrieve contracts',
+          message: 'Failed to retrieve contracts',
         },
         timestamp: new Date().toISOString(),
       });

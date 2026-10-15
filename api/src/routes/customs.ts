@@ -22,6 +22,90 @@ const validateRequest = (req: Request, res: Response, next: any) => {
 };
 
 /**
+ * POST /api/v1/customs — Submit customs declaration (wrapper endpoint)
+ */
+router.post('/',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        customsID,
+        shipmentID,
+        exporterID,
+        hsCode,
+        quantity,
+        value,
+        currency,
+        destination,
+        status
+      } = req.body;
+
+      logger.info(`[CUSTOMS] 📝 Submitting customs declaration: ${customsID}`);
+
+      const declarationNumber = customsID || req.body.declarationNumber || `CD-${Date.now()}`;
+      const shipmentId = shipmentID || req.body.shipmentId || '';
+      const exporterId = exporterID || req.body.exporterId || '';
+      const contractId = req.body.contractID || req.body.contractId || '';
+
+      if (!declarationNumber || !shipmentId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Missing required fields: customsID, shipmentID',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Call blockchain to submit customs declaration
+      await fabricService.connectAsOrg('CustomsMSP');
+      
+      const result = await fabricService.invokeChaincode('SubmitCustomsDeclaration', [
+        declarationNumber,
+        shipmentId,
+        contractId,
+        exporterId,
+        hsCode || '0901.21',
+        String(quantity || 10000),
+        String(value || 85000),
+        currency || 'USD',
+        destination || 'Germany',
+        new Date().toISOString().split('T')[0] // Submission date
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [CUSTOMS] Declaration submitted: ${declarationNumber}`);
+        res.status(201).json({
+          success: true,
+          message: 'Customs declaration submitted successfully',
+          data: { customsID: declarationNumber, declarationNumber, status: 'submitted' },
+          txId: result.txId,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        logger.error(`❌ [CUSTOMS] Failed to submit: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SUBMISSION_FAILED',
+            message: result.error || 'Failed to submit customs declaration',
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error submitting declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
  * GET /api/v1/customs/declarations
  * Get all customs declarations (for checking which shipments have declarations)
  */

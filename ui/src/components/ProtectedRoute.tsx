@@ -38,10 +38,16 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     }
 
     // Check role-based access
-    if (allowedRoles && !allowedRoles.includes(user.role)) {
-      console.warn(`Access denied: User role ${user.role} not in allowed roles`, allowedRoles);
-      router.replace('/login'); // Redirect to login instead of unauthorized
-      return;
+    if (allowedRoles && user.role) {
+      // Normalize both the user role and allowed roles to uppercase for comparison
+      const normalizedUserRole = user.role.toUpperCase();
+      const normalizedAllowedRoles = allowedRoles.map(r => r.toUpperCase());
+      
+      if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
+        console.warn(`Access denied: User role ${user.role} (normalized: ${normalizedUserRole}) not in allowed roles`, allowedRoles);
+        router.replace('/login'); // Redirect to login instead of unauthorized
+        return;
+      }
     }
 
     // Check permission-based access
@@ -77,8 +83,13 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   }
 
   // Not authorized - show nothing (will redirect)
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return null;
+  if (allowedRoles && user.role) {
+    const normalizedUserRole = user.role.toUpperCase();
+    const normalizedAllowedRoles = allowedRoles.map(r => r.toUpperCase());
+    
+    if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
+      return null;
+    }
   }
 
   if (requirePermission && !user.permissions.includes(requirePermission)) {
