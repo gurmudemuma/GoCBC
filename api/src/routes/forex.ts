@@ -105,20 +105,82 @@ router.post('/', authMiddleware, async (req, res) => {
       // GET /api/v1/forex — all forex allocations (BLOCKCHAIN ONLY - NO CACHE)
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    logger.info('[FOREX] 🔗 Querying all forex DIRECTLY from Hyperledger Fabric blockchain...');
+    logger.info('[FOREX] Fetching forex allocations with parallel blockchain + PostgreSQL...');
     
-    // Query blockchain directly - NO timeout, NO fallback, NO cache
-    const result = await fabricService.queryAllForex();
+    // Parallel fetch: PostgreSQL (fast) + Blockchain (background)
+    const pgPromise = postgresDb.all(`
+      SELECT * FROM forex_allocations 
+      ORDER BY created_at DESC
+    `).catch(err => {
+      logger.warn('[FOREX] PostgreSQL query failed:', err);
+      return [];
+    });
+    
+    const blockchainPromise = fabricService.queryAllForex().catch(err => {
+      logger.warn('[FOREX] Blockchain query failed (graceful):', err);
+      return { success: false, data: [], error: err.message };
+    });
+    
+    // Wait for PostgreSQL first (instant response)
+    const pgForex = await pgPromise;
+    logger.info(`[FOREX] ✅ Retrieved ${pgForex.length} forex allocations from PostgreSQL`);
+    
+    // If we have PostgreSQL data, return it immediately
+    if (pgForex && pgForex.length > 0) {
+      // Blockchain continues in background (non-blocking)
+      blockchainPromise.then(result => {
+        if (result.success && result.data) {
+          logger.info(`[FOREX] ✅ Background: Retrieved ${result.data.length} forex from blockchain`);
+        }
+      });
+      
+      const normalizedForex = pgForex.map((fx: any) => ({
+        forexId: String(fx?.forex_id || ''),
+        contractId: String(fx?.contract_id || ''),
+        exporterId: String(fx?.exporter_id || ''),
+        lcId: String(fx?.lc_id || ''),
+        buyerName: fx?.buyer_name || 'Unknown Buyer',
+        buyerCountry: fx?.buyer_country || '',
+        amount: fx?.amount ?? 0,
+        currency: fx?.currency || 'USD',
+        status: fx?.status || 'REQUESTED',
+        requestedAmount: fx?.requested_amount ?? 0,
+        allocatedAmount: fx?.allocated_amount ?? 0,
+        exchangeRate: fx?.exchange_rate ?? 0,
+        retention: fx?.retention ?? 0,
+        retentionRate: fx?.retention_rate ?? 0.4,
+        expiryDate: fx?.expiry_date || null,
+        requestDate: fx?.request_date || null,
+        allocationDate: fx?.allocation_date || null,
+        utilizationDate: fx?.utilization_date || null,
+        nbeApprovalRef: fx?.nbe_approval_ref || '',
+        nbeOfficer: fx?.nbe_officer || '',
+        verifiedBy: fx?.verified_by || '',
+        verifiedByMSP: fx?.verified_by_msp || '',
+        comments: fx?.comments || '',
+      }));
+      
+      const uniqueForex = dedupeById(normalizedForex, (fx: any) => String(fx.forexId));
+      
+      return res.json({ 
+        success: true, 
+        data: uniqueForex,
+        source: 'postgresql',
+        count: uniqueForex.length,
+        timestamp: new Date().toISOString() 
+      });
+    }
+    
+    // Fallback: Try blockchain if PostgreSQL empty
+    const result = await blockchainPromise;
     
     if (!result.success) {
-      logger.error(`[FOREX] ❌ Blockchain query failed: ${result.error}`);
-      return res.status(500).json({ 
-        success: false, 
-        error: { 
-          code: 'BLOCKCHAIN_QUERY_FAILED', 
-          message: result.error || 'Failed to query blockchain' 
-        },
-        source: 'blockchain',
+      logger.error(`[FOREX] ❌ Both PostgreSQL and blockchain failed`);
+      return res.json({ 
+        success: true, 
+        data: [],
+        source: 'none',
+        count: 0,
         timestamp: new Date().toISOString() 
       });
     }

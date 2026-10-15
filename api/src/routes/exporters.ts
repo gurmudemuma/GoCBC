@@ -36,7 +36,7 @@ router.get('/exporter-applications',
         params.push(status);
       }
 
-      query += ' ORDER BY submitted_at DESC';
+      query += ' ORDER BY submitted_date DESC';
       const applications = await postgresDb.all(query, params);
 
       res.json({

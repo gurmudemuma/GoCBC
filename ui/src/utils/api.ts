@@ -329,10 +329,14 @@ class CECBSApi {
   }
 
   async rejectContract(contractId: string, reason: string, rejectedBy?: string): Promise<ApiResponse<any>> {
-    const response = await this.client.post(`/contracts/${contractId}/reject`, {
+    const url = `/contracts/${contractId}/reject`;
+    console.log('[API] Calling reject contract:', url, { reason, rejectedBy });
+    console.log('[API] Full URL:', `${this.client.defaults.baseURL}${url}`);
+    const response = await this.client.post(url, {
       reason,
       rejectedBy,
     });
+    console.log('[API] Reject response:', response.status, response.data);
     return response.data;
   }
 

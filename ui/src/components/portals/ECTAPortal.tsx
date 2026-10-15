@@ -1083,9 +1083,19 @@ The exporter can reapply once all requirements are met.`,
       return;
     }
     
+    const contractId = selectedContract.contractID || selectedContract.contractId || selectedContract.contract_id;
+    
+    if (!contractId) {
+      console.error('Contract ID missing:', selectedContract);
+      showError('Rejection Failed', 'Contract ID is missing. Please try again.');
+      return;
+    }
+    
+    console.log('[REJECT] Rejecting contract:', contractId, 'Reason:', contractRejectionReason);
+    
     try {
       const response = await api.rejectContract(
-        selectedContract.contractID || selectedContract.contractId,
+        contractId,
         contractRejectionReason,
         'ECTA Officer'
       );
