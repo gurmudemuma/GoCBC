@@ -590,19 +590,20 @@ router.get('/:contractID/documents',
         `SELECT 
           document_id, 
           document_type, 
-          entity_type, 
-          entity_id, 
+          contract_id as entity_id,
+          'CONTRACT' as entity_type,
           file_name, 
           file_size, 
           mime_type, 
           uploaded_by, 
           uploaded_at,
+          upload_date,
           verification_status,
           status,
           metadata
          FROM documents 
-         WHERE UPPER(entity_type) = 'CONTRACT' AND entity_id = $1 AND status != 'deleted'
-         ORDER BY uploaded_at DESC`,
+         WHERE contract_id = $1 AND (status IS NULL OR status != 'deleted')
+         ORDER BY COALESCE(uploaded_at, upload_date, created_at) DESC`,
         [contractID]
       );
       
