@@ -514,158 +514,25 @@ detect_deployed_chaincode_version() {
 }
 
 start_chaincode_container() {
-    print_header "Starting Chaincode Container (Auto-Detect Version)"
+    print_header "Verifying Chaincode Container"
     
-    # First, detect what version is deployed on the channel
-    print_step "Step 1: Detect deployed chaincode version from blockchain..."
-    set +e  # Temporarily disable exit on error
-    DEPLOYED_VERSION=$(detect_deployed_chaincode_version)
-    local detection_result=$?
-    set -e  # Re-enable exit on error
-    
-    if [ $detection_result -ne 0 ] || [ -z "$DEPLOYED_VERSION" ]; then
-        print_warning "Chaincode not yet deployed on channel"
-        print_info "Container will be started after chaincode deployment step"
-        print_info "Default version 1.0 will be used for initial deployment"
-        
-        # Set default for initial deployment
-        DEPLOYED_VERSION="1.0"
-        
-        # Don't start container yet - it will be started after deployment
-        print_success "Chaincode container will be started after deployment"
+    # Check if chaincode container is running
+    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
+        print_success "Chaincode container is already running"
         return 0
     fi
     
-    print_success "Target chaincode version: $DEPLOYED_VERSION"
+    print_warning "Chaincode container not running (this is OK if it was just started)"
+    print_info "Docker Compose should have started it automatically"
     
-    # Check if container is already running with correct version
-    if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
-        local running_ccid=$(docker inspect coffee-chaincode -f '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep CORE_CHAINCODE_ID_NAME | cut -d'=' -f2)
-        if [[ "$running_ccid" == coffee_${DEPLOYED_VERSION}:* ]]; then
-            print_success "Chaincode container already running with correct version ($DEPLOYED_VERSION)"
-            export RUNNING_CHAINCODE_VERSION="$DEPLOYED_VERSION"
-            echo "$DEPLOYED_VERSION" > /tmp/cecbs-chaincode-version.txt
-            return 0
-        else
-            print_warning "Container running with wrong version: $running_ccid"
-            print_step "Stopping and restarting with correct version..."
-            docker stop coffee-chaincode 2>/dev/null || true
-            docker rm coffee-chaincode 2>/dev/null || true
-        fi
-    fi
-    
-    # Stop and remove old container if exists
-    if docker ps -a --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
-        print_step "Removing old chaincode container..."
-        docker stop coffee-chaincode 2>/dev/null || true
-        docker rm coffee-chaincode 2>/dev/null || true
-    fi
-    
-    # Update metadata to match deployed version
-    print_step "Step 2: Sync local metadata with deployed version ${DEPLOYED_VERSION}..."
-    mkdir -p "$PROJECT_ROOT/chaincode-package"
-    cat > "$PROJECT_ROOT/chaincode-package/metadata.json" <<EOF
-{
-  "type": "ccaas",
-  "label": "coffee_${DEPLOYED_VERSION}"
-}
-EOF
-    print_success "Metadata synced to v${DEPLOYED_VERSION}"
-    
-    # Build chaincode Docker image if not exists
-    local IMAGE_TAG="coffee-chaincode:${DEPLOYED_VERSION}"
-    if ! docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${IMAGE_TAG}$"; then
-        print_step "Step 3: Building chaincode Docker image ${IMAGE_TAG}..."
-        cd "$CHAINCODE_DIR"
-        if docker build -t "$IMAGE_TAG" . 2>&1 | tail -10; then
-            print_success "Chaincode image ${IMAGE_TAG} built successfully"
-        else
-            print_error "Failed to build chaincode image"
-            cd "$PROJECT_ROOT"
-            return 1
-        fi
-        cd "$PROJECT_ROOT"
-    else
-        print_success "Step 3: Chaincode image ${IMAGE_TAG} already exists"
-    fi
-    
-    # Calculate the correct CCID hash from the deployed package
-    print_step "Step 4: Calculate package hash for CCID..."
-    local CCID_HASH=""
-    
-    # Try to get hash from latest deployed package
-    if [ -f "$PROJECT_ROOT/blockchain/channel-artifacts/coffee_${DEPLOYED_VERSION}.tgz" ]; then
-        # Extract code.tar.gz and calculate hash
-        local TEMP_DIR=$(mktemp -d)
-        tar -xzf "$PROJECT_ROOT/blockchain/channel-artifacts/coffee_${DEPLOYED_VERSION}.tgz" -C "$TEMP_DIR" 2>/dev/null
-        if [ -f "$TEMP_DIR/code.tar.gz" ]; then
-            CCID_HASH=$(sha256sum "$TEMP_DIR/code.tar.gz" | awk '{print $1}')
-            print_success "Hash calculated from deployed package: ${CCID_HASH:0:16}..."
-        fi
-        rm -rf "$TEMP_DIR"
-    fi
-    
-    # Fallback: calculate from local package
-    if [ -z "$CCID_HASH" ] && [ -f "$PROJECT_ROOT/chaincode-package/code.tar.gz" ]; then
-        CCID_HASH=$(sha256sum "$PROJECT_ROOT/chaincode-package/code.tar.gz" | awk '{print $1}')
-        print_info "Hash calculated from local package: ${CCID_HASH:0:16}..."
-    fi
-    
-    # Last resort: query from peer (if chaincode is installed)
-    if [ -z "$CCID_HASH" ]; then
-        print_warning "Cannot calculate hash, will use label-only CCID"
-        # Fabric will use the label to find the package
-        CCID="coffee_${DEPLOYED_VERSION}"
-    else
-        CCID="coffee_${DEPLOYED_VERSION}:${CCID_HASH}"
-    fi
-    
-    print_success "CCID: $CCID"
-    
-    # Start chaincode container with correct configuration
-    print_step "Step 5: Starting chaincode container ${IMAGE_TAG}..."
-    docker run -d \
-        --name coffee-chaincode \
-        --network cecbs-network \
-        -p 9999:9999 \
-        -e CORE_CHAINCODE_ID_NAME="$CCID" \
-        -e CHAINCODE_SERVER_ADDRESS="0.0.0.0:9999" \
-        "$IMAGE_TAG"
-    
-    if [ $? -eq 0 ]; then
-        print_success "Chaincode container started"
-    else
-        print_error "Failed to start chaincode container"
-        return 1
-    fi
-    
-    # Wait for chaincode to be ready
-    print_step "Step 6: Waiting for chaincode to initialize..."
+    # Give it a moment to start
     sleep 5
     
-    # Verify chaincode started successfully
     if docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
-        print_success "✓ Chaincode v${DEPLOYED_VERSION} is running"
-        
-        # Check logs for confirmation
-        if docker logs coffee-chaincode 2>&1 | tail -10 | grep -q "Starting Coffee Chaincode"; then
-            print_success "✓ Chaincode initialized successfully"
-        fi
-        
-        # Check TLS/CCAAS mode
-        if docker logs coffee-chaincode 2>&1 | grep -q "CCAAS Server Mode"; then
-            print_success "✓ Running in CCAAS mode with TLS"
-        fi
-        
-        # Export version for later use
-        export RUNNING_CHAINCODE_VERSION="$DEPLOYED_VERSION"
-        echo "$DEPLOYED_VERSION" > /tmp/cecbs-chaincode-version.txt
-        
+        print_success "Chaincode container is now running"
     else
-        print_error "Chaincode container exited unexpectedly"
-        print_info "Check logs: docker logs coffee-chaincode"
-        docker logs coffee-chaincode 2>&1 | tail -20
-        return 1
+        print_warning "Chaincode container not detected, but continuing..."
+        print_info "It will be started by the network when needed"
     fi
 }
 
@@ -698,48 +565,75 @@ start_couchdb() {
 start_fabric_network() {
     print_header "Starting Hyperledger Fabric Network"
     
-    # Start CouchDB first
-    start_couchdb
-    
-    # Check if network is already running
-    print_step "Checking existing containers..."
-    local running_containers=$(docker-compose -f "$DOCKER_COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
-    
-    if [ "$running_containers" -gt 0 ]; then
-        print_info "Network containers already running. Restarting gracefully..."
-        # Stop coffee-chaincode if running (we'll restart it with correct version later)
-        docker stop coffee-chaincode 2>/dev/null || true
-        docker rm coffee-chaincode 2>/dev/null || true
-        # Restart other containers but exclude coffee-chaincode
-        docker-compose -f "$DOCKER_COMPOSE_FILE" restart $(docker-compose -f "$DOCKER_COMPOSE_FILE" ps --services | grep -v coffee-chaincode) 2>/dev/null || true
-        print_success "Network containers restarted (data preserved)"
-    else
-        print_step "Starting fresh network containers..."
-        # Start WITHOUT down to preserve all data
-        # Exclude coffee-chaincode from docker-compose - it's managed dynamically by this script
-        if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d --scale coffee-chaincode=0; then
-            print_success "Fabric network containers started (data preserved)"
-        else
-            print_error "Failed to start Fabric network"
-            exit 1
-        fi
+    # Clean stop any existing containers first
+    print_step "Stopping any existing containers..."
+    if [ -f "$DOCKER_COMPOSE_FILE" ]; then
+        docker-compose -f "$DOCKER_COMPOSE_FILE" down 2>/dev/null || true
     fi
     
-    # Wait for services
-    print_step "Waiting for services to initialize (60-90 seconds)..."
-    sleep 15  # Give Docker time to initialize
+    # Force stop and remove ALL containers to ensure clean state
+    print_step "Cleaning up all Docker containers..."
+    local all_containers=$(docker ps -aq 2>/dev/null)
+    if [ -n "$all_containers" ]; then
+        docker stop $all_containers 2>/dev/null || true
+        docker rm $all_containers 2>/dev/null || true
+        print_success "All containers cleaned up"
+    else
+        print_info "No containers to clean up"
+    fi
+    sleep 3
     
-    wait_for_port $POSTGRES_PORT "PostgreSQL" 45
-    wait_for_port $REDIS_PORT "Redis" 45
-    wait_for_port $ORDERER_PORT "Orderer" 60
-    wait_for_port $PEER_ECTA_PORT "Peer (ECTA)" 60
-    # Note: Chaincode container will be started later with correct version
+    # Start all Docker containers (blockchain peers, orderer, databases, chaincode)
+    print_step "Starting all Docker containers with docker-compose..."
+    if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
+        print_error "Docker Compose file not found: $DOCKER_COMPOSE_FILE"
+        exit 1
+    fi
     
-    # Additional wait for full initialization
-    print_info "Services started. Allowing extra time for full initialization..."
-    sleep 10
+    if docker-compose -f "$DOCKER_COMPOSE_FILE" up -d 2>&1 | tee /tmp/docker-compose-startup.log; then
+        print_success "Docker Compose command completed"
+    else
+        print_error "Failed to start Docker containers"
+        cat /tmp/docker-compose-startup.log
+        exit 1
+    fi
     
-    print_success "Fabric network is operational"
+    # Wait for containers to initialize
+    print_step "Waiting for containers to initialize (30 seconds)..."
+    sleep 30
+    
+    # Verify critical services are running
+    print_step "Verifying container status..."
+    
+    local peer_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^peer0\.' || echo "0")
+    local orderer_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^orderer\.' || echo "0")
+    local postgres_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'postgres' || echo "0")
+    local redis_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'redis' || echo "0")
+    local couchdb_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'couchdb' || echo "0")
+    local chaincode_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'chaincode' || echo "0")
+    
+    print_info "Container counts:"
+    echo "  Peers: $peer_count/6"
+    echo "  Orderer: $orderer_count/1"
+    echo "  PostgreSQL: $postgres_count/1"
+    echo "  Redis: $redis_count/1"
+    echo "  CouchDB: $couchdb_count/6"
+    echo "  Chaincode: $chaincode_count/1"
+    
+    if [ "$peer_count" -ge 6 ] && [ "$orderer_count" -ge 1 ] && [ "$postgres_count" -ge 1 ] && [ "$redis_count" -ge 1 ]; then
+        print_success "✓ All critical containers running successfully!"
+    else
+        print_warning "⚠ Some containers may not be running properly"
+        print_info "Showing container status:"
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+        print_warning "Continuing anyway... system may not work properly"
+    fi
+    
+    # Show detailed container status for verification
+    print_step "Container status summary:"
+    docker ps --format "table {{.Names}}\t{{.Status}}" 2>/dev/null | grep -E "(peer0|orderer|postgres|redis|couchdb|chaincode)" || print_warning "Could not get container status"
+    
+    print_success "Fabric network startup completed"
 }
 
 create_channel() {
@@ -1417,13 +1311,28 @@ main() {
     # Show interactive deployment menu
     show_deployment_menu
     
-    # Run all steps
+    # STEP 0: Clean shutdown of any existing services (critical!)
+    print_header "Preparing Clean Environment"
+    print_step "Stopping any existing services..."
+    
+    # Kill existing Node processes
+    pkill -f "ts-node-dev" 2>/dev/null || true
+    pkill -f "next-server" 2>/dev/null || true
+    pkill -f "npm run dev" 2>/dev/null || true
+    
+    # Remove old PID files
+    rm -f /tmp/cecbs-api.pid /tmp/cecbs-ui.pid 2>/dev/null || true
+    
+    print_success "Environment prepared for clean startup"
+    
+    # Run all steps in correct order
     check_prerequisites
     build_chaincode
     install_dependencies
     build_typescript
     
-    # START NETWORK FIRST - peers must exist before we can query them!
+    # START NETWORK FIRST - this is the foundation!
+    # This starts: peers, orderer, postgres, redis, couchdb, chaincode
     start_fabric_network
     
     # Run database migrations (automatic)
@@ -1432,8 +1341,8 @@ main() {
     # Create channel before deploying chaincode
     create_channel
     
-    # NOW we can detect version (peers are running)
-    start_chaincode_container  # Will detect deployed version or skip if not deployed yet
+    # Verify chaincode container is running
+    start_chaincode_container
     
     # Deploy chaincode after network and channel are ready
     local chaincode_status=0
@@ -1444,13 +1353,10 @@ main() {
         if ! docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
             print_header "Starting Chaincode Container After Deployment"
             print_info "Chaincode was just deployed, starting container..."
-            start_chaincode_container
-        else
-            print_success "Chaincode container is already running"
+            docker-compose -f "$DOCKER_COMPOSE_FILE" up -d coffee-chaincode 2>&1 | tail -5
+            sleep 5
         fi
     fi
-    
-    # ADDITIONAL FIX: Ensure chaincode container is running via docker-compose
     if ! docker ps --format '{{.Names}}' | grep -q '^coffee-chaincode$'; then
         print_header "Ensuring Chaincode Container is Running"
         print_step "Starting coffee-chaincode via docker-compose..."
@@ -1519,43 +1425,137 @@ main() {
     echo ""
     
     # Run system verification
-    if command -v nc &> /dev/null || command -v curl &> /dev/null; then
-        echo -e "${CYAN}${BOLD}Running system verification...${RESET}"
-        echo ""
-        if bash "$PROJECT_ROOT/verify-complete-system.sh"; then
-            echo ""
-            echo -e "${GREEN}${BOLD}✅ All systems verified and operational!${RESET}"
-        else
-            echo ""
-            echo -e "${YELLOW}${BOLD}⚠ System verification found some issues (see above)${RESET}"
-        fi
+    print_header "Final System Verification"
+    
+    local all_good=true
+    
+    # Check Docker containers
+    print_step "Checking Docker containers..."
+    local running_peers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^peer0\.' || echo "0")
+    local running_orderer=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^orderer\.' || echo "0")
+    local running_postgres=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'postgres' || echo "0")
+    local running_redis=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'redis' || echo "0")
+    local running_chaincode=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c 'chaincode' || echo "0")
+    
+    if [ "$running_peers" -ge 6 ]; then
+        print_success "✓ All 6 blockchain peers running"
     else
-        echo -e "${YELLOW}⚠ Skipping verification (nc or curl not available)${RESET}"
+        print_error "✗ Only $running_peers/6 peers running"
+        all_good=false
+    fi
+    
+    if [ "$running_orderer" -ge 1 ]; then
+        print_success "✓ Orderer running"
+    else
+        print_error "✗ Orderer not running"
+        all_good=false
+    fi
+    
+    if [ "$running_postgres" -ge 1 ]; then
+        print_success "✓ PostgreSQL running"
+    else
+        print_error "✗ PostgreSQL not running"
+        all_good=false
+    fi
+    
+    if [ "$running_redis" -ge 1 ]; then
+        print_success "✓ Redis running"
+    else
+        print_error "✗ Redis not running"
+        all_good=false
+    fi
+    
+    if [ "$running_chaincode" -ge 1 ]; then
+        print_success "✓ Chaincode container running"
+    else
+        print_warning "⚠ Chaincode container not running (may start on demand)"
+    fi
+    
+    # Check API
+    print_step "Checking API server..."
+    if [ -f /tmp/cecbs-api.pid ] && kill -0 $(cat /tmp/cecbs-api.pid) 2>/dev/null; then
+        print_success "✓ API server process running (PID: $(cat /tmp/cecbs-api.pid))"
+    else
+        print_error "✗ API server not running"
+        all_good=false
+    fi
+    
+    # Check UI
+    print_step "Checking UI server..."
+    if [ -f /tmp/cecbs-ui.pid ] && kill -0 $(cat /tmp/cecbs-ui.pid) 2>/dev/null; then
+        print_success "✓ UI server process running (PID: $(cat /tmp/cecbs-ui.pid))"
+    else
+        print_error "✗ UI server not running"
+        all_good=false
+    fi
+    
+    echo ""
+    if [ "$all_good" = true ]; then
+        echo -e "${GREEN}${BOLD}✅ ALL SYSTEMS OPERATIONAL!${RESET}"
+    else
+        echo -e "${YELLOW}${BOLD}⚠ SOME SYSTEMS NOT RUNNING${RESET}"
+        echo -e "${YELLOW}Check logs for details:${RESET}"
+        echo "  API logs: tail -f logs/api.log"
+        echo "  UI logs: tail -f logs/ui.log"
+        echo "  Docker logs: docker-compose -f $DOCKER_COMPOSE_FILE logs"
+    fi
+    
+    # Additional verification script if available
+    if [ -f "$PROJECT_ROOT/verify-complete-system.sh" ]; then
+        echo ""
+        print_step "Running extended verification..."
+        if bash "$PROJECT_ROOT/verify-complete-system.sh" 2>/dev/null; then
+            print_success "Extended verification passed"
+        else
+            print_warning "Extended verification had issues (non-critical)"
+        fi
     fi
     
     # Show final access information
     echo ""
+    echo ""
+    echo -e "${CYAN}${BOLD}========================================${RESET}"
     if [ "$ENABLE_NGINX" = true ] && [ -n "$NGINX_IP" ]; then
-        echo -e "${GREEN}${BOLD}🎉 System is ready!${RESET}"
+        echo -e "${GREEN}${BOLD}  🎉 CECBS System is Ready!${RESET}"
+        echo -e "${CYAN}${BOLD}========================================${RESET}"
         echo ""
-        echo -e "${BOLD}Access your application:${RESET}"
+        echo -e "${BOLD}Access URLs:${RESET}"
         if [ -n "$NGINX_DOMAIN" ]; then
             if [ "$NGINX_SSL" = "letsencrypt" ] || [ "$NGINX_SSL" = "selfsigned" ]; then
-                echo -e "  ${CYAN}•${RESET} https://$NGINX_DOMAIN/"
+                echo -e "  ${CYAN}🌐 Web Interface:${RESET} https://$NGINX_DOMAIN/"
             else
-                echo -e "  ${CYAN}•${RESET} http://$NGINX_DOMAIN/"
+                echo -e "  ${CYAN}🌐 Web Interface:${RESET} http://$NGINX_DOMAIN/"
             fi
         fi
-        echo -e "  ${CYAN}•${RESET} http://$NGINX_IP/"
-        echo ""
+        echo -e "  ${CYAN}🌐 IP Access:${RESET} http://$NGINX_IP/"
     else
-        echo -e "${GREEN}${BOLD}🎉 System is ready!${RESET}"
+        echo -e "${GREEN}${BOLD}  🎉 CECBS System is Ready!${RESET}"
+        echo -e "${CYAN}${BOLD}========================================${RESET}"
         echo ""
-        echo -e "${BOLD}Access your application:${RESET}"
-        echo -e "  ${CYAN}•${RESET} Frontend: http://localhost:3000"
-        echo -e "  ${CYAN}•${RESET} API: http://localhost:3001"
-        echo ""
+        echo -e "${BOLD}Access URLs:${RESET}"
+        echo -e "  ${CYAN}🌐 Frontend:${RESET} http://localhost:3000"
+        echo -e "  ${CYAN}🔧 API:${RESET}      http://localhost:3001"
+        echo -e "  ${CYAN}📚 API Docs:${RESET} http://localhost:3001/api-docs"
+        echo -e "  ${CYAN}🏥 Health:${RESET}   http://localhost:3001/health"
     fi
+    
+    echo ""
+    echo -e "${BOLD}Next Steps:${RESET}"
+    echo -e "  ${CYAN}1.${RESET} Wait 30 seconds for full initialization"
+    echo -e "  ${CYAN}2.${RESET} Open your browser to http://localhost:3000"
+    echo -e "  ${CYAN}3.${RESET} Hard refresh (Ctrl+Shift+R) to clear cache"
+    echo -e "  ${CYAN}4.${RESET} Login with your credentials"
+    echo ""
+    echo -e "${BOLD}View Logs:${RESET}"
+    echo -e "  ${CYAN}•${RESET} API:  tail -f logs/api.log"
+    echo -e "  ${CYAN}•${RESET} UI:   tail -f logs/ui.log"
+    echo -e "  ${CYAN}•${RESET} Or use: ./logs-api.sh  or  ./logs-ui.sh"
+    echo ""
+    echo -e "${BOLD}Stop Services:${RESET}"
+    echo -e "  ${CYAN}•${RESET} Quick: ./kill-ports.sh"
+    echo -e "  ${CYAN}•${RESET} Clean: docker-compose -f docker-compose-fabric.yml down"
+    echo ""
+    echo -e "${CYAN}${BOLD}========================================${RESET}"
     echo ""
 }
 

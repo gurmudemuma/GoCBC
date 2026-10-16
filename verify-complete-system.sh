@@ -130,9 +130,12 @@ check_port 6379 "Redis"
 check_port 7050 "Orderer"
 check_port 7051 "Peer (ECTA)"
 check_port 9999 "Chaincode Service"
-check_port 5984 "CouchDB (ECTA)"
+check_port 5985 "CouchDB (ECTA)"
 check_port 6984 "CouchDB (ECX)"
 check_port 7984 "CouchDB (Banks)"
+check_port 8984 "CouchDB (NBE)"
+check_port 9984 "CouchDB (Customs)"
+check_port 10984 "CouchDB (Shipping)"
 
 # ============================================================================
 print_header "3. Database Tables"
@@ -396,7 +399,7 @@ fi
 # Test CouchDB connectivity
 echo "Testing CouchDB connectivity..."
 COUCH_DBS=0
-for port in 5984 6984 7984 8984 9984 10984; do
+for port in 5985 6984 7984 8984 9984 10984; do
     if curl -s -u admin:adminpw http://localhost:$port/_up > /dev/null 2>&1; then
         ((COUCH_DBS++))
     fi
