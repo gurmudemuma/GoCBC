@@ -501,13 +501,13 @@ const InspectionRequestsTab: React.FC = () => {
           columns={columns}
           getRowId={(row) => row.inspectionId}
           loading={loading}
-          pagination
-          page={page}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-          rowsPerPageOptions={[5, 10, 25, 50]}
-          disableSelectionOnClick
+          paginationModel={{ page, pageSize }}
+          onPaginationModelChange={(model) => {
+            setPage(model.page);
+            setPageSize(model.pageSize);
+          }}
+          pageSizeOptions={[5, 10, 25, 50]}
+          disableRowSelectionOnClick
           sx={{
             '& .MuiDataGrid-columnHeaders': {
               backgroundColor: ECTA_COLORS.lightGreen,

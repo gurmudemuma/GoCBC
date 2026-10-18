@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
+import { resolveDocumentPath } from '../utils/fileUtils';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
@@ -433,22 +434,32 @@ router.post('/inspections/:inspectionID/approve',
           const signatureId = `SIG-${doc.document_id}-${user.org || 'ECTA'}-${Date.now()}`;
           const timestamp = new Date().toISOString();
           
-          // Add visual signature stamp to PDF (if applicable)
+          // Resolve physical file path for visual signature
+          const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
           const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
           let visualSignatureAdded = false;
           
-          if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+          if (isPDF && resolvedPath) {
             try {
-              await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+              // Get current signature count for positioning
+              const sigCountResult = await postgresDb.get(
+                'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+                [doc.document_id]
+              );
+              const positionIndex = parseInt(sigCountResult?.count || '0');
+
+              await DocumentSignatureService.addVisualSignatureToPDF(resolvedPath, {
                 signer: user.username || approvedBy || 'ECTA Quality Director',
                 organization: user.org || 'ECTAMSP',
                 timestamp,
                 signatureType: 'APPROVE',
                 role: user.role || 'Quality Director',
                 transactionId: signatureId,
-              });
+                documentId: doc.document_id,
+                documentType: doc.document_type
+              }, positionIndex);
               visualSignatureAdded = true;
-              logger.info(`✅ Visual signature added to inspection document: ${doc.document_id}`);
+              logger.info(`✅ Visual signature added to inspection document: ${doc.document_id} at position ${positionIndex}`);
             } catch (pdfError) {
               logger.warn(`Failed to add visual signature to PDF ${doc.document_id}:`, pdfError);
             }

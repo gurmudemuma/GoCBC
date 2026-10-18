@@ -64,10 +64,10 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
         setDiscrepancies(mockData);
         setFiltered(mockData);
         setStats({ total: mockData.length, open: mockData.filter(d => d.status !== 'RESOLVED' && d.status !== 'REJECTED').length, resolved: mockData.filter(d => d.status === 'RESOLVED').length, resolutionRate: 85, avgTime: 3.2 });
-        showSuccess(`Loaded ${mockData.length} discrepancy records`);
+        showSuccess('Success', `Loaded ${mockData.length} discrepancy records`);
       }
     } catch (error) {
-      showError('Failed to load discrepancies');
+      showError('Error', 'Failed to load discrepancies');
     } finally {
       setLoading(false);
     }
@@ -119,7 +119,7 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
     { field: 'discrepancyId', headerName: 'Discrepancy ID', width: 150, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography variant="body2" fontWeight={600}>{p.value}</Typography>
-        {p.row.txId && <BlockchainStatusIcon verified={true} size="small" />}
+        {p.row.txId && <BlockchainStatusIcon status="VERIFIED" size="small" />}
       </Box>
     )},
     { field: 'lcNumber', headerName: 'LC Number', width: 130, valueGetter: (params: any) => params.row.lcNumber || params.row.lcId },
@@ -179,7 +179,20 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
       </Card>
 
       <Paper sx={{ height: 600, width: '100%' }}>
-        <DataGrid rows={filtered} columns={columns} getRowId={(r) => r.discrepancyId} loading={loading} pagination page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} rowsPerPageOptions={[5, 10, 25]} disableSelectionOnClick sx={{ '& .MuiDataGrid-columnHeaders': { backgroundColor: CBE_COLORS.purple, color: 'white', fontWeight: 600 } }} />
+        <DataGrid 
+          rows={filtered} 
+          columns={columns} 
+          getRowId={(r) => r.discrepancyId} 
+          loading={loading} 
+          paginationModel={{ page, pageSize }}
+          onPaginationModelChange={(model) => {
+            setPage(model.page);
+            setPageSize(model.pageSize);
+          }}
+          pageSizeOptions={[5, 10, 25]} 
+          disableRowSelectionOnClick 
+          sx={{ '& .MuiDataGrid-columnHeaders': { backgroundColor: CBE_COLORS.purple, color: 'white', fontWeight: 600 } }} 
+        />
       </Paper>
 
       <DiscrepancyReportingDialog open={reportDialogOpen} onClose={() => setReportDialogOpen(false)} lcId={selectedLC} onSuccess={fetchDiscrepancies} />

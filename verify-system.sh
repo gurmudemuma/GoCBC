@@ -72,13 +72,14 @@ test_service "Redis" "docker ps | grep cecbs-redis"
 echo ""
 
 echo -e "${BOLD}4. Service Connectivity${RESET}"
-test_service "CouchDB API" "curl -s http://localhost:5984/ | grep -q couchdb"
+test_service "CouchDB ECTA API" "curl -s http://localhost:5985/ | grep -q couchdb"
+test_service "CouchDB ECX API" "curl -s http://localhost:6984/ | grep -q couchdb"
 test_service "API Health" "curl -s http://localhost:3001/health | grep -q healthy"
 test_service "UI Access" "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 | grep -q 200"
 echo ""
 
 echo -e "${BOLD}5. Blockchain Channel${RESET}"
-test_service "Channel Data" "curl -s http://admin:adminpw@localhost:5984/_all_dbs | grep -q coffeechannel"
+test_service "Channel Data" "curl -s http://admin:adminpw@localhost:5985/_all_dbs | grep -q coffeechannel"
 test_service "Channel Height" "docker exec peer0.ecta.cecbs.et peer channel getinfo -c coffeechannel 2>&1 | grep -q height"
 echo ""
 

@@ -968,9 +968,9 @@ const BanksPortal: React.FC = () => {
       }
 
       devLog('[BANKS] ⚡ All critical data loaded!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('[BANKS] Loading failed:', error);
-      showError('Data Loading Failed', 'Could not load banking data', error instanceof Error ? error.message : String(error));
+      showError('Data Loading Failed', 'Could not load banking data', (error as Error)?.message || String(error));
     }
   };
 
@@ -6058,7 +6058,7 @@ const BanksPortal: React.FC = () => {
                                     console.log('Response status:', response.status);
                                     
                                     if (!response.ok) {
-                                      const errorData = await response.json().catch(() => null);
+                                      const errorData: any = await response.json().catch(() => null);
                                       console.log('Error data:', errorData);
                                       
                                       // Handle authentication errors
@@ -6074,7 +6074,7 @@ const BanksPortal: React.FC = () => {
                                         return;
                                       }
                                       
-                                      throw new Error(errorData?.error?.message || 'Failed to download document');
+                                      throw new (Error as any)(errorData?.error?.message || 'Failed to download document');
                                     }
                                     
                                     // Create blob and open in new tab
@@ -6084,9 +6084,9 @@ const BanksPortal: React.FC = () => {
                                     
                                     // Clean up blob URL after a delay
                                     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-                                  } catch (error) {
+                                  } catch (error: any) {
                                     console.error('Error viewing document:', error);
-                                    alert(`Failed to view document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                    alert(`Failed to view document: ${(error as Error)?.message || 'Unknown error'}`);
                                   }
                                 }}
                                 fullWidth
@@ -6865,7 +6865,7 @@ const BanksPortal: React.FC = () => {
         onClose={() => setRepatriationDialogOpen(false)}
         onSuccess={() => {
           setRepatriationDialogOpen(false);
-          fetchForexAllocations(); // Refresh forex data
+          loadBankingData(); // Refresh forex data
         }}
         preselectedPayment={null}
       />

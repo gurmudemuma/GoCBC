@@ -5,7 +5,7 @@
  * Loads forex allocations, exchange rates, SWIFT messages, compliance data
  */
 
-import { apiFetch } from '../../../../utils/api';
+import { apiFetch } from '../../../../config/api.config';
 
 // ============================================================================
 // Type Definitions

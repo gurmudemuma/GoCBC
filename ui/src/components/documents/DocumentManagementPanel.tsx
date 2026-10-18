@@ -488,12 +488,20 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
           </DialogActions>
         </Dialog>
 
-        {/* Document Viewer Dialog */}
+        {/* Document Viewer Dialog - FIXED: No dual scrolling */}
         <Dialog
           open={viewerOpen}
           onClose={() => setViewerOpen(false)}
-          maxWidth="lg"
+          maxWidth="xl"
           fullWidth
+          PaperProps={{
+            sx: {
+              height: '90vh', // Fixed height for dialog
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+            }
+          }}
         >
           <DialogTitle>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -501,19 +509,43 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
               <Button onClick={() => setViewerOpen(false)}>Close</Button>
             </Stack>
           </DialogTitle>
-          <DialogContent dividers>
+          <DialogContent 
+            dividers
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              p: 0,
+              overflow: 'hidden', // Prevent DialogContent from scrolling
+            }}
+          >
             {viewingDocument && (
-              <Stack spacing={3}>
-                {/* Document Preview with Signature Overlay */}
-                <Box sx={{ position: 'relative', height: '500px', bgcolor: 'grey.100', borderRadius: 1, overflow: 'hidden' }}>
+              <Box 
+                sx={{ 
+                  display: 'flex',
+                  flexDirection: { xs: 'column', md: 'row' },
+                  height: '100%',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* LEFT SIDE: Document Preview - Takes most of the space */}
+                <Box 
+                  sx={{ 
+                    flex: { xs: '1 1 60%', md: '1 1 70%' },
+                    position: 'relative',
+                    bgcolor: 'grey.100',
+                    overflow: 'hidden',
+                    minHeight: { xs: '400px', md: '100%' },
+                  }}
+                >
                   {viewingDocument.mime_type === 'application/pdf' ? (
                     authToken ? (
                       <>
-                        {/* PDF Viewer with PDF.js */}
+                        {/* PDF Viewer - Full height, no separate scroll */}
                         <PDFViewer
                           documentId={viewingDocument.document_id}
                           token={authToken}
-                          height={500}
+                          height="100%" // Use full height of parent
                         />
                         
                         {/* Always show watermark overlay on top of PDF */}
@@ -662,46 +694,61 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                   )}
                 </Box>
 
-                {/* Approval Progress (if multi-party approval required) */}
-                <ApprovalProgressIndicator
-                  documentId={viewingDocument.document_id}
-                  showApproveButton={allowSign}
-                  onApprovalComplete={async () => {
-                    await fetchDocuments();
-                    // Refetch signatures for overlay
-                    try {
-                      if (typeof window === 'undefined') return;
-                      
-                      const token = localStorage.getItem('authToken');
-                      const response = await axios.get(
-                        `http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/signatures`,
-                        {
-                          headers: { Authorization: `Bearer ${token}` },
-                        }
-                      );
-                      if (response.data.success && response.data.data?.signatures) {
-                        setViewingSignatures(response.data.data.signatures);
-                      }
-                    } catch (err) {
-                      console.error('Error refetching signatures:', err);
-                    }
-                    
-                    if (onDocumentSigned) {
-                      onDocumentSigned(viewingDocument.document_id, { workflowComplete: true });
-                    }
+                {/* RIGHT SIDE: Signature Details - Scrollable sidebar */}
+                <Box
+                  sx={{
+                    flex: { xs: '1 1 40%', md: '1 1 30%' },
+                    borderLeft: { xs: 'none', md: '1px solid' },
+                    borderTop: { xs: '1px solid', md: 'none' },
+                    borderColor: 'divider',
+                    bgcolor: 'background.paper',
+                    overflow: 'auto', // THIS is the ONLY scrollable area
+                    p: 2,
                   }}
-                />
+                >
+                  <Stack spacing={3}>
+                    {/* Approval Progress (if multi-party approval required) */}
+                    <ApprovalProgressIndicator
+                      documentId={viewingDocument.document_id}
+                      showApproveButton={allowSign}
+                      onApprovalComplete={async () => {
+                        await fetchDocuments();
+                        // Refetch signatures for overlay
+                        try {
+                          if (typeof window === 'undefined') return;
+                          
+                          const token = localStorage.getItem('authToken');
+                          const response = await axios.get(
+                            `http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/signatures`,
+                            {
+                              headers: { Authorization: `Bearer ${token}` },
+                            }
+                          );
+                          if (response.data.success && response.data.data?.signatures) {
+                            setViewingSignatures(response.data.data.signatures);
+                          }
+                        } catch (err) {
+                          console.error('Error refetching signatures:', err);
+                        }
+                        
+                        if (onDocumentSigned) {
+                          onDocumentSigned(viewingDocument.document_id, { workflowComplete: true });
+                        }
+                      }}
+                    />
 
-                {/* Signature Tracker */}
-                {showSignatureTracker && (
-                  <DocumentSignatureTracker
-                    documentId={viewingDocument.document_id}
-                    showHeader={true}
-                    compact={false}
-                    autoRefresh={true}
-                  />
-                )}
-              </Stack>
+                    {/* Signature Tracker */}
+                    {showSignatureTracker && (
+                      <DocumentSignatureTracker
+                        documentId={viewingDocument.document_id}
+                        showHeader={true}
+                        compact={false}
+                        autoRefresh={true}
+                      />
+                    )}
+                  </Stack>
+                </Box>
+              </Box>
             )}
           </DialogContent>
         </Dialog>

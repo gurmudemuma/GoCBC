@@ -420,7 +420,7 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
             {data.txId && (
               <Box sx={{ mt: 2, p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <BlockchainStatusIcon verified={true} />
+                  <BlockchainStatusIcon status="VERIFIED" />
                   <Typography variant="caption" fontWeight={600}>
                     Blockchain Verified Transaction
                   </Typography>

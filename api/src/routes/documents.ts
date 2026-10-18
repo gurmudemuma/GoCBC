@@ -7,10 +7,13 @@ import crypto from 'crypto';
 import { authMiddleware } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { DocumentSignatureService } from '../services/documentSignatureService';
+import { DigitalSignatureService } from '../services/digitalSignatureService';
+import { CertificateManager } from '../utils/certificateManager';
 import { FabricService } from '../services/fabricService';
 import { CryptoUserService } from '../services/cryptoUserService';
 import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 import { logger } from '../utils/logger';
+import { resolveDocumentPath } from '../utils/fileUtils';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
@@ -113,8 +116,8 @@ router.post('/',
           entityId: documentID,
           actionType: 'REGISTER',
           signerUsername: user.username,
-          signerOrg: 'BanksMSP',
-          signerRole: user.role || 'BANKS',
+          signerOrg: fabricService.getMspFromRole(user.role),
+          signerRole: user.role,
           blockchainTxId: blockchainResult.txId,
           blockchainTimestamp: new Date(),
           chaincodeName: 'coffee',
@@ -211,14 +214,62 @@ router.post('/:documentID/verify',
 
       logger.info(`✅ Document ${documentID} verified on blockchain (TX: ${blockchainResult.txId})`);
 
-      let blockchainSignature: any = null;
-      blockchainSignature = {
-        txId: blockchainResult.txId,
-        signatureId: blockchainResult.signatureId,
-        timestamp: new Date().toISOString()
-      };
+      const signatureId = `SIG-${documentID}-${user.organization || 'ORG'}-${Date.now()}`;
+      const timestamp = new Date().toISOString();
+      
+      // ✅ Visual Signature for PDFs
+      let visualSignatureAdded = false;
+      if (verified && doc.file_path && fs.existsSync(doc.file_path)) {
+        const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+        if (isPDF) {
+          try {
+            // Get current signature count for positioning
+            const sigCountResult = await postgresDb.get(
+              'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+              [documentID]
+            );
+            const positionIndex = parseInt(sigCountResult?.count || '0');
 
-      // ✅ Store blockchain signature
+            await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+              signer: user.username,
+              organization: user.organization || 'BanksMSP',
+              timestamp,
+              signatureType: 'VERIFY',
+              role: user.role,
+              transactionId: blockchainResult.txId
+            }, positionIndex);
+            visualSignatureAdded = true;
+            logger.info(`✅ Visual signature added to document ${documentID} at position ${positionIndex}`);
+          } catch (pdfErr) {
+            logger.warn(`Failed to add visual signature to ${documentID}:`, pdfErr);
+          }
+        }
+      }
+
+      // ✅ Store in document_signatures table
+      try {
+        await postgresDb.run(
+          `INSERT INTO document_signatures (
+            signature_id, document_id, signer_id, signer_org, signature_type,
+            remarks, blockchain_tx_id, visual_signature_added, signed_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            signatureId,
+            documentID,
+            user.username,
+            fabricService.getMspFromRole(user.role),
+            signatureType,
+            remarks || `Document ${verified ? 'verified' : 'rejected'} by ${user.username}`,
+            blockchainResult.txId,
+            visualSignatureAdded,
+            new Date()
+          ]
+        );
+      } catch (sigDbErr) {
+        logger.error('Failed to store document signature:', sigDbErr);
+      }
+
+      // ✅ Store blockchain signature (legacy support)
       try {
         await postgresDb.run(
           `INSERT INTO blockchain_signatures (
@@ -228,18 +279,17 @@ router.post('/:documentID/verify',
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           ON CONFLICT (signature_id) DO NOTHING`,
           [
-            blockchainResult.signatureId || `SIG-${Date.now()}`,
+            blockchainResult.signatureId || signatureId,
             blockchainResult.txId,
             'DOCUMENT',
             documentID,
             'VerifyDocumentHash',
-            user.organization || 'BanksMSP',
+            fabricService.getMspFromRole(user.role),
             user.username,
             new Date(),
             signatureType
           ]
         );
-        logger.info(`✅ Blockchain signature stored in database: ${blockchainResult.signatureId}`);
       } catch (dbError) {
         logger.error('Failed to store blockchain signature in database:', dbError);
       }
@@ -270,7 +320,11 @@ router.post('/:documentID/verify',
           verified, 
           verificationStatus: newStatus,
           blockchainTxId: blockchainResult.txId,
-          blockchainSignature
+          blockchainSignature: {
+            txId: blockchainResult.txId,
+            signatureId: blockchainResult.signatureId || signatureId,
+            timestamp: new Date().toISOString()
+          }
         },
         timestamp: new Date().toISOString()
       });
@@ -303,7 +357,7 @@ router.get('/',
         params.push(contractID);
       }
 
-      query += ' ORDER BY upload_date DESC';
+      query += ' ORDER BY uploaded_at DESC';
       const documents = await postgresDb.all(query, params);
 
       res.json({ success: true, data: { documents }, timestamp: new Date().toISOString() });
@@ -328,6 +382,7 @@ router.post('/upload',
     try {
       const file = req.file;
       const user = (req as any).user;
+      const exporterID = user.exporterId || user.username;
       
       if (!file) {
         return res.status(400).json({
@@ -417,41 +472,97 @@ router.post('/upload',
           entityId: documentID,
           actionType: 'REGISTER',
           signerUsername: user.username,
-          signerOrg: 'BanksMSP',
-          signerRole: user.role || 'BANKS',
+          signerOrg: fabricService.getMspFromRole(user.role),
+          signerRole: user.role,
           blockchainTxId: blockchainResult.txId,
           blockchainTimestamp: new Date(),
           chaincodeName: 'coffee',
           chaincodeFunction: 'RegisterDocumentHash',
-          transactionArgs: [documentID, fileHash, documentType],
-          metadata: { fileName, documentType }
+          transactionArgs: [documentID, fileHash, finalDocType],
+          metadata: { fileName: finalFileName, documentType: finalDocType }
         });
       } catch (sigErr) {
         logger.warn('Failed to record signature:', sigErr);
       }
 
+      // ✅ VISUAL SIGNATURE: Add permanent visual signature for ALL PDF uploads
+      // This establishes immediate liability for the person uploading the document.
+      let visualSignatureAdded = false;
+      const isPDF = file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf');
+      
+      if (isPDF) {
+        try {
+          logger.info(`Adding permanent 'UPLOAD' signature to document: ${documentID} by ${user.username}`);
+          const timestamp = new Date().toISOString();
+          
+          await DocumentSignatureService.addVisualSignatureToPDF(file.path, {
+            signer: user.username || user.userId || 'User',
+            organization: fabricService.getMspFromRole(user.role),
+            timestamp,
+            signatureType: 'UPLOAD',
+            role: user.role,
+            transactionId: blockchainResult.txId,
+            documentId: documentID,
+            documentType: finalDocType
+          }, 0); // Upload is always the first signature
+          visualSignatureAdded = true;
+          logger.info(`✅ Permanent 'UPLOAD' signature applied to document: ${documentID}`);
+        } catch (pdfErr) {
+          logger.error(`Failed to add visual signature to uploaded file: ${documentID}`, pdfErr);
+        }
+      }
+
       // ✅ Cache in PostgreSQL
       await postgresDb.run(
         `INSERT INTO documents (
-          document_id, entity_type, entity_id, document_type, file_name,
-          file_hash, mime_type, file_size, file_path, uploaded_by, status, description, blockchain_tx_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          document_id, shipment_id, contract_id, exporter_id, document_type, file_name,
+          file_hash, mime_type, file_size, file_path, uploaded_by, status, description, 
+          blockchain_tx_id, verification_status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           documentID, 
-          finalEntityType, 
-          finalEntityId, 
+          finalEntityType === 'SHIPMENT' ? finalEntityId : null,
+          finalEntityType === 'CONTRACT' ? finalEntityId : null,
+          exporterID, 
           finalDocType, 
           finalFileName,
           fileHash,
           file.mimetype,
           file.size,
           file.path,
-          user.username,
+          user.userId || user.sub || user.username,
           'active',
           description || null,
-          blockchainResult.txId
+          blockchainResult.txId,
+          visualSignatureAdded ? 'signed' : 'pending'
         ]
       );
+
+      // ✅ Record in document_signatures if visual signature was added
+      if (visualSignatureAdded) {
+        try {
+          const sigId = `SIG-${documentID}-UPLOAD-${Date.now()}`;
+          await postgresDb.run(
+            `INSERT INTO document_signatures (
+              signature_id, document_id, signer_id, signer_org, signature_type,
+              remarks, blockchain_tx_id, visual_signature_added, signed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              sigId,
+              documentID,
+              user.username,
+              fabricService.getMspFromRole(user.role),
+              'UPLOAD',
+              `Document uploaded and permanently signed by ${user.username}`,
+              blockchainResult.txId,
+              true,
+              new Date()
+            ]
+          );
+        } catch (sigDbErr) {
+          logger.error('Failed to record upload signature in database:', sigDbErr);
+        }
+      }
 
       logger.info('Authenticated document cached in database:', documentID);
 
@@ -702,91 +813,23 @@ router.get('/:documentId/download',
       
       logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
       
-      // Resolve file path - handle both absolute and relative paths
-      let filePath = doc.file_path;
-      let pathFound = false;
-      
-      // Check if it's a real absolute path (with drive letter on Windows or root on Unix)
-      // Paths like "/uploads/..." are relative in our context
-      const isReallyAbsolute = path.isAbsolute(filePath) && (
-        /^[a-zA-Z]:/.test(filePath) || // Windows drive letter
-        fs.existsSync(filePath) // Actually exists as absolute
-      );
-      
-      if (!isReallyAbsolute) {
-        // Try multiple possible base paths
-        const possiblePaths = [
-          path.join(__dirname, '../..', filePath), // From api/dist
-          path.join(process.cwd(), filePath.replace(/^\//, '')), // From project root, strip leading /
-          path.join(process.cwd(), 'api', filePath.replace(/^\//, '')), // From api directory
-        ];
-        
-        // Find the first path that exists
-        for (const testPath of possiblePaths) {
-          if (fs.existsSync(testPath)) {
-            filePath = testPath;
-            logger.info(`Resolved file path: ${filePath}`);
-            pathFound = true;
-            break;
-          }
-        }
-        
-        // If still not found, try fallback locations based on file name
-        if (!pathFound) {
-          const fileName = path.basename(doc.file_path);
-          const baseFileName = fileName.replace(/\.[^/.]+$/, ''); // Remove extension
-          const fallbackDirs = [
-            path.join(__dirname, '../../uploads/documents'),
-            path.join(__dirname, '../../uploads/declarations'),
-            path.join(process.cwd(), 'api/uploads/documents'),
-            path.join(process.cwd(), 'api/uploads/declarations'),
-          ];
-          
-          logger.info(`Searching for ${fileName} in fallback locations...`);
-          
-          // First try exact match
-          for (const dir of fallbackDirs) {
-            const testPath = path.join(dir, fileName);
-            if (fs.existsSync(testPath)) {
-              filePath = testPath;
-              logger.info(`Found file in fallback location: ${filePath}`);
-              pathFound = true;
-              break;
-            }
-          }
-          
-          // If exact match fails, try fuzzy match (files starting with same name)
-          if (!pathFound) {
-            logger.info(`Trying fuzzy match for ${baseFileName}...`);
-            for (const dir of fallbackDirs) {
-              if (fs.existsSync(dir)) {
-                const files = fs.readdirSync(dir);
-                const matchedFile = files.find(f => 
-                  f.toLowerCase().startsWith(baseFileName.toLowerCase())
-                );
-                if (matchedFile) {
-                  filePath = path.join(dir, matchedFile);
-                  logger.info(`Found similar file in fallback location: ${filePath}`);
-                  pathFound = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
-      } else {
-        pathFound = fs.existsSync(filePath);
-      }
+      // Resolve file path using shared utility
+      const filePath = resolveDocumentPath(doc.file_path, doc.file_name);
       
       // Check if file exists
-      if (!pathFound || !fs.existsSync(filePath)) {
-        logger.error(`File not found on disk: ${filePath} (original: ${doc.file_path})`);
+      if (!filePath || !fs.existsSync(filePath)) {
+        logger.error(`File not found on disk: ${doc.file_path}`);
         return res.status(404).json({
           success: false,
           error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
           timestamp: new Date().toISOString()
         });
       }
+
+      // ✅ SIGNATURES ARE NOW PERMANENTLY EMBEDDED - No need for on-the-fly sync
+      // Signatures are embedded when the document is signed (see POST /:documentId/sign endpoint)
+      // This ensures downloaded documents ALWAYS have permanent, verifiable signatures
+      logger.info(`📄 Serving permanently signed document: ${documentId}`);
       
       // Set content type
       res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
@@ -901,14 +944,33 @@ router.get('/:documentId/view',
       
       logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
       
+      // Resolve file path using shared utility
+      const filePath = resolveDocumentPath(doc.file_path, doc.file_name);
+      
       // Check if file exists
-      if (!doc.file_path || !fs.existsSync(doc.file_path)) {
+      if (!filePath || !fs.existsSync(filePath)) {
         logger.error(`File not found on disk: ${doc.file_path}`);
         return res.status(404).json({
           success: false,
           error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      // ✅ SYNC SIGNATURES ON-THE-FLY: Ensure the viewed file has all recorded signatures
+      const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+      if (isPDF) {
+        try {
+          logger.info(`🔄 Triggering on-the-fly sync for view: ${documentId}`);
+          await DocumentSignatureService.syncSignatures(
+            filePath,
+            documentId,
+            doc.document_type,
+            postgresDb
+          );
+        } catch (syncErr) {
+          logger.warn(`⚠️ Sync failed for ${documentId} during view:`, syncErr);
+        }
       }
       
       // Remove X-Frame-Options to allow iframe embedding
@@ -926,7 +988,7 @@ router.get('/:documentId/view',
       logger.info(`Streaming file for viewing: ${doc.file_name}`);
       
       // Send file
-      const fileStream = fs.createReadStream(doc.file_path);
+      const fileStream = fs.createReadStream(filePath);
       fileStream.pipe(res);
       
       // ✅ LOG TO AUDIT TRAIL - Document Viewed
@@ -1040,23 +1102,47 @@ router.get('/entity/:entityType/:entityId',
       // Query both databases and merge results
       let allDocuments: any[] = [];
       
-      // 1. Try PostgreSQL first (case-insensitive for entity_type)
+      // 1. Try PostgreSQL first
+      // PostgreSQL uses contract_id, shipment_id columns (not entity_type/entity_id)
       try {
-        const pgDocs = await postgresDb.all(
-          `SELECT 
-            document_id, entity_type, entity_id, document_type, file_name,
-            file_hash, mime_type, file_size, uploaded_by, status, uploaded_at
-          FROM documents 
-          WHERE UPPER(entity_type) = UPPER($1) AND entity_id = $2
-          ORDER BY uploaded_at DESC`,
-          [entityType, entityId]
-        );
+        let pgDocs: any[] = [];
+        
+        if (entityType.toUpperCase() === 'CONTRACT') {
+          pgDocs = await postgresDb.all(
+            `SELECT 
+              document_id, document_type, file_name,
+              file_hash, mime_type, file_size, uploaded_by, status, uploaded_at,
+              contract_id
+            FROM documents 
+            WHERE contract_id = $1
+            ORDER BY uploaded_at DESC`,
+            [entityId]
+          );
+        } else if (entityType.toUpperCase() === 'SHIPMENT') {
+          pgDocs = await postgresDb.all(
+            `SELECT 
+              document_id, document_type, file_name,
+              file_hash, mime_type, file_size, uploaded_by, status, uploaded_at,
+              shipment_id
+            FROM documents 
+            WHERE shipment_id = $1
+            ORDER BY uploaded_at DESC`,
+            [entityId]
+          );
+        }
+        
         if (pgDocs && pgDocs.length > 0) {
+          // Add entity_type and entity_id for frontend compatibility
+          pgDocs = pgDocs.map(doc => ({
+            ...doc,
+            entity_type: entityType,
+            entity_id: entityId
+          }));
           allDocuments = [...allDocuments, ...pgDocs];
-          logger.info(`Found ${pgDocs.length} documents in PostgreSQL`);
+          logger.info(`Found ${pgDocs.length} documents in PostgreSQL for ${entityType}/${entityId}`);
         }
       } catch (pgError) {
-        logger.warn('PostgreSQL query failed, trying CouchDB:', pgError);
+        logger.warn('PostgreSQL query failed:', pgError);
       }
       
       // 2. Also try SQLite (legacy fallback)
@@ -1144,7 +1230,17 @@ router.post('/:documentId/sign',
       const { signatureType, remarks } = req.body;
       const user = (req as any).user;
 
+      // ✅ ECTA quality document configuration (declared once at function scope)
+      const ectaQualityDocTypes = ['CERTIFICATE_OF_ORIGIN', 'QUALITY_CERTIFICATE', 'CUPPING_REPORT', 
+                                   'PHYTOSANITARY_CERTIFICATE', 'EXPORT_PERMIT', 'INSPECTION_CERTIFICATE'];
+      const ectaRoles = ['ECTA', 'ECTA_SUPERVISOR', 'ECTA_OFFICER', 'ECTA_INSPECTOR', 'ADMIN'];
+
       logger.info(`Document signature requested: ${documentId} by ${user.username} (${signatureType})`);
+      
+      // 🔍 DEBUG: Log signature type explicitly
+      logger.info(`🔍 DEBUG: Signature type received: "${signatureType}" (type: ${typeof signatureType})`);
+      logger.info(`🔍 DEBUG: Is APPROVE? ${signatureType === 'APPROVE'}`);
+      logger.info(`🔍 DEBUG: Is VERIFY? ${signatureType === 'VERIFY'}`);
 
       // 1. Get document from database
       const doc = await postgresDb.get(
@@ -1161,39 +1257,51 @@ router.post('/:documentId/sign',
       }
 
       // ✅ 2. MULTI-PARTY APPROVAL: Validate approval for APPROVE signature type
+      // ✅ ECTA QUALITY DOCUMENTS: Allow ECTA supervisors to sign quality documents directly
+      const isEctaQualityDoc = ectaQualityDocTypes.includes(doc.document_type);
+      const isEctaUser = ectaRoles.includes(user.role);
+      
       if (signatureType === 'APPROVE') {
-        const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
-        
-        const validation = await ApprovalRulesService.validateApproval(
-          documentId,
-          user.username || user.sub,
-          user.role
-        );
+        // ECTA users can approve quality documents without multi-party validation
+        if (isEctaQualityDoc && isEctaUser) {
+          logger.info(`✅ ECTA quality document approval (direct authority): ${documentId} by ${user.username} (${user.role})`);
+          // Skip multi-party approval validation - ECTA has direct authority over quality documents
+        } else {
+          // Non-ECTA documents or non-ECTA users must go through approval workflow
+          const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+          
+          const validation = await ApprovalRulesService.validateApproval(
+            documentId,
+            user.username || user.sub,
+            user.role
+          );
 
-        if (!validation.canApprove) {
-          logger.warn(`Approval denied for ${documentId}: ${validation.reason}`);
-          return res.status(403).json({
-            success: false,
-            error: {
-              code: 'APPROVAL_DENIED',
-              message: validation.reason || 'You cannot approve this document',
-              details: {
-                requiresApproval: validation.requiresApproval,
-                currentApprovals: validation.currentApprovals,
-                requiredApprovals: validation.requiredApprovals,
-                approvedBy: validation.approvedBy,
-                nextRequiredRole: validation.nextRequiredRole
-              }
-            },
-            timestamp: new Date().toISOString()
-          });
+          if (!validation.canApprove) {
+            logger.warn(`Approval denied for ${documentId}: ${validation.reason}`);
+            return res.status(403).json({
+              success: false,
+              error: {
+                code: 'APPROVAL_DENIED',
+                message: validation.reason || 'You cannot approve this document',
+                details: {
+                  requiresApproval: validation.requiresApproval,
+                  currentApprovals: validation.currentApprovals,
+                  requiredApprovals: validation.requiredApprovals,
+                  approvedBy: validation.approvedBy,
+                  nextRequiredRole: validation.nextRequiredRole
+                }
+              },
+              timestamp: new Date().toISOString()
+            });
+          }
+
+          logger.info(`✅ Approval validation passed: ${documentId} (${validation.currentApprovals + 1}/${validation.requiredApprovals})`);
         }
-
-        logger.info(`✅ Approval validation passed: ${documentId} (${validation.currentApprovals + 1}/${validation.requiredApprovals})`);
       }
 
-      // 3. Check if file exists - for PDF visual signature
-      const fileExists = doc.file_path && fs.existsSync(doc.file_path);
+      // 3. Resolve physical file path for PDF visual signature
+      const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
+      const fileExists = resolvedPath !== null;
       const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
       
       if (!fileExists) {
@@ -1201,39 +1309,87 @@ router.post('/:documentId/sign',
       }
 
       // 4. Create signature ID and timestamp
-      const signatureId = `SIG-${documentId}-${user.org || 'ORG'}-${Date.now()}`;
+      const signatureId = `SIG-${documentId}-${fabricService.getMspFromRole(user.role)}-${Date.now()}`;
       const timestamp = new Date().toISOString();
 
-      // 5. Add visual signature stamp to PDF (if file exists and is PDF)
+      // 5. ✅ PERMANENTLY EMBED CRYPTOGRAPHIC SIGNATURE in PDF (if file exists and is PDF)
       let visualSignatureAdded = false;
-      if (fileExists && isPDF) {
+      let cryptoSignatureEmbedded = false;
+      
+      if (fileExists && isPDF && resolvedPath) {
         try {
-          await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
-            signer: user.username || user.sub || 'Unknown',
-            organization: user.org || user.organization || 'Unknown',
-            timestamp,
-            signatureType,
-            role: user.role,
-            transactionId: signatureId,
-          });
+          logger.info(`🔐 Embedding permanent cryptographic signature for ${documentId}`);
+          
+          // Get current signature count for positioning
+          const sigCountResult = await postgresDb.get(
+            'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+            [documentId]
+          );
+          const positionIndex = parseInt(sigCountResult?.count || '0');
+
+          // ✅ Get user's X.509 certificate from Fabric identity
+          const userCertificate = await CertificateManager.getUserCertificate(
+            user.username || user.sub || 'unknown',
+            user.organization || fabricService.getMspFromRole(user.role)
+          );
+
+          // ✅ PERMANENTLY SIGN DOCUMENT with cryptographic signature
+          await DigitalSignatureService.signDocumentPermanently(
+            resolvedPath,
+            userCertificate,
+            {
+              signerName: user.username || user.sub || 'Unknown',
+              signerEmail: user.email || `${user.username}@cecbs.et`,
+              organization: fabricService.getMspFromRole(user.role),
+              reason: remarks || signatureType,
+              location: 'Ethiopian Coffee Export Consortium',
+              contactInfo: user.email || 'info@cecbs.et',
+              timestamp: new Date(),
+              documentId: documentId,
+              documentType: doc.document_type,
+              blockchainTxId: signatureId, // Will be updated with real TX ID later
+            },
+            positionIndex
+          );
+          
           visualSignatureAdded = true;
-          logger.info(`✅ Visual signature added to PDF: ${documentId}`);
-        } catch (pdfError) {
-          logger.error(`Failed to add visual signature to PDF: ${documentId}`, pdfError);
-          // Continue anyway - blockchain signature is more important
+          cryptoSignatureEmbedded = true;
+          
+          // ✅ UPDATE DOCUMENT HASH after signing (file has been modified)
+          const signedFileBytes = fs.readFileSync(resolvedPath);
+          const newFileHash = crypto.createHash('sha256').update(signedFileBytes).digest('hex');
+          
+          await postgresDb.run(
+            'UPDATE documents SET file_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+            [newFileHash, documentId]
+          );
+          
+          logger.info(`✅ Permanent cryptographic signature embedded in ${documentId} at position ${positionIndex}`);
+          logger.info(`   New document hash: ${newFileHash}`);
+          
+        } catch (signError) {
+          logger.error(`Failed to embed cryptographic signature in PDF: ${documentId}`, signError);
+          // Continue anyway - blockchain signature is still recorded
         }
+      } else if (!isPDF && fileExists) {
+        logger.info(`Document ${documentId} is not a PDF - signature recorded in blockchain only`);
+      } else if (!fileExists) {
+        logger.warn(`Physical file not found for ${documentId} - signature recorded in blockchain only`);
       }
 
       // 5. ✅ BLOCKCHAIN FIRST: Sign document on blockchain
       logger.info(`Signing document ${documentId} on blockchain...`);
-      const FabricService = (await import('../services/fabricService')).default;
-      const fabricService = FabricService.getInstance();
       
       let blockchainTxId: string | null = null;
       let approvalMetadata: any = null;
       
+      // Check if this is an ECTA quality document (reuse variables from above)
+      const isEctaQualityDoc2 = ectaQualityDocTypes.includes(doc.document_type);
+      const isEctaUser2 = ectaRoles.includes(user.role);
+      
       // ✅ For APPROVE signatures, gather approval workflow metadata for blockchain
-      if (signatureType === 'APPROVE') {
+      // Skip this for ECTA quality documents as they use direct authority
+      if (signatureType === 'APPROVE' && !(isEctaQualityDoc2 && isEctaUser2)) {
         const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
         const validation = await ApprovalRulesService.validateApproval(
           documentId,
@@ -1247,6 +1403,16 @@ router.post('/:documentId/sign',
           requiredApprovals: validation.requiredApprovals,
           approverRole: user.role,
           workflowComplete: validation.isComplete
+        };
+      } else if (signatureType === 'APPROVE' && isEctaQualityDoc2 && isEctaUser2) {
+        // ECTA direct approval metadata
+        approvalMetadata = {
+          multiPartyApproval: false,
+          approvalLevel: 1,
+          requiredApprovals: 1,
+          approverRole: user.role,
+          workflowComplete: true,
+          ectaDirectAuthority: true
         };
       }
       
@@ -1289,56 +1455,115 @@ router.post('/:documentId/sign',
 
       // 6. ✅ Cache signature in database (with multi-party approval support)
       if (signatureType === 'APPROVE') {
-        // Use approval service to record approval
-        const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
-        const approvalResult = await ApprovalRulesService.recordApproval(
-          documentId,
-          user.username || user.sub,
-          user.role,
-          blockchainTxId || undefined,
-          user.org || user.organization || 'Unknown'
-        );
-
-        if (!approvalResult.success) {
-          logger.error(`Failed to record approval: ${approvalResult.message}`);
-          return res.status(400).json({
-            success: false,
-            error: { code: 'APPROVAL_FAILED', message: approvalResult.message },
-            timestamp: new Date().toISOString()
-          });
-        }
-
-        logger.info(`✅ Approval recorded: ${approvalResult.message} (workflow complete: ${approvalResult.workflowComplete})`);
-
-        // Update document status only if all approvals complete
-        if (approvalResult.workflowComplete) {
+        // Check if this is an ECTA quality document with direct authority (reuse variables)
+        const isEctaQualityDoc3 = ectaQualityDocTypes.includes(doc.document_type);
+        const isEctaUser3 = ectaRoles.includes(user.role);
+        
+        if (isEctaQualityDoc3 && isEctaUser3) {
+          // ECTA direct approval - bypass approval workflow service
+          logger.info(`✅ Recording ECTA direct approval for ${documentId}`);
+          
+          // Record signature directly in document_signatures table
+          await postgresDb.run(
+            `INSERT INTO document_signatures (
+              signature_id, document_id, signer_id, signer_org, signature_type,
+              certificate_id, remarks, blockchain_tx_id, visual_signature_added, crypto_signature_embedded
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              signatureId,
+              documentId,
+              user.username || user.sub,
+              fabricService.getMspFromRole(user.role),
+              signatureType,
+              user.sub || null,
+              remarks || null,
+              blockchainTxId,
+              visualSignatureAdded,
+              cryptoSignatureEmbedded
+            ]
+          );
+          
+          // Update document status to approved immediately
           await postgresDb.run(
             'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
             ['approved', documentId]
           );
+          
         } else {
-          await postgresDb.run(
-            'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
-            ['pending_approval', documentId]
-          );
+          // Use approval service to record approval for non-ECTA documents
+          logger.info(`📝 Calling approval service for ${documentId}`);
+          logger.info(`   User: ${user.username || user.sub}, Role: ${user.role}, Org: ${user.org || user.organization || 'Unknown'}`);
+          
+          const ApprovalRulesService = (await import('../services/approvalRulesService')).approvalRulesService;
+          
+          let approvalResult;
+          try {
+            approvalResult = await ApprovalRulesService.recordApproval(
+              documentId,
+              user.username || user.sub,
+              user.role,
+              blockchainTxId || undefined,
+              user.org || user.organization || 'Unknown'
+            );
+          } catch (approvalError: any) {
+            logger.error(`❌ Approval service threw error:`, approvalError);
+            return res.status(500).json({
+              success: false,
+              error: { 
+                code: 'APPROVAL_SERVICE_ERROR', 
+                message: `Approval service error: ${approvalError.message}`,
+                details: approvalError.stack
+              },
+              timestamp: new Date().toISOString()
+            });
+          }
+
+          if (!approvalResult.success) {
+            logger.error(`Failed to record approval: ${approvalResult.message}`);
+            logger.error(`Approval result details:`, JSON.stringify(approvalResult, null, 2));
+            return res.status(400).json({
+              success: false,
+              error: { code: 'APPROVAL_FAILED', message: approvalResult.message || 'Failed to record approval' },
+              timestamp: new Date().toISOString()
+            });
+          }
+
+          logger.info(`✅ Approval recorded: ${approvalResult.message} (workflow complete: ${approvalResult.workflowComplete})`);
+
+          // Update document status only if all approvals complete
+          if (approvalResult.workflowComplete) {
+            await postgresDb.run(
+              'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+              ['approved', documentId]
+            );
+          } else {
+            await postgresDb.run(
+              'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+              ['pending_approval', documentId]
+            );
+          }
         }
       } else {
-        // For non-approval signatures, use legacy method
+        // For non-approval signatures (VERIFY, UPLOAD, REJECT), use direct insert
+        logger.info(`📝 Recording non-approval signature: ${signatureType} for ${documentId}`);
+        logger.info(`   Bypassing approval workflow - direct signature insert`);
+        
         await postgresDb.run(
           `INSERT INTO document_signatures (
             signature_id, document_id, signer_id, signer_org, signature_type,
-            certificate_id, remarks, blockchain_tx_id, visual_signature_added
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            certificate_id, remarks, blockchain_tx_id, visual_signature_added, crypto_signature_embedded
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             signatureId,
             documentId,
             user.username || user.sub,
-            user.org || user.organization,
+            fabricService.getMspFromRole(user.role),
             signatureType,
             user.sub || null,
             remarks || null,
             blockchainTxId,
-            visualSignatureAdded
+            visualSignatureAdded,
+            cryptoSignatureEmbedded
           ]
         );
 
@@ -1390,6 +1615,7 @@ router.post('/:documentId/sign',
           organization: user.org,
           timestamp,
           visualSignatureAdded,
+          cryptoSignatureEmbedded, // Cryptographic signature permanently embedded in PDF
           blockchainTxId, // Blockchain transaction ID (if blockchain is connected)
         },
         timestamp: new Date().toISOString()
@@ -2020,6 +2246,337 @@ router.get('/:documentId/approval-status',
           code: 'INTERNAL_ERROR',
           message: error.message || 'Failed to fetch approval status'
         },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// ============================================================================
+// SIGNATURE VERIFICATION ENDPOINT
+// ============================================================================
+
+/**
+ * Verify cryptographic signatures in a document
+ * GET /documents/:documentId/verify-signatures
+ * Returns verification results including signature validity, tamper detection, and certificate info
+ */
+router.get('/:documentId/verify-signatures',
+  authMiddleware,
+  [
+    param('documentId').notEmpty().withMessage('Document ID is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      const user = (req as any).user;
+
+      logger.info(`Signature verification requested for document: ${documentId} by ${user.username}`);
+
+      // 1. Get document from database
+      const doc = await postgresDb.get(
+        'SELECT * FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // 2. Get all signatures from database
+      const dbSignatures = await postgresDb.all(
+        `SELECT 
+          signature_id, document_id, signer_id, signer_org, signature_type,
+          signed_at, remarks, blockchain_tx_id, 
+          visual_signature_added, crypto_signature_embedded
+        FROM document_signatures 
+        WHERE document_id = $1 
+        ORDER BY signed_at ASC`,
+        [documentId]
+      );
+
+      // 3. Resolve physical file path
+      const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
+      const fileExists = resolvedPath !== null;
+      const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+
+      let verificationResult: any = {
+        documentId,
+        documentType: doc.document_type,
+        fileName: doc.file_name,
+        fileExists,
+        isPDF,
+        hasSignatures: dbSignatures.length > 0,
+        signatureCount: dbSignatures.length,
+        cryptoSignatureCount: dbSignatures.filter((s: any) => s.crypto_signature_embedded).length,
+        allSignaturesCryptographic: dbSignatures.every((s: any) => s.crypto_signature_embedded),
+      };
+
+      // 4. If file exists and is PDF, verify cryptographic signatures
+      if (fileExists && isPDF && resolvedPath) {
+        try {
+          const cryptoVerification = await DigitalSignatureService.verifyDocumentSignatures(resolvedPath);
+          
+          verificationResult = {
+            ...verificationResult,
+            cryptographicVerification: {
+              isValid: cryptoVerification.isValid,
+              isTampered: cryptoVerification.isTampered,
+              documentHash: cryptoVerification.documentHash,
+              verificationTimestamp: cryptoVerification.verificationTimestamp,
+              signatures: cryptoVerification.signatures,
+            },
+          };
+
+          logger.info(`✅ Cryptographic verification complete: ${documentId} - Valid: ${cryptoVerification.isValid}, Tampered: ${cryptoVerification.isTampered}`);
+        } catch (verifyError) {
+          logger.error(`Failed to verify cryptographic signatures: ${documentId}`, verifyError);
+          verificationResult.cryptographicVerification = {
+            error: 'Failed to verify cryptographic signatures',
+            details: (verifyError as Error).message,
+          };
+        }
+      } else {
+        verificationResult.cryptographicVerification = {
+          available: false,
+          reason: !fileExists ? 'File not found' : !isPDF ? 'Not a PDF document' : 'Unknown',
+        };
+      }
+
+      // 5. Add database signature records
+      verificationResult.databaseSignatures = dbSignatures.map((sig: any) => ({
+        signatureId: sig.signature_id,
+        signerName: sig.signer_id,
+        organization: sig.signer_org,
+        signatureType: sig.signature_type,
+        signedAt: sig.signed_at,
+        blockchainTxId: sig.blockchain_tx_id,
+        remarks: sig.remarks,
+        visualSignatureAdded: sig.visual_signature_added,
+        cryptoSignatureEmbedded: sig.crypto_signature_embedded,
+      }));
+
+      // 6. Verify blockchain signatures
+      if (fabricService.isConnected()) {
+        try {
+          const blockchainSignatures = await signatureService.getSignatures('DOCUMENT', documentId);
+          verificationResult.blockchainSignatures = blockchainSignatures;
+          verificationResult.blockchainVerified = blockchainSignatures.length > 0;
+        } catch (bcError) {
+          logger.warn(`Failed to fetch blockchain signatures: ${documentId}`, bcError);
+          verificationResult.blockchainSignatures = [];
+          verificationResult.blockchainVerified = false;
+        }
+      }
+
+      // 7. Overall verification status
+      const isFullyVerified = 
+        verificationResult.hasSignatures &&
+        verificationResult.allSignaturesCryptographic &&
+        (!verificationResult.cryptographicVerification?.isTampered) &&
+        (verificationResult.cryptographicVerification?.isValid || !isPDF);
+
+      verificationResult.overallStatus = isFullyVerified ? 'VERIFIED' : 
+        verificationResult.cryptographicVerification?.isTampered ? 'TAMPERED' :
+        !verificationResult.allSignaturesCryptographic ? 'PARTIAL' :
+        !verificationResult.hasSignatures ? 'UNSIGNED' : 'UNVERIFIED';
+
+      // 8. Log verification audit trail
+      await postgresDb.run(
+        `INSERT INTO audit_trail (
+          entity_type, entity_id, action, performed_by, performed_by_org, 
+          old_value, new_value, reason, metadata, ip_address
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          'DOCUMENT',
+          documentId,
+          'VERIFY_SIGNATURE',
+          user.username || user.sub,
+          user.org || 'UNKNOWN',
+          'N/A',
+          verificationResult.overallStatus,
+          'Signature verification performed',
+          JSON.stringify({
+            documentId,
+            verificationStatus: verificationResult.overallStatus,
+            signatureCount: verificationResult.signatureCount,
+            cryptoSignatureCount: verificationResult.cryptoSignatureCount,
+            isTampered: verificationResult.cryptographicVerification?.isTampered || false,
+            verifiedBy: user.username,
+            timestamp: new Date().toISOString()
+          }),
+          req.ip || (req as any).connection?.remoteAddress || 'unknown'
+        ]
+      );
+
+      res.json({
+        success: true,
+        data: verificationResult,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('Signature verification error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// ============================================================================
+// ADD SIGNATURE CERTIFICATE PAGE
+// ============================================================================
+
+/**
+ * Add signature certificate page to a multi-party signed document
+ * POST /documents/:documentId/add-certificate-page
+ * Adds a final page showing complete signature chain, blockchain TXs, and QR codes
+ */
+router.post('/:documentId/add-certificate-page',
+  authMiddleware,
+  [
+    param('documentId').notEmpty().withMessage('Document ID is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      const user = (req as any).user;
+
+      logger.info(`Certificate page generation requested for: ${documentId} by ${user.username}`);
+
+      // 1. Get document from database
+      const doc = await postgresDb.get(
+        'SELECT * FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // 2. Get all signatures
+      const signatures = await postgresDb.all(
+        `SELECT 
+          signature_id, signer_id, signer_org, signature_type,
+          signed_at, blockchain_tx_id, remarks
+        FROM document_signatures 
+        WHERE document_id = $1 
+        ORDER BY signed_at ASC`,
+        [documentId]
+      );
+
+      if (signatures.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'NO_SIGNATURES', message: 'Document has no signatures' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // 3. Resolve file path
+      const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
+      if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+      if (!isPDF) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'NOT_PDF', message: 'Certificate pages can only be added to PDF documents' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // 4. Add certificate page
+      try {
+        await DigitalSignatureService.addSignatureCertificatePage(
+          resolvedPath,
+          documentId,
+          signatures.map((sig: any) => ({
+            signerName: sig.signer_id,
+            organization: sig.signer_org,
+            signatureType: sig.signature_type,
+            timestamp: new Date(sig.signed_at),
+            blockchainTxId: sig.blockchain_tx_id,
+            certificateInfo: sig.remarks,
+          }))
+        );
+
+        logger.info(`✅ Certificate page added to document: ${documentId}`);
+
+        // 5. Update document hash after modification
+        const modifiedFileBytes = fs.readFileSync(resolvedPath);
+        const newFileHash = crypto.createHash('sha256').update(modifiedFileBytes).digest('hex');
+
+        await postgresDb.run(
+          'UPDATE documents SET file_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+          [newFileHash, documentId]
+        );
+
+        // 6. Log to audit trail
+        await postgresDb.run(
+          `INSERT INTO audit_trail (
+            entity_type, entity_id, action, performed_by, performed_by_org, 
+            old_value, new_value, reason, metadata, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            'DOCUMENT',
+            documentId,
+            'ADD_CERTIFICATE_PAGE',
+            user.username || user.sub,
+            user.org || 'UNKNOWN',
+            doc.file_hash,
+            newFileHash,
+            'Signature certificate page added',
+            JSON.stringify({
+              documentId,
+              signatureCount: signatures.length,
+              addedBy: user.username,
+              timestamp: new Date().toISOString()
+            }),
+            req.ip || (req as any).connection?.remoteAddress || 'unknown'
+          ]
+        );
+
+        res.json({
+          success: true,
+          message: 'Signature certificate page added successfully',
+          data: {
+            documentId,
+            signatureCount: signatures.length,
+            newFileHash,
+          },
+          timestamp: new Date().toISOString()
+        });
+
+      } catch (certError) {
+        logger.error(`Failed to add certificate page: ${documentId}`, certError);
+        throw certError;
+      }
+
+    } catch (error: any) {
+      logger.error('Certificate page generation error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
         timestamp: new Date().toISOString()
       });
     }

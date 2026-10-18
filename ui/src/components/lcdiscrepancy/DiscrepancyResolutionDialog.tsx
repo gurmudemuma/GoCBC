@@ -20,9 +20,9 @@ const DiscrepancyResolutionDialog: React.FC<DiscrepancyResolutionDialogProps> = 
       setSubmitting(true);
       const response = await apiFetch(`/api/v1/banking/discrepancy/${discrepancy.discrepancyId}/resolve`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ resolutionMethod, ...form }) });
       const result = await response.json();
-      if (result.success) { showSuccess('Discrepancy resolved successfully'); onSuccess(); onClose(); }
-      else showError(result.error || 'Failed');
-    } catch (error) { showError('Failed to resolve discrepancy'); } finally { setSubmitting(false); }
+      if (result.success) { showSuccess('Success', 'Discrepancy resolved successfully'); onSuccess(); onClose(); }
+      else showError('Error', result.error || 'Failed');
+    } catch (error) { showError('Error', 'Failed to resolve discrepancy'); } finally { setSubmitting(false); }
   };
 
   return (

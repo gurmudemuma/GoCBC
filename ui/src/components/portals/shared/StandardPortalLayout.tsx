@@ -35,12 +35,23 @@ interface TabItem {
   tabIndex: number;
 }
 
-interface TabCategory {
+export interface TabCategory {
   id: string;
   label: string;
   icon: React.ReactNode;
   roles: string[];
   children: TabItem[];
+}
+
+// Flat tab configuration (used in tab config files)
+export interface TabConfig {
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+  roles: string[];
+  category: string;
+  index: number;
+  metadata?: any;
 }
 
 interface StandardPortalLayoutProps {
@@ -132,7 +143,7 @@ const StandardPortalLayout: React.FC<StandardPortalLayoutProps> = ({
               {showBlockchainStatus && (
                 <Box sx={{ textAlign: 'right' }}>
                   <BlockchainStatusIcon 
-                    verified={true} 
+                    status="VERIFIED" 
                     size="large"
                   />
                   {blockchainHeight && (
@@ -250,7 +261,7 @@ const StandardPortalLayout: React.FC<StandardPortalLayoutProps> = ({
                 <Tab 
                   key={parent.id} 
                   label={parent.label} 
-                  icon={parent.icon}
+                  icon={parent.icon as React.ReactElement}
                   iconPosition="start"
                 />
               ))}
@@ -283,7 +294,7 @@ const StandardPortalLayout: React.FC<StandardPortalLayoutProps> = ({
                     <Tab 
                       key={child.id} 
                       label={child.label}
-                      icon={child.icon}
+                      icon={child.icon as React.ReactElement}
                       iconPosition="start"
                     />
                   ))}

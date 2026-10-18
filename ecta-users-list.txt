@@ -1,0 +1,5 @@
+ username  | role | organization | status 
+-----------+------+--------------+--------
+ ectaAdmin | ECTA | ECTA         | active
+(1 row)
+

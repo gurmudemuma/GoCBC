@@ -5,7 +5,7 @@
  * Loads contracts, forex, LCs, shipments, payments, and customs data
  */
 
-import { apiFetch } from '../../../../utils/api';
+import { apiFetch } from '../../../../config/api.config';
 
 // ============================================================================
 // Type Definitions

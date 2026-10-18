@@ -1,0 +1,19 @@
+psql:insert-documents-correct.sql:2: ERROR:  column "user_id" does not exist
+LINE 1: SELECT user_id, username FROM users WHERE username = 'ectaAd...
+               ^
+BEGIN
+INSERT 0 4
+COMMIT
+           document_id           |         contract_id         |     document_type     |            file_name             | status 
+---------------------------------+-----------------------------+-----------------------+----------------------------------+--------
+ DOC_CERT_ORIGIN_1792162422504   | CONTRACT_READY_FOR_APPROVAL | CERTIFICATE_OF_ORIGIN | Sample_CERTIFICATE_OF_ORIGIN.pdf | active
+ DOC_CONTRACT_1792162422504      | CONTRACT_READY_FOR_APPROVAL | CONTRACT_SIGNED       | Sample_CONTRACT_SIGNED.pdf       | active
+ DOC_EXPORT_PERMIT_1792162422504 | CONTRACT_READY_FOR_APPROVAL | EXPORT_PERMIT         | Sample_EXPORT_PERMIT.pdf         | active
+ DOC_QUALITY_1792162422504       | CONTRACT_READY_FOR_APPROVAL | QUALITY_CERTIFICATE   | Sample_QUALITY_CERTIFICATE.pdf   | active
+(4 rows)
+
+ total 
+-------
+     4
+(1 row)
+

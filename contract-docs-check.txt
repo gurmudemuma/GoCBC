@@ -1,0 +1,13 @@
+psql:verify-contract-docs.sql:16: ERROR:  column "entity_type" does not exist
+LINE 3:   entity_type,
+          ^
+ total_docs 
+------------
+          2
+(1 row)
+
+         contract_id         |   status   | exporter_id |       buyer_id        
+-----------------------------+------------+-------------+-----------------------
+ CONTRACT_READY_FOR_APPROVAL | REGISTERED | exp001      | BEREKET_COFFEE_EXPORT
+(1 row)
+

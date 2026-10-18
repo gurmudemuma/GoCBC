@@ -1,0 +1,5 @@
+ username  | role |       email       | organization | status |     created_at      
+-----------+------+-------------------+--------------+--------+---------------------
+ ectaAdmin | ECTA | admin@ecta.gov.et | ECTA         | active | 2026-10-15 16:12:05
+(1 row)
+

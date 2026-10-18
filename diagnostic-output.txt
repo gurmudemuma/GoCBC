@@ -1,0 +1,66 @@
+=== 1. DATABASE SCHEMA CHECK ===
+                                             Table "public.documents"
+       Column        |            Type             | Collation | Nullable |                Default                
+---------------------+-----------------------------+-----------+----------+---------------------------------------
+ id                  | integer                     |           | not null | nextval('documents_id_seq'::regclass)
+ document_id         | character varying(100)      |           | not null | 
+ shipment_id         | character varying(100)      |           |          | 
+ document_type       | character varying(100)      |           |          | 
+ document_name       | character varying(255)      |           |          | 
+ file_hash           | character varying(255)      |           |          | 
+ ipfs_hash           | character varying(255)      |           |          | 
+ uploaded_by         | integer                     |           |          | 
+ uploaded_at         | timestamp without time zone |           |          | CURRENT_TIMESTAMP
+ status              | character varying(50)       |           |          | 'pending'::character varying
+ verified            | boolean                     |           |          | false
+ contract_id         | character varying(100)      |           |          | 
+ exporter_id         | character varying(50)       |           |          | 
+ file_name           | character varying(255)      |           |          | 
+ ipfs_cid            | character varying(100)      |           |          | 
+ blockchain_tx_id    | character varying(255)      |           |          | 
+ verification_status | character varying(50)       |           |          | 
+ verified_by         | character varying(100)      |           |          | 
+ verified_at         | timestamp without time zone |           |          | 
+ mime_type           | character varying(100)      |           |          | 
+ file_size           | bigint                      |           |          | 
+ file_path           | character varying(500)      |           |          | 
+ description         | text                        |           |          | 
+ entity_id           | character varying(100)      |           |          | 
+Indexes:
+    "documents_pkey" PRIMARY KEY, btree (id)
+    "documents_document_id_key" UNIQUE CONSTRAINT, btree (document_id)
+    "idx_documents_contract" btree (contract_id)
+    "idx_documents_contract_id" btree (contract_id)
+    "idx_documents_exporter" btree (exporter_id)
+    "idx_documents_shipment" btree (shipment_id)
+    "idx_documents_shipment_id" btree (shipment_id)
+    "idx_documents_status" btree (status)
+    "idx_documents_type" btree (document_type)
+
+
+=== 2. CONTRACT EXISTS? ===
+         contract_id         |   status   | exporter_id |         created_at         
+-----------------------------+------------+-------------+----------------------------
+ CONTRACT_READY_FOR_APPROVAL | REGISTERED | exp001      | 2026-10-16 12:55:12.398909
+(1 row)
+
+
+=== 3. DOCUMENTS FOR THIS CONTRACT ===
+ document_id | contract_id | document_type | file_name | status | uploaded_at 
+-------------+-------------+---------------+-----------+--------+-------------
+(0 rows)
+
+
+=== 4. ALL DOCUMENTS IN SYSTEM ===
+ count | contract_ids 
+-------+--------------
+     0 | 
+(1 row)
+
+
+=== 5. FILE SYSTEM CHECK ===
+-rw-r--r-- 1 guda guda 938 Oct 16 16:47 /home/guda/GoCBC/api/uploads/documents/Sample_CERTIFICATE_OF_ORIGIN.pdf
+-rw-r--r-- 1 guda guda 770 Oct 16 16:46 /home/guda/GoCBC/api/uploads/documents/Sample_CONTRACT_SIGNED.pdf
+-rw-r--r-- 1 guda guda 915 Oct 16 16:47 /home/guda/GoCBC/api/uploads/documents/Sample_EXPORT_PERMIT.pdf
+-rw-r--r-- 1 guda guda 929 Oct 16 16:47 /home/guda/GoCBC/api/uploads/documents/Sample_QUALITY_CERTIFICATE.pdf
+-rw-r--r-- 1 guda guda 872 Oct 16 16:42 /home/guda/GoCBC/api/uploads/documents/Sample_Sales_Contract.pdf

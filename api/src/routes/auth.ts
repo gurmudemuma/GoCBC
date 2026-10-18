@@ -34,7 +34,8 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Find user in database
     const user = await db.get(
-      `SELECT id, username, email, password_hash, role, organization, status
+      `SELECT id, username, email, password_hash, role, organization, status, 
+              exporter_id, ecta_license, phone, full_name
        FROM users WHERE username = $1`,
       [username]
     );
@@ -223,12 +224,12 @@ router.post('/login', async (req: Request, res: Response) => {
       id: user.id,
       username: user.username,
       email: user.email,
-      fullName: user.username, // Use username as fallback
+      fullName: user.full_name || user.username, // Use full_name if available
       role: user.role,
       organization: user.organization,
-      exporterId: null,
-      ectaLicense: null,
-      phone: null,
+      exporterId: user.exporter_id || null,
+      ectaLicense: user.ecta_license || null,
+      phone: user.phone || null,
       status: user.status,
       permissions,
       lastLogin: new Date().toISOString(),

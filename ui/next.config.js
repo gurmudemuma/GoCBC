@@ -14,9 +14,6 @@ const nextConfig = {
     // your project has ESLint errors.
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    serverActions: true,
-  },
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1',
     CECBS_API_URL: process.env.CECBS_API_URL || 'http://localhost:3001/api/v1',

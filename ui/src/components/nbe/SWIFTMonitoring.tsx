@@ -491,7 +491,7 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
       >
         {selectedMessage && (
           <>
-            <Alert
+            <AntAlert
               message="High-Value Transaction Review"
               description={`This transaction exceeds $1,000,000 and requires NBE approval before processing.`}
               type="warning"

@@ -30,9 +30,9 @@ const DiscrepancyReportingDialog: React.FC<DiscrepancyReportingDialogProps> = ({
       setSubmitting(true);
       const response = await apiFetch(`/api/v1/banking/lc/${form.lcId}/discrepancy/report`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
-      if (result.success) { showSuccess('Discrepancy reported successfully'); onSuccess(); onClose(); }
-      else showError(result.error || 'Failed');
-    } catch (error) { showError('Failed to report discrepancy'); } finally { setSubmitting(false); }
+      if (result.success) { showSuccess('Success', 'Discrepancy reported successfully'); onSuccess(); onClose(); }
+      else showError('Error', result.error || 'Failed');
+    } catch (error) { showError('Error', 'Failed to report discrepancy'); } finally { setSubmitting(false); }
   };
 
   return (

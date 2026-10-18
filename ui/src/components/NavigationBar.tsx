@@ -15,20 +15,15 @@ import {
   Divider,
   ListItemIcon,
   ListItemText,
-  Badge,
   Breadcrumbs,
   Link,
   Tooltip,
-  Button,
   useScrollTrigger,
-  Slide,
 } from '@mui/material';
 import {
   AccountCircle,
   Logout,
   Settings,
-  Notifications,
-  Coffee,
   Dashboard,
   Help,
   Home,
@@ -46,19 +41,6 @@ import { useRouter } from 'next/router';
 import NextLink from 'next/link';
 import NotificationCenter from '@/components/NotificationCenter';
 import OrganizationLogo from '@/components/OrganizationLogo';
-
-interface HideOnScrollProps {
-  children: React.ReactElement;
-}
-
-function HideOnScroll({ children }: HideOnScrollProps) {
-  const trigger = useScrollTrigger();
-  return (
-    <Slide appear={false} direction="down" in={!trigger}>
-      {children}
-    </Slide>
-  );
-}
 
 const NavigationBar: React.FC = () => {
   const { user, logout } = useAuth();
@@ -137,38 +119,6 @@ const NavigationBar: React.FC = () => {
 
     return crumbs;
   }, [router.pathname]);
-
-  // Quick actions based on user role
-  const quickActions = useMemo(() => {
-    const actions: Record<string, Array<{ label: string; icon: React.ReactNode; path: string }>> = {
-      ECTA: [
-        { label: 'Register Exporter', icon: <Add />, path: '/portals/ecta?action=register' },
-        { label: 'Quality Report', icon: <Assessment />, path: '/portals/ecta?action=quality' },
-      ],
-      ECX: [
-        { label: 'New Lot', icon: <Add />, path: '/portals/ecx?action=lot' },
-        { label: 'Market Data', icon: <Assessment />, path: '/portals/ecx?action=market' },
-      ],
-      NBE: [
-        { label: 'Approve Contract', icon: <VerifiedUser />, path: '/portals/nbe?action=approve' },
-        { label: 'Forex Report', icon: <Assessment />, path: '/portals/nbe?action=forex' },
-      ],
-      BANKS: [
-        { label: 'Process Permit', icon: <Description />, path: '/portals/banks?action=permit' },
-        { label: 'Transactions', icon: <Assessment />, path: '/portals/banks?action=transactions' },
-      ],
-      CUSTOMS: [
-        { label: 'Clear Shipment', icon: <VerifiedUser />, path: '/portals/customs?action=clear' },
-        { label: 'EUDR Verify', icon: <Assessment />, path: '/portals/customs?action=eudr' },
-      ],
-      SHIPPING: [
-        { label: 'Track Shipment', icon: <LocalShipping />, path: '/portals/shipping?action=track' },
-        { label: 'Logistics', icon: <Assessment />, path: '/portals/shipping?action=logistics' },
-      ],
-    };
-
-    return actions[user?.role || ''] || [];
-  }, [user?.role]);
 
   if (!user) return null;
 

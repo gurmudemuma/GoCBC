@@ -96,7 +96,7 @@ const RepatriationCompliancePanel: React.FC<RepatriationCompliancePanelProps> = 
   // Send compliance notice
   const handleSendNotice = async () => {
     if (selectedIds.length === 0) {
-      showError('Please select at least one repatriation');
+      showError('Selection Required', 'Please select at least one repatriation');
       return;
     }
 
@@ -118,12 +118,12 @@ const RepatriationCompliancePanel: React.FC<RepatriationCompliancePanelProps> = 
 
       await Promise.all(promises);
       
-      showSuccess(`Compliance notice sent to ${selectedIds.length} exporter(s)`);
+      showSuccess('Success', `Compliance notice sent to ${selectedIds.length} exporter(s)`);
       setSelectedIds([]);
       onRefresh();
     } catch (error) {
       console.error('[COMPLIANCE] Error sending notices:', error);
-      showError('Failed to send compliance notices');
+      showError('Error', 'Failed to send compliance notices');
     } finally {
       setSending(false);
     }
@@ -150,7 +150,7 @@ const RepatriationCompliancePanel: React.FC<RepatriationCompliancePanelProps> = 
     a.href = url;
     a.download = `overdue_repatriations_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
-    showSuccess('Report downloaded');
+    showSuccess('Success', 'Report downloaded');
   };
 
   // Categorize by severity

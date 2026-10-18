@@ -5,7 +5,7 @@
  * Loads LCs, forex allocations, SWIFT messages, payments, settlements
  */
 
-import { apiFetch } from '../../../../utils/api';
+import { apiFetch } from '../../../../config/api.config';
 
 // ============================================================================
 // Type Definitions

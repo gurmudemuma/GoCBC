@@ -225,8 +225,8 @@ class ApprovalRulesService {
         };
       }
 
-      // Check role requirements
-      if (!requirements.requiredRoles.includes(userRole)) {
+      // Check role requirements - ADMIN role is always authorized
+      if (userRole !== 'ADMIN' && !requirements.requiredRoles.includes(userRole)) {
         return {
           canApprove: false,
           reason: `Your role (${userRole}) is not authorized to approve this document type. Required roles: ${requirements.requiredRoles.join(', ')}`,
@@ -238,8 +238,8 @@ class ApprovalRulesService {
         };
       }
 
-      // For sequential approval, check if it's this role's turn
-      if (requirements.approvalOrder === 'sequential') {
+      // For sequential approval, check if it's this role's turn - ADMIN role can jump in at any time
+      if (userRole !== 'ADMIN' && requirements.approvalOrder === 'sequential') {
         const currentApprovalLevel = workflow.currentApprovals;
         const expectedRole = requirements.requiredRoles[currentApprovalLevel];
         

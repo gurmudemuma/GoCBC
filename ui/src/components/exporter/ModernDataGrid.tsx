@@ -24,15 +24,21 @@ export const ModernDataGrid: React.FC<ModernDataGridProps> = ({
   checkboxSelection = false,
   autoHeight = true,
 }) => {
+  const [paginationModel, setPaginationModel] = React.useState({
+    pageSize: pageSize,
+    page: 0,
+  });
+
   return (
     <Box sx={{ width: '100%' }}>
       <DataGrid
         rows={rows}
         columns={columns}
-        pageSize={pageSize}
-        rowsPerPageOptions={[5, 10, 25, 50]}
+        paginationModel={paginationModel}
+        onPaginationModelChange={setPaginationModel}
+        pageSizeOptions={[5, 10, 25, 50]}
         loading={loading}
-        disableSelectionOnClick
+        disableRowSelectionOnClick
         checkboxSelection={checkboxSelection}
         autoHeight={autoHeight}
         onRowClick={onRowClick}

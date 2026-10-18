@@ -431,10 +431,10 @@ services:
     build:
       context: ./chaincodes/coffee
       dockerfile: Dockerfile
-    image: coffee-chaincode:1.9-tls
+    image: coffee-chaincode:1.10
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_1.9_tls:2b094adc2b1d5c848eacf297c7ab1c1bcd2af67cb7f763f8f11c8e303a951db4
+      - CORE_CHAINCODE_ID_NAME=coffee_1.10:56565e9686323956f8d87ecd7acc58b3d58e6d6ae91fd45ec941cf0ec20ab95d
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
     ports:
       - "9999:9999"

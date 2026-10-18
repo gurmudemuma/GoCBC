@@ -9,6 +9,7 @@ import { authMiddleware } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { dedupeById, isValidContract } from '../utils/dataFilters';
 import { statusManager } from '../utils/statusManager';
+import { resolveDocumentPath } from '../utils/fileUtils';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -351,7 +352,7 @@ router.get('/', async (req, res) => {
         c.status as contract_status, c.eudr_required, c.created_at as registered_at, c.updated_at as approved_at,
         c.buyer_id as buyer_name
       FROM contracts c
-      WHERE c.status IN ('approved', 'registered', 'pending')
+      WHERE LOWER(c.status) IN ('approved', 'registered', 'pending')
       ORDER BY c.created_at DESC
     `).catch(err => {
       logger.error('PostgreSQL query error:', err);
@@ -441,42 +442,9 @@ router.get('/', async (req, res) => {
         terms: contract?.terms || contract?.Terms || '',
       }));
 
-      // ✅ ENRICH: Sync buyer names from PostgreSQL to blockchain contracts
-      try {
-        const { DatabaseService } = await import('../services/databaseService');
-        const db = DatabaseService.getInstance();
-        
-        const uniqueBuyerIds = [...new Set(normalizedContracts.map((c: any) => c.buyerId).filter(Boolean))];
-        if (uniqueBuyerIds.length > 0) {
-          const placeholders = uniqueBuyerIds.map((_, i) => `$${i + 1}`).join(',');
-          const buyersResult = await db.all(
-            `SELECT buyer_id, company_name, country FROM buyers WHERE buyer_id IN (${placeholders})`,
-            uniqueBuyerIds
-          );
-          
-          const buyersMap = new Map(buyersResult.map((b: any) => [b.buyer_id, {
-            name: b.company_name,
-            country: b.country
-          }]));
-          
-          // Enrich blockchain contracts with PostgreSQL buyer data
-          normalizedContracts.forEach((contract: any) => {
-            const buyerData = buyersMap.get(contract.buyerId);
-            if (buyerData) {
-              // PostgreSQL is source of truth for buyer names
-              contract.buyerName = buyerData.name;
-              if (!contract.buyerCountry) {
-                contract.buyerCountry = buyerData.country;
-              }
-            }
-          });
-          
-          logger.info(`✅ Enriched ${normalizedContracts.length} blockchain contracts with buyer names from ${buyersMap.size} PostgreSQL buyers`);
-        }
-      } catch (buyerError) {
-        logger.warn('⚠️  Failed to enrich with buyer names from PostgreSQL:', buyerError);
-        // Continue without buyer enrichment
-      }
+      // Enrichment block removed as 'buyers' table does not exist
+      logger.info(`✅ Processing ${normalizedContracts.length} contracts for display`);
+
 
       // Debug: Log first normalized contract to see structure
       if (normalizedContracts.length > 0) {
@@ -484,27 +452,24 @@ router.get('/', async (req, res) => {
       }
       
       // Filter valid contracts
-      const invalidContracts = normalizedContracts.filter((c: any) => !isValidContract(c));
-      if (invalidContracts.length > 0) {
-        logger.warn(`⚠️  Filtered out ${invalidContracts.length} invalid contracts`);
-        invalidContracts.forEach((c: any) => {
-          const validations = {
-            contractId: !!c.contractId && typeof c.contractId === 'string' && c.contractId.trim().length > 0,
-            exporterId: !!c.exporterId && typeof c.exporterId === 'string' && c.exporterId.trim().length > 0,
-            buyerId: !!c.buyerId && typeof c.buyerId === 'string' && c.buyerId.trim().length > 0,
-            buyerCountry: !!c.buyerCountry && typeof c.buyerCountry === 'string' && c.buyerCountry.trim().length > 0,
-            coffeeType: !!c.coffeeType && typeof c.coffeeType === 'string' && c.coffeeType.trim().length > 0,
-            quantity: typeof c.quantity === 'number' && !Number.isNaN(c.quantity) && c.quantity > 0,
-            pricePerKg: typeof c.pricePerKg === 'number' && !Number.isNaN(c.pricePerKg) && c.pricePerKg > 0,
-            currency: !!c.currency && typeof c.currency === 'string' && c.currency.trim().length > 0,
-          };
-          const failedFields = Object.entries(validations).filter(([k, v]) => !v).map(([k]) => k);
-          logger.warn(`  Invalid contract ${c.contractId}: FAILED fields: ${failedFields.join(', ')}`);
-        });
-      }
-      
-      const validContracts = dedupeById(normalizedContracts.filter(isValidContract), (contract: any) => contract.contractId);
-      logger.info(`✅ Valid contracts after filtering: ${validContracts.length}/${normalizedContracts.length}`);
+      const allCount = normalizedContracts.length;
+      const validContracts = dedupeById(normalizedContracts.filter(c => {
+        const valid = isValidContract(c);
+        if (!valid) {
+          logger.warn(`Contract ${c.contractId} failed validation: ${JSON.stringify({
+            contractId: c.contractId,
+            exporterId: c.exporterId,
+            buyerId: c.buyerId,
+            buyerCountry: c.buyerCountry,
+            coffeeType: c.coffeeType,
+            quantity: c.quantity,
+            pricePerKg: c.pricePerKg,
+            currency: c.currency
+          })}`);
+        }
+        return valid;
+      }), (contract: any) => contract.contractId);
+      logger.info(`✅ Valid contracts after filtering: ${validContracts.length}/${allCount}`);
       const { exporterID, status, eudrRequired, limit = 50, offset = 0 } = req.query;
 
       // Apply filters
@@ -785,6 +750,22 @@ router.get('/:contractID',
       }
 
       if (blockchainData) {
+        // ✅ FETCH LINKED DOCUMENTS
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          const documents = await db.all(
+            'SELECT document_id, document_type, file_name, status, verification_status FROM documents WHERE contract_id = $1',
+            [contractID]
+          );
+          (blockchainData as any).documents = documents || [];
+        } catch (docError) {
+          logger.warn(`Failed to fetch documents for contract ${contractID}:`, docError);
+          if (!(blockchainData as any).documents) {
+            (blockchainData as any).documents = [];
+          }
+        }
+
         res.json({
           success: true,
           data: blockchainData,
@@ -909,8 +890,49 @@ router.post('/:contractID/approve',
         });
       }
 
-      // ✅ DOCUMENT VERIFICATION: TEMPORARILY DISABLED FOR TESTING
-      logger.info(`Contract ${contractID}: Skipping document check for testing`);
+      // ✅ DOCUMENT VERIFICATION: Ensure required documents are present and signed
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      const requiredDocs = ['CONTRACT_SIGNED', 'PROFORMA_INVOICE'];
+      const uploadedDocs = await db.all(
+        `SELECT document_type, verification_status, status 
+         FROM documents 
+         WHERE entity_id = $1 AND entity_type = 'CONTRACT' AND status = 'active'`,
+        [contractID]
+      );
+      
+      const uploadedTypes = uploadedDocs.map(d => d.document_type);
+      const missingDocs = requiredDocs.filter(type => !uploadedTypes.includes(type));
+      
+      if (missingDocs.length > 0) {
+        logger.warn(`Contract ${contractID} approval blocked: Missing required documents: ${missingDocs.join(', ')}`);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_DOCUMENTS',
+            message: `Required documents missing: ${missingDocs.join(', ')}. Please upload and sign these documents first.`,
+            details: missingDocs
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      // Check if CONTRACT_SIGNED is actually signed by the exporter
+      const contractSignedDoc = uploadedDocs.find(d => d.document_type === 'CONTRACT_SIGNED');
+      if (contractSignedDoc && contractSignedDoc.verification_status !== 'signed' && contractSignedDoc.verification_status !== 'verified') {
+        logger.warn(`Contract ${contractID} approval blocked: CONTRACT_SIGNED document not signed by exporter`);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_NOT_SIGNED',
+            message: 'The Sales Contract document must be signed by the exporter before ECTA approval.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      logger.info(`✅ Document verification passed for contract ${contractID}`);
 
       // Log which organization is approving
       logger.info(`[${user.org}] ECTA approving contract for export compliance: ${contractID}`, {
@@ -976,25 +998,35 @@ router.post('/:contractID/approve',
             // ✅ PARALLEL PROCESSING: Sign all documents simultaneously for speed
             const signingPromises = contractDocuments.map(async (doc) => {
               try {
-                const signatureId = `SIG-${doc.document_id}-${user.org || 'ECTA'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const signatureId = `SIG-${doc.document_id}-${fabricService.getMspFromRole(user.role)}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                 const timestamp = new Date().toISOString();
                 
-                // Add visual signature stamp to PDF (if applicable)
+                // Resolve physical file path for visual signature
+                const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
                 const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
                 let visualSignatureAdded = false;
                 
-                if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+                if (isPDF && resolvedPath) {
                   try {
-                    await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+                    // Get current signature count for positioning
+                    const sigCountResult = await db.get(
+                      'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+                      [doc.document_id]
+                    );
+                    const positionIndex = parseInt(sigCountResult?.count || '0');
+
+                    await DocumentSignatureService.addVisualSignatureToPDF(resolvedPath, {
                       signer: user.username || user.sub || 'ECTA Officer',
-                      organization: user.org || 'ECTAMSP',
+                      organization: fabricService.getMspFromRole(user.role),
                       timestamp,
                       signatureType: 'APPROVE',
                       role: user.role || 'ECTA',
                       transactionId: signatureId,
-                    });
+                      documentId: doc.document_id,
+                      documentType: doc.document_type
+                    }, positionIndex);
                     visualSignatureAdded = true;
-                    logger.info(`✅ Visual signature added to: ${doc.document_id}`);
+                    logger.info(`✅ Visual signature added to: ${doc.document_id} at position ${positionIndex}`);
                   } catch (pdfError) {
                     logger.warn(`⚠️  Failed to add visual signature to ${doc.document_id}:`, pdfError);
                   }
@@ -1010,7 +1042,7 @@ router.post('/:contractID/approve',
                     signatureId,
                     doc.document_id,
                     user.username || user.sub,
-                    user.org || 'ECTAMSP',
+                    fabricService.getMspFromRole(user.role),
                     'APPROVE',
                     user.sub || null, // X.509 certificate ID
                     `Contract ${contractID} approved by ECTA for export compliance`,

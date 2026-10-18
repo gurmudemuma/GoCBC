@@ -1101,7 +1101,7 @@ const NBEPortal: React.FC = () => {
               // Breakdown - Show by category/type
               { icon: <Category />, label: 'By Status', value: `${Math.round((allContracts.filter(c => c.contractStatus === 'APPROVED').length / (allContracts.length || 1)) * 100)}% Approved`, color: '#4caf50' },
               { icon: <AttachMoney />, label: 'Avg LC Amount', value: `$${(forexAllocations.length > 0 ? forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) / forexAllocations.length / 1000 : 0).toFixed(0)}K`, color: '#2196f3' },
-              { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => c.transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
+              { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => (c as any).transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
               { icon: <TrendingUp />, label: 'Top Destination', value: 'Germany', color: '#1976d2' },
             ]
           ) : tabValue === 6 ? [

@@ -318,7 +318,7 @@ const ECTAPortal: React.FC = () => {
           
           if (result.success && Array.isArray(result.data)) {
             // Map the documents to the expected format
-            const docs = result.data.map((doc: any) => ({
+            let docs = result.data.map((doc: any) => ({
               document_id: doc.document_id,
               documentId: doc.document_id,
               id: doc.document_id,
@@ -338,6 +338,30 @@ const ECTAPortal: React.FC = () => {
               uploadedBy: doc.uploaded_by,
               status: doc.status || 'active'
             }));
+            
+            // 🎯 ROLE-BASED DOCUMENT FILTERING
+            const userRole = user?.role || '';
+            const username = user?.username || '';
+            
+            // ECTA_SUPERVISOR: Only show ECTA quality documents (not CONTRACT_SIGNED)
+            // They sign AFTER inspector, so they only need to see the 3 ECTA docs
+            if (username === 'ecta_supervisor') {
+              docs = docs.filter((doc: any) => 
+                doc.document_type === 'QUALITY_CERTIFICATE' ||
+                doc.document_type === 'CERTIFICATE_OF_ORIGIN' ||
+                doc.document_type === 'EXPORT_PERMIT'
+              );
+              console.log(`[ECTA] 👔 Supervisor filtered to ${docs.length} ECTA quality documents (removed CONTRACT_SIGNED)`);
+            }
+            // ECTA_INSPECTOR: Show all documents for initial inspection/signature
+            else if (username === 'ecta_inspector') {
+              console.log(`[ECTA] 🔍 Inspector sees all ${docs.length} documents for initial inspection`);
+            }
+            // ADMIN or other ECTA users: Show all documents
+            else {
+              console.log(`[ECTA] 👤 ${username} (${userRole}) sees all ${docs.length} documents`);
+            }
+            
             setContractDocs(docs);
             console.log('[ECTA] Fetched', docs.length, 'documents for contract', contractId);
           } else {
@@ -420,6 +444,37 @@ const ECTAPortal: React.FC = () => {
   
   const visibleTabs = getRoleBasedTabs();
 
+  // 🎯 ROLE-BASED FILTERING: Show only items that need user's action
+  const filterContractsForRole = (contracts: any[]) => {
+    const userRole = user?.role || '';
+    const username = user?.username || '';
+    
+    console.log(`[ECTA] 🎯 Filtering contracts for role: ${userRole}, user: ${username}`);
+    
+    // ECTA_SUPERVISOR: Only show contracts with inspector-signed documents (waiting for supervisor)
+    if (userRole === 'ECTA_SUPERVISOR' || username.includes('supervisor')) {
+      // For now, show REGISTERED contracts (those needing signatures)
+      const supervisorContracts = contracts.filter(c => 
+        c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED'
+      );
+      console.log(`[ECTA] 👔 Supervisor sees ${supervisorContracts.length} contracts needing signature`);
+      return supervisorContracts;
+    }
+    
+    // ECTA_INSPECTOR: Only show contracts needing initial inspection/signature
+    if (userRole === 'ECTA_INSPECTOR' || username.includes('inspector')) {
+      const inspectorContracts = contracts.filter(c => 
+        c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED'
+      );
+      console.log(`[ECTA] 🔍 Inspector sees ${inspectorContracts.length} contracts needing inspection`);
+      return inspectorContracts;
+    }
+    
+    // ADMIN/ECTA: See all contracts
+    console.log(`[ECTA] 👤 ${userRole} sees all ${contracts.length} contracts`);
+    return contracts;
+  };
+
   const loadData = async () => {
     console.log('[ECTA] ⚡ Starting PARALLEL data loading (zero waits)...');
     console.time('[ECTA] Total load time');
@@ -466,13 +521,19 @@ const ECTAPortal: React.FC = () => {
         setApprovedApplications([]);
       });
     
-    // 3️⃣ Contracts - Load independently
+    // 3️⃣ Contracts - Load independently with role-based filtering
     api.getContracts()
       .then(contractsRes => {
         if (contractsRes.success && contractsRes.data) {
           console.log(`[ECTA] ✅ Contracts loaded: ${contractsRes.data.length} items (${performance.now().toFixed(0)}ms)`);
-          setAllContracts(contractsRes.data);
-          setContracts(contractsRes.data);
+          
+          // 🎯 Filter contracts based on user role
+          const filteredContracts = filterContractsForRole(contractsRes.data);
+          
+          setAllContracts(contractsRes.data); // Keep all for reference
+          setContracts(filteredContracts); // Show only relevant ones
+          
+          console.log(`[ECTA] 🎯 Displaying ${filteredContracts.length} contracts after role filtering`);
         } else {
           setContracts([]);
           setAllContracts([]);
@@ -1054,14 +1115,24 @@ The exporter can reapply once all requirements are met.`,
   const handleApproveContract = async () => {
     if (!selectedContract) return;
     
+    const contractId = selectedContract.contractID || selectedContract.contractId || selectedContract.contract_id;
+    
+    if (!contractId) {
+      console.error('Contract ID missing:', selectedContract);
+      showError('Approval Failed', 'Contract ID is missing. Please try again.');
+      return;
+    }
+    
+    console.log('[APPROVE] Approving contract:', contractId);
+    
     try {
-      const response = await api.approveContract(selectedContract.contractID || selectedContract.contractId);
+      const response = await api.approveContract(contractId);
       
       if (response.success) {
         setContractApprovalDialogOpen(false);
         showSuccess(
           'Contract Approved',
-          `Contract ${selectedContract.contractID || selectedContract.contractId} has been approved for export compliance. Banks can now issue LC and allocate forex.`
+          `Contract ${contractId} has been approved for export compliance. Banks can now issue LC and allocate forex.`
         );
         
         // Refresh contracts
@@ -1916,6 +1987,19 @@ The exporter can reapply once all requirements are met.`,
       {/* Content Panels */}
       <Box>
         <TabPanel value={tabValue} index={0}>
+          {/* 🎯 ROLE-BASED DASHBOARD ALERT */}
+          {(user?.role === 'ECTA_SUPERVISOR' || user?.username?.includes('supervisor')) && (
+            <Alert severity="info" icon={<Assignment />} sx={{ mb: 3 }}>
+              <strong>👔 Supervisor Dashboard:</strong> You see only items that need YOUR action. Contracts and documents already signed by inspectors will appear here for your approval.
+            </Alert>
+          )}
+          
+          {(user?.role === 'ECTA_INSPECTOR' || user?.username?.includes('inspector')) && (
+            <Alert severity="info" icon={<Science />} sx={{ mb: 3 }}>
+              <strong>🔍 Inspector Dashboard:</strong> You see only items that need YOUR initial inspection and signature. Sign documents first, then they go to supervisor.
+            </Alert>
+          )}
+          
           <Typography variant="h6" gutterBottom>
             Pending Exporter Applications
           </Typography>

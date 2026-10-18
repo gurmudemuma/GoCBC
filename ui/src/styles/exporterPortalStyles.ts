@@ -135,7 +135,7 @@ export const buttonStyles = {
     bgcolor: colors.brandPrimary,
     color: 'white',
     fontWeight: 600,
-    textTransform: 'none' as 'none',
+    textTransform: 'none' as const,
     px: 3,
     py: 1.5,
     borderRadius: 2,
@@ -147,7 +147,7 @@ export const buttonStyles = {
     bgcolor: colors.brandSecondary,
     color: '#1a1a1a',
     fontWeight: 600,
-    textTransform: 'none' as 'none',
+    textTransform: 'none' as const,
     px: 3,
     py: 1.5,
     borderRadius: 2,
@@ -167,16 +167,12 @@ export const statusColors = {
   REJECTED: { bgcolor: colors.brandError, color: 'white' },
 };
 
-// Chart Gradients
+// Chart Gradient IDs (define the actual JSX in your chart components)
 export const chartGradients = {
-  primary: (
-    <defs>
-      <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="5%" stopColor="#9b30b7" stopOpacity={0.3} />
-        <stop offset="95%" stopColor="#9b30b7" stopOpacity={0.05} />
-      </linearGradient>
-    </defs>
-  ),
+  primaryId: 'colorValue',
+  primaryColor: '#9b30b7',
+  primaryOpacityStart: 0.3,
+  primaryOpacityEnd: 0.05,
 };
 
 // Export legacy structure for backward compatibility
@@ -213,7 +209,7 @@ export const exporterPortalStyles = {
   chartCard: cardStyles.chart,
   dataGrid: dataGridStyles,
   loadingOverlay: {
-    position: 'fixed' as 'fixed',
+    position: 'fixed' as const,
     top: 0,
     left: 0,
     right: 0,

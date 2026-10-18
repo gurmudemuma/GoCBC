@@ -5,7 +5,7 @@
  * Loads customs declarations, inspections, clearances, border crossings
  */
 
-import { apiFetch } from '../../../../utils/api';
+import { apiFetch } from '../../../../config/api.config';
 
 // ============================================================================
 // Type Definitions

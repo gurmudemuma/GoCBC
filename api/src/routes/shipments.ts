@@ -450,15 +450,51 @@ router.get('/', async (req, res) => {
     // Import enrichment service
     const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
     
-    // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
-    const { CouchDBDirectService } = require('../services/couchDBDirectService');
-    const couchDBService = new CouchDBDirectService();
+    let shipments: any[] = [];
+    let source = 'blockchain';
     
-    logger.info(`[SHIPMENTS] 🔗 Fetching shipments from blockchain (CouchDB direct)...`);
-    
-    let shipments = await couchDBService.queryAllShipments();
-    
-    logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from blockchain (CouchDB direct)`);
+    // ✅ Try CouchDB first with error handling and PostgreSQL fallback
+    try {
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info(`[SHIPMENTS] 🔗 Fetching shipments from blockchain (CouchDB direct)...`);
+      shipments = await couchDBService.queryAllShipments();
+      logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from blockchain (CouchDB direct)`);
+    } catch (couchError: any) {
+      // ✅ FALLBACK: Use PostgreSQL if CouchDB fails
+      logger.warn(`[SHIPMENTS] CouchDB query failed, falling back to PostgreSQL: ${couchError.message}`);
+      source = 'database';
+      
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      const dbShipments = await db.all(
+        `SELECT * FROM shipments ORDER BY created_at DESC`
+      );
+      
+      shipments = dbShipments.map((s: any) => ({
+        shipmentId: s.shipment_id,
+        contractId: s.contract_id,
+        exporterId: s.exporter_id,
+        buyerId: s.buyer_id,
+        origin: s.origin,
+        destination: s.destination,
+        quantity: s.quantity,
+        grade: s.grade,
+        icoNumber: s.ico_number,
+        ecxLotNumber: s.ecx_lot_number,
+        channel: s.channel,
+        status: s.status,
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
+        eudrCompliant: s.eudr_compliant,
+        ecxLots: [],
+        documents: []
+      }));
+      
+      logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from PostgreSQL (fallback)`);
+    }
     
     // Apply filters
     if (exporterID) {

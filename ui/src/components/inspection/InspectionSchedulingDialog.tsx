@@ -135,7 +135,7 @@ const InspectionSchedulingDialog: React.FC<InspectionSchedulingDialogProps> = ({
 
   const handleSubmit = async () => {
     if (!validate()) {
-      showError('Please fill in all required fields');
+      showError('Validation Error', 'Please fill in all required fields');
       return;
     }
 
@@ -156,16 +156,16 @@ const InspectionSchedulingDialog: React.FC<InspectionSchedulingDialogProps> = ({
       const result = await response.json();
 
       if (result.success) {
-        showSuccess('Inspection scheduled successfully');
+        showSuccess('Success', 'Inspection scheduled successfully');
         onSuccess();
         onClose();
         resetForm();
       } else {
-        showError(result.error || 'Failed to schedule inspection');
+        showError('Error', result.error || 'Failed to schedule inspection');
       }
     } catch (error: any) {
       console.error('[INSPECTION] Error scheduling:', error);
-      showError('Failed to schedule inspection');
+      showError('Error', 'Failed to schedule inspection');
     } finally {
       setSubmitting(false);
     }

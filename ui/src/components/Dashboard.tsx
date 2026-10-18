@@ -25,7 +25,6 @@ import {
 } from '@mui/material';
 import {
   TrendingUp,
-  TrendingDown,
   Coffee,
   LocalShipping,
   AccountBalance,
@@ -42,12 +41,8 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/utils/api';
 import {
-  LineChart,
-  Line,
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   PieChart,
   Pie,
   Cell,

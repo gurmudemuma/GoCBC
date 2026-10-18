@@ -1,0 +1,10 @@
+         contract_id         |   status   | exporter_id |       buyer_id        | created_date | doc_count 
+-----------------------------+------------+-------------+-----------------------+--------------+-----------
+ CONTRACT_READY_FOR_APPROVAL | REGISTERED | exp001      | BEREKET_COFFEE_EXPORT | 2026-10-16   |         2
+(1 row)
+
+         contract_id         |   status   | created_date | doc_count 
+-----------------------------+------------+--------------+-----------
+ CONTRACT_READY_FOR_APPROVAL | REGISTERED | 2026-10-16   |         2
+(1 row)
+

@@ -100,7 +100,7 @@ const DiscrepancyDetailsDialog: React.FC<DiscrepancyDetailsDialogProps> = ({ ope
         {discrepancy.txId && (
           <Box sx={{ mt: 3, p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BlockchainStatusIcon verified={true} />
+              <BlockchainStatusIcon status="VERIFIED" />
               <Typography variant="caption" fontWeight={600}>Blockchain Verified</Typography>
             </Box>
             <Typography variant="caption" color="text.secondary">TX: {discrepancy.txId}</Typography>

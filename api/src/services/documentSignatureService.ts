@@ -12,6 +12,8 @@ export interface SignatureStamp {
   signatureType: string;
   role?: string;
   transactionId?: string;
+  documentId?: string;
+  documentType?: string;
 }
 
 export class DocumentSignatureService {
@@ -21,10 +23,11 @@ export class DocumentSignatureService {
    */
   public static async addVisualSignatureToPDF(
     filePath: string,
-    stamp: SignatureStamp
+    stamp: SignatureStamp,
+    positionIndex: number = 0
   ): Promise<void> {
     try {
-      logger.info(`Adding visual signature to PDF: ${filePath}`);
+      logger.info(`Adding visual signature to PDF: ${filePath} at position ${positionIndex}`);
 
       // Check if file exists
       if (!fs.existsSync(filePath)) {
@@ -41,127 +44,173 @@ export class DocumentSignatureService {
 
       // Get all pages
       const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-      const { width, height } = firstPage.getSize();
+      const lastPage = pages[pages.length - 1];
+      const { width, height } = lastPage.getSize();
 
-      // Calculate stamp position (bottom right corner)
-      const stampWidth = 200;
-      const stampHeight = 90;
-      const margin = 20;
-      const stampX = width - stampWidth - margin;
-      const stampY = margin;
+      // Professional Multi-Signer Layout Constants
+      const stampWidth = 200; 
+      const stampHeight = 100; // Increased height for document details
+      const marginX = 30; 
+      const marginY = 40;
+      const horizontalSpacing = 20;
+      const verticalSpacing = 15;
+
+      // Calculate how many stamps fit per row
+      const stampsPerRow = Math.floor((width - 2 * marginX + horizontalSpacing) / (stampWidth + horizontalSpacing));
+      
+      // Calculate grid position (starting from bottom right and moving left/up)
+      const row = Math.floor(positionIndex / stampsPerRow);
+      const col = positionIndex % stampsPerRow;
+
+      // Positioning: Right to Left, Bottom to Top
+      const stampX = width - marginX - (col + 1) * stampWidth - col * horizontalSpacing;
+      const stampY = marginY + row * stampHeight + row * verticalSpacing;
 
       // Determine stamp color based on signature type
       const stampColor = this.getStampColor(stamp.signatureType);
 
-      // ✅ Draw signature box
-      firstPage.drawRectangle({
+      // ✅ Draw signature box (Modern professional design)
+      lastPage.drawRectangle({
         x: stampX,
         y: stampY,
         width: stampWidth,
         height: stampHeight,
         borderColor: stampColor.border,
-        borderWidth: 2,
-        color: stampColor.background,
-        opacity: 0.95,
+        borderWidth: 1.5,
+        color: rgb(1, 1, 1),
+        opacity: 1.0,
+      });
+
+      // ✅ Draw professional side accent bar
+      lastPage.drawRectangle({
+        x: stampX,
+        y: stampY,
+        width: 5,
+        height: stampHeight,
+        color: stampColor.border,
       });
 
       // ✅ Draw checkmark icon
-      firstPage.drawText('✓', {
-        x: stampX + 10,
-        y: stampY + stampHeight - 35,
-        size: 32,
+      lastPage.drawText('V', {
+        x: stampX + 15,
+        y: stampY + stampHeight - 30,
+        size: 24,
         font: boldFont,
         color: stampColor.icon,
       });
 
-      // ✅ Draw signature label
-      firstPage.drawText('DIGITALLY SIGNED', {
-        x: stampX + 50,
-        y: stampY + stampHeight - 22,
-        size: 10,
+      // ✅ Draw header label
+      lastPage.drawText('CECBS DIGITAL PROOF', {
+        x: stampX + 45,
+        y: stampY + stampHeight - 18,
+        size: 8,
         font: boldFont,
         color: rgb(0, 0, 0),
       });
 
+      // ✅ NEW: Document Details (Liability requirement)
+      if (stamp.documentId || stamp.documentType) {
+        const docInfo = `${stamp.documentType || 'DOC'}: ${stamp.documentId || 'N/A'}`;
+        lastPage.drawText(this.truncate(docInfo, 35), {
+          x: stampX + 45,
+          y: stampY + stampHeight - 28,
+          size: 6,
+          font: font,
+          color: rgb(0.4, 0.4, 0.4),
+        });
+      }
+
       // ✅ Draw signature type
-      firstPage.drawText(stamp.signatureType, {
-        x: stampX + 50,
-        y: stampY + stampHeight - 34,
-        size: 8,
-        font: font,
+      lastPage.drawText(stamp.signatureType, {
+        x: stampX + 45,
+        y: stampY + stampHeight - 38,
+        size: 7.5,
+        font: boldFont,
         color: stampColor.text,
       });
 
       // ✅ Draw signer name
-      const signerText = `By: ${this.truncate(stamp.signer, 25)}`;
-      firstPage.drawText(signerText, {
-        x: stampX + 10,
-        y: stampY + stampHeight - 50,
-        size: 8,
+      const signerText = `Signer: ${this.truncate(stamp.signer, 22)}`;
+      lastPage.drawText(signerText, {
+        x: stampX + 15,
+        y: stampY + stampHeight - 55,
+        size: 7.5,
         font: font,
-        color: rgb(0, 0, 0),
+        color: rgb(0.1, 0.1, 0.1),
       });
 
       // ✅ Draw organization
-      const orgText = `Org: ${this.truncate(stamp.organization, 23)}`;
-      firstPage.drawText(orgText, {
-        x: stampX + 10,
-        y: stampY + stampHeight - 62,
-        size: 7,
-        font: font,
-        color: rgb(0.3, 0.3, 0.3),
+      const orgText = `Org: ${this.truncate(stamp.organization, 25)}`;
+      lastPage.drawText(orgText, {
+        x: stampX + 15,
+        y: stampY + stampHeight - 67,
+        size: 7.5,
+        font: boldFont,
+        color: rgb(0.2, 0.2, 0.2),
       });
 
       // ✅ Draw timestamp
-      const dateText = `Date: ${new Date(stamp.timestamp).toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      })}`;
-      firstPage.drawText(dateText, {
-        x: stampX + 10,
-        y: stampY + stampHeight - 74,
-        size: 6,
+      const dateText = new Date(stamp.timestamp).toLocaleDateString('en-US', {
+        month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+      lastPage.drawText(dateText, {
+        x: stampX + 15,
+        y: stampY + 22,
+        size: 6.5,
         font: font,
         color: rgb(0.3, 0.3, 0.3),
       });
 
-      // ✅ Draw transaction ID (if provided)
+      // ✅ Draw transaction ID
       if (stamp.transactionId) {
-        const txText = `TX: ${stamp.transactionId.substring(0, 12)}...`;
-        firstPage.drawText(txText, {
-          x: stampX + 10,
-          y: stampY + 8,
+        const txText = `TX: ${stamp.transactionId.substring(0, 18)}...`;
+        lastPage.drawText(txText, {
+          x: stampX + 15,
+          y: stampY + 10,
           size: 6,
           font: font,
           color: rgb(0.5, 0.5, 0.5),
         });
       }
 
-      // ✅ Add watermark to all pages (optional - only for approved documents)
-      if (stamp.signatureType === 'APPROVE') {
+      // ✅ Add permanent watermark to all pages for high-trust documents
+      if (['APPROVE', 'VERIFY'].includes(stamp.signatureType)) {
         for (const page of pages) {
           const { width: pageWidth, height: pageHeight } = page.getSize();
-          page.drawText('SIGNED', {
-            x: pageWidth / 2 - 80,
-            y: pageHeight / 2,
-            size: 80,
+          
+          // Bottom-left corner small confirmation stamp on every page
+          page.drawText(`Verified by CECBS Blockchain - ${stamp.organization}`, {
+            x: 20,
+            y: 10,
+            size: 6,
+            font: font,
+            color: rgb(0.7, 0.7, 0.7),
+            opacity: 0.5,
+          });
+
+          // Large diagonal watermark
+          page.drawText(stamp.signatureType === 'APPROVE' ? 'APPROVED' : 'VERIFIED', {
+            x: pageWidth / 2 - 120,
+            y: pageHeight / 2 - 50,
+            size: 70,
             font: boldFont,
             color: stampColor.watermark,
-            opacity: 0.08,
+            opacity: 0.05,
             rotate: degrees(45),
           });
         }
       }
 
-      // ✅ Save modified PDF
+      // ✅ Save modified PDF with full write synchronization
       const pdfBytes = await pdfDoc.save();
-      fs.writeFileSync(filePath, pdfBytes);
+      
+      // Use fs.writeSync to ensure the data is flushed to the physical disk immediately
+      const fd = fs.openSync(filePath, 'w');
+      fs.writeSync(fd, pdfBytes, 0, pdfBytes.length);
+      fs.fsyncSync(fd); // Force OS to flush to disk
+      fs.closeSync(fd);
 
-      logger.info(`✅ Visual signature added to PDF: ${filePath}`);
+      logger.info(`✅ Visual signature permanently flushed to disk: ${filePath}`);
     } catch (error) {
       logger.error(`Failed to add visual signature to PDF: ${filePath}`, error);
       throw error;
@@ -169,7 +218,7 @@ export class DocumentSignatureService {
   }
 
   /**
-   * Add multiple signature stamps to PDF (for documents with multiple signers)
+   * Add multiple signature stamps to PDF (for documents with multiple signers from different orgs)
    */
   public static async addMultipleSignaturesToPDF(
     filePath: string,
@@ -196,98 +245,138 @@ export class DocumentSignatureService {
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-      // Get first page
+      // Get last page for official signatures
       const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-      const { width, height } = firstPage.getSize();
+      const lastPage = pages[pages.length - 1];
+      const { width, height } = lastPage.getSize();
 
-      // Calculate stamp dimensions
+      // Professional Multi-Signer Layout Constants
       const stampWidth = 180;
-      const stampHeight = 70;
-      const margin = 15;
-      const spacing = 10;
+      const stampHeight = 85;
+      const marginX = 30;
+      const marginY = 40;
+      const horizontalSpacing = 20;
+      const verticalSpacing = 15;
 
-      // Add stamps vertically (starting from bottom)
-      let currentY = margin;
+      // Calculate how many stamps fit per row
+      const stampsPerRow = Math.floor((width - 2 * marginX + horizontalSpacing) / (stampWidth + horizontalSpacing));
 
-      for (let i = 0; i < Math.min(stamps.length, 5); i++) {
+      for (let i = 0; i < Math.min(stamps.length, 9); i++) {
         const stamp = stamps[i];
-        const stampX = width - stampWidth - margin;
+        
+        // Calculate grid position (starting from bottom right and moving left/up)
+        const row = Math.floor(i / stampsPerRow);
+        const col = i % stampsPerRow;
+
+        // Positioning: Right to Left, Bottom to Top
+        const stampX = width - marginX - (col + 1) * stampWidth - col * horizontalSpacing;
+        const stampY = marginY + row * stampHeight + row * verticalSpacing;
+
         const stampColor = this.getStampColor(stamp.signatureType);
 
-        // Draw signature box
-        firstPage.drawRectangle({
+        // ✅ Draw signature box (Modern professional design)
+        lastPage.drawRectangle({
           x: stampX,
-          y: currentY,
+          y: stampY,
           width: stampWidth,
           height: stampHeight,
           borderColor: stampColor.border,
-          borderWidth: 1.5,
-          color: stampColor.background,
-          opacity: 0.9,
+          borderWidth: 1,
+          color: rgb(1, 1, 1),
+          opacity: 1.0,
         });
 
-        // Draw checkmark
-        firstPage.drawText('✓', {
-          x: stampX + 8,
-          y: currentY + stampHeight - 25,
-          size: 20,
+        // ✅ Draw professional side accent bar
+        lastPage.drawRectangle({
+          x: stampX,
+          y: stampY,
+          width: 4,
+          height: stampHeight,
+          color: stampColor.border,
+        });
+
+        // ✅ Draw small checkmark icon
+        lastPage.drawText('V', {
+          x: stampX + 10,
+          y: stampY + stampHeight - 25,
+          size: 18,
           font: boldFont,
           color: stampColor.icon,
         });
 
-        // Draw signer info
-        firstPage.drawText(this.truncate(stamp.signer, 20), {
+        // ✅ Draw header label
+        lastPage.drawText('DIGITAL PROOF', {
           x: stampX + 35,
-          y: currentY + stampHeight - 20,
-          size: 8,
+          y: stampY + stampHeight - 15,
+          size: 7,
           font: boldFont,
           color: rgb(0, 0, 0),
         });
 
-        firstPage.drawText(stamp.organization, {
+        // ✅ Draw signature type
+        lastPage.drawText(stamp.signatureType, {
           x: stampX + 35,
-          y: currentY + stampHeight - 32,
+          y: stampY + stampHeight - 25,
           size: 7,
-          font: font,
-          color: rgb(0.4, 0.4, 0.4),
-        });
-
-        firstPage.drawText(stamp.signatureType, {
-          x: stampX + 35,
-          y: currentY + stampHeight - 44,
-          size: 7,
-          font: font,
+          font: boldFont,
           color: stampColor.text,
         });
 
+        // ✅ Draw signer name
+        lastPage.drawText(`By: ${this.truncate(stamp.signer, 22)}`, {
+          x: stampX + 10,
+          y: stampY + stampHeight - 40,
+          size: 7,
+          font: font,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+
+        // ✅ Draw organization (Prominent for multi-org tracking)
+        lastPage.drawText(`Org: ${this.truncate(stamp.organization, 25)}`, {
+          x: stampX + 10,
+          y: stampY + stampHeight - 52,
+          size: 7.5,
+          font: boldFont,
+          color: rgb(0.2, 0.2, 0.2),
+        });
+
+        // ✅ Draw date
         const dateStr = new Date(stamp.timestamp).toLocaleDateString('en-US', {
           month: 'short',
           day: '2-digit',
           year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
         });
-        firstPage.drawText(dateStr, {
-          x: stampX + 35,
-          y: currentY + stampHeight - 56,
+        lastPage.drawText(dateStr, {
+          x: stampX + 10,
+          y: stampY + 8,
           size: 6,
           font: font,
-          color: rgb(0.5, 0.5, 0.5),
+          color: rgb(0.4, 0.4, 0.4),
         });
 
-        currentY += stampHeight + spacing;
-
-        // If running out of space, stop adding more stamps
-        if (currentY + stampHeight > height - margin) {
-          logger.warn(`Only ${i + 1} of ${stamps.length} signatures fit on first page`);
-          break;
+        // If transaction ID exists, add a tiny TX reference
+        if (stamp.transactionId) {
+          lastPage.drawText(`TX: ${stamp.transactionId.substring(0, 10)}...`, {
+            x: stampX + 10,
+            y: stampY + 18,
+            size: 5,
+            font: font,
+            color: rgb(0.5, 0.5, 0.5),
+          });
         }
       }
 
-      // Save modified PDF
+      // Save modified PDF with full write synchronization
       const pdfBytes = await pdfDoc.save();
-      fs.writeFileSync(filePath, pdfBytes);
+      
+      const fd = fs.openSync(filePath, 'w');
+      fs.writeSync(fd, pdfBytes, 0, pdfBytes.length);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
 
-      logger.info(`✅ ${Math.min(stamps.length, 5)} visual signatures added to PDF`);
+      logger.info(`✅ Multi-signer layout permanently flushed to disk`);
     } catch (error) {
       logger.error(`Failed to add multiple signatures to PDF: ${filePath}`, error);
       throw error;
@@ -308,6 +397,159 @@ export class DocumentSignatureService {
       logger.warn('Remove signatures not implemented - requires original PDF backup');
     } catch (error) {
       logger.error(`Failed to remove signatures from PDF: ${filePath}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync signatures between database and PDF file.
+   * Ensures all recorded signatures are visually present on the PDF.
+   */
+  public static async syncSignatures(
+    filePath: string,
+    documentId: string,
+    documentType: string,
+    postgresDb: any
+  ): Promise<void> {
+    try {
+      logger.info(`🔍 SYNC START: Document ${documentId} at ${filePath}`);
+
+      // 1. Get all signatures from DB
+      const dbSignatures = await postgresDb.all(
+        'SELECT * FROM document_signatures WHERE document_id = $1 ORDER BY signed_at ASC',
+        [documentId]
+      );
+
+      if (!dbSignatures || dbSignatures.length === 0) {
+        logger.info(`ℹ️ SYNC SKIP: No signatures found in DB for ${documentId}`);
+        return;
+      }
+
+      logger.info(`📝 SYNC PROCESS: Found ${dbSignatures.length} signatures in DB for ${documentId}`);
+
+      // 2. Load PDF once for efficiency
+      if (!fs.existsSync(filePath)) {
+        logger.error(`❌ SYNC ERROR: File not found at ${filePath}`);
+        return;
+      }
+
+      const existingPdfBytes = fs.readFileSync(filePath);
+      const pdfDoc = await PDFDocument.load(existingPdfBytes);
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const pages = pdfDoc.getPages();
+      const lastPage = pages[pages.length - 1];
+      const { width, height } = lastPage.getSize();
+
+      // Professional Multi-Signer Layout Constants
+      const stampWidth = 200; 
+      const stampHeight = 100;
+      const marginX = 30; 
+      const marginY = 40;
+      const horizontalSpacing = 20;
+      const verticalSpacing = 15;
+      const stampsPerRow = Math.floor((width - 2 * marginX + horizontalSpacing) / (stampWidth + horizontalSpacing));
+
+      // 3. Apply all signatures in one pass
+      for (let i = 0; i < dbSignatures.length; i++) {
+        const sig = dbSignatures[i];
+        const stamp = {
+          signer: sig.signer_id,
+          organization: sig.signer_org,
+          timestamp: sig.signed_at,
+          signatureType: sig.signature_type,
+          transactionId: sig.blockchain_tx_id,
+          documentId,
+          documentType
+        };
+
+        const row = Math.floor(i / stampsPerRow);
+        const col = i % stampsPerRow;
+        const stampX = width - marginX - (col + 1) * stampWidth - col * horizontalSpacing;
+        const stampY = marginY + row * stampHeight + row * verticalSpacing;
+        const stampColor = this.getStampColor(stamp.signatureType);
+
+        logger.info(`   - Applying stamp ${i+1}/${dbSignatures.length}: ${sig.signature_type} by ${sig.signer_id}`);
+
+        // Draw signature box
+        lastPage.drawRectangle({
+          x: stampX, y: stampY, width: stampWidth, height: stampHeight,
+          borderColor: stampColor.border, borderWidth: 1.5,
+          color: rgb(1, 1, 1), opacity: 1.0,
+        });
+
+        // Side accent bar
+        lastPage.drawRectangle({
+          x: stampX, y: stampY, width: 5, height: stampHeight,
+          color: stampColor.border,
+        });
+
+        // Checkmark icon
+        lastPage.drawText('V', {
+          x: stampX + 15, y: stampY + stampHeight - 30,
+          size: 24, font: boldFont, color: stampColor.icon,
+        });
+
+        // Header
+        lastPage.drawText('CECBS DIGITAL PROOF', {
+          x: stampX + 45, y: stampY + stampHeight - 18,
+          size: 8, font: boldFont, color: rgb(0, 0, 0),
+        });
+
+        // Doc Info
+        const docInfo = `${stamp.documentType || 'DOC'}: ${stamp.documentId || 'N/A'}`;
+        lastPage.drawText(this.truncate(docInfo, 35), {
+          x: stampX + 45, y: stampY + stampHeight - 28,
+          size: 6, font: font, color: rgb(0.4, 0.4, 0.4),
+        });
+
+        // Signature type
+        lastPage.drawText(stamp.signatureType, {
+          x: stampX + 45, y: stampY + stampHeight - 38,
+          size: 7.5, font: boldFont, color: stampColor.text,
+        });
+
+        // Signer name
+        lastPage.drawText(`Signer: ${this.truncate(stamp.signer, 22)}`, {
+          x: stampX + 15, y: stampY + stampHeight - 55,
+          size: 7.5, font: font, color: rgb(0.1, 0.1, 0.1),
+        });
+
+        // Organization
+        lastPage.drawText(`Org: ${this.truncate(stamp.organization, 25)}`, {
+          x: stampX + 15, y: stampY + stampHeight - 67,
+          size: 7.5, font: boldFont, color: rgb(0.2, 0.2, 0.2),
+        });
+
+        // Timestamp
+        const dateText = new Date(stamp.timestamp).toLocaleDateString('en-US', {
+          month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        lastPage.drawText(dateText, {
+          x: stampX + 15, y: stampY + 22,
+          size: 6.5, font: font, color: rgb(0.3, 0.3, 0.3),
+        });
+
+        // Transaction ID
+        if (stamp.transactionId) {
+          const txText = `TX: ${stamp.transactionId.substring(0, 18)}...`;
+          lastPage.drawText(txText, {
+            x: stampX + 15, y: stampY + 10,
+            size: 6, font: font, color: rgb(0.5, 0.5, 0.5),
+          });
+        }
+      }
+
+      // 4. Save and flush to disk once
+      const pdfBytes = await pdfDoc.save();
+      const fd = fs.openSync(filePath, 'w');
+      fs.writeSync(fd, pdfBytes, 0, pdfBytes.length);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+
+      logger.info(`✅ SYNC COMPLETE: ${dbSignatures.length} signatures permanently embedded in ${filePath}`);
+    } catch (error) {
+      logger.error(`❌ SYNC FAILED for document ${documentId}:`, error);
       throw error;
     }
   }

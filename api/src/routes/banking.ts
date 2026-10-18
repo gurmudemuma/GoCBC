@@ -11,6 +11,7 @@ import { authMiddleware } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { dedupeById, isValidLC } from '../utils/dataFilters';
 import { body, param } from 'express-validator';
+import { resolveDocumentPath } from '../utils/fileUtils';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -361,22 +362,32 @@ router.post('/lc/:lcID/approve',
             const signatureId = `SIG-${doc.document_id}-${user.org}-${Date.now()}`;
             const timestamp = new Date().toISOString();
             
-            // Add visual signature stamp to PDF (if applicable)
+            // Resolve physical file path for visual signature
+            const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
             const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
             let visualSignatureAdded = false;
             
-            if (isPDF && doc.file_path && require('fs').existsSync(doc.file_path)) {
+            if (isPDF && resolvedPath) {
               try {
-                await DocumentSignatureService.addVisualSignatureToPDF(doc.file_path, {
+                // Get current signature count for positioning
+                const sigCountResult = await db.get(
+                  'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+                  [doc.document_id]
+                );
+                const positionIndex = parseInt(sigCountResult?.count || '0');
+
+                await DocumentSignatureService.addVisualSignatureToPDF(resolvedPath, {
                   signer: user.username || user.sub || 'Bank Officer',
                   organization: user.org || issuingBank,
                   timestamp,
                   signatureType: 'APPROVE',
                   role: user.role || 'Bank Officer',
                   transactionId: signatureId,
-                });
+                  documentId: doc.document_id,
+                  documentType: doc.document_type
+                }, positionIndex);
                 visualSignatureAdded = true;
-                logger.info(`✅ Visual signature added to LC document: ${doc.document_id}`);
+                logger.info(`✅ Visual signature added to LC document: ${doc.document_id} at position ${positionIndex}`);
               } catch (pdfError) {
                 logger.warn(`Failed to add visual signature to PDF ${doc.document_id}:`, pdfError);
               }

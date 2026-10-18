@@ -133,13 +133,13 @@ const RepatriationManagementTab: React.FC = () => {
         setRepatriations(data);
         setFilteredRepatriations(data);
         calculateStats(data);
-        showSuccess(`Loaded ${data.length} repatriation records`);
+        showSuccess('Success', `Loaded ${data.length} repatriation records`);
       } else {
-        showError(result.error || 'Failed to fetch repatriations');
+        showError('Error', result.error || 'Failed to fetch repatriations');
       }
     } catch (error: any) {
       console.error('[REPATRIATION] Error fetching data:', error);
-      showError('Failed to load repatriation data');
+      showError('Error', 'Failed to load repatriation data');
     } finally {
       setLoading(false);
     }
@@ -221,14 +221,14 @@ const RepatriationManagementTab: React.FC = () => {
       const result = await response.json();
       
       if (result.success) {
-        showSuccess('Repatriation verified successfully');
+        showSuccess('Success', 'Repatriation verified successfully');
         fetchRepatriations(); // Refresh data
       } else {
-        showError(result.error || 'Failed to verify repatriation');
+        showError('Error', result.error || 'Failed to verify repatriation');
       }
     } catch (error: any) {
       console.error('[REPATRIATION] Error verifying:', error);
-      showError('Failed to verify repatriation');
+      showError('Error', 'Failed to verify repatriation');
     }
   };
 
@@ -245,14 +245,14 @@ const RepatriationManagementTab: React.FC = () => {
       const result = await response.json();
       
       if (result.success) {
-        showSuccess('Repatriation marked as compliant');
+        showSuccess('Success', 'Repatriation marked as compliant');
         fetchRepatriations();
       } else {
-        showError(result.error || 'Failed to mark compliant');
+        showError('Error', result.error || 'Failed to mark compliant');
       }
     } catch (error: any) {
       console.error('[REPATRIATION] Error marking compliant:', error);
-      showError('Failed to mark compliant');
+      showError('Error', 'Failed to mark compliant');
     }
   };
 
@@ -277,7 +277,7 @@ const RepatriationManagementTab: React.FC = () => {
     a.href = url;
     a.download = `repatriations_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
-    showSuccess('Export downloaded');
+    showSuccess('Success', 'Export downloaded');
   };
 
   // Status chip renderer
@@ -297,7 +297,7 @@ const RepatriationManagementTab: React.FC = () => {
       <Chip
         label={config.label}
         size="small"
-        icon={config.icon}
+        icon={config.icon as React.ReactElement}
         sx={{
           backgroundColor: config.color,
           color: 'white',
@@ -319,7 +319,7 @@ const RepatriationManagementTab: React.FC = () => {
           <Typography variant="body2" fontWeight={600}>
             {params.value}
           </Typography>
-          {params.row.txId && <BlockchainStatusIcon verified={true} size="small" />}
+          {params.row.txId && <BlockchainStatusIcon status="VERIFIED" size="small" />}
         </Box>
       ),
     },
@@ -522,13 +522,13 @@ const RepatriationManagementTab: React.FC = () => {
           columns={columns}
           getRowId={(row) => row.repatriationId}
           loading={loading}
-          pagination
-          page={page}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-          rowsPerPageOptions={[5, 10, 25, 50]}
-          disableSelectionOnClick
+          paginationModel={{ page, pageSize }}
+          onPaginationModelChange={(model) => {
+            setPage(model.page);
+            setPageSize(model.pageSize);
+          }}
+          pageSizeOptions={[5, 10, 25, 50]}
+          disableRowSelectionOnClick
           sx={{
             '& .MuiDataGrid-columnHeaders': {
               backgroundColor: NBE_COLORS.lightBronze,
@@ -556,7 +556,9 @@ const RepatriationManagementTab: React.FC = () => {
       <RepatriationCompliancePanel
         open={compliancePanelOpen}
         onClose={() => setCompliancePanelOpen(false)}
-        overdueRepatriations={repatriations.filter(r => r.status === 'OVERDUE' || r.status === 'VIOLATION')}
+        overdueRepatriations={repatriations.filter(r => 
+          (r.status === 'OVERDUE' || r.status === 'VIOLATION') && r.daysOverdue !== undefined
+        ) as any}
         onRefresh={fetchRepatriations}
       />
     </Box>

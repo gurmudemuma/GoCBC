@@ -179,7 +179,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
 
   const handleSubmit = async () => {
     if (!validate()) {
-      showError('Please fill in all required fields');
+      showError('Validation Error', 'Please fill in all required fields');
       return;
     }
 
@@ -210,16 +210,16 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
       const result = await response.json();
 
       if (result.success) {
-        showSuccess('Repatriation initiated successfully');
+        showSuccess('Success', 'Repatriation initiated successfully');
         onSuccess();
         onClose();
         resetForm();
       } else {
-        showError(result.error || 'Failed to initiate repatriation');
+        showError('Error', result.error || 'Failed to initiate repatriation');
       }
     } catch (error: any) {
       console.error('[REPATRIATION] Error submitting:', error);
-      showError('Failed to initiate repatriation');
+      showError('Error', 'Failed to initiate repatriation');
     } finally {
       setSubmitting(false);
     }

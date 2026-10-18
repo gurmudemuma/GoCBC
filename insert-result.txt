@@ -1,0 +1,18 @@
+BEGIN
+psql:insert-documents-expert.sql:61: ERROR:  invalid input syntax for type integer: "system"
+LINE 14:   'system',
+           ^
+psql:insert-documents-expert.sql:66: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ROLLBACK
+
+=== FINAL COUNT ===
+ total_docs 
+------------
+          0
+(1 row)
+
+ contract_docs 
+---------------
+             0
+(1 row)
+

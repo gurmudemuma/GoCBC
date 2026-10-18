@@ -1,0 +1,5 @@
+    username     |       role        | organization | status 
+-----------------+-------------------+--------------+--------
+ ecta_supervisor | Quality Inspector | ECTA         | active
+(1 row)
+

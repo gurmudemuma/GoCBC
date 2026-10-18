@@ -5,7 +5,7 @@
  * Loads shipments across all lifecycle stages from clearance to delivery
  */
 
-import { apiFetch } from '../../../../utils/api';
+import { apiFetch } from '../../../../config/api.config';
 
 // ============================================================================
 // Type Definitions
