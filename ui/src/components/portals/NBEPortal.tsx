@@ -90,6 +90,7 @@ interface ForexAllocation {
   exchangeRate: number;
   officialRate: number;
   retentionRate: number;
+  retentionStatus?: string;
   transportMode?: TransportMode;
   status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED';
   requestDate: string;
@@ -171,6 +172,7 @@ const NBEPortal: React.FC = () => {
   const [deliveredShipments, setDeliveredShipments] = useState<any[]>([]);
   const [allForexAllocations, setAllForexAllocations] = useState<ForexAllocation[]>([]);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
+  const [coffeeRetentionPolicy, setCoffeeRetentionPolicy] = useState<{ retentionRate: number; surrenderRate: number } | null>(null);
   const [swiftMessages, setSwiftMessages] = useState<any[]>([]);
   const [bankingMetrics, setBankingMetrics] = useState<BankingMetrics>({
     totalExports: 0,
@@ -207,8 +209,8 @@ const NBEPortal: React.FC = () => {
 
   const [forexForm, setForexForm] = useState({
     allocatedAmount: '',
-    exchangeRate: '115.50',
-    retentionRate: '40',
+    exchangeRate: '',
+    retentionRate: '',
     nbeOfficer: '',
     nbeApprovalRef: '',
     expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -270,6 +272,7 @@ const NBEPortal: React.FC = () => {
             exchangeRate: isAllocated ? (forex.exchangeRate || 0) : 0,
             officialRate: forex.exchangeRate || 0,
             retentionRate: isAllocated ? (forex.retentionRate || 0) : 0,
+            retentionStatus: forex.retentionStatus || '',
             status: status,
             requestDate: forex.requestDate || forex.createdAt || new Date().toISOString(),
             approvalDate: forex.allocationDate || null,
@@ -301,9 +304,9 @@ const NBEPortal: React.FC = () => {
         if (ratesRes.success && ratesRes.data && Array.isArray(ratesRes.data)) {
           setExchangeRates(ratesRes.data.map((r: any) => ({
             ...r,
-            status: (r.status === 'ACTIVE' || r.status === 'INACTIVE' || r.status === 'SUPERSEDED') 
-              ? r.status 
-              : 'ACTIVE' // Default to ACTIVE if status is invalid
+            status: (r.status === 'ACTIVE' || r.status === 'INACTIVE' || r.status === 'SUPERSEDED')
+              ? r.status
+              : 'INACTIVE'
           })));
           console.log(`Loaded ${ratesRes.data.length} exchange rates from API`);
         } else {
@@ -313,6 +316,21 @@ const NBEPortal: React.FC = () => {
       } catch (error) {
         console.warn('Could not load exchange rates:', error);
         setExchangeRates([]);
+      }
+
+      try {
+        const policyResponse = await apiFetch('/forex/retention-policy/COFFEE', { method: 'GET' });
+        const policyResult = await policyResponse.json();
+        const retentionRate = Number(policyResult.data?.retentionRate ?? policyResult.data?.RetentionRate);
+        const surrenderRate = Number(policyResult.data?.surrenderRate ?? policyResult.data?.SurrenderRate);
+        setCoffeeRetentionPolicy(
+          policyResult.success && Number.isFinite(retentionRate) && Number.isFinite(surrenderRate)
+            ? { retentionRate, surrenderRate }
+            : null
+        );
+      } catch (error) {
+        console.warn('Could not load active COFFEE retention policy:', error);
+        setCoffeeRetentionPolicy(null);
       }
 
       // Calculate banking metrics
@@ -335,33 +353,18 @@ const NBEPortal: React.FC = () => {
           setBankingMetrics(metricsRes.data);
           console.log('Loaded banking metrics from analytics API:', metricsRes.data);
         } else {
-          // Fallback metrics
-          const fallbackMetrics: BankingMetrics = {
-            totalExports: 1250000000,
-            forexVolume: 500000000,
-            complianceRate: 96.8,
-            avgProcessingTime: 2.3
-          };
+          const fallbackMetrics: BankingMetrics = { totalExports: 0, forexVolume: 0, complianceRate: 0, avgProcessingTime: 0 };
           setBankingMetrics(fallbackMetrics);
         }
       } catch (error) {
         console.warn('Could not load banking metrics from API, using fallback:', error);
-        const fallbackMetrics: BankingMetrics = {
-          totalExports: 1250000000,
-          forexVolume: 500000000,
-          complianceRate: 96.8,
-          avgProcessingTime: 2.3
-        };
+        const fallbackMetrics: BankingMetrics = { totalExports: 0, forexVolume: 0, complianceRate: 0, avgProcessingTime: 0 };
         setBankingMetrics(fallbackMetrics);
       }
 
       // Load delivered shipments for forex repatriation tracking
       try {
-        const token = localStorage.getItem('authToken');
-        const shipmentsResponse = await apiFetch('/shipments?status=DELIVERED', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const shipmentsResult = await shipmentsResponse.json();
+        const shipmentsResult = await api.getShipments({ status: 'DELIVERED' });
         if (shipmentsResult.success && shipmentsResult.data) {
           const delivered = shipmentsResult.data.filter((s: any) => {
             const status = s.Status || s.status || s.shipmentStatus || '';
@@ -421,9 +424,7 @@ const NBEPortal: React.FC = () => {
           return logDate >= oneDayAgo;
         }).length;
         
-        const blockchainVerified = logs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = logs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         
         const organizationsInvolved = new Set(
           logs.map((log: any) => log.performed_by_org).filter(Boolean)
@@ -493,7 +494,7 @@ const NBEPortal: React.FC = () => {
         setApprovalNotification({
           open: true,
           success: true,
-          message: `Contract ${contract.contractId} approved for forex allocation. Banks can now issue LC and allocate forex per NBE policy (50% retention).`
+          message: `Contract ${contract.contractId} approved for forex allocation. Banks can now issue the LC and allocate forex under the active NBE ledger policy.`
         });
         await loadData();
       } else {
@@ -611,14 +612,14 @@ const NBEPortal: React.FC = () => {
   const handleReviewForexCompliance = async (forex: ForexAllocation) => {
     try {
       // NBE reviews forex allocation for policy compliance
-      const retentionCompliant = forex.retentionRate >= 40; // NBE policy: minimum 40% retention (updated to 50% in 2024)
+      const retentionCompliant = forex.retentionStatus === 'COMPLIED';
       const amountCompliant = forex.allocatedAmount <= forex.requestedAmount;
-      const rateCompliant = forex.exchangeRate > 0 && forex.exchangeRate <= 120; // Reasonable range check
+      const rateCompliant = forex.exchangeRate > 0 && forex.exchangeRate === forex.officialRate;
       
       const complianceIssues = [];
-      if (!retentionCompliant) complianceIssues.push(`Retention rate ${forex.retentionRate}% below NBE minimum 40%`);
+      if (!retentionCompliant) complianceIssues.push(`Retention status is ${forex.retentionStatus || 'unrecorded'}; ledger policy compliance is not confirmed`);
       if (!amountCompliant) complianceIssues.push(`Allocated amount exceeds requested amount`);
-      if (!rateCompliant) complianceIssues.push(`Exchange rate ${forex.exchangeRate} outside acceptable range`);
+      if (!rateCompliant) complianceIssues.push(`Recorded exchange rate does not match the official rate captured with this allocation`);
       
       if (complianceIssues.length > 0) {
         setApprovalNotification({
@@ -693,8 +694,8 @@ const NBEPortal: React.FC = () => {
         await loadData();
         setForexForm({
           allocatedAmount: '',
-          exchangeRate: '115.50',
-          retentionRate: '40',
+          exchangeRate: '',
+          retentionRate: '',
           nbeOfficer: '',
           nbeApprovalRef: '',
           expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -745,6 +746,12 @@ const NBEPortal: React.FC = () => {
   };
   
   const visibleTabs = getRoleBasedTabs();
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.some(tab => tab.index === tabValue)) {
+      setTabValue(visibleTabs[0].index);
+    }
+  }, [tabValue, visibleTabs]);
 
   const contractColumns: GridColDef[] = [
     { field: 'contractId', headerName: 'Contract ID', width: 150 },
@@ -1001,6 +1008,13 @@ const NBEPortal: React.FC = () => {
                 color="success"
                 onClick={(e) => {
                   e.stopPropagation();
+                  const activeRate = exchangeRates.find(rate => rate.currency === params.row.currency && rate.status === 'ACTIVE');
+                  setForexForm(prev => ({
+                    ...prev,
+                    allocatedAmount: String(params.row.requestedAmount || ''),
+                    exchangeRate: activeRate?.midRate ? String(activeRate.midRate) : '',
+                    retentionRate: coffeeRetentionPolicy ? String(coffeeRetentionPolicy.retentionRate) : '',
+                  }));
                   setSelectedForex(params.row);
                   setForexDialogOpen(true);
                 }}
@@ -1029,8 +1043,15 @@ const NBEPortal: React.FC = () => {
       {/* Compact KPI Cards - Clean design like ECX Portal */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {(() => {
-          // Get current rate from blockchain, fallback to first rate in list, then to 161.0 (current NBE rate Oct 2026)
-          const currentRate = exchangeRates.length > 0 ? exchangeRates[0].midRate : 161.0;
+          const currentRate = exchangeRates
+            .filter(rate => rate.currency === 'USD' && rate.status === 'ACTIVE')
+            .sort((a, b) => new Date(b.effectiveDate).getTime() - new Date(a.effectiveDate).getTime())[0]?.midRate;
+          const destinationCounts = allContracts.reduce((counts: Record<string, number>, contract: any) => {
+            const country = contract.buyerCountry || 'Unknown';
+            counts[country] = (counts[country] || 0) + 1;
+            return counts;
+          }, {});
+          const topDestination = Object.entries(destinationCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unavailable';
           const kpis = tabValue === 0 ? (
             // Forex Monitoring - KPIs change based on filter/sub-tab
             forexSubTab === 0 ? [
@@ -1043,7 +1064,7 @@ const NBEPortal: React.FC = () => {
               // Allocated Forex
               { icon: <CheckCircle />, label: 'Allocated', value: forexAllocations.filter(f => f.status === 'ALLOCATED').length, color: '#4caf50', onClick: () => setForexSubTab(1) },
               { icon: <AttachMoney />, label: 'Allocated Amount', value: `$${(forexAllocations.filter(f => f.status === 'ALLOCATED').reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) / 1000000).toFixed(1)}M`, color: '#4caf50' },
-              { icon: <TrendingUp />, label: 'Avg Retention', value: `${forexAllocations.filter(f => f.status === 'ALLOCATED' && f.retentionRate).length > 0 ? Math.round(forexAllocations.filter(f => f.status === 'ALLOCATED').reduce((sum, f) => sum + (f.retentionRate || 0), 0) / forexAllocations.filter(f => f.status === 'ALLOCATED').length) : 40}%`, color: '#2196f3' },
+              { icon: <TrendingUp />, label: 'Avg Retention', value: forexAllocations.filter(f => f.status === 'ALLOCATED' && f.retentionRate > 0).length > 0 ? `${Math.round(forexAllocations.filter(f => f.status === 'ALLOCATED' && f.retentionRate > 0).reduce((sum, f) => sum + f.retentionRate, 0) / forexAllocations.filter(f => f.status === 'ALLOCATED' && f.retentionRate > 0).length)}%` : 'Unavailable', color: '#2196f3' },
               { icon: <Assignment />, label: 'Back to All', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
             ] : [
               // Requested Forex
@@ -1053,10 +1074,10 @@ const NBEPortal: React.FC = () => {
               { icon: <Assignment />, label: 'Back to All', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
             ]
           ) : tabValue === 1 ? [
-            { icon: <CurrencyExchange />, label: 'Current Rate (ETB/USD)', value: currentRate.toFixed(2), color: BRAND_COLOR },
-            { icon: <TrendingUp />, label: 'Monthly Change', value: `${((currentRate - 57.0) / 57.0 * 100).toFixed(1)}%`, color: currentRate > 57 ? '#f44336' : '#4caf50' },
+            { icon: <CurrencyExchange />, label: 'Current Rate (ETB/USD)', value: currentRate ? currentRate.toFixed(2) : 'Unavailable', color: BRAND_COLOR },
+            { icon: <TrendingUp />, label: 'Active Currencies', value: new Set(exchangeRates.filter(rate => rate.status === 'ACTIVE').map(rate => rate.currency)).size, color: '#4caf50' },
             { icon: <Assessment />, label: 'Rate Updates', value: exchangeRates.length, color: '#2196f3' },
-            { icon: <CheckCircle />, label: 'Active', value: 1, color: '#4caf50' },
+            { icon: <CheckCircle />, label: 'Active Rates', value: exchangeRates.filter(rate => rate.status === 'ACTIVE').length, color: '#4caf50' },
           ] : tabValue === 2 ? (
             // SWIFT Monitoring - KPIs change dynamically based on active sub-tab
             swiftSubTab === 0 ? [
@@ -1079,10 +1100,10 @@ const NBEPortal: React.FC = () => {
               { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
             ]
           ) : tabValue === 3 ? [
-            { icon: <Gavel />, label: 'Active Policies', value: 5, color: BRAND_COLOR },
-            { icon: <CheckCircle />, label: 'Compliant', value: forexAllocations.length, color: '#4caf50' },
-            { icon: <Warning />, label: 'Review Required', value: 0, color: '#ff9800' },
-            { icon: <Assessment />, label: 'Audits', value: 3, color: '#2196f3' },
+            { icon: <Gavel />, label: 'Active Coffee Policy', value: coffeeRetentionPolicy ? 1 : 0, color: BRAND_COLOR },
+            { icon: <CheckCircle />, label: 'Retention Compliant', value: forexAllocations.filter(f => f.retentionStatus === 'COMPLIED').length, color: '#4caf50' },
+            { icon: <Warning />, label: 'Review Required', value: forexAllocations.filter(f => ['PENDING', 'NON_COMPLIANT'].includes(f.retentionStatus || '')).length, color: '#ff9800' },
+            { icon: <Assessment />, label: 'Audit Activities', value: auditStats.totalActivities, color: '#2196f3' },
           ] : tabValue === 4 ? (
             // Analytics Tab - KPIs change based on sub-tab (Overview, Trends, Breakdown)
             analyticsSubTab === 0 ? [
@@ -1093,16 +1114,16 @@ const NBEPortal: React.FC = () => {
               { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: swiftMessages.length, color: '#9c27b0' },
             ] : analyticsSubTab === 1 ? [
               // Trends - Show growth/trend metrics
-              { icon: <TrendingUp />, label: 'Monthly Growth', value: '+12.5%', color: '#4caf50' },
+              { icon: <TrendingUp />, label: 'Monthly Growth', value: 'Unavailable', color: '#4caf50' },
               { icon: <Assessment />, label: 'Avg Contract Value', value: `$${(allContracts.length > 0 ? allContracts.reduce((sum, c) => sum + (c.totalValue || 0), 0) / allContracts.length / 1000 : 0).toFixed(0)}K`, color: '#2196f3' },
               { icon: <CurrencyExchange />, label: 'Forex Utilization', value: `${forexAllocations.length > 0 ? Math.round((forexAllocations.filter(f => f.status === 'ALLOCATED').length / forexAllocations.length) * 100) : 0}%`, color: '#ff9800' },
-              { icon: <CheckCircle />, label: 'Completion Rate', value: '87%', color: '#9c27b0' },
+              { icon: <CheckCircle />, label: 'Approved Contract Rate', value: allContracts.length ? `${Math.round((allContracts.filter(c => c.contractStatus === 'APPROVED').length / allContracts.length) * 100)}%` : 'Unavailable', color: '#9c27b0' },
             ] : [
               // Breakdown - Show by category/type
               { icon: <Category />, label: 'By Status', value: `${Math.round((allContracts.filter(c => c.contractStatus === 'APPROVED').length / (allContracts.length || 1)) * 100)}% Approved`, color: '#4caf50' },
               { icon: <AttachMoney />, label: 'Avg LC Amount', value: `$${(forexAllocations.length > 0 ? forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) / forexAllocations.length / 1000 : 0).toFixed(0)}K`, color: '#2196f3' },
               { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => (c as any).transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
-              { icon: <TrendingUp />, label: 'Top Destination', value: 'Germany', color: '#1976d2' },
+              { icon: <TrendingUp />, label: 'Top Destination', value: topDestination, color: '#1976d2' },
             ]
           ) : tabValue === 6 ? [
             { icon: <Timeline />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
@@ -1112,7 +1133,7 @@ const NBEPortal: React.FC = () => {
           ] : [
             { icon: <Assessment />, label: 'Total Forex (M)', value: Math.round(stats.totalValue / 1000000), color: BRAND_COLOR },
             { icon: <TrendingUp />, label: 'Allocations', value: forexAllocations.length, color: '#4caf50' },
-            { icon: <CurrencyExchange />, label: 'Rate (ETB/USD)', value: currentRate.toFixed(2), color: '#2196f3' },
+            { icon: <CurrencyExchange />, label: 'Rate (ETB/USD)', value: currentRate ? currentRate.toFixed(2) : 'Unavailable', color: '#2196f3' },
             { icon: <FlightTakeoff />, label: 'SWIFT Messages', value: swiftMessages.length, color: '#9c27b0' },
           ];
 
@@ -1386,7 +1407,7 @@ const NBEPortal: React.FC = () => {
                     Efficiency metric
                   </Typography>
                   <Typography variant="h4" fontWeight={700} sx={{ color: CBE_GOLDEN }}>
-                    87.5%
+                      —
                   </Typography>
                 </CardContent>
               </Card>
@@ -1408,7 +1429,7 @@ const NBEPortal: React.FC = () => {
                     NBE policy
                   </Typography>
                   <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
-                    40%
+                    {coffeeRetentionPolicy ? `${coffeeRetentionPolicy.retentionRate}%` : 'Unavailable'}
                   </Typography>
                 </CardContent>
               </Card>
@@ -1436,12 +1457,12 @@ const NBEPortal: React.FC = () => {
                     Current mid-rate
                   </Typography>
                   <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
-                    {exchangeRates.find(r => r.currency === 'USD')?.midRate.toFixed(2) || '115.50'} ETB
+                    {exchangeRates.find(r => r.currency === 'USD' && r.status === 'ACTIVE')?.midRate.toFixed(2) || 'Unavailable'} ETB
                   </Typography>
                   <Box display="flex" alignItems="center" gap={0.5} mt={1}>
                     <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
                     <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
-                      +0.5%
+                      —
                     </Typography>
                   </Box>
                 </CardContent>
@@ -1464,12 +1485,12 @@ const NBEPortal: React.FC = () => {
                     Current mid-rate
                   </Typography>
                   <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
-                    {exchangeRates.find(r => r.currency === 'EUR')?.midRate.toFixed(2) || '125.75'} ETB
+                    {exchangeRates.find(r => r.currency === 'EUR' && r.status === 'ACTIVE')?.midRate.toFixed(2) || 'Unavailable'} ETB
                   </Typography>
                   <Box display="flex" alignItems="center" gap={0.5} mt={1}>
                     <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
                     <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
-                      +1.2%
+                      —
                     </Typography>
                   </Box>
                 </CardContent>
@@ -1492,12 +1513,12 @@ const NBEPortal: React.FC = () => {
                     Current mid-rate
                   </Typography>
                   <Typography variant="h4" fontWeight={700} sx={{ color: '#333' }}>
-                    {exchangeRates.find(r => r.currency === 'GBP')?.midRate.toFixed(2) || '146.00'} ETB
+                    {exchangeRates.find(r => r.currency === 'GBP' && r.status === 'ACTIVE')?.midRate.toFixed(2) || 'Unavailable'} ETB
                   </Typography>
                   <Box display="flex" alignItems="center" gap={0.5} mt={1}>
                     <TrendingUp sx={{ fontSize: 16, color: '#4caf50' }} />
                     <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 600 }}>
-                      +0.8%
+                      —
                     </Typography>
                   </Box>
                 </CardContent>
@@ -1569,6 +1590,7 @@ const NBEPortal: React.FC = () => {
             {visibleTabs.map((tab) => (
               <Tab 
                 key={tab.index}
+                value={tab.index}
                 label={
                   tab.index === 0 ? `${tab.label} (${forexAllocations.length})` :
                   tab.index === 1 ? `${tab.label} (${exchangeRates.length})` :
@@ -1700,7 +1722,7 @@ const NBEPortal: React.FC = () => {
                     </Typography>
                   </Box>
                   <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="textSecondary">EUDR Documentation: 98.2%</Typography>
+                    <Typography variant="body2" color="textSecondary">EUDR Documentation: Unavailable</Typography>
                   </Box>
                 </CardContent>
               </Card>
@@ -2082,11 +2104,9 @@ const NBEPortal: React.FC = () => {
               <Box sx={{ mt: 3 }}>
                 <Typography variant="h6" gutterBottom>🔐 Blockchain Verification</Typography>
                 <Divider sx={{ mb: 2 }} />
-                <Alert severity="success" sx={{ mb: 2 }}>
+                <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Hyperledger Fabric Blockchain:</strong> This contract and all related documents are 
-                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
-                    are verified against X.509 certificates and blockchain transaction records.
+                    <strong>Hyperledger Fabric proof:</strong> The panel below checks committed transaction status, creator and endorser signatures, and certificate trust against configured MSP CA roots. A record is labeled verified only when those checks pass.
                   </Typography>
                 </Alert>
                 <BlockchainSignatureVerification
@@ -2110,6 +2130,11 @@ const NBEPortal: React.FC = () => {
         <DialogContent>
           {selectedForex && (
             <Box sx={{ pt: 2 }}>
+              {(!forexForm.exchangeRate || !forexForm.retentionRate) && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  An active NBE exchange rate and COFFEE retention policy are required before this allocation can be submitted.
+                </Alert>
+              )}
               <Alert severity="warning" sx={{ mb: 3, bgcolor: 'rgba(155, 48, 183, 0.1)', borderLeft: `4px solid ${CBE_PURPLE}` }}>
                 <Typography variant="body2">
                   <strong>NBE Forex Allocation:</strong> This will allocate foreign exchange for the approved export contract.
@@ -2155,8 +2180,8 @@ const NBEPortal: React.FC = () => {
                     label="Exchange Rate (ETB)"
                     type="number"
                     value={forexForm.exchangeRate}
-                    onChange={(e) => setForexForm(prev => ({ ...prev, exchangeRate: e.target.value }))}
-                    helperText="Current NBE official rate"
+                    InputProps={{ readOnly: true }}
+                    helperText="Active NBE official rate from the ledger"
                     inputProps={{ step: "0.01" }}
                   />
                 </Grid>
@@ -2166,8 +2191,8 @@ const NBEPortal: React.FC = () => {
                     label="Retention Rate (%)"
                     type="number"
                     value={forexForm.retentionRate}
-                    onChange={(e) => setForexForm(prev => ({ ...prev, retentionRate: e.target.value }))}
-                    helperText="NBE retention policy rate"
+                    InputProps={{ readOnly: true }}
+                    helperText={coffeeRetentionPolicy ? 'Active COFFEE policy from the ledger' : 'No active COFFEE policy found'}
                     inputProps={{ step: "0.1", min: "0", max: "100" }}
                   />
                 </Grid>
@@ -2286,7 +2311,7 @@ const NBEPortal: React.FC = () => {
           </Button>
           <Button 
             variant="contained"
-            disabled={!forexForm.allocatedAmount || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
+            disabled={!forexForm.allocatedAmount || !forexForm.exchangeRate || !forexForm.retentionRate || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
             sx={{ 
               bgcolor: CBE_PURPLE, 
               color: CBE_WHITE,

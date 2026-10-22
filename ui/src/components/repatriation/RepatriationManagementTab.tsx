@@ -64,7 +64,7 @@ interface Repatriation {
   fcyBankBIC: string;
   shipmentDate: string;
   repatriationDeadline: string;
-  status: 'INITIATED' | 'RECEIVED' | 'VERIFIED' | 'COMPLIANT' | 'OVERDUE' | 'VIOLATION';
+  status: 'PENDING' | 'PARTIAL' | 'READY_FOR_VERIFICATION' | 'COMPLIED' | 'WAIVED' | 'NON_COMPLIANT' | 'OVERDUE';
   initiatedDate: string;
   receivedDate?: string;
   verifiedDate?: string;
@@ -122,14 +122,34 @@ const RepatriationManagementTab: React.FC = () => {
   const fetchRepatriations = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch('/api/v1/repatriation', {
+      const response = await apiFetch('/repatriation', {
         method: 'GET',
         headers: getAuthHeaders(),
       });
       const result = await response.json();
       
       if (result.success) {
-        const data = result.data || [];
+        const data = (result.data || []).map((item: any) => {
+          const daysRemaining = Number(item.daysRemaining ?? item.DaysRemaining ?? 0);
+          const rawStatus = String(item.status ?? item.Status ?? 'PENDING').toUpperCase();
+          return {
+            ...item,
+            repatriationId: item.repatriationId || item.RepatriationID || '',
+            paymentId: item.paymentId || item.PaymentID || '',
+            contractId: item.contractId || item.ContractID || '',
+            shipmentId: item.shipmentId || item.ShipmentID || '',
+            exporterId: item.exporterId || item.ExporterID || '',
+            exportAmount: Number(item.exportAmount ?? item.ExportAmount ?? 0),
+            currency: item.currency || item.Currency || 'USD',
+            status: rawStatus,
+            initiatedDate: item.createdAt || item.CreatedAt || item.initiatedDate || '',
+            repatriationDeadline: item.complianceDeadline || item.ComplianceDeadline || item.repatriationDeadline || '',
+            daysRemaining,
+            daysOverdue: daysRemaining < 0 ? Math.abs(daysRemaining) : 0,
+            verifiedDate: item.verificationDate || item.VerificationDate,
+            complianceDate: item.complianceDate || item.ComplianceDate,
+          };
+        });
         setRepatriations(data);
         setFilteredRepatriations(data);
         calculateStats(data);
@@ -148,9 +168,9 @@ const RepatriationManagementTab: React.FC = () => {
   // Calculate statistics
   const calculateStats = (data: Repatriation[]) => {
     const total = data.length;
-    const pending = data.filter(r => r.status === 'INITIATED' || r.status === 'RECEIVED').length;
-    const compliant = data.filter(r => r.status === 'COMPLIANT' || r.status === 'VERIFIED').length;
-    const overdue = data.filter(r => r.status === 'OVERDUE' || r.status === 'VIOLATION').length;
+    const pending = data.filter(r => ['PENDING', 'PARTIAL', 'READY_FOR_VERIFICATION'].includes(r.status)).length;
+    const compliant = data.filter(r => r.status === 'COMPLIED').length;
+    const overdue = data.filter(r => r.status === 'OVERDUE' || r.status === 'NON_COMPLIANT').length;
     const complianceRate = total > 0 ? (compliant / total) * 100 : 0;
     const totalValue = data.reduce((sum, r) => sum + r.exportAmount, 0);
     
@@ -210,12 +230,15 @@ const RepatriationManagementTab: React.FC = () => {
   // Handle verify repatriation
   const handleVerify = async (repatriationId: string) => {
     try {
-      const response = await apiFetch(`/api/v1/repatriation/${repatriationId}/verify`, {
-        method: 'PUT',
+      const verificationRef = window.prompt('Enter the NBE verification reference');
+      if (!verificationRef?.trim()) return;
+      const verificationNotes = window.prompt('Verification notes (optional)') || '';
+      const response = await apiFetch(`/repatriation/${repatriationId}/verify`, {
+        method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
-          verifiedBy: 'NBE Officer', // From auth context
-          verificationNotes: 'Verified by NBE',
+          verificationRef: verificationRef.trim(),
+          verificationNotes,
         }),
       });
       const result = await response.json();
@@ -229,30 +252,6 @@ const RepatriationManagementTab: React.FC = () => {
     } catch (error: any) {
       console.error('[REPATRIATION] Error verifying:', error);
       showError('Error', 'Failed to verify repatriation');
-    }
-  };
-
-  // Handle mark compliant
-  const handleMarkCompliant = async (repatriationId: string) => {
-    try {
-      const response = await apiFetch(`/api/v1/repatriation/${repatriationId}/complete`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          completedBy: 'NBE Officer',
-        }),
-      });
-      const result = await response.json();
-      
-      if (result.success) {
-        showSuccess('Success', 'Repatriation marked as compliant');
-        fetchRepatriations();
-      } else {
-        showError('Error', result.error || 'Failed to mark compliant');
-      }
-    } catch (error: any) {
-      console.error('[REPATRIATION] Error marking compliant:', error);
-      showError('Error', 'Failed to mark compliant');
     }
   };
 
@@ -283,15 +282,16 @@ const RepatriationManagementTab: React.FC = () => {
   // Status chip renderer
   const getStatusChip = (status: string) => {
     const statusConfig: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
-      INITIATED: { color: '#1976d2', label: 'Initiated', icon: <Schedule /> },
-      RECEIVED: { color: '#0288d1', label: 'Received', icon: <AttachMoney /> },
-      VERIFIED: { color: '#0097a7', label: 'Verified', icon: <VerifiedUser /> },
-      COMPLIANT: { color: NBE_COLORS.success, label: 'Compliant', icon: <CheckCircle /> },
+      PENDING: { color: '#1976d2', label: 'Pending', icon: <Schedule /> },
+      PARTIAL: { color: '#0288d1', label: 'Partial', icon: <AttachMoney /> },
+      READY_FOR_VERIFICATION: { color: '#0097a7', label: 'Ready for NBE review', icon: <VerifiedUser /> },
+      COMPLIED: { color: NBE_COLORS.success, label: 'Compliant', icon: <CheckCircle /> },
+      WAIVED: { color: '#607d8b', label: 'Waived by NBE', icon: <VerifiedUser /> },
+      NON_COMPLIANT: { color: NBE_COLORS.error, label: 'Non-compliant', icon: <Warning /> },
       OVERDUE: { color: NBE_COLORS.warning, label: 'Overdue', icon: <Warning /> },
-      VIOLATION: { color: NBE_COLORS.error, label: 'Violation', icon: <Warning /> },
     };
     
-    const config = statusConfig[status] || statusConfig.INITIATED;
+    const config = statusConfig[status] || statusConfig.PENDING;
     
     return (
       <Chip
@@ -319,7 +319,7 @@ const RepatriationManagementTab: React.FC = () => {
           <Typography variant="body2" fontWeight={600}>
             {params.value}
           </Typography>
-          {params.row.txId && <BlockchainStatusIcon status="VERIFIED" size="small" />}
+          {params.row.txId && <BlockchainStatusIcon status="RECORDED" txId={params.row.txId} size="small" />}
         </Box>
       ),
     },
@@ -359,7 +359,7 @@ const RepatriationManagementTab: React.FC = () => {
       width: 140,
       renderCell: (params: GridRenderCellParams) => {
         const days = params.value;
-        const isOverdue = params.row.status === 'OVERDUE' || params.row.status === 'VIOLATION';
+        const isOverdue = params.row.status === 'OVERDUE' || params.row.status === 'NON_COMPLIANT';
         const color = isOverdue ? NBE_COLORS.error : days < 7 ? NBE_COLORS.warning : NBE_COLORS.success;
         
         return (
@@ -398,7 +398,7 @@ const RepatriationManagementTab: React.FC = () => {
             </IconButton>
           </Tooltip>
           
-          {params.row.status === 'RECEIVED' && (
+          {(params.row.status === 'READY_FOR_VERIFICATION' || params.row.status === 'OVERDUE') && (
             <Tooltip title="Verify">
               <IconButton
                 size="small"
@@ -410,17 +410,6 @@ const RepatriationManagementTab: React.FC = () => {
             </Tooltip>
           )}
           
-          {params.row.status === 'VERIFIED' && (
-            <Tooltip title="Mark Compliant">
-              <IconButton
-                size="small"
-                onClick={() => handleMarkCompliant(params.row.repatriationId)}
-                sx={{ color: NBE_COLORS.success }}
-              >
-                <CheckCircle fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
         </Box>
       ),
     },
@@ -459,12 +448,13 @@ const RepatriationManagementTab: React.FC = () => {
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <MenuItem value="ALL">All Statuses</MenuItem>
-                <MenuItem value="INITIATED">Initiated</MenuItem>
-                <MenuItem value="RECEIVED">Received</MenuItem>
-                <MenuItem value="VERIFIED">Verified</MenuItem>
-                <MenuItem value="COMPLIANT">Compliant</MenuItem>
+                <MenuItem value="PENDING">Pending</MenuItem>
+                <MenuItem value="PARTIAL">Partial</MenuItem>
+                <MenuItem value="READY_FOR_VERIFICATION">Ready for NBE review</MenuItem>
+                <MenuItem value="COMPLIED">Compliant</MenuItem>
+                <MenuItem value="WAIVED">Waived by NBE</MenuItem>
                 <MenuItem value="OVERDUE">Overdue</MenuItem>
-                <MenuItem value="VIOLATION">Violation</MenuItem>
+                <MenuItem value="NON_COMPLIANT">Non-compliant</MenuItem>
               </TextField>
             </Grid>
             <Grid item xs={12} sm={6} md={2}>
@@ -548,7 +538,6 @@ const RepatriationManagementTab: React.FC = () => {
             setSelectedRepatriation(null);
           }}
           repatriation={selectedRepatriation}
-          onRefresh={fetchRepatriations}
         />
       )}
 
@@ -557,7 +546,7 @@ const RepatriationManagementTab: React.FC = () => {
         open={compliancePanelOpen}
         onClose={() => setCompliancePanelOpen(false)}
         overdueRepatriations={repatriations.filter(r => 
-          (r.status === 'OVERDUE' || r.status === 'VIOLATION') && r.daysOverdue !== undefined
+          (r.status === 'OVERDUE' || r.status === 'NON_COMPLIANT') && r.daysOverdue !== undefined
         ) as any}
         onRefresh={fetchRepatriations}
       />

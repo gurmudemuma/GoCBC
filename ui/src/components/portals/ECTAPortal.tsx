@@ -118,6 +118,19 @@ import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/compo
 // Status types for chips
 type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_REVIEW' | string;
 
+const contractRejectionFields = [
+  'Buyer name or company',
+  'Buyer country or bank',
+  'Coffee type or grade',
+  'Quantity',
+  'Price, value, or currency',
+  'Payment method',
+  'Delivery terms, port, or date',
+  'EUDR or other compliance',
+  'Required documents',
+  'Other contract detail',
+];
+
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -253,6 +266,7 @@ const ECTAPortal: React.FC = () => {
   const [contractDetailsDialogOpen, setContractDetailsDialogOpen] = useState(false);
   const [contractRejectDialogOpen, setContractRejectDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<any>(null);
+  const [contractRejectionField, setContractRejectionField] = useState('');
   const [contractRejectionReason, setContractRejectionReason] = useState('');
   const [contractStatusFilter, setContractStatusFilter] = useState<string>(''); // '' = all, 'REGISTERED', 'APPROVED', 'REJECTED'
   
@@ -423,13 +437,13 @@ const ECTAPortal: React.FC = () => {
     const allTabs = [
       { index: 0, label: `Pending Applications`, icon: <Assignment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
       { index: 1, label: `Approved Exporters`, icon: <Coffee sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
-      { index: 2, label: `Sales Contracts`, icon: <Description sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'Permit Officer'] },
-      { index: 3, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
+      { index: 2, label: `Sales Contracts`, icon: <Description sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'Permit Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
+      { index: 3, label: `Quality Control`, icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
       { index: 4, label: `License Renewals`, icon: <Warning sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer'] },
       { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
-      { index: 6, label: 'Pre-shipment Inspection', icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer'] },
+      { index: 6, label: 'Pre-shipment Inspection', icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
       { index: 7, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
-      { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer'] },
+      { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
       { index: 9, label: 'Post-Delivery Audits', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
     ];
     
@@ -443,6 +457,12 @@ const ECTAPortal: React.FC = () => {
   };
   
   const visibleTabs = getRoleBasedTabs();
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.some(tab => tab.index === tabValue)) {
+      setTabValue(visibleTabs[0].index);
+    }
+  }, [tabValue, visibleTabs]);
 
   // 🎯 ROLE-BASED FILTERING: Show only items that need user's action
   const filterContractsForRole = (contracts: any[]) => {
@@ -559,7 +579,7 @@ const ECTAPortal: React.FC = () => {
       });
     
     // 5️⃣ Shipments - Load independently
-    api.getShipments({ limit: 100 })
+    api.getShipments()
       .then(shipmentsRes => {
         if (shipmentsRes.success && shipmentsRes.data) {
           const ectaRelevantShipments = shipmentsRes.data.filter((s: any) => {
@@ -626,9 +646,7 @@ const ECTAPortal: React.FC = () => {
           oneDayAgo.setDate(oneDayAgo.getDate() - 1);
           return logDate >= oneDayAgo;
         }).length;
-        const blockchainVerified = logs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = logs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         const organizationsInvolved = new Set(
           logs.map((log: any) => log.performed_by_org).filter(Boolean)
         ).size;
@@ -677,9 +695,12 @@ const ECTAPortal: React.FC = () => {
     
     if (!confirm(confirmMessage)) return;
 
+    const reason = action === 'suspend' ? prompt(`Enter a reason for suspending license ${exporterId}:`) : undefined;
+    if (action === 'suspend' && !reason?.trim()) return;
+
     try {
       const newStatus = action === 'suspend' ? 'SUSPENDED' : 'ACTIVE';
-      const response = await api.put(`/exporters/${exporterId}/status`, { status: newStatus });
+      const response = await api.put(`/exporters/${exporterId}/status`, { status: newStatus, reason });
       
       if (response.data?.success) {
         setNotificationContent({
@@ -1149,10 +1170,13 @@ The exporter can reapply once all requirements are met.`,
 
   // Contract Rejection Handler
   const handleRejectContract = async () => {
-    if (!selectedContract || !contractRejectionReason) {
-      showError('Rejection Failed', 'Please provide a reason for rejection');
+    const correctionDetails = contractRejectionReason.trim();
+    if (!selectedContract || !contractRejectionField || correctionDetails.length < 20) {
+      showError('Rejection Failed', 'Select the affected field and describe the required correction in at least 20 characters.');
       return;
     }
+
+    const detailedFeedback = `Field to correct: ${contractRejectionField}\nRequired change: ${correctionDetails}`;
     
     const contractId = selectedContract.contractID || selectedContract.contractId || selectedContract.contract_id;
     
@@ -1162,12 +1186,12 @@ The exporter can reapply once all requirements are met.`,
       return;
     }
     
-    console.log('[REJECT] Rejecting contract:', contractId, 'Reason:', contractRejectionReason);
+    console.log('[REJECT] Rejecting contract:', contractId, 'Reason:', detailedFeedback);
     
     try {
       const response = await api.rejectContract(
         contractId,
-        contractRejectionReason,
+        detailedFeedback,
         'ECTA Officer'
       );
       
@@ -1181,6 +1205,7 @@ The exporter can reapply once all requirements are met.`,
         // Refresh contracts
         loadData();
         setSelectedContract(null);
+        setContractRejectionField('');
         setContractRejectionReason('');
       } else {
         showError('Rejection Failed', response.error?.message || 'Failed to reject contract');
@@ -1952,6 +1977,7 @@ The exporter can reapply once all requirements are met.`,
           {visibleTabs.map((tab) => (
             <Tab 
               key={tab.index}
+              value={tab.index}
               icon={tab.icon}
               iconPosition="start"
               label={
@@ -2280,9 +2306,9 @@ The exporter can reapply once all requirements are met.`,
                                   `Email: ${application.email}\n` +
                                   `Exporter ID: ${application.exporter_id || 'Not Set'}\n\n` +
                                   `────────────────────────────\n\n` +
-                                  `The password will be reset to: password123\n\n` +
+                                  `A unique temporary password will be generated and shown once after the reset.\n\n` +
                                   `⚠️ IMPORTANT:\n` +
-                                  `The user must change this temporary password immediately after logging in.\n\n` +
+                                  `Ask the user to change the temporary password after signing in.\n\n` +
                                   `Continue with password reset?`
                                 );
                                 if (confirmed) {
@@ -2294,15 +2320,11 @@ The exporter can reapply once all requirements are met.`,
                                       return;
                                     }
                                     
-                                    console.log('[PASSWORD RESET] Using direct endpoint with exporterId:', exporterId);
-                                    
                                     // Use the new direct endpoint that doesn't require fetching all users
                                     const response = await api.post('/users/reset-password-by-identifier', {
                                       exporterId: exporterId,
                                       email: application.email
                                     });
-                                    
-                                    console.log('[PASSWORD RESET] Response:', response.data);
                                     
                                     if (response.data?.success) {
                                       const userData = response.data.data;
@@ -2312,17 +2334,16 @@ The exporter can reapply once all requirements are met.`,
                                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                                         `📧 Email: ${userData.email}\n` +
                                         `👤 Username: ${userData.username}\n` +
-                                        `🔑 New Password: password123\n` +
+                                        `🔑 Temporary Password: ${userData.temporaryPassword}\n` +
                                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                                         `⚠️ NEXT STEPS:\n` +
                                         `1. Inform the user about the password reset\n` +
                                         `2. User logs in with username "${userData.username}"\n` +
-                                        `3. User must change password immediately\n\n` +
+                                        `3. Ask the user to change the temporary password after signing in\n\n` +
                                         `✅ Password reset completed successfully.`
                                       );
                                     }
                                   } catch (error: any) {
-                                    console.error('[PASSWORD RESET] Error:', error);
                                     const errorMsg = error?.response?.data?.error?.message || error?.message || 'Failed to reset password';
                                     showError('Password Reset Failed', errorMsg);
                                   }
@@ -2340,7 +2361,10 @@ The exporter can reapply once all requirements are met.`,
                                 const reason = prompt(`Enter reason for suspending ${application.company_name}:`);
                                 if (reason) {
                                   try {
-                                    const response = await api.post(`/exporters/${application.exporter_id}/suspend`, { reason });
+                                    const response = await api.put(`/exporters/${application.exporter_id}/status`, {
+                                      status: 'SUSPENDED',
+                                      reason,
+                                    });
                                     if (response.data?.success) {
                                       showSuccess('License Suspended', `${application.company_name} license has been suspended. They cannot access the system until reactivated.`);
                                       loadData();
@@ -2366,7 +2390,11 @@ The exporter can reapply once all requirements are met.`,
                                     try {
                                       const response = await api.post(`/exporters/${application.exporter_id}/revoke`, { reason });
                                       if (response.data?.success) {
-                                        showError('License Revoked', `${application.company_name} license has been permanently revoked. Account is disabled.`);
+                                        if (response.data?.data?.accountDisabled) {
+                                          showSuccess('License Revoked', `${application.company_name} license has been permanently revoked and the account has been disabled.`);
+                                        } else {
+                                          showError('License Revoked with Account Warning', response.data?.warning || 'The license was revoked on the ledger, but the local account could not be disabled.');
+                                        }
                                         loadData();
                                       }
                                     } catch (error: any) {
@@ -2524,6 +2552,8 @@ The exporter can reapply once all requirements are met.`,
                               color="error"
                               onClick={() => {
                                 setSelectedContract(contract);
+                                setContractRejectionField('');
+                                setContractRejectionReason('');
                                 setContractRejectDialogOpen(true);
                               }}
                             >
@@ -2930,10 +2960,14 @@ The exporter can reapply once all requirements are met.`,
                             variant="outlined"
                             brandColor={BRAND_COLOR}
                             onClick={() => {
-                              const newExpiryDate = new Date(exporter.licenseExpiryDate);
+                              const currentExpiryDate = new Date(exporter.licenseExpiryDate);
+                              const renewalBaseDate = new Date(Math.max(currentExpiryDate.getTime(), Date.now()));
+                              const newExpiryDate = new Date(renewalBaseDate);
                               newExpiryDate.setFullYear(newExpiryDate.getFullYear() + 1);
                               
                               if (window.confirm(`Process License Renewal?\n\nExporter: ${exporter.companyName}\nLicense: ${exporter.ectaLicenseNumber}\nCurrent Expiry: ${formatDate(exporter.licenseExpiryDate)}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nThis will extend the license for 1 year.`)) {
+                                const reason = window.prompt(`Enter the reason for renewing ${exporter.companyName}'s license:`);
+                                if (!reason?.trim()) return;
                                 apiFetch(`/exporters/${exporter.exporterId}/renew-license`, {
                                   method: 'POST',
                                   headers: {
@@ -2942,17 +2976,17 @@ The exporter can reapply once all requirements are met.`,
                                   },
                                   body: JSON.stringify({
                                     newExpiryDate: newExpiryDate.toISOString(),
-                                    renewedBy: 'ECTA Officer',
-                                    renewalDate: new Date().toISOString(),
+                                    reason: reason.trim(),
                                   })
                                 })
                                 .then(res => res.json())
                                 .then(result => {
                                   if (result.success) {
-                                    alert(`✅ License Renewed Successfully\n\nExporter: ${exporter.companyName}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nLicense extended for 1 year`);
+                                    const mirrorNotice = result.warning ? `\n\nWarning: ${result.warning}` : '';
+                                    alert(`✅ License Renewed Successfully\n\nExporter: ${exporter.companyName}\nNew Expiry: ${formatDate(newExpiryDate.toISOString())}\n\nLicense extended for 1 year${mirrorNotice}`);
                                     loadData();
                                   } else {
-                                    alert(`❌ Renewal Failed\n\n${result.error || 'Unknown error'}`);
+                                    alert(`❌ Renewal Failed\n\n${result.error?.message || result.error || 'Unknown error'}`);
                                   }
                                 })
                                 .catch(error => {
@@ -3737,14 +3771,15 @@ The exporter can reapply once all requirements are met.`,
                   const reason = prompt('Enter suspension reason:');
                   if (!reason) return;
                   
-                  const response = await apiFetch(`/exporters/${selectedExporter.exporterId}/suspend`, {
-                    method: 'POST',
+                  const response = await apiFetch(`/exporters/${selectedExporter.exporterId}/status`, {
+                    method: 'PUT',
                     headers: {
                       'Authorization': `Bearer ${token}`,
                       'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                      suspensionReason: reason,
+                      status: 'SUSPENDED',
+                      reason,
                       suspendedBy: 'ECTA Officer',
                       suspensionDate: new Date().toISOString(),
                     })
@@ -3821,7 +3856,7 @@ The exporter can reapply once all requirements are met.`,
           }}
           onSuccess={() => {
             // Refresh shipments list
-            api.getShipments({ limit: 100 }).then(res => {
+            api.getShipments().then(res => {
               if (res.success && res.data) {
                 setShipments(res.data);
               }
@@ -4048,6 +4083,12 @@ The exporter can reapply once all requirements are met.`,
 
               {/* ECTA Document Signing Panel */}
               <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>📋 Document Workflow:</strong> Exporters upload commercial documents (contracts, invoices, certificates). 
+                    ECTA staff must create and upload official ECTA documents below after completing inspections.
+                  </Typography>
+                </Alert>
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   <Typography variant="body2">
                     <strong>ECTA Responsibility:</strong> ECTA Inspector and Supervisor must sign QUALITY_CERTIFICATE, 
@@ -4086,11 +4127,9 @@ The exporter can reapply once all requirements are met.`,
                 <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
                   🔐 Blockchain Verification
                 </Typography>
-                <Alert severity="success" sx={{ mb: 2 }}>
+                <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Hyperledger Fabric Blockchain:</strong> This contract and all related documents are 
-                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
-                    are verified against X.509 certificates and blockchain transaction records.
+                    <strong>Hyperledger Fabric proof:</strong> The panel below checks committed transaction status, creator and endorser signatures, and certificate trust against configured MSP CA roots. A record is labeled verified only when those checks pass.
                   </Typography>
                 </Alert>
                 <BlockchainSignatureVerification
@@ -4112,6 +4151,8 @@ The exporter can reapply once all requirements are met.`,
                 color="error"
                 onClick={() => {
                   setContractDetailsDialogOpen(false);
+                  setContractRejectionField('');
+                  setContractRejectionReason('');
                   setContractRejectDialogOpen(true);
                 }}
               >
@@ -4281,6 +4322,7 @@ The exporter can reapply once all requirements are met.`,
         open={contractRejectDialogOpen} 
         onClose={() => {
           setContractRejectDialogOpen(false);
+          setContractRejectionField('');
           setContractRejectionReason('');
         }}
         maxWidth="sm"
@@ -4291,9 +4333,9 @@ The exporter can reapply once all requirements are met.`,
           {selectedContract && (
             <>
               <Alert severity="warning" sx={{ mb: 2 }}>
-                <strong>Contract Rejection</strong>
+                <strong>Give the exporter a precise correction.</strong>
                 <br />
-                This will reject the contract and prevent it from proceeding to export.
+                The exporter sees this feedback on the rejected contract. Name the field and state the exact change required.
               </Alert>
               
               <Typography variant="body2" sx={{ mb: 1 }}>
@@ -4307,13 +4349,29 @@ The exporter can reapply once all requirements are met.`,
               </Typography>
               
               <TextField
+                select
+                fullWidth
+                required
+                label="Field to correct *"
+                value={contractRejectionField}
+                onChange={(e) => setContractRejectionField(e.target.value)}
+                helperText="Choose the contract detail that must change."
+                sx={{ mb: 2 }}
+              >
+                {contractRejectionFields.map((field) => (
+                  <MenuItem key={field} value={field}>{field}</MenuItem>
+                ))}
+              </TextField>
+              <TextField
                 fullWidth
                 multiline
                 rows={4}
-                label="Rejection Reason *"
+                label="Required correction *"
                 value={contractRejectionReason}
                 onChange={(e) => setContractRejectionReason(e.target.value)}
-                placeholder="Provide detailed reason for rejection..."
+                placeholder="Name what is wrong and what value or document the exporter must provide."
+                error={contractRejectionReason.length > 0 && contractRejectionReason.trim().length < 20}
+                helperText={`${contractRejectionReason.trim().length}/20 characters minimum. This text is shown to the exporter.`}
                 required
               />
             </>
@@ -4322,6 +4380,7 @@ The exporter can reapply once all requirements are met.`,
         <DialogActions>
           <Button onClick={() => {
             setContractRejectDialogOpen(false);
+            setContractRejectionField('');
             setContractRejectionReason('');
           }}>
             Cancel
@@ -4330,7 +4389,7 @@ The exporter can reapply once all requirements are met.`,
             variant="contained" 
             color="error"
             onClick={handleRejectContract}
-            disabled={!contractRejectionReason}
+            disabled={!contractRejectionField || contractRejectionReason.trim().length < 20}
           >
             Reject Contract
           </Button>

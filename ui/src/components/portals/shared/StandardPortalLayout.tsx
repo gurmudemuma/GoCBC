@@ -143,7 +143,7 @@ const StandardPortalLayout: React.FC<StandardPortalLayoutProps> = ({
               {showBlockchainStatus && (
                 <Box sx={{ textAlign: 'right' }}>
                   <BlockchainStatusIcon 
-                    status="VERIFIED" 
+                    status="CONNECTED" 
                     size="large"
                   />
                   {blockchainHeight && (

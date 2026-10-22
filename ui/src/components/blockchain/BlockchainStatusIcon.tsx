@@ -14,6 +14,8 @@ import {
 
 export type BlockchainStatus = 
   | 'VERIFIED' 
+  | 'RECORDED'
+  | 'CONNECTED'
   | 'PENDING' 
   | 'SYNCING' 
   | 'MISMATCH' 
@@ -46,8 +48,24 @@ const BlockchainStatusIcon: React.FC<BlockchainStatusIconProps> = ({
           icon: <CheckCircle fontSize={size} />,
           color: '#4caf50',
           label: 'Blockchain Verified',
-          tooltip: 'Cryptographically verified on blockchain',
+          tooltip: 'Fabric block validation passed for this transaction.',
           bgColor: 'rgba(76, 175, 80, 0.1)',
+        };
+      case 'RECORDED':
+        return {
+          icon: <CheckCircle fontSize={size} />,
+          color: '#1976d2',
+          label: 'Transaction Recorded',
+          tooltip: 'A transaction ID is available. Block validation has not been checked here.',
+          bgColor: 'rgba(33, 150, 243, 0.1)',
+        };
+      case 'CONNECTED':
+        return {
+          icon: <CheckCircle fontSize={size} />,
+          color: '#1976d2',
+          label: 'Fabric Connected',
+          tooltip: 'The application is connected to the Fabric channel.',
+          bgColor: 'rgba(33, 150, 243, 0.1)',
         };
       case 'PENDING':
         return {

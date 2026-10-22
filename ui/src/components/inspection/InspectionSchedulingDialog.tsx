@@ -142,7 +142,7 @@ const InspectionSchedulingDialog: React.FC<InspectionSchedulingDialogProps> = ({
     try {
       setSubmitting(true);
       
-      const response = await apiFetch(`/api/v1/inspection/${inspection.inspectionId}/schedule`, {
+      const response = await apiFetch(`/inspection/${inspection.inspectionId}/schedule`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({

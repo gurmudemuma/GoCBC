@@ -48,7 +48,7 @@ const BorderCrossingTab: React.FC = () => {
   const fetchCrossings = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch('/api/v1/bordercrossing', { method: 'GET', headers: getAuthHeaders() });
+      const response = await apiFetch('/bordercrossing', { method: 'GET', headers: getAuthHeaders() });
       const result = await response.json();
       if (result.success) {
         const data = result.data || [];
@@ -96,7 +96,7 @@ const BorderCrossingTab: React.FC = () => {
     { field: 'borderCrossingId', headerName: 'Crossing ID', width: 150, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography variant="body2" fontWeight={600}>{p.value}</Typography>
-        {p.row.txId && <BlockchainStatusIcon status="VERIFIED" txId={p.row.txId} size="small" />}
+        {p.row.txId && <BlockchainStatusIcon status="RECORDED" txId={p.row.txId} size="small" />}
       </Box>
     )},
     { field: 'shipmentId', headerName: 'Shipment', width: 130 },

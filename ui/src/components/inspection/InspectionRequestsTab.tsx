@@ -120,7 +120,7 @@ const InspectionRequestsTab: React.FC = () => {
   const fetchInspections = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch('/api/v1/inspection', {
+      const response = await apiFetch('/inspection', {
         method: 'GET',
         headers: getAuthHeaders(),
       });
@@ -269,7 +269,7 @@ const InspectionRequestsTab: React.FC = () => {
           <Typography variant="body2" fontWeight={600}>
             {params.value}
           </Typography>
-          {params.row.txId && <BlockchainStatusIcon status="VERIFIED" txId={params.row.txId} size="small" />}
+          {params.row.txId && <BlockchainStatusIcon status="RECORDED" txId={params.row.txId} size="small" />}
         </Box>
       ),
     },

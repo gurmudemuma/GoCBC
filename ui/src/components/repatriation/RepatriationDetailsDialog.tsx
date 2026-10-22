@@ -36,7 +36,6 @@ import {
   SwapHoriz,
   Person,
   AccessTime,
-  VerifiedUser,
 } from '@mui/icons-material';
 import { BlockchainStatusIcon, BlockchainTxChip } from '@/components/blockchain';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
@@ -63,6 +62,7 @@ interface Repatriation {
   fcyBankBIC: string;
   shipmentDate: string;
   repatriationDeadline: string;
+  complianceDeadline?: string;
   status: string;
   initiatedDate: string;
   receivedDate?: string;
@@ -70,6 +70,7 @@ interface Repatriation {
   completedDate?: string;
   verifiedBy?: string;
   verifiedByMsp?: string;
+  verificationDate?: string;
   initiatedBy?: string;
   initiatedByMsp?: string;
   daysRemaining?: number;
@@ -79,6 +80,16 @@ interface Repatriation {
   verificationNotes?: string;
   fcyRetentionAmount?: number;
   etbConversionAmount?: number;
+  requiredRetention?: number;
+  requiredConversion?: number;
+  retentionPercentage?: number;
+  conversionPercentage?: number;
+  repatriatedAmount?: number;
+  convertedAmount?: number;
+  convertedAmountBirr?: number;
+  complianceDate?: string;
+  repatriationDate?: string;
+  createdAt?: string;
   exchangeRate?: number;
   txId?: string;
   timestamp?: string;
@@ -88,14 +99,12 @@ interface RepatriationDetailsDialogProps {
   open: boolean;
   onClose: () => void;
   repatriation: Repatriation;
-  onRefresh: () => void;
 }
 
 const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
   open,
   onClose,
   repatriation,
-  onRefresh,
 }) => {
   const [loading, setLoading] = useState(false);
   const [detailedData, setDetailedData] = useState<Repatriation | null>(null);
@@ -110,7 +119,7 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
   const fetchDetailedData = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch(`/api/v1/repatriation/${repatriation.repatriationId}`, {
+      const response = await apiFetch(`/repatriation/${repatriation.repatriationId}`, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
@@ -132,9 +141,15 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
   const getActiveStep = () => {
     const statusMap: Record<string, number> = {
       INITIATED: 0,
+      PENDING: 0,
       RECEIVED: 1,
+      PARTIAL: 1,
       VERIFIED: 2,
       COMPLIANT: 3,
+      COMPLIED: 3,
+      WAIVED: 3,
+      NON_COMPLIANT: 3,
+      OVERDUE: 3,
     };
     return statusMap[data.status] || 0;
   };
@@ -144,35 +159,37 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
     {
       label: 'Repatriation Initiated',
       description: 'Bank initiated repatriation process',
-      date: data.initiatedDate,
+      date: data.initiatedDate || data.createdAt,
       actor: data.initiatedBy || 'Bank Officer',
       msp: data.initiatedByMsp,
     },
     {
       label: 'Funds Received',
       description: 'Export proceeds received in FCY account',
-      date: data.receivedDate,
+      date: data.receivedDate || data.repatriationDate,
       actor: data.fcyBank,
     },
     {
       label: 'NBE Verification',
       description: 'NBE verified repatriation compliance',
-      date: data.verifiedDate,
+      date: data.verifiedDate || data.verificationDate,
       actor: data.verifiedBy,
       msp: data.verifiedByMsp,
     },
     {
       label: 'Compliant',
       description: 'Repatriation completed within deadline',
-      date: data.completedDate,
+      date: data.completedDate || data.complianceDate,
     },
   ];
 
   // Financial breakdown
-  const fcyRetention = data.fcyRetentionAmount || (data.exportAmount * 0.4); // 40% retention
-  const etbConversion = data.etbConversionAmount || (data.exportAmount * 0.6); // 60% conversion
-  const exchangeRate = data.exchangeRate || 115.5;
-  const etbAmount = etbConversion * exchangeRate;
+  const retentionRate = Number(data.retentionPercentage ?? 0);
+  const conversionRate = Number(data.conversionPercentage ?? 0);
+  const fcyRetention = Number(data.repatriatedAmount ?? data.fcyRetentionAmount ?? 0);
+  const convertedAmount = Number(data.convertedAmount ?? data.etbConversionAmount ?? 0);
+  const exchangeRate = Number(data.exchangeRate ?? 0);
+  const etbAmount = Number(data.convertedAmountBirr ?? (convertedAmount * exchangeRate));
 
   return (
     <Dialog
@@ -218,13 +235,13 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
             {/* Status Alert */}
             <Alert
               severity={
-                data.status === 'COMPLIANT' ? 'success' :
-                data.status === 'OVERDUE' || data.status === 'VIOLATION' ? 'error' :
+                data.status === 'COMPLIED' || data.status === 'WAIVED' ? 'success' :
+                data.status === 'OVERDUE' || data.status === 'NON_COMPLIANT' ? 'error' :
                 'info'
               }
               icon={
-                data.status === 'COMPLIANT' ? <CheckCircle /> :
-                data.status === 'OVERDUE' || data.status === 'VIOLATION' ? <Warning /> :
+                data.status === 'COMPLIED' || data.status === 'WAIVED' ? <CheckCircle /> :
+                data.status === 'OVERDUE' || data.status === 'NON_COMPLIANT' ? <Warning /> :
                 <Schedule />
               }
               sx={{ mb: 3 }}
@@ -282,27 +299,27 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
             <Card sx={{ mb: 3, bgcolor: '#f5f5f5' }}>
               <CardContent>
                 <Typography variant="subtitle2" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <SwapHoriz /> Financial Breakdown (60/40 NBE Split)
+                  <SwapHoriz /> Financial Breakdown (Recorded Ledger Policy)
                 </Typography>
                 <Divider sx={{ my: 1 }} />
                 <Grid container spacing={2}>
                   <Grid item xs={12} sm={4}>
                     <Box>
                       <Typography variant="caption" color="text.secondary">
-                        FCY Retention (40%)
+                        FCY Repatriated ({data.retentionPercentage != null ? `${retentionRate}% policy` : 'policy unavailable'})
                       </Typography>
                       <Typography variant="body1" fontWeight={600}>
-                        {data.currency} {fcyRetention.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        {data.currency} {fcyRetention.toLocaleString(undefined, { maximumFractionDigits: 2 })} / {data.currency} {Number(data.requiredRetention || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} required
                       </Typography>
                     </Box>
                   </Grid>
                   <Grid item xs={12} sm={4}>
                     <Box>
                       <Typography variant="caption" color="text.secondary">
-                        NBE Conversion (60%)
+                        Converted ({data.conversionPercentage != null ? `${conversionRate}% policy` : 'policy unavailable'})
                       </Typography>
                       <Typography variant="body1" fontWeight={600}>
-                        {data.currency} {etbConversion.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        {data.currency} {convertedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} / {data.currency} {Number(data.requiredConversion || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} required
                       </Typography>
                     </Box>
                   </Grid>
@@ -312,7 +329,7 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
                         ETB Equivalent @ {exchangeRate}
                       </Typography>
                       <Typography variant="body1" fontWeight={600} color={NBE_COLORS.success}>
-                        ETB {etbAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        {exchangeRate > 0 ? `ETB ${etbAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : 'Ledger rate unavailable'}
                       </Typography>
                     </Box>
                   </Grid>
@@ -420,9 +437,9 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
             {data.txId && (
               <Box sx={{ mt: 2, p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <BlockchainStatusIcon status="VERIFIED" />
+                  <BlockchainStatusIcon status="RECORDED" txId={data.txId} />
                   <Typography variant="caption" fontWeight={600}>
-                    Blockchain Verified Transaction
+                    Ledger transaction recorded
                   </Typography>
                 </Box>
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
@@ -445,34 +462,6 @@ const RepatriationDetailsDialog: React.FC<RepatriationDetailsDialogProps> = ({
         <Button onClick={onClose} variant="outlined">
           Close
         </Button>
-        {data.status === 'RECEIVED' && (
-          <Button
-            variant="contained"
-            startIcon={<VerifiedUser />}
-            sx={{ bgcolor: NBE_COLORS.success }}
-            onClick={() => {
-              // Handle verify action
-              onClose();
-              onRefresh();
-            }}
-          >
-            Verify Repatriation
-          </Button>
-        )}
-        {data.status === 'VERIFIED' && (
-          <Button
-            variant="contained"
-            startIcon={<CheckCircle />}
-            sx={{ bgcolor: NBE_COLORS.success }}
-            onClick={() => {
-              // Handle mark compliant action
-              onClose();
-              onRefresh();
-            }}
-          >
-            Mark Compliant
-          </Button>
-        )}
       </DialogActions>
     </Dialog>
   );

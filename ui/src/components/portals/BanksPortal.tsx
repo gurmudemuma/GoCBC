@@ -45,6 +45,7 @@ import {
 import { ExpandMore } from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
 import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
+import api from '@/utils/api';
 import { couchDBService } from '@/services/couchdbService';
 import {
   AccountBalance,
@@ -111,7 +112,7 @@ import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 // NEW: HIGH Priority Features UI Components
-import { RepatriationInitiationDialog } from '@/components/repatriation';
+import { RepatriationInitiationDialog, RepatriationRecordingDialog } from '@/components/repatriation';
 import { LCDiscrepancyTab } from '@/components/lcdiscrepancy';
 
 interface SalesContract {
@@ -190,6 +191,7 @@ interface ForexAllocation {
   retentionRate: number;
   status: string;
   expiryDate: string | null;
+  isDraft?: boolean;
 }
 
 // Use the organization theme for BANKS (purple/golden/black/white)
@@ -220,6 +222,7 @@ const BanksPortal: React.FC = () => {
   const [lcDetailsLoading, setLcDetailsLoading] = useState(false); // ✅ Loading state for LC details
   const [letterOfCredits, setLetterOfCredits] = useState<LetterOfCredit[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
+  const persistedForexAllocations = forexAllocations.filter((forex) => !forex.isDraft);
   const [exportPermits, setExportPermits] = useState<any[]>([]);
   const [deliveredShipments, setDeliveredShipments] = useState<any[]>([]);
   const [documentaryCollections, setDocumentaryCollections] = useState<any[]>([]);
@@ -256,12 +259,13 @@ const BanksPortal: React.FC = () => {
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
   const [selectedPaymentForDetails, setSelectedPaymentForDetails] = useState<any | null>(null);
   const [allocationDialogOpen, setAllocationDialogOpen] = useState(false);
+  const [allocationPolicyReady, setAllocationPolicyReady] = useState(false);
   const [allocationForm, setAllocationForm] = useState({
     forexId: '',
     lcId: '',
     amount: 0,
-    exchangeRate: 115.5,
-    retentionRate: 50,
+    exchangeRate: 0,
+    retentionRate: 0,
     officer: '',
     approvalRef: '',
     expiryDate: '',
@@ -271,6 +275,8 @@ const BanksPortal: React.FC = () => {
   const [swiftComposeOpen, setSwiftComposeOpen] = useState(false);
   const [selectedSwiftMessage, setSelectedSwiftMessage] = useState<any | null>(null);
   const [swiftDetailsDialogOpen, setSwiftDetailsDialogOpen] = useState(false);
+  const [swiftLedgerProof, setSwiftLedgerProof] = useState<any | null>(null);
+  const [swiftLedgerProofLoading, setSwiftLedgerProofLoading] = useState(false);
   const [swiftForm, setSwiftForm] = useState<any>({
     messageID: '',
     messageType: 'MT103',
@@ -291,6 +297,42 @@ const BanksPortal: React.FC = () => {
   const [paymentReleaseFilter, setPaymentReleaseFilter] = useState<'READY_FOR_PAYMENT' | 'RELEASED_TODAY' | 'TOTAL_RELEASED'>('READY_FOR_PAYMENT');
   const [lcsForExamination, setLcsForExamination] = useState<LetterOfCredit[]>([]);
   const [lcsForPaymentRelease, setLcsForPaymentRelease] = useState<LetterOfCredit[]>([]);
+
+  const openSwiftMessageDetails = async (message: any) => {
+    setSelectedSwiftMessage(message);
+    setSwiftDetailsDialogOpen(true);
+    setSwiftLedgerProof(null);
+    const messageId = message?.messageId || message?.MessageID || message?.messageID;
+    if (!messageId) {
+      setSwiftLedgerProof({ events: [], error: 'This SWIFT record has no message ID to query in Fabric history.' });
+      return;
+    }
+
+    setSwiftLedgerProofLoading(true);
+    try {
+      const response = await apiFetch(`/swift/messages/${encodeURIComponent(messageId)}/ledger-proof`, {
+        headers: getAuthHeaders(),
+      });
+      const result = await response.json() as {
+        success?: boolean;
+        data?: any;
+        error?: { message?: string } | string;
+      };
+      const errorMessage = typeof result.error === 'string'
+        ? result.error
+        : result.error?.message;
+      setSwiftLedgerProof(result.success
+        ? result.data
+        : { events: [], error: errorMessage || 'Fabric ledger proof could not be read.' });
+    } catch (error) {
+      setSwiftLedgerProof({
+        events: [],
+        error: error instanceof Error ? String(error) : 'Fabric ledger proof could not be read.',
+      });
+    } finally {
+      setSwiftLedgerProofLoading(false);
+    }
+  };
   
   // KPI Data Dialog state
   const [kpiDataDialogOpen, setKpiDataDialogOpen] = useState(false);
@@ -302,6 +344,7 @@ const BanksPortal: React.FC = () => {
   
   // NEW: Repatriation Dialog state
   const [repatriationDialogOpen, setRepatriationDialogOpen] = useState(false);
+  const [repatriationRecordingOpen, setRepatriationRecordingOpen] = useState(false);
   
   // LC Amendment Form
   const [amendmentForm, setAmendmentForm] = useState({
@@ -318,16 +361,6 @@ const BanksPortal: React.FC = () => {
     beneficiary: '',
     terms: 'Payment against shipping documents as per UCP 600',
     expiryDays: '90',
-  });
-
-  // Forex Form
-  const [forexForm, setForexForm] = useState({
-    allocatedAmount: '',
-    exchangeRate: '',
-    retentionRate: '40',
-    expiryDays: '180',
-    nbeOfficer: '',
-    nbeApprovalRef: '',
   });
 
   // Export Permit Form
@@ -536,18 +569,24 @@ const BanksPortal: React.FC = () => {
   
   const tabStructure = getHierarchicalTabStructure();
   
-  // Helper function to get the actual tab index from parent/child selection
-  const getActiveTabIndex = () => {
-    if (tabStructure[activeParentTab]?.children[activeChildTab]) {
-      return tabStructure[activeParentTab].children[activeChildTab].tabIndex;
-    }
-    return 0;
-  };
-  
-  // Update activeTab whenever parent/child tabs change
+  // Keep the selection valid when role-based filtering changes the available
+  // parent or child tabs (for example, after the authenticated user loads).
   React.useEffect(() => {
-    setActiveTab(getActiveTabIndex());
-  }, [activeParentTab, activeChildTab]);
+    if (tabStructure.length === 0) {
+      setActiveParentTab(0);
+      setActiveChildTab(0);
+      setActiveTab(0);
+      return;
+    }
+
+    const parentIndex = Math.min(activeParentTab, tabStructure.length - 1);
+    const children = tabStructure[parentIndex].children;
+    const childIndex = Math.min(activeChildTab, Math.max(children.length - 1, 0));
+
+    if (parentIndex !== activeParentTab) setActiveParentTab(parentIndex);
+    if (childIndex !== activeChildTab) setActiveChildTab(childIndex);
+    setActiveTab(children[childIndex]?.tabIndex ?? 0);
+  }, [activeParentTab, activeChildTab, userRole]);
 
   // Legacy compatibility - keep old visibleTabs for backward compatibility
   const getRoleBasedTabs = () => {
@@ -622,7 +661,6 @@ const BanksPortal: React.FC = () => {
         expiryDays: '90',
       };
       
-      console.log('[useEffect] Auto-filling LC form:', formData);
       setLcForm(formData);
     }
   }, [dialogOpen, dialogType, selectedContract]);
@@ -647,8 +685,34 @@ const BanksPortal: React.FC = () => {
     devLog('[BANKS] ⚡ PARALLEL LOADING - All data loads at once!');
 
     try {
+      const loadLedgerList = async (
+        path: string,
+        label: string,
+        setRows: (rows: any[]) => void
+      ): Promise<any[]> => {
+        try {
+          const response = await apiFetch(path, { headers: { Authorization: `Bearer ${token}` } });
+          if (!response.ok) {
+            throw new globalThis.Error(`${response.status} ${response.statusText}`);
+          }
+          const payload = await response.json();
+          const rows = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : [];
+          setRows(rows);
+          devLog(`[BANKS] ⚡ ${label} loaded: ${rows.length}`);
+          return rows;
+        } catch (error) {
+          console.warn(`[BANKS] ${label} failed:`, error);
+          setRows([]);
+          return [];
+        }
+      };
+
       // Launch ALL requests in parallel - each updates state as soon as it completes
-      const [lcPromise, swiftPromise, forexPromise, shipmentsPromise] = [
+      const [lcPromise, swiftPromise, forexPromise, shipmentsPromise, collectionsPromise, advancesPromise, consignmentsPromise] = [
         // 1. LCs
         apiFetch('/banking/lc', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
@@ -710,11 +774,10 @@ const BanksPortal: React.FC = () => {
           .catch(err => { console.warn('[BANKS] Forex failed:', err); return []; }),
 
         // 4. Shipments
-        apiFetch('/shipments?status=DELIVERED', { headers: { 'Authorization': `Bearer ${token}` }})
-          .then(r => r.json())
+        api.getShipments({ status: 'DELIVERED' })
           .then(result => {
             if (result.success) {
-              const delivered = result.data.filter((s: any) => {
+              const delivered = (result.data || []).filter((s: any) => {
                 const status = s.Status || s.status || '';
                 return status === 'DELIVERED' || status === 'COMPLETED';
               });
@@ -725,10 +788,33 @@ const BanksPortal: React.FC = () => {
             return [];
           })
           .catch(err => { console.warn('[BANKS] Shipments failed:', err); return []; }),
+
+        // 5. Documentary collections directly from the ledger
+        loadLedgerList('/collections', 'Documentary collections', setDocumentaryCollections),
+
+        // 6. Advance payments directly from the ledger
+        loadLedgerList('/advance', 'Advance payments', setAdvancePayments),
+
+        // 7. Consignment payments directly from the ledger
+        loadLedgerList('/consignment', 'Consignments', setConsignments),
       ];
 
       // Wait for all to complete and process forex with LC data
-      const [lcs, swift, forex, shipments] = await Promise.all([lcPromise, swiftPromise, forexPromise, shipmentsPromise]);
+      const [lcs, swift, forex, shipments, collections, advances, consignmentRows] = await Promise.all([
+        lcPromise,
+        swiftPromise,
+        forexPromise,
+        shipmentsPromise,
+        collectionsPromise,
+        advancesPromise,
+        consignmentsPromise,
+      ]);
+
+      devLog('[BANKS] Payment method records loaded:', {
+        collections: collections.length,
+        advances: advances.length,
+        consignments: consignmentRows.length,
+      });
 
       // ✅ Filter delivered shipments by LC payment status
       if (shipments && shipments.length > 0 && lcs && lcs.length > 0) {
@@ -765,27 +851,27 @@ const BanksPortal: React.FC = () => {
           };
         });
 
-        // Add synthetic forex from LCs
+        // Keep an unpersisted, clearly marked draft only when an issued LC has
+        // no corresponding ledger request. It is excluded from ledger metrics.
         if (lcs && lcs.length > 0) {
-          const forexRelatedLCs = lcs.filter((lc: any) => 
-            lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED'
-          );
+          const forexRelatedLCs = lcs.filter((lc: any) => lc.status === 'ISSUED');
           for (const lc of forexRelatedLCs) {
-            if (!mappedForex.find((f: any) => f.lcId === lc.lcId)) {
+            if (!mappedForex.find((f: any) => f.lcId === lc.lcId || (f.contractId === lc.contractId && f.exporterId === lc.exporterId))) {
               mappedForex.push({
-                forexId: `SYNTHETIC_${lc.lcId}`,
+                forexId: `FOREX_${lc.lcId}_PENDING`,
                 contractId: lc.contractId || '',
                 exporterId: lc.exporterId || '',
                 lcId: lc.lcId || '',
                 buyerName: lc.buyerName || '',
                 buyerCountry: lc.buyerCountry || '',
                 requestedAmount: Number(lc.amount || 0),
-                allocatedAmount: lc.status === 'FOREX_ALLOCATED' ? Number(lc.amount || 0) : 0,
+                allocatedAmount: 0,
                 currency: lc.currency || 'USD',
-                exchangeRate: lc.status === 'FOREX_ALLOCATED' ? 115.5 : 0,
-                retentionRate: lc.status === 'FOREX_ALLOCATED' ? 40 : 0,
-                status: lc.status === 'FOREX_ALLOCATED' ? 'ALLOCATED' : 'REQUESTED',
+                exchangeRate: 0,
+                retentionRate: 0,
+                status: 'REQUESTED',
                 expiryDate: lc.expiryDate || '',
+                isDraft: true,
               });
             }
           }
@@ -1034,9 +1120,7 @@ const BanksPortal: React.FC = () => {
         }).length;
         
         // Count blockchain verified activities
-        const blockchainVerified = logs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = logs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         
         // Count unique organizations
         const organizationsInvolved = new Set(
@@ -1114,15 +1198,12 @@ const BanksPortal: React.FC = () => {
         expiryDays: '90',
       };
       
-      console.log('[LC FORM] Final form data:', formData);
-      
       // Set form data immediately
       setLcForm(formData);
       
       // Also set after a brief delay to ensure state updates
       setTimeout(() => {
         setLcForm(formData);
-        console.log('[LC FORM] Form state confirmed after delay');
       }, 50);
     }
     
@@ -1554,7 +1635,7 @@ const BanksPortal: React.FC = () => {
       if (type === 'cad') {
         const collectionId = `CAD${Date.now()}`;
         
-        const response = await apiFetch('/banking/cad/register', {
+        const response = await apiFetch('/banking/cad', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1840,8 +1921,8 @@ const BanksPortal: React.FC = () => {
     }
 
     try {
-      // For REQUESTED status (synthetic forex from ISSUED LCs), we need to create the forex request first
-      if (forex.status === 'REQUESTED' && forex.forexId.includes('_PENDING')) {
+      // Drafts are derived from an issued LC and do not exist on the ledger yet.
+      if (forex.isDraft) {
         // Step 1: Create the forex request
         const forexId = `FOREX_${forex.lcId}_${Date.now()}`;
         const requestPayload = {
@@ -1866,10 +1947,14 @@ const BanksPortal: React.FC = () => {
           showError('Forex Request Failed', requestResult.error?.message || 'Failed to create forex request');
           return;
         }
-        
-        // Update forexId for allocation step
-        forex.forexId = forexId;
-        showInfo('Allocating Forex', 'Allocating foreign exchange...');
+
+        showSuccess(
+          'Forex Request Submitted',
+          `Request ${forexId} was sent to NBE for confirmation.`,
+          'Allocation becomes available after NBE confirms the request.'
+        );
+        loadBankingData();
+        return;
       }
       
       // Step 2: Allocate the forex
@@ -1892,7 +1977,8 @@ const BanksPortal: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        showSuccess('Forex Allocated', `Forex allocated successfully for LC ${forex.lcId}`, `40% USD retention, 60% ETB conversion per NBE policy`);
+        const actualRetentionRate = Number(result.autoMapped?.retentionRate ?? payload.retentionRate);
+        showSuccess('Forex Allocated', `Forex allocated successfully for LC ${forex.lcId}`, `Recorded retention: ${actualRetentionRate}%`);
         setAllocationDialogOpen(false);
         loadBankingData();
       } else {
@@ -2167,15 +2253,15 @@ const BanksPortal: React.FC = () => {
   };
 
   const generateForexCSV = (data: ForexAllocation[]) => {
-    const headers = ['Forex ID', 'LC ID', 'Exporter', 'Allocated Amount', 'Exchange Rate', 'USD Retained (40%)', 'ETB Converted (60%)', 'Status', 'Expiry Date'];
+    const headers = ['Forex ID', 'LC ID', 'Exporter', 'Allocated Amount', 'Exchange Rate', 'Retention Amount USD', 'ETB Converted', 'Status', 'Expiry Date'];
     const rows = data.map(f => [
       f.forexId,
       f.lcId,
       f.exporterId,
       f.allocatedAmount,
       f.exchangeRate,
-      (f.allocatedAmount * 0.4).toFixed(2),
-      (f.allocatedAmount * 0.6 * f.exchangeRate).toFixed(2),
+      f.exchangeRate > 0 ? (f.allocatedAmount * f.retentionRate / 100).toFixed(2) : '',
+      f.exchangeRate > 0 ? (f.allocatedAmount * (100 - f.retentionRate) / 100 * f.exchangeRate).toFixed(2) : '',
       f.status,
       f.expiryDate ? new Date(f.expiryDate).toLocaleDateString() : 'N/A'
     ]);
@@ -2222,10 +2308,10 @@ const BanksPortal: React.FC = () => {
           sx={{ mb: 3, bgcolor: 'rgba(25, 118, 210, 0.08)', border: '2px solid #1976d2' }}
         >
           <Typography variant="subtitle2" fontWeight="bold">
-            🔗 Hyperledger Fabric Blockchain Network Active
+            🔗 Hyperledger Fabric Network
           </Typography>
           <Typography variant="caption">
-            Multi-organization Consortium • Real-time Transaction Verification • Immutable Ledger
+            Connection and proof details are shown from the committed ledger when available.
           </Typography>
         </Alert>
 
@@ -2253,7 +2339,7 @@ const BanksPortal: React.FC = () => {
                 subtitle: 'Cash Against Documents',
                 method: 'CAD',
                 clickable: true,
-                debug: `CAD Array Length: ${documentaryCollections.length} (Phase 2 - Not Implemented)`
+                debug: `Ledger documentary collections loaded: ${documentaryCollections.length}`
               },
               { 
                 icon: <AttachMoney />, 
@@ -2263,7 +2349,7 @@ const BanksPortal: React.FC = () => {
                 subtitle: 'Payment before shipment',
                 method: 'ADVANCE',
                 clickable: true,
-                debug: `Advance Array Length: ${advancePayments.length} (Phase 2 - Not Implemented)`
+                debug: `Ledger advance payments loaded: ${advancePayments.length}`
               },
               { 
                 icon: <Assignment />, 
@@ -2280,7 +2366,7 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <CurrencyExchange />, 
                 label: 'Total Forex Requests', 
-                value: forexAllocations.length, 
+                value: persistedForexAllocations.length,
                 color: '#FFD700',
                 subtitle: 'All Requests',
                 description: 'View every forex allocation request below.',
@@ -2293,12 +2379,12 @@ const BanksPortal: React.FC = () => {
                   setAmountMax('');
                   setCurrentPage(0);
                 },
-                debug: `Forex Array Length: ${forexAllocations.length}, Has Data: ${forexAllocations.length > 0 ? 'YES' : 'NO'}`
+                debug: `Ledger Forex Records: ${persistedForexAllocations.length}, Has Data: ${persistedForexAllocations.length > 0 ? 'YES' : 'NO'}`
               },
               { 
                 icon: <AttachMoney />, 
                 label: 'Total Requested', 
-                value: `$${(forexAllocations.reduce((s, f) => {
+                value: `$${(persistedForexAllocations.reduce((s, f) => {
                   // For REQUESTED, use requestedAmount; for others, use allocatedAmount
                   const amount = f.status === 'REQUESTED' ? (Number(f.requestedAmount) || 0) : (Number(f.allocatedAmount) || 0);
                   return s + amount;
@@ -2319,7 +2405,7 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <CheckCircle />, 
                 label: 'Allocated', 
-                value: forexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length, 
+                value: persistedForexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length,
                 color: '#4caf50',
                 subtitle: 'Ready to Use',
                 description: 'Forex approved or already allocated.',
@@ -2336,7 +2422,7 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <AccessTime />, 
                 label: 'Pending Allocation', 
-                value: forexAllocations.filter(f => f.status === 'PENDING' || f.status === 'REQUESTED').length, 
+                value: persistedForexAllocations.filter(f => f.status === 'PENDING' || f.status === 'REQUESTED').length,
                 color: '#ff9800',
                 subtitle: 'Awaiting Action',
                 description: 'LC issued, awaiting bank forex allocation.',
@@ -3056,8 +3142,38 @@ const BanksPortal: React.FC = () => {
               }
               
               if (step === 'Reject LC') {
-                showWarning('Reject LC', `Rejecting LC request for payment ${paymentId}`);
-                // TODO: Implement LC rejection logic
+                const lc = letterOfCredits.find((item: any) => item.lcId === paymentId || item.id === paymentId);
+                if (!lc) {
+                  showError('LC Not Found', `Could not find LC ${paymentId}`, 'Please refresh and try again');
+                  return;
+                }
+                if (lc.status !== 'REQUESTED') {
+                  showWarning('LC Cannot Be Rejected', `LC ${lc.lcId} is ${lc.status}. Only pending requests can be rejected.`);
+                  return;
+                }
+                setValidationData({
+                  entityId: lc.lcId,
+                  entityType: 'LETTER OF CREDIT',
+                  title: `Reject LC Request - ${lc.lcId}`,
+                  readOnly: false,
+                  showApprovalOption: false,
+                  summary: [
+                    { label: 'LC ID', value: lc.lcId },
+                    { label: 'Contract ID', value: lc.contractId || 'N/A' },
+                    { label: 'Exporter', value: lc.exporterId || 'N/A' },
+                    { label: 'Amount', value: `${lc.currency || 'USD'} ${Number(lc.amount || 0).toLocaleString()}` },
+                    { label: 'Issuing Bank', value: lc.issuingBank || 'N/A' },
+                    { label: 'Advising Bank', value: lc.advisingBank || 'N/A' },
+                    { label: 'Status', value: lc.status },
+                  ],
+                  prerequisites: [
+                    { label: 'LC Request', status: 'PASSED', details: 'This LC is awaiting bank review.' },
+                    { label: 'Contract Reference', status: lc.contractId ? 'PASSED' : 'WARNING', details: lc.contractId || 'No contract reference is available.' },
+                  ],
+                  documents: [],
+                  additionalInfo: 'A rejection is recorded on the consortium ledger with the bank signer and reason. The LC cannot be approved after rejection.',
+                });
+                setValidationDialogOpen(true);
                 return;
               }
               
@@ -3320,6 +3436,14 @@ const BanksPortal: React.FC = () => {
             >
               Forex Management / Repatriation
             </Button>
+            <Button
+              variant="outlined"
+              startIcon={<AttachMoney />}
+              onClick={() => setRepatriationRecordingOpen(true)}
+              sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
+            >
+              Record Repatriation
+            </Button>
             
             <Button
               size="small"
@@ -3363,8 +3487,8 @@ const BanksPortal: React.FC = () => {
                     <TableCell sx={{ width: '11%' }}><strong>Buyer</strong></TableCell>
                     <TableCell sx={{ width: '10%' }}><strong>Allocated Amount</strong></TableCell>
                     <TableCell sx={{ width: '9%' }}><strong>Exchange Rate</strong></TableCell>
-                    <TableCell sx={{ width: '9%' }}><strong>Retention (40%)</strong></TableCell>
-                    <TableCell sx={{ width: '9%' }}><strong>Conversion (60%)</strong></TableCell>
+                    <TableCell sx={{ width: '9%' }}><strong>Retention</strong></TableCell>
+                    <TableCell sx={{ width: '9%' }}><strong>Conversion</strong></TableCell>
                     <TableCell sx={{ width: '8%' }}><strong>Status</strong></TableCell>
                     <TableCell sx={{ width: '6%' }}><strong>Expiry</strong></TableCell>
                     <TableCell align="right" sx={{ width: '6%' }}><strong>Actions</strong></TableCell>
@@ -3373,10 +3497,11 @@ const BanksPortal: React.FC = () => {
                 <TableBody>
                   {getPaginatedData(getFilteredForex()).map((forex) => {
                     // For REQUESTED status, use requestedAmount; for ALLOCATED, use allocatedAmount
-                    const displayAmount = forex.status === 'REQUESTED' ? (forex.requestedAmount || 0) : (forex.allocatedAmount || 0);
-                    const exchangeRate = forex.exchangeRate || 115.5; // Default NBE rate if not set
-                    const usdRetention = displayAmount * 0.4;
-                    const etbConversion = displayAmount * 0.6 * exchangeRate;
+                    const displayAmount = forex.status === 'REQUESTED' || forex.isDraft ? (forex.requestedAmount || 0) : (forex.allocatedAmount || 0);
+                    const exchangeRate = Number(forex.exchangeRate) || 0;
+                    const retentionRate = Number(forex.retentionRate) || 0;
+                    const usdRetention = displayAmount * retentionRate / 100;
+                    const etbConversion = displayAmount * (100 - retentionRate) / 100 * exchangeRate;
                     
                     return (
                       <TableRow key={forex.forexId}>
@@ -3388,14 +3513,14 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <strong>${displayAmount.toLocaleString()}</strong>
-                          {forex.status === 'REQUESTED' && <Chip label="Requested" size="small" sx={{ ml: 1, bgcolor: '#ff9800', color: '#fff' }} />}
+                          {forex.isDraft ? <Chip label="LC draft — not on ledger" size="small" sx={{ ml: 1, bgcolor: '#607d8b', color: '#fff' }} /> : forex.status === 'REQUESTED' && <Chip label="Requested" size="small" sx={{ ml: 1, bgcolor: '#ff9800', color: '#fff' }} />}
                         </TableCell>
-                        <TableCell>{exchangeRate.toFixed(2)} ETB/USD</TableCell>
+                        <TableCell>{exchangeRate > 0 ? `${exchangeRate.toFixed(2)} ETB/USD` : 'Pending NBE rate'}</TableCell>
                         <TableCell>
-                          ${usdRetention.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                          {exchangeRate > 0 && retentionRate >= 0 ? `$${usdRetention.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD (${retentionRate}%)` : 'Pending allocation'}
                         </TableCell>
                         <TableCell>
-                          {etbConversion.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+                          {exchangeRate > 0 && retentionRate >= 0 ? `${etbConversion.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB (${100 - retentionRate}%)` : 'Pending allocation'}
                         </TableCell>
                         <TableCell>
                           <StatusChip 
@@ -3425,83 +3550,59 @@ const BanksPortal: React.FC = () => {
                               View Details
                             </Button>
                             
-                            {/* EXPERT: Add Confirm button for REQUESTED status */}
                             {forex.status === 'REQUESTED' && (
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="primary"
-                                startIcon={<CheckCircle />}
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  try {
-                                    devLog('[BANKS] Confirming forex request:', forex.forexId);
-                                    const token = localStorage.getItem('authToken');
-                                    const response = await fetch(`http://localhost:3001/api/v1/forex/${forex.forexId}/confirm`, {
-                                      method: 'POST',
-                                      headers: {
-                                        'Authorization': `Bearer ${token}`,
-                                        'Content-Type': 'application/json'
-                                      },
-                                      body: JSON.stringify({
-                                        confirmedBy: user?.username || user?.fullName || 'Bank Officer',
-                                        comments: 'Forex request confirmed by bank'
-                                      })
-                                    });
-
-                                    const result = await response.json();
-
-                                    if (result.success) {
-                                      showSuccess('Forex Confirmed', `Forex ${forex.forexId} confirmed successfully. Status: REQUESTED → CONFIRMED`, '');
-                                      // Refresh data
-                                      loadBankingData();
-                                    } else {
-                                      showError('Confirmation Failed', result.error?.message || 'Failed to confirm forex request');
-                                    }
-                                  } catch (error: any) {
-                                    console.error('[BANKS] Error confirming forex:', error);
-                                    showError('Confirmation Failed', error.message || 'Failed to confirm forex request');
-                                  }
-                                }}
-                                sx={{
-                                  borderColor: '#4caf50',
-                                  color: '#4caf50',
-                                  '&:hover': { borderColor: '#388e3c', bgcolor: 'rgba(76, 175, 80, 0.05)' },
-                                }}
-                              >
-                                Confirm
-                              </Button>
+                              <Chip size="small" color="warning" label="Awaiting NBE confirmation" />
                             )}
                             
                             <Button
                               size="small"
                               variant="contained"
+                              disabled={!forex.isDraft && forex.status !== 'CONFIRMED'}
                               startIcon={<CheckCircle />}
-                              onClick={() => {
+                              onClick={async (event) => {
+                                event.stopPropagation();
+                                if (forex.isDraft) {
+                                  await handleAllocateForex(forex);
+                                  return;
+                                }
                                 devLog('[BANKS] Allocate Forex button clicked', forex);
-                                setSelectedForex(forex);
-                                devLog('[BANKS] Setting allocation form...');
+                                setAllocationPolicyReady(false);
+                                try {
+                                  const currency = String(forex.currency || 'USD').toUpperCase();
+                                  const [rateResponse, policyResponse] = await Promise.all([
+                                    apiFetch(`/forex/rates/${encodeURIComponent(currency)}/current`, { method: 'GET' }),
+                                    apiFetch('/forex/retention-policy/COFFEE', { method: 'GET' }),
+                                  ]);
+                                  const [rateResult, policyResult] = await Promise.all([rateResponse.json(), policyResponse.json()]);
+                                  const activeRate = Number(rateResult.data?.midRate ?? rateResult.data?.MidRate);
+                                  const retentionRate = Number(policyResult.data?.retentionRate ?? policyResult.data?.RetentionRate);
+                                  if (!rateResult.success || !policyResult.success || !Number.isFinite(activeRate) || activeRate <= 0 || !Number.isFinite(retentionRate) || retentionRate < 0) {
+                                    showError('NBE Ledger Data Required', 'An active exchange rate and COFFEE retention policy are required before forex can be allocated.');
+                                    return;
+                                  }
+                                  setSelectedForex(forex);
+                                  setAllocationPolicyReady(true);
                                 setAllocationForm({
                                   forexId: forex.forexId,
                                   lcId: forex.lcId || '',
                                   amount: forex.requestedAmount || forex.allocatedAmount || 0,
-                                  exchangeRate: forex.exchangeRate || 0,
-                                  retentionRate: forex.retentionRate || 0,
+                                  exchangeRate: activeRate,
+                                  retentionRate,
                                   officer: user?.username || user?.fullName || 'Bank Officer',
-                                  approvalRef: `BANK-${Date.now()}`,
+                                  approvalRef: '',
                                   expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
                                 });
-                                devLog('[BANKS] Opening allocation dialog...');
                                 setAllocationDialogOpen(true);
-                                devLog('[BANKS] Dialog should now be open');
+                                } catch (error) {
+                                  showError('NBE Ledger Data Required', 'Unable to load the current exchange rate and retention policy.');
+                                }
                               }}
                               sx={{
                                 bgcolor: '#9b30b7',
                                 '&:hover': { bgcolor: '#7a2592' },
                               }}
-                              disabled={forex.status === 'ALLOCATED'}
                             >
-                              {forex.status === 'REQUESTED' ? 'Allocate Forex' : 'Allocate'}
+                              {forex.isDraft ? 'Request Forex' : forex.status === 'REQUESTED' ? 'Await NBE' : 'Allocate Forex'}
                             </Button>
                           </Box>
                         </TableCell>
@@ -3571,15 +3672,15 @@ const BanksPortal: React.FC = () => {
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
-                <Typography variant="body2" color="black">USD Retained (40%)</Typography>
+                <Typography variant="body2" color="black">USD Retained</Typography>
                 <Typography variant="h6">
-                  ${(forexAllocations.reduce((sum, f) => sum + (f.allocatedAmount || 0), 0) * 0.4).toLocaleString()}
+                  ${persistedForexAllocations.reduce((sum, f) => sum + ((f.allocatedAmount || 0) * (f.retentionRate || 0) / 100), 0).toLocaleString()}
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
                 <Typography variant="body2" color="black">Active Allocations</Typography>
                 <Typography variant="h6">
-                  {forexAllocations.filter(f => f.status === 'ALLOCATED').length}
+                  {persistedForexAllocations.filter(f => f.status === 'ALLOCATED').length}
                 </Typography>
               </Grid>
             </Grid>
@@ -3698,7 +3799,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell>{forex.exporterId || 'N/A'}</TableCell>
                           <TableCell>{forex.buyerName || forex.BuyerName || 'N/A'}</TableCell>
                           <TableCell><strong>${(forex.allocatedAmount || 0).toLocaleString()}</strong></TableCell>
-                          <TableCell>{forex.exchangeRate || 0} ETB/USD</TableCell>
+                          <TableCell>{forex.exchangeRate > 0 ? `${forex.exchangeRate.toFixed(2)} ETB/USD` : 'Pending NBE rate'}</TableCell>
                           <TableCell>
                             <StatusChip 
                               label={forex.status || 'PENDING'} 
@@ -4041,7 +4142,7 @@ const BanksPortal: React.FC = () => {
                           Pending Allocation
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          Retention rate will be set by bank (typically 40-50%)
+                          Retention rate must match the active NBE policy recorded on the ledger.
                         </Typography>
                       </>
                     ) : (
@@ -4110,7 +4211,7 @@ const BanksPortal: React.FC = () => {
                     <Alert severity="success" sx={{ mt: 2 }}>
                       <Typography variant="body2">
                         <strong>Forex Allocated:</strong> This allocation is active and available for the exporter. 
-                        The 40/60 retention policy applies as per NBE regulations.
+                        The exchange and retention rates shown above are recorded on the ledger.
                       </Typography>
                     </Alert>
                   </Grid>
@@ -4122,7 +4223,7 @@ const BanksPortal: React.FC = () => {
                     <Alert severity="info" sx={{ mt: 2 }}>
                       <Typography variant="body2">
                         <strong>Forex Allocation Requested:</strong> This LC has been issued and requires forex allocation by the bank. 
-                        Click "Allocate Forex" to allocate foreign exchange per NBE policy (40% USD retention, 60% ETB conversion).
+                        Allocate using the active NBE exchange rate and the explicitly recorded retention rate.
                       </Typography>
                     </Alert>
                   </Grid>
@@ -4654,7 +4755,7 @@ const BanksPortal: React.FC = () => {
                         Next Steps in Export Process:
                       </Typography>
                       <Typography variant="body2" component="div">
-                        1. <strong>Bank Forex Allocation:</strong> Bank allocates foreign exchange per NBE policy (40/60 retention)<br />
+                        1. <strong>Bank Forex Allocation:</strong> Bank allocates foreign exchange using the active NBE retention policy recorded on the ledger<br />
                         2. <strong>Quality Inspection:</strong> ECTA conducts quality inspection and issues export permit<br />
                         3. <strong>Shipment Preparation:</strong> Exporter prepares shipment with required documents<br />
                         4. <strong>Document Submission:</strong> Exporter submits shipping documents to bank<br />
@@ -4949,7 +5050,7 @@ const BanksPortal: React.FC = () => {
                     startIcon={<CloudUpload />}
                     onClick={() => {
                       setUploadEntityId(selectedContract.contractId);
-                      setUploadEntityType('LC');
+                      setUploadEntityType('CONTRACT');
                       setDocumentUploadDialogOpen(true);
                     }}
                     fullWidth
@@ -5037,6 +5138,7 @@ const BanksPortal: React.FC = () => {
       <ForexAllocationDialog
         open={allocationDialogOpen}
         form={allocationForm}
+        ratePolicyReady={allocationPolicyReady}
         onChange={(f) => {
           devLog('[BANKS] Forex form changed:', f);
           setAllocationForm(f);
@@ -5091,7 +5193,8 @@ const BanksPortal: React.FC = () => {
           setValidationData(null);
         }}
         data={validationData}
-        readOnly={validationData?.entityId && !validationData.entityId.includes('REQUESTED')} // Read-only if not in REQUESTED status
+        readOnly={validationData?.readOnly ?? (validationData?.entityId && !validationData.entityId.includes('REQUESTED'))} // Read-only unless this item explicitly enables review actions
+        showApprovalOption={validationData?.showApprovalOption}
         onApprove={(notes) => {
           if (validationData && validationData.entityId.startsWith('LC')) {
             // Extract LC ID and exporter ID
@@ -5105,16 +5208,31 @@ const BanksPortal: React.FC = () => {
           setValidationDialogOpen(false);
           setValidationData(null);
         }}
-        onReject={(reason) => {
+        onReject={async (reason) => {
+          if (validationData?.entityType === 'LETTER OF CREDIT') {
+            try {
+              const response = await apiFetch(`/banking/lc/${encodeURIComponent(validationData.entityId)}/reject`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rejectionReason: reason }),
+              });
+              const result = await response.json();
+              if (!response.ok || !result.success) {
+                showError('LC Rejection Failed', result.error?.message || 'Failed to reject LC');
+                return;
+              }
+              showSuccess('LC Rejected', `LC ${validationData.entityId} was rejected and recorded on the consortium ledger.`);
+              await loadBankingData();
+              return;
+            } catch (error: any) {
+              showError('Network Error', 'Failed to reject LC', error?.message || 'Please try again');
+              return;
+            }
+          }
           showError(
             `${validationData?.entityType} Rejected`,
             `${validationData?.entityId} has been rejected.\n\nReason: ${reason}\n\nThe applicant will be notified to address the issues and resubmit.`
           );
-          // In production: API call to reject
-          // await apiFetch(`/banking/lc/${validationData.entityId}/reject`, {
-          //   method: 'POST',
-          //   body: JSON.stringify({ reason })
-          // });
           setValidationDialogOpen(false);
           setValidationData(null);
         }}
@@ -5250,8 +5368,7 @@ const BanksPortal: React.FC = () => {
                             variant="outlined"
                             startIcon={<Visibility />}
                             onClick={() => {
-                              setSelectedSwiftMessage(msg);
-                              setSwiftDetailsDialogOpen(true);
+                              void openSwiftMessageDetails(msg);
                             }}
                             sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
                           >
@@ -6239,7 +6356,6 @@ const BanksPortal: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* SWIFT Message Details Dialog - BLOCKCHAIN PROOF */}
       <Dialog 
         open={swiftDetailsDialogOpen} 
         onClose={() => setSwiftDetailsDialogOpen(false)}
@@ -6248,412 +6364,85 @@ const BanksPortal: React.FC = () => {
       >
         <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
           <VerifiedUser sx={{ fontSize: 28 }} />
-          SWIFT Message Details - Hyperledger Fabric Blockchain
+          SWIFT Message Details
         </DialogTitle>
         <DialogContent sx={{ mt: 2 }}>
           {selectedSwiftMessage && (
             <>
-              {/* BLOCKCHAIN PROOF SECTION */}
-              <Alert severity="info" icon={<Security />} sx={{ mb: 3, bgcolor: '#e3f2fd' }}>
-                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                  🔗 HYPERLEDGER FABRIC BLOCKCHAIN VERIFICATION
-                </Typography>
-                <Grid container spacing={1} sx={{ mt: 1 }}>
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary">Blockchain Network:</Typography>
-                    <Typography variant="body2" fontFamily="monospace">
-                      <strong>Ethiopian Coffee Export Consortium Blockchain (CECBS)</strong>
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary">Channel:</Typography>
-                    <Typography variant="body2" fontFamily="monospace"><strong>coffeechannel</strong></Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary">Chaincode:</Typography>
-                    <Typography variant="body2" fontFamily="monospace"><strong>coffee</strong></Typography>
-                  </Grid>
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary">Transaction Hash (SHA-256):</Typography>
-                    <Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-all', bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                      {selectedSwiftMessage.messageHash || 'a41faaf3e922dff65508aa26d3754de0b2860c4e6e81443e233c36b04641a7b5'}
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary">Blockchain Record ID:</Typography>
-                    <Typography variant="body2" fontFamily="monospace" sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                      {selectedSwiftMessage.messageId}
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={12}>
-                    <Typography variant="caption" color="text.secondary">Endorsed By Consortium Members:</Typography>
-                    <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                      <Chip label="🏛️ ECTA (Ethiopian Coffee)" size="small" color="success" />
-                      <Chip label="🏦 Commercial Bank" size="small" color="success" />
-                      <Chip label="🏛️ National Bank (NBE)" size="small" color="success" />
-                      <Chip label="✅ Multi-Org Endorsed" size="small" color="primary" />
-                    </Box>
-                  </Grid>
-                </Grid>
-              </Alert>
-
-              {/* TRANSACTION DETAILS */}
-              <Grid container spacing={3}>
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2 }}>
-                    📄 Transaction Information
-                  </Typography>
-                </Grid>
-                
-                <Grid item xs={4}>
-                  <Typography variant="body2" color="text.secondary">Message ID</Typography>
-                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageId}</Typography>
-                </Grid>
-                <Grid item xs={4}>
-                  <Typography variant="body2" color="text.secondary">Message Type</Typography>
-                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.messageType}</Typography>
-                </Grid>
-                <Grid item xs={4}>
-                  <Typography variant="body2" color="text.secondary">SWIFT Reference</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.swiftReference || 'DC1789453723155'}</Typography>
-                </Grid>
-                
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Status</Typography>
-                  <Chip 
-                    label={selectedSwiftMessage.status || 'SENT'} 
-                    color={selectedSwiftMessage.status === 'SENT' ? 'success' : selectedSwiftMessage.status === 'DRAFT' ? 'warning' : 'default'}
-                    size="small"
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Authenticated</Typography>
-                  <Chip 
-                    label={selectedSwiftMessage.authenticated ? '✓ Verified' : 'Pending'} 
-                    color={selectedSwiftMessage.authenticated ? 'success' : 'warning'}
-                    size="small"
-                    icon={<VerifiedUser />}
-                  />
-                </Grid>
-
-                {/* PARTICIPANTS */}
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
-                    🏦 Financial Institutions
-                  </Typography>
-                </Grid>
-                
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Sender Bank (BIC)</Typography>
-                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.senderBic || 'CHASUS33'}</Typography>
-                  <Typography variant="caption" color="text.secondary">Chase Bank, USA</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Receiver Bank (BIC)</Typography>
-                  <Typography variant="body1" fontWeight="bold">{selectedSwiftMessage.receiverBic || 'CBETETAA'}</Typography>
-                  <Typography variant="caption" color="text.secondary">Commercial Bank of Ethiopia</Typography>
-                </Grid>
-
-                {/* LC DETAILS */}
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
-                    💰 Letter of Credit Details
-                  </Typography>
-                </Grid>
-
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">LC Number (Blockchain Linked)</Typography>
-                  <Typography variant="body1" fontWeight="bold" color="primary">
-                    {selectedSwiftMessage.linkedLcId || selectedSwiftMessage.lcNumber || 'LC1789453661454'}
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">LC Amount</Typography>
-                  <Typography variant="h6" color="primary">
-                    ${(selectedSwiftMessage.amount || selectedSwiftMessage.lcAmount || 170000).toLocaleString()} {selectedSwiftMessage.currency || selectedSwiftMessage.lcCurrency || 'USD'}
-                  </Typography>
-                </Grid>
-                
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Beneficiary (Exporter)</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.beneficiary || 'EXP4342570'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Applicant (Importer)</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.lcApplicant || 'ABC Coffee Importers Inc'}</Typography>
-                </Grid>
-
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">LC Issue Date</Typography>
-                  <Typography variant="body1">
-                    {selectedSwiftMessage.lcIssueDate ? new Date(selectedSwiftMessage.lcIssueDate).toLocaleDateString() : 'Pending'}
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">LC Expiry Date</Typography>
-                  <Typography variant="body1">
-                    {selectedSwiftMessage.lcExpiryDate ? new Date(selectedSwiftMessage.lcExpiryDate).toLocaleDateString() : 'Dec 14, 2026'}
-                  </Typography>
-                </Grid>
-
-                {/* SHIPMENT */}
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
-                    🚢 Shipment Information
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Loading Port</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.loadingPort || 'Djibouti Port'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Discharge Port</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.dischargePort || 'New York Port, USA'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Latest Ship Date</Typography>
-                  <Typography variant="body1">
-                    {selectedSwiftMessage.latestShipDate ? new Date(selectedSwiftMessage.latestShipDate).toLocaleDateString() : 'Oct 15, 2026'}
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Partial Shipment</Typography>
-                  <Typography variant="body1">{selectedSwiftMessage.partialShipment || 'Not Allowed'}</Typography>
-                </Grid>
-
-                {/* BLOCKCHAIN TIMELINE WITH ACTORS & SIGNATURES */}
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
-                    <Timeline sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
-                    Blockchain Transaction Timeline - Consortium Actor Trail
-                  </Typography>
-                </Grid>
-                
-                <Grid item xs={12}>
-                  <Box sx={{ pl: 2 }}>
-                    {/* STEP 1: Transaction Initiation */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
-                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>1</Box>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" fontWeight="bold" color="success.main">✓ Transaction Initiated</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                          {selectedSwiftMessage.createdAt ? new Date(selectedSwiftMessage.createdAt).toLocaleString() : 'Sep 15, 2026, 06:28:43'}
-                        </Typography>
-                        <Box sx={{ bgcolor: '#f5f5f5', p: 1.5, borderRadius: 1, border: '1px solid #e0e0e0' }}>
-                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
-                            👤 Actor: Bank Administrator
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            🏛️ Organization: <strong>BANKS MSP</strong> (Commercial Bank of Ethiopia)
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            ⚡ Action: <strong>CREATE_SWIFT_MESSAGE</strong>
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
-                            Certificate DN: {selectedSwiftMessage.createdBy ? 
-                              selectedSwiftMessage.createdBy.substring(0, 80) + '...' : 
-                              'CN=Admin@banks.cecbs.et,OU=admin,O=banks.cecbs.et'}
-                          </Typography>
-                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                            <Typography variant="caption" fontWeight="bold" color="primary">🔐 Digital Signature:</Typography>
-                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
-                              30:82:01:0a:02:82:01:01:00:c4:8b:a0:6c:4f:3d:92:7a:bc:de:f1:45:67:89:ab:cd:ef
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </Box>
-                    </Box>
-
-                    {/* STEP 2: Blockchain Endorsements */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
-                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#2196f3', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>2</Box>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" fontWeight="bold" color="primary">✓ Consortium Endorsement Phase</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                          Multi-organization consensus achieved
-                        </Typography>
-
-                        {/* ECTA Endorsement */}
-                        <Box sx={{ bgcolor: '#e8f5e9', p: 1.5, borderRadius: 1, border: '1px solid #4caf50', mb: 1.5 }}>
-                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
-                            👤 Endorser 1: ECTA Peer Node
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            🏛️ Organization: <strong>ECTA MSP</strong> (Ethiopian Coffee & Tea Authority)
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
-                            Peer: peer0.ecta.cecbs.et
-                          </Typography>
-                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                            <Typography variant="caption" fontWeight="bold" color="success.main">✅ Endorsement Signature:</Typography>
-                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
-                              30:82:01:0a:02:82:01:01:00:d7:2e:4f:8c:6a:1b:3c:9d:fe:21:54:76:98:ba:dc:fe
-                            </Typography>
-                          </Box>
-                        </Box>
-
-                        {/* BANKS Endorsement */}
-                        <Box sx={{ bgcolor: '#e3f2fd', p: 1.5, borderRadius: 1, border: '1px solid #2196f3', mb: 1.5 }}>
-                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
-                            👤 Endorser 2: BANKS Peer Node
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            🏛️ Organization: <strong>BANKS MSP</strong> (Commercial Bank of Ethiopia)
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
-                            Peer: peer0.banks.cecbs.et
-                          </Typography>
-                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                            <Typography variant="caption" fontWeight="bold" color="primary">✅ Endorsement Signature:</Typography>
-                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
-                              30:82:01:0a:02:82:01:01:00:a9:3f:7d:5e:2c:8b:4a:1f:cd:32:65:87:09:ab:cd:ef
-                            </Typography>
-                          </Box>
-                        </Box>
-
-                        {/* NBE Endorsement */}
-                        <Box sx={{ bgcolor: '#fff3e0', p: 1.5, borderRadius: 1, border: '1px solid #ff9800' }}>
-                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
-                            👤 Endorser 3: NBE Peer Node
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            🏛️ Organization: <strong>NBE MSP</strong> (National Bank of Ethiopia)
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
-                            Peer: peer0.nbe.cecbs.et
-                          </Typography>
-                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                            <Typography variant="caption" fontWeight="bold" color="warning.main">✅ Endorsement Signature:</Typography>
-                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
-                              30:82:01:0a:02:82:01:01:00:b2:5c:8e:9f:3d:4a:2b:7c:ef:43:76:98:10:bc:de:f0
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </Box>
-                    </Box>
-
-                    {/* STEP 3: Orderer Consensus */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 3, gap: 2 }}>
-                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: '#9c27b0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>3</Box>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" fontWeight="bold" color="secondary">✓ Orderer Consensus & Block Commitment</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                          Transaction ordered and committed to blockchain ledger
-                        </Typography>
-                        <Box sx={{ bgcolor: '#f3e5f5', p: 1.5, borderRadius: 1, border: '1px solid #9c27b0' }}>
-                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', mb: 0.5 }}>
-                            👤 Orderer: Raft Consensus Node
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-                            🏛️ Organization: <strong>Orderer MSP</strong> (CECBS Consortium)
-                          </Typography>
-                          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
-                            Node: orderer.cecbs.et
-                          </Typography>
-                          <Box sx={{ bgcolor: '#fff', p: 1, borderRadius: 1, border: '1px solid #ddd' }}>
-                            <Typography variant="caption" fontWeight="bold" color="secondary">🔐 Block Signature:</Typography>
-                            <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.7rem' }}>
-                              30:82:01:0a:02:82:01:01:00:f8:4d:9e:2a:7b:5c:1f:8d:ae:54:87:09:21:cd:ef:ab
-                            </Typography>
-                          </Box>
-                          <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
-                            <strong>Block Number:</strong> #2847 | <strong>Tx Position:</strong> 3 of 5
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Box>
-
-                    {/* STEP 4: Current Status */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-                      <Box sx={{ width: 50, height: 50, borderRadius: '50%', bgcolor: selectedSwiftMessage.status === 'DRAFT' ? '#ff9800' : '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 20, fontWeight: 'bold', flexShrink: 0 }}>
-                        {selectedSwiftMessage.status === 'DRAFT' ? '⏳' : '✓'}
-                      </Box>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" fontWeight="bold">
-                          Current Status: {selectedSwiftMessage.status}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                          Last Updated: {selectedSwiftMessage.updatedAt ? new Date(selectedSwiftMessage.updatedAt).toLocaleString() : new Date(selectedSwiftMessage.createdAt).toLocaleString()}
-                        </Typography>
-                        <Alert severity={selectedSwiftMessage.status === 'SENT' ? 'success' : 'warning'} sx={{ mt: 1 }}>
-                          <Typography variant="caption">
-                            <strong>Immutable Record:</strong> This transaction is permanently recorded on the blockchain ledger with {selectedSwiftMessage.status === 'SENT' ? '4' : '3'} cryptographic signatures from consortium members ensuring data integrity and non-repudiation.
-                          </Typography>
-                        </Alert>
-                      </Box>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* CRYPTOGRAPHIC PROOF */}
-                <Grid item xs={12}>
-                  <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
-                    <Security sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
-                    Cryptographic Proof & Immutability
-                  </Typography>
-                </Grid>
-                <Grid item xs={12}>
-                  <Alert severity="success" icon={<VerifiedUser />}>
-                    <Typography variant="subtitle2" fontWeight="bold">
-                      This transaction is cryptographically secured and immutable
-                    </Typography>
-                    <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
-                      <li>Stored on distributed Hyperledger Fabric network</li>
-                      <li>Endorsed by multiple consortium organizations (ECTA, Banks, NBE)</li>
-                      <li>Cannot be altered or deleted once committed</li>
-                      <li>Full audit trail maintained on blockchain</li>
-                      <li>Cryptographic hash ensures data integrity</li>
-                    </ul>
+              <Box sx={{ mb: 3 }}>
+                {swiftLedgerProofLoading ? (
+                  <Alert severity="info" icon={<CircularProgress size={18} />}>
+                    Reading the SWIFT message history from Fabric and checking each committed transaction.
                   </Alert>
-                </Grid>
-              </Grid>
-            </>
-          )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
-          <Button 
-            onClick={() => {
-              // Show audit trail
-              const lcId = selectedSwiftMessage?.linkedLcId || selectedSwiftMessage?.lcNumber;
-              if (lcId) {
-                setAuditEntityType('LC');
-                setAuditEntityId(lcId);
-                setShowAuditTrail(true);
-                setSwiftDetailsDialogOpen(false);
-              }
-            }}
-            variant="outlined"
-            startIcon={<Timeline />}
-            sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
-          >
-            View Full Audit Trail
-          </Button>
-          <Button onClick={() => setSwiftDetailsDialogOpen(false)} variant="contained" sx={{ bgcolor: '#9b30b7' }}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog 
-        open={swiftDetailsDialogOpen} 
-        onClose={() => setSwiftDetailsDialogOpen(false)}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <VerifiedUser sx={{ fontSize: 28 }} />
-          SWIFT Message Details - Blockchain Verified
-        </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
-          {selectedSwiftMessage && (
-            <>
-              {/* Blockchain Verification Badge */}
-              <Alert severity="success" icon={<VerifiedUser />} sx={{ mb: 3 }}>
-                <strong>Blockchain Verified Transaction</strong>
-                <br />
-                This SWIFT message is recorded on Hyperledger Fabric blockchain and cryptographically signed.
-                <br />
-                Hash: <code style={{fontSize: '0.85em'}}>{selectedSwiftMessage.messageHash || 'N/A'}</code>
-              </Alert>
+                ) : !swiftLedgerProof?.events?.length ? (
+                  <Alert severity="warning" icon={<Security />}>
+                    {swiftLedgerProof?.error || 'No committed Fabric history was found for this SWIFT message. This record is not marked blockchain verified.'}
+                  </Alert>
+                ) : (
+                  <>
+                    <Alert severity={swiftLedgerProof.verified ? 'success' : 'warning'} icon={<Security />} sx={{ mb: 2 }}>
+                      <strong>{swiftLedgerProof.verified ? 'Ledger history and transaction signatures verified' : 'Ledger history found; full cryptographic verification did not pass'}</strong>
+                      <br />Channel: <code>{swiftLedgerProof.channelId}</code> · {swiftLedgerProof.events.length} committed history event(s)
+                    </Alert>
+                    <Grid container spacing={1.5}>
+                      {swiftLedgerProof.events.map((event: any, index: number) => {
+                        const transaction = event.transaction;
+                        return (
+                          <Grid item xs={12} key={event.txId || index}>
+                            <Paper variant="outlined" sx={{ p: 1.5 }}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'center', mb: 1 }}>
+                                <Typography variant="subtitle2">Ledger event {index + 1}</Typography>
+                                <Chip
+                                  size="small"
+                                  label={transaction?.validationStatus || 'PROOF UNAVAILABLE'}
+                                  color={transaction?.validationStatus === 'VALID' ? 'success' : 'warning'}
+                                />
+                              </Box>
+                              <Typography variant="caption" color="text.secondary">Transaction ID</Typography>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', mb: 1 }}>
+                                {event.txId || 'Unavailable'}
+                              </Typography>
+                              <Grid container spacing={1}>
+                                <Grid item xs={6}>
+                                  <Typography variant="caption" color="text.secondary">Block</Typography>
+                                  <Typography variant="body2">{transaction?.blockNumber ?? 'Unavailable'}</Typography>
+                                </Grid>
+                                <Grid item xs={6}>
+                                  <Typography variant="caption" color="text.secondary">Function</Typography>
+                                  <Typography variant="body2">{transaction?.chaincodeFunction || 'Unavailable'}</Typography>
+                                </Grid>
+                                <Grid item xs={12}>
+                                  <Typography variant="caption" color="text.secondary">Block hash</Typography>
+                                  <Typography variant="body2" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                                    {transaction?.blockHash || 'Unavailable'}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={12}>
+                                  <Typography variant="caption" color="text.secondary">Creator</Typography>
+                                  <Typography variant="body2">
+                                    {transaction?.creator?.identity || 'Unavailable'} · {transaction?.creator?.mspId || 'MSP unavailable'}
+                                    {' · signature '}{transaction?.creator?.signatureValid === true ? 'valid' : 'not verified'}
+                                    {' · CA trust '}{transaction?.creator?.certificateTrustStatus || 'unavailable'}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={12}>
+                                  <Typography variant="caption" color="text.secondary">Endorsers ({transaction?.endorsers?.length || 0})</Typography>
+                                  {(transaction?.endorsers || []).map((endorser: any, endorserIndex: number) => (
+                                    <Typography variant="body2" key={`${endorser.mspId}-${endorserIndex}`}>
+                                      {endorser.mspId} · signature {endorser.signatureValid === true ? 'valid' : 'not verified'}
+                                      {' · CA trust '}{endorser.certificateTrustStatus || 'unavailable'}
+                                    </Typography>
+                                  ))}
+                                </Grid>
+                              </Grid>
+                            </Paper>
+                          </Grid>
+                        );
+                      })}
+                    </Grid>
+                  </>
+                )}
+              </Box>
 
               <Grid container spacing={3}>
                 {/* Basic Information */}
@@ -6678,7 +6467,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={6}>
                   <Typography variant="body2" color="text.secondary">Status</Typography>
                   <Chip 
-                    label={selectedSwiftMessage.status || 'SENT'} 
+                    label={selectedSwiftMessage.status || 'UNKNOWN'}
                     color={selectedSwiftMessage.status === 'SENT' ? 'success' : selectedSwiftMessage.status === 'DRAFT' ? 'warning' : 'default'}
                     size="small"
                   />
@@ -6773,12 +6562,12 @@ const BanksPortal: React.FC = () => {
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2, gap: 2 }}>
                       <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>1</Box>
                       <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" fontWeight="bold">Created on Blockchain</Typography>
+                        <Typography variant="body1" fontWeight="bold">Message Created</Typography>
                         <Typography variant="body2" color="text.secondary">
                           {selectedSwiftMessage.createdAt ? new Date(selectedSwiftMessage.createdAt).toLocaleString() : 'N/A'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          By: {selectedSwiftMessage.createdBy ? 'Bank Administrator' : 'System'}
+                          By: {selectedSwiftMessage.createdBy || 'Unavailable'}
                         </Typography>
                       </Box>
                     </Box>
@@ -6807,7 +6596,7 @@ const BanksPortal: React.FC = () => {
                             {new Date(selectedSwiftMessage.processedDate).toLocaleString()}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
-                            Processed by: {selectedSwiftMessage.processedBy || 'System'}
+                            Processed by: {selectedSwiftMessage.processedBy || 'Unavailable'}
                           </Typography>
                         </Box>
                       </Box>
@@ -6827,21 +6616,21 @@ const BanksPortal: React.FC = () => {
                   </Box>
                 </Grid>
 
-                {/* Blockchain Metadata */}
+                {/* Application record metadata */}
                 <Grid item xs={12}>
                   <Typography variant="h6" sx={{ borderBottom: '2px solid #9b30b7', pb: 1, mb: 2, mt: 2 }}>
                     <Security sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
-                    Blockchain Metadata
+                    Record Metadata
                   </Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Blockchain Record ID</Typography>
+                  <Typography variant="body2" color="text.secondary">SWIFT Message ID</Typography>
                   <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
                     {selectedSwiftMessage.messageId}
                   </Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="body2" color="text.secondary">Authenticated</Typography>
+                  <Typography variant="body2" color="text.secondary">Application Authenticated</Typography>
                   <Chip 
                     label={selectedSwiftMessage.authenticated ? 'Yes' : 'Pending'} 
                     color={selectedSwiftMessage.authenticated ? 'success' : 'warning'}
@@ -6868,6 +6657,14 @@ const BanksPortal: React.FC = () => {
           loadBankingData(); // Refresh forex data
         }}
         preselectedPayment={null}
+      />
+      <RepatriationRecordingDialog
+        open={repatriationRecordingOpen}
+        onClose={() => setRepatriationRecordingOpen(false)}
+        onSuccess={() => {
+          setRepatriationRecordingOpen(false);
+          loadBankingData();
+        }}
       />
     </Box>
     </ThemeProvider>

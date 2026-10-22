@@ -649,20 +649,24 @@ Ethiopian Customs Commission (ECC)
                   {(log.signature as any).recordType !== 'DATABASE' && (
                     <>
                       <Typography variant="caption" component="div">
-                        <strong>Data Hash (SHA-256):</strong> {log.signature.dataHash}
+                        <strong>{(log.signature as any).dataHashScope === 'FULL_AUDIT_PAYLOAD' ? 'Stored audit payload hash (SHA-256):' : 'Data hash (SHA-256):'}</strong> {log.signature.dataHash}
                       </Typography>
-                      <Typography variant="caption" component="div">
-                        <strong>Previous State Hash:</strong>{' '}
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
-                          {log.signature.previousStateHash}
-                        </span>
-                      </Typography>
-                      <Typography variant="caption" component="div">
-                        <strong>New State Hash:</strong>{' '}
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
-                          {log.signature.newStateHash}
-                        </span>
-                      </Typography>
+                      {log.signature.previousStateHash && (
+                        <Typography variant="caption" component="div">
+                          <strong>Stored previous audit hash:</strong>{' '}
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
+                            {log.signature.previousStateHash}
+                          </span>
+                        </Typography>
+                      )}
+                      {log.signature.newStateHash && (
+                        <Typography variant="caption" component="div">
+                          <strong>Stored new audit hash:</strong>{' '}
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', wordBreak: 'break-all' }}>
+                            {log.signature.newStateHash}
+                          </span>
+                        </Typography>
+                      )}
                     </>
                   )}
                   {(log.signature as any).recordType === 'DATABASE' && (
@@ -682,12 +686,10 @@ Ethiopian Customs Commission (ECC)
                       </Typography>
                     </Box>
                   )}
-                  {!log.tampered && (log.signature as any).recordType !== 'DATABASE' && (
+                  {(log.signature as any).stateHashChainVerified === true && (
                     <Box sx={{ mt: 1, p: 1, bgcolor: 'success.light', borderRadius: 1 }}>
                       <Typography variant="caption" sx={{ color: 'success.dark', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        {log.signature.previousStateHash === '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a' 
-                          ? '🔒 Genesis transaction - Chain begins here'
-                          : '✓ Hash chain verified - No tampering detected'}
+                        ✓ Audit hash chain verified by chaincode
                       </Typography>
                     </Box>
                   )}

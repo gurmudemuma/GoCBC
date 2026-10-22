@@ -104,19 +104,24 @@ const RepatriationCompliancePanel: React.FC<RepatriationCompliancePanelProps> = 
       setSending(true);
       
       // Send compliance notices for selected repatriations
-      const promises = selectedIds.map(id =>
-        apiFetch('/api/v1/notifications/compliance-notice', {
+      const results = await Promise.all(selectedIds.map(async (id) => {
+        const record = overdueRepatriations.find(item => item.repatriationId === id);
+        const response = await apiFetch('/notifications/compliance/repatriation', {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
+            exporterId: record?.exporterId,
             repatriationId: id,
-            noticeType: 'OVERDUE_REPATRIATION',
-            severity: 'HIGH',
+            deadline: record?.repatriationDeadline || undefined,
           }),
-        })
-      );
-
-      await Promise.all(promises);
+        });
+        const result = await response.json();
+        return { ok: response.ok && result.success, error: result.error?.message || result.error };
+      }));
+      const failed = results.filter(result => !result.ok);
+      if (failed.length > 0) {
+        throw new globalThis.Error(`${failed.length} of ${selectedIds.length} compliance notices could not be sent`);
+      }
       
       showSuccess('Success', `Compliance notice sent to ${selectedIds.length} exporter(s)`);
       setSelectedIds([]);

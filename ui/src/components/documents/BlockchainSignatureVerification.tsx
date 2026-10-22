@@ -74,6 +74,7 @@ interface BlockchainSignature {
     certificateDetails?: any;
     signerInfo?: any;
   }>;
+  endorsementNote?: string;
   blockchainData?: any;
   transactionId?: string;
   documentFileName?: string;
@@ -84,6 +85,7 @@ interface BlockchainSignature {
 interface VerificationSummary {
   total: number;
   verified: number;
+  unverified?: number;
   failed: number;
   pending: number;
   unavailable?: number;
@@ -154,48 +156,44 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
         );
 
         if (entitySigResponse.data.success && entitySigResponse.data.data.transactions) {
-          // Convert blockchain transactions to signature format
-          // API now returns enhanced certificateDetails and signerInfo objects
           for (const tx of entitySigResponse.data.data.transactions) {
+            const identity = tx.creator?.identity || 'Unknown identity';
+            const hasVerifiedEndorsements = Array.isArray(tx.endorsers) && tx.endorsers.length > 0 &&
+              tx.endorsers.every((endorser: any) => endorser.signatureValid === true);
+            const isLedgerVerified = tx.source !== 'POSTGRESQL' && tx.validationCode === 'VALID' &&
+              tx.creator?.signatureValid === true && hasVerifiedEndorsements;
             entitySignatures.push({
               signature_id: tx.txId,
               document_id: entityId,
               signer_id: 0,
               signer_org: tx.creator.mspId,
               signature_type: 'BLOCKCHAIN_TRANSACTION',
-              username: tx.signerInfo?.username || tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
-              full_name: tx.signerInfo?.name || tx.creator.identity,
+              username: tx.signerInfo?.username || identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
+              full_name: tx.signerInfo?.name || identity,
               email: tx.signerInfo?.email || '',
               org_name: tx.signerInfo?.organization || tx.creator.mspId,
               blockchain_tx_id: tx.txId,
               signed_at: tx.timestamp,
-              blockchainVerified: tx.validationCode === 'VALID',
-              verificationStatus: tx.validationCode === 'VALID' ? 'VERIFIED' : 'PENDING',
-              verificationMessage: `${tx.chaincodeFunction} - Block #${tx.blockNumber}`,
-              certificateDetails: tx.certificateDetails || {
-                commonName: tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
-                organization: tx.creator.identity.split('O=')[1]?.split(',')[0] || tx.creator.mspId,
-                organizationalUnit: tx.creator.identity.split('OU=')[1]?.split(',')[0] || 'client',
-                country: 'ET',
-                serialNumber: tx.txId.substring(0, 16),
-                issuer: `${tx.creator.mspId} CA`,
-                validFrom: tx.timestamp,
-                validUntil: 'N/A',
-                fingerprint: tx.blockHash || tx.txId
-              },
+              blockchainVerified: isLedgerVerified,
+              verificationStatus: isLedgerVerified ? 'VERIFIED' : tx.source === 'POSTGRESQL' ? 'UNVERIFIED' : 'UNVERIFIED',
+              verificationMessage: tx.source === 'POSTGRESQL'
+                ? 'Application signature record; ledger validation was not confirmed.'
+                : `${tx.chaincodeFunction} - Block #${tx.blockNumber}; endorsement certificates are shown with their verification result.`,
+              certificateDetails: tx.certificateDetails,
               signerInfo: tx.signerInfo || {
-                name: tx.creator.identity,
-                username: tx.creator.identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
+                name: identity,
+                username: identity.split('CN=')[1]?.split(',')[0] || 'Unknown',
                 email: '',
                 organization: tx.creator.mspId,
                 mspId: tx.creator.mspId
               },
-              endorsers: tx.endorsers || [], // CRITICAL: Include consortium endorsers for multi-org verification
+              endorsers: tx.endorsers || [],
+              endorsementNote: tx.endorsementNote,
               blockchainData: tx,
               transactionId: tx.txId,
               documentFileName: `${tx.chaincodeFunction}`,
               documentType: entityType,
-              signatureSource: 'BLOCKCHAIN_TRANSACTION'
+              signatureSource: tx.source === 'POSTGRESQL' ? 'APPLICATION_SIGNATURE' : 'BLOCKCHAIN_TRANSACTION'
             });
           }
         }
@@ -211,6 +209,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
       const summaryData = {
         total: allSignatures.length,
         verified: allSignatures.filter(r => r.blockchainVerified).length,
+        unverified: allSignatures.filter(r => r.verificationStatus === 'UNVERIFIED').length,
         failed: allSignatures.filter(r => r.verificationStatus === 'MISMATCH' || r.verificationStatus === 'NOT_FOUND_ON_BLOCKCHAIN').length,
         pending: allSignatures.filter(r => r.verificationStatus === 'NO_BLOCKCHAIN_TX').length,
         unavailable: allSignatures.filter(r => r.verificationStatus === 'BLOCKCHAIN_UNAVAILABLE').length
@@ -317,7 +316,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
                 🔐 Blockchain Signature Verification
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                All signatures verified against immutable blockchain records
+                Ledger sourced entries are checked against Fabric history; application signature records are labeled separately.
               </Typography>
             </Box>
             <Tooltip title="Refresh verification">
@@ -335,6 +334,14 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
                 color="success"
                 variant="filled"
               />
+              {(summary.unverified || 0) > 0 && (
+                <Chip
+                  icon={<InfoIcon />}
+                  label={`${summary.unverified} Unverified`}
+                  color="info"
+                  variant="outlined"
+                />
+              )}
               {summary.failed > 0 && (
                 <Chip
                   icon={<ErrorIcon />}
@@ -389,7 +396,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
           <AccordionDetails>
             <Stack spacing={2}>
               {/* Verification Status */}
-              <Alert severity={sig.blockchainVerified ? 'success' : 'warning'}>
+              <Alert severity={sig.blockchainVerified ? 'success' : sig.verificationStatus === 'UNVERIFIED' ? 'info' : 'warning'}>
                 <Typography variant="body2">
                   <strong>Verification:</strong> {sig.verificationMessage}
                 </Typography>
@@ -542,42 +549,20 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
                 </Table>
               </Box>
 
-              {/* Consortium Endorsers - Multi-Organization Consensus */}
-              {(sig as any).endorsers && (sig as any).endorsers.length > 0 ? (
+              {/* Consortium endorsements reported by the ledger source */}
+              {sig.endorsers && sig.endorsers.length > 0 ? (
                 <Box>
                   <Divider sx={{ my: 2 }} />
                   <Typography variant="subtitle2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    🏛️ Consortium Endorsements ({(sig as any).endorsers.length} Organizations)
+                    🏛️ Recorded Peer Endorsements ({sig.endorsers.length})
                   </Typography>
-                  {(sig as any).endorsers.length >= 4 ? (
-                    <Alert severity="success" sx={{ mb: 2, fontSize: '0.85rem' }}>
-                      <Typography variant="body2">
-                        <strong>MAJORITY Consensus Achieved:</strong> This transaction was endorsed by {(sig as any).endorsers.length} peer organizations, 
-                        meeting the consortium's MAJORITY endorsement policy requirement (minimum 4 of 6 organizations). 
-                        Each endorsement represents independent validation and cryptographic approval.
-                      </Typography>
-                      <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-                        📊 Endorsement Policy: MAJORITY (4 of 6) • ✅ Status: Valid Consensus
-                      </Typography>
-                    </Alert>
-                  ) : (sig as any).endorsers.length >= 2 ? (
-                    <Alert severity="info" sx={{ mb: 2, fontSize: '0.85rem' }}>
-                      <Typography variant="body2">
-                        <strong>Partial Consensus Data:</strong> {(sig as any).endorsers.length} endorser(s) captured. 
-                        The consortium's current endorsement policy requires MAJORITY (4 of 6 organizations) for transaction validation.
-                      </Typography>
-                    </Alert>
-                  ) : (
-                    <Alert severity="warning" sx={{ mb: 2, fontSize: '0.85rem' }}>
-                      <Typography variant="body2">
-                        <strong>Legacy Transaction:</strong> This transaction was recorded before multi-organization endorsement tracking was implemented. 
-                        Only {(sig as any).endorsers.length} endorser(s) captured. Current transactions capture endorsements from all validating organizations 
-                        (MAJORITY policy: minimum 4 of 6).
-                      </Typography>
-                    </Alert>
-                  )}
+                  <Alert severity={sig.blockchainVerified ? 'success' : 'info'} sx={{ mb: 2, fontSize: '0.85rem' }}>
+                    {sig.blockchainVerified
+                      ? 'Fabric marked this ledger transaction valid under the active endorsement policy. The peer identities shown are the endorsement data available in this record.'
+                      : 'Peer identities are listed in this record, but this entry has not been verified as a valid ledger transaction.'}
+                  </Alert>
                   
-                  {(sig as any).endorsers.map((endorser: any, idx: number) => (
+                  {sig.endorsers.map((endorser: any, idx: number) => (
                     <Accordion key={idx} sx={{ mb: 1, backgroundColor: '#fafafa' }}>
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                         <Stack direction="row" spacing={2} alignItems="center">
@@ -636,14 +621,10 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
               ) : (
                 <Box>
                   <Divider sx={{ my: 2 }} />
-                  <Alert severity="info" sx={{ fontSize: '0.85rem' }}>
-                    <Typography variant="body2">
-                      <strong>Endorsement Policy:</strong> This consortium blockchain uses MAJORITY endorsement policy, requiring 
-                      validation from at least 4 of the 6 peer organizations for each transaction.
-                    </Typography>
-                    <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-                      📋 Policy: MAJORITY (4/6) • Organizations: ECTA, ECX, Banks, NBE, Customs, Shipping
-                    </Typography>
+                  <Alert severity={sig.blockchainVerified ? 'info' : 'warning'} sx={{ fontSize: '0.85rem' }}>
+                    {sig.endorsementNote || (sig.blockchainVerified
+                      ? 'Fabric marked this ledger transaction valid under the active channel and chaincode policy. This history response does not include the endorsing peer identities.'
+                      : 'No peer endorsement evidence is available for this entry.')}
                   </Alert>
                 </Box>
               )}

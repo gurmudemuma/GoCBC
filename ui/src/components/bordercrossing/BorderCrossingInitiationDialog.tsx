@@ -29,7 +29,7 @@ const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogPro
     if (!validate()) return;
     try {
       setSubmitting(true);
-      const response = await apiFetch('/api/v1/bordercrossing/initiate', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
+      const response = await apiFetch('/bordercrossing/initiate', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
       if (result.success) { showSuccess('Success', 'Border crossing initiated'); onSuccess(); onClose(); setForm({ ...form, borderCrossingId: `BC${Date.now()}` }); }
       else showError('Error', result.error || 'Failed');

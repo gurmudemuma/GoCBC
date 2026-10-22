@@ -68,7 +68,7 @@ const InspectionConductDialog: React.FC<InspectionConductDialogProps> = ({
   const handleSubmit = async () => {
     try {
       setSubmitting(true);
-      const response = await apiFetch(`/api/v1/inspection/${inspection.inspectionId}/conduct`, {
+      const response = await apiFetch(`/inspection/${inspection.inspectionId}/conduct`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({

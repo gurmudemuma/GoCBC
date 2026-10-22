@@ -121,8 +121,8 @@ const InspectionReportDialog: React.FC<InspectionReportDialogProps> = ({
         {inspection.txId && (
           <Box sx={{ mt: 3, p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BlockchainStatusIcon status="VERIFIED" txId={inspection.txId} />
-              <Typography variant="caption" fontWeight={600}>Blockchain Verified</Typography>
+              <BlockchainStatusIcon status="RECORDED" txId={inspection.txId} />
+              <Typography variant="caption" fontWeight={600}>Ledger transaction recorded</Typography>
             </Box>
             <Typography variant="caption" color="text.secondary">TX: {inspection.txId}</Typography>
           </Box>

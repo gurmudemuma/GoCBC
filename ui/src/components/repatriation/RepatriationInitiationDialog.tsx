@@ -47,6 +47,7 @@ interface Payment {
   exporterName?: string;
   amount: number;
   currency: string;
+  status?: string;
 }
 
 interface RepatriationInitiationDialogProps {
@@ -67,6 +68,8 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [policy, setPolicy] = useState<{ retentionRate: number; surrenderRate: number } | null>(null);
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null);
   
   const [formData, setFormData] = useState({
     repatriationId: '',
@@ -95,6 +98,38 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const loadPolicyAndRate = async () => {
+      setPolicy(null);
+      setExchangeRate(null);
+      try {
+        const [policyResponse, rateResponse] = await Promise.all([
+          apiFetch('/forex/retention-policy/COFFEE', { method: 'GET', headers: getAuthHeaders() }),
+          apiFetch(`/forex/rates/${encodeURIComponent(formData.currency)}/current`, { method: 'GET', headers: getAuthHeaders() }),
+        ]);
+        const [policyResult, rateResult] = await Promise.all([policyResponse.json(), rateResponse.json()]);
+        if (!active) return;
+        if (policyResult.success && policyResult.data) {
+          const retentionRate = Number(policyResult.data.retentionRate ?? policyResult.data.RetentionRate);
+          const surrenderRate = Number(policyResult.data.surrenderRate ?? policyResult.data.SurrenderRate);
+          if (Number.isFinite(retentionRate) && Number.isFinite(surrenderRate) && Math.abs(retentionRate + surrenderRate - 100) < 0.0001) {
+            setPolicy({ retentionRate, surrenderRate });
+          }
+        }
+        if (rateResult.success && rateResult.data) {
+          const currentRate = Number(rateResult.data.midRate ?? rateResult.data.MidRate);
+          if (Number.isFinite(currentRate) && currentRate > 0) setExchangeRate(currentRate);
+        }
+      } catch (error) {
+        console.error('[REPATRIATION] Could not load active NBE policy/rate:', error);
+      }
+    };
+    void loadPolicyAndRate();
+    return () => { active = false; };
+  }, [open, formData.currency]);
+
   // Preselect payment if provided
   useEffect(() => {
     if (preselectedPayment) {
@@ -113,7 +148,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
   const fetchPayments = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch('/api/v1/payments', {
+      const response = await apiFetch('/payments', {
         method: 'GET',
         headers: getAuthHeaders(),
       });
@@ -121,8 +156,9 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
       
       if (result.success) {
         // Filter payments that need repatriation
-        const eligible = result.data.filter((p: Payment) => 
-          p.amount > 0 && (p.currency === 'USD' || p.currency === 'EUR')
+        const eligible = result.data.filter((p: Payment) =>
+          p.amount > 0 && ['USD', 'EUR', 'GBP'].includes(String(p.currency).toUpperCase()) &&
+          String(p.status || '').toUpperCase() === 'SETTLED'
         );
         setPayments(eligible);
       }
@@ -186,7 +222,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
     try {
       setSubmitting(true);
       
-      const response = await apiFetch('/api/v1/repatriation/initiate', {
+      const response = await apiFetch('/repatriation/initiate', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -252,12 +288,11 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
     }
   };
 
-  // Calculate 60/40 split
+  // Preview the active ledger policy and rate; no local defaults are used.
   const exportAmount = parseFloat(formData.exportAmount) || 0;
-  const fcyRetention = exportAmount * 0.4;
-  const nbeConversion = exportAmount * 0.6;
-  const exchangeRate = 115.5; // Current rate
-  const etbAmount = nbeConversion * exchangeRate;
+  const fcyRetention = policy ? exportAmount * policy.retentionRate / 100 : null;
+  const nbeConversion = policy ? exportAmount * policy.surrenderRate / 100 : null;
+  const etbAmount = nbeConversion !== null && exchangeRate !== null ? nbeConversion * exchangeRate : null;
 
   return (
     <Dialog
@@ -294,7 +329,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
         <Box>
           {/* Info Alert */}
           <Alert severity="info" sx={{ mb: 3 }} icon={<Warning />}>
-            Export proceeds must be repatriated within 60 days of shipment. NBE monitors compliance.
+            Export proceeds must be repatriated within 120 days of shipment. The active NBE retention policy and currency rate are read from the ledger.
           </Alert>
 
           {/* Repatriation ID */}
@@ -408,7 +443,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
                 value={formData.shipmentDate}
                 onChange={(e) => handleInputChange('shipmentDate', e.target.value)}
                 error={!!errors.shipmentDate}
-                helperText={errors.shipmentDate}
+                helperText={errors.shipmentDate || 'Must match the departure date or bill-of-lading date already recorded for this shipment.'}
                 InputLabelProps={{ shrink: true }}
               />
             </Grid>
@@ -479,17 +514,18 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
           {exportAmount > 0 && (
             <Box sx={{ mt: 3, p: 2, bgcolor: '#f5f5f5', borderRadius: 1 }}>
               <Typography variant="subtitle2" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <SwapHoriz /> NBE 60/40 Split Calculation
+                <SwapHoriz /> NBE Ledger Policy Preview
               </Typography>
               <Divider sx={{ my: 1 }} />
+              {!policy && <Alert severity="warning" sx={{ mb: 2 }}>No active COFFEE retention policy is available on the ledger. Repatriation cannot be initiated until NBE records one.</Alert>}
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={4}>
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      FCY Retention (40%)
+                      FCY Retention ({policy ? `${policy.retentionRate}%` : 'unavailable'})
                     </Typography>
                     <Typography variant="body1" fontWeight={600} color={CBE_COLORS.purple}>
-                      {formData.currency} {fcyRetention.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {fcyRetention === null ? 'Unavailable' : `${formData.currency} ${fcyRetention.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       Retained in exporter's FCY account
@@ -499,10 +535,10 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
                 <Grid item xs={12} sm={4}>
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      NBE Conversion (60%)
+                      NBE Conversion ({policy ? `${policy.surrenderRate}%` : 'unavailable'})
                     </Typography>
                     <Typography variant="body1" fontWeight={600} color={CBE_COLORS.purple}>
-                      {formData.currency} {nbeConversion.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {nbeConversion === null ? 'Unavailable' : `${formData.currency} ${nbeConversion.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       Converted to ETB via NBE
@@ -512,10 +548,10 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
                 <Grid item xs={12} sm={4}>
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      ETB Amount @ {exchangeRate}
+                      ETB Amount @ {exchangeRate === null ? 'unavailable' : exchangeRate}
                     </Typography>
                     <Typography variant="body1" fontWeight={600} color="#2e7d32">
-                      ETB {etbAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {etbAmount === null ? 'Unavailable' : `ETB ${etbAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       Deposited to exporter's ETB account
@@ -549,7 +585,7 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
         <Button
           variant="contained"
           onClick={handleSubmit}
-          disabled={submitting || !formData.paymentId}
+          disabled={submitting || !formData.paymentId || !policy || exchangeRate === null}
           startIcon={submitting ? <CircularProgress size={16} /> : <Send />}
           sx={{ bgcolor: CBE_COLORS.purple }}
         >

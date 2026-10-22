@@ -243,8 +243,7 @@ const UserManagement: React.FC = () => {
         setUsers(parsedUsers);
         setTotalUsers(parseInt(response.data.pagination.total) || 0);
         
-        console.log('Loaded users:', parsedUsers.length, 'Total:', response.data.pagination.total);
-        console.log('User IDs:', parsedUsers.map((u: any) => ({ id: u.id, username: u.username })));
+        console.log('Loaded user accounts:', parsedUsers.length);
       }
     } catch (error) {
       console.error('Failed to load users:', error);
@@ -507,14 +506,6 @@ const UserManagement: React.FC = () => {
 
   // Handler functions
   const handleCreateUser = async (data: UserFormData) => {
-    console.log('🔵 Create User Form Data:', data);
-    console.log('🔵 Form Errors:', errors);
-    console.log('🔵 Current User Context:', {
-      role: currentUser?.role,
-      organization: currentUser?.organization,
-      userId: currentUser?.id,
-    });
-    
     setLoading(true);
     try {
       const payload = {
@@ -529,11 +520,7 @@ const UserManagement: React.FC = () => {
         ectaLicense: data.ecta_license,
       };
 
-      console.log('🟢 Sending payload to API:', payload);
-
       const response = await api.post('/users', payload);
-      
-      console.log('✅ API Response:', response.data);
       
       if (response.data.success) {
         showSnackbar(`✅ User "${data.username}" created successfully!`, 'success');
@@ -542,10 +529,6 @@ const UserManagement: React.FC = () => {
         await loadUsers(); // Reload users list
       }
     } catch (error: any) {
-      console.error('❌ Error creating user:', error);
-      console.error('❌ Error response:', error.response?.data);
-      console.error('❌ Error details:', JSON.stringify(error.response?.data, null, 2));
-      
       const errorData = error.response?.data?.error;
       let errorMessage = errorData?.message || 'Failed to create user';
       
@@ -562,8 +545,6 @@ const UserManagement: React.FC = () => {
 
   // Add onError handler for form validation failures
   const handleCreateUserError = (errors: any) => {
-    console.log('❌ Form Validation Errors:', errors);
-    
     // Collect all error messages
     const errorMessages = Object.entries(errors).map(([field, error]: [string, any]) => {
       const fieldName = field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -713,13 +694,10 @@ const UserManagement: React.FC = () => {
       return;
     }
 
-    console.log('Resetting password for user:', selectedUser.id, selectedUser.username);
     setResettingPassword(true);
 
     try {
       const response = await api.post(`/users/${selectedUser.id}/reset-password`, {});
-      
-      console.log('Password reset response:', response.data);
       
       if (response.data.success) {
         const newPassword = response.data.data.newPassword;
@@ -728,12 +706,6 @@ const UserManagement: React.FC = () => {
         setSelectedUser(null);
       }
     } catch (error: any) {
-      console.error('Password reset error:', error);
-      console.error('Error response:', error.response?.data);
-      console.error('Error status:', error.response?.status);
-      console.error('Error message:', error.message);
-      console.error('Request URL:', error.config?.url);
-      
       const errorData = error.response?.data;
       const errorMessage = errorData?.error?.message || 
                           errorData?.message ||
@@ -1305,11 +1277,6 @@ const UserManagement: React.FC = () => {
               type="submit" 
               variant="contained"
               startIcon={<Save />}
-              onClick={(e) => {
-                console.log('🔵 Create User button clicked');
-                console.log('🔵 Current form values:', watch());
-                console.log('🔵 Current form errors:', errors);
-              }}
             >
               Create User
             </Button>
@@ -1721,9 +1688,9 @@ const UserManagement: React.FC = () => {
               </Alert>
               
               <Alert severity="info">
-                The password will be reset to the default: <strong>password123</strong>
+                A unique temporary password will be generated and shown once after the reset.
                 <br /><br />
-                Please inform the user to change their password after logging in.
+                Ask the user to change the password after signing in.
               </Alert>
             </Box>
           )}

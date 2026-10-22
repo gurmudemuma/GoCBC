@@ -83,7 +83,7 @@ interface BlockchainAuditLog {
   createdAt: string;
   chainPosition?: number;
   totalInChain?: number;
-  chainVerified?: boolean;
+  chainLinked?: boolean;
   isBlockchainRecord?: boolean;
   immutable?: boolean;
 }
@@ -302,7 +302,7 @@ const BlockchainAuditTrail: React.FC<BlockchainAuditTrailProps> = ({
                   top: 80,
                   bottom: -24,
                   width: 2,
-                  bgcolor: log.chainVerified ? 'success.main' : 'error.main',
+                  bgcolor: log.chainLinked ? 'info.main' : 'error.main',
                   zIndex: 0,
                 }}
               />
@@ -355,12 +355,12 @@ const BlockchainAuditTrail: React.FC<BlockchainAuditTrailProps> = ({
                           color="primary"
                         />
                       )}
-                      {log.chainVerified && (
+                      {log.chainLinked && (
                         <Chip
                           icon={<CheckCircle />}
-                          label="VERIFIED"
+                          label="HASH LINKS PRESENT"
                           size="small"
-                          color="success"
+                          color="info"
                         />
                       )}
                     </Box>

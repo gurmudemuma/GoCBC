@@ -84,6 +84,7 @@ interface DocumentValidationDialogProps {
   approveLabel?: string;
   rejectLabel?: string;
   showRejectOption?: boolean;
+  showApprovalOption?: boolean;
   readOnly?: boolean; // Add read-only mode for view-only
 }
 
@@ -117,6 +118,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
   approveLabel = 'Approve',
   rejectLabel = 'Reject',
   showRejectOption = true,
+  showApprovalOption = true,
   readOnly = false,
 }) => {
   const [tabValue, setTabValue] = useState(0);
@@ -595,7 +597,7 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
         {/* Approval/Rejection Form */}
         {!readOnly && (
           <>
-            {!showRejectForm ? (
+            {!showRejectForm && showApprovalOption && (
               <Box sx={{ mt: 3 }}>
                 <TextField
                   fullWidth
@@ -617,7 +619,8 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                   sx={{ mt: 2 }}
                 />
               </Box>
-            ) : (
+            )}
+            {showRejectForm && (
               <Box sx={{ mt: 3 }}>
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   Please provide a detailed reason for rejection. This will be communicated to the applicant.
@@ -656,15 +659,17 @@ export const DocumentValidationDialog: React.FC<DocumentValidationDialogProps> =
                 {rejectLabel}
               </Button>
             )}
-            <Button
-              onClick={handleApprove}
-              variant="contained"
-              color="success"
-              startIcon={<CheckCircle />}
-              disabled={!acknowledgeChecks}
-            >
-              {approveLabel}
-            </Button>
+            {showApprovalOption && (
+              <Button
+                onClick={handleApprove}
+                variant="contained"
+                color="success"
+                startIcon={<CheckCircle />}
+                disabled={!acknowledgeChecks}
+              >
+                {approveLabel}
+              </Button>
+            )}
           </>
         )}
         {!readOnly && showRejectForm && (

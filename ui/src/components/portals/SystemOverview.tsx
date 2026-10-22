@@ -279,7 +279,7 @@ const SystemOverview: React.FC = () => {
 
               <Alert severity="success" sx={{ mt: 2 }}>
                 <Typography variant="caption">
-                  <strong>Cryptographic Integrity:</strong> All blockchain-verified logs include complete cryptographic chain (previousStateHash → newStateHash)
+                  <strong>Cryptographic Integrity:</strong> Verified counts require a valid Fabric block entry, valid creator and endorsement signatures, and certificates trusted by configured MSP roots.
                 </Typography>
               </Alert>
             </CardContent>
@@ -431,7 +431,7 @@ const SystemOverview: React.FC = () => {
       {/* Bottom Info Banner */}
       <Paper sx={{ p: 2, bgcolor: 'info.light' }}>
         <Typography variant="body2" color="info.contrastText">
-          <strong>🔐 TRUE BLOCKCHAIN IMPLEMENTATION:</strong> Every audit action is written to Hyperledger Fabric FIRST with cryptographic signatures (previousStateHash → newStateHash chain), then cached in PostgreSQL for fast queries. Complete traceability from application to delivery.
+          <strong>🔐 Fabric audit verification:</strong> The verified count includes only entries with a valid block validation code, valid transaction signatures, and configured MSP certificate trust. Application records and ledger references without complete proof remain separate.
         </Typography>
       </Paper>
     </Box>

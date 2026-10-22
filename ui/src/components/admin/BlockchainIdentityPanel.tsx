@@ -50,6 +50,12 @@ interface BlockchainIdentity {
   expiresAt: string;
   status: 'active' | 'suspended' | 'revoked' | 'expired';
   revokedAt?: string;
+  revocationStatus?: string;
+  crlGeneratedAt?: string;
+  crlHash?: string;
+  credentialType?: string;
+  fabricMspMembership?: string;
+  ledgerRecorded?: boolean;
 }
 
 interface BlockchainIdentityPanelProps {
@@ -75,6 +81,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
   const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [revokeReason, setRevokeReason] = useState('');
+  const isFabricIdentity = identity?.credentialType === 'FABRIC_CA_X509' || identity?.fabricMspMembership === 'CA_ISSUED';
 
   useEffect(() => {
     loadIdentity();
@@ -134,7 +141,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
       });
 
       if (response.data.success) {
-        setSuccess('Blockchain identity revoked successfully!');
+        setSuccess(response.data.data?.consensusRevocationMessage || 'Fabric CA identity revoked successfully.');
         setRevokeDialogOpen(false);
         setRevokeReason('');
         loadIdentity();
@@ -150,9 +157,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
     setRenewing(true);
     setError('');
     try {
-      const response = await api.post(`/crypto-users/${userId}/renew-certificate`, {
-        validityDays: 365,
-      });
+      const response = await api.post(`/crypto-users/${userId}/renew-certificate`, {});
 
       if (response.data.success) {
         setSuccess('Certificate renewed successfully!');
@@ -199,7 +204,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
           <Box display="flex" alignItems="center" gap={1}>
             <VerifiedUser color="primary" />
-            <Typography variant="h6">Blockchain Identity</Typography>
+            <Typography variant="h6">Fabric CA Identity</Typography>
           </Box>
           <IconButton onClick={loadIdentity} size="small">
             <Refresh />
@@ -218,10 +223,23 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
           </Alert>
         )}
 
+        <Alert severity={isFabricIdentity ? 'info' : 'warning'} sx={{ mb: 2 }}>
+          {isFabricIdentity
+            ? 'This user has a CA-issued X.509 identity stored in the Fabric wallet. The certificate identifies the transaction creator; it does not by itself place user data on the ledger.'
+            : 'This user does not have a Fabric CA identity yet. Legacy application signing records are not Fabric MSP identities and cannot sign Fabric transactions.'}
+        </Alert>
+        {identity?.status === 'revoked' && identity.revocationStatus && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {identity.revocationStatus === 'PENDING_MSP_CRL_UPDATE'
+              ? `The CA revocation list was generated${identity.crlHash ? ` (SHA-256 ${identity.crlHash})` : ''}. The owning organization still needs to commit it through a channel configuration update before peers reject this certificate.`
+              : 'The CA revocation is recorded. Generate the updated MSP revocation list and commit it through a channel configuration update before peers reject this certificate.'}
+          </Alert>
+        )}
+
         {!identity ? (
           <Box textAlign="center" py={3}>
             <Typography variant="body2" color="text.secondary" mb={2}>
-              No blockchain identity enrolled yet
+              No identity record is enrolled for this user.
             </Typography>
             <Button
               variant="contained"
@@ -229,11 +247,18 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
               onClick={handleEnroll}
               disabled={enrolling}
             >
-              {enrolling ? 'Enrolling...' : 'Enroll Blockchain Identity'}
+              {enrolling ? 'Enrolling…' : 'Enroll Fabric CA Identity'}
             </Button>
           </Box>
         ) : (
           <>
+            {!isFabricIdentity && (
+              <Box mb={2} textAlign="center">
+                <Button variant="contained" startIcon={<VpnKey />} onClick={handleEnroll} disabled={enrolling}>
+                  {enrolling ? 'Enrolling…' : 'Replace with Fabric CA Identity'}
+                </Button>
+              </Box>
+            )}
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
                 <List dense>
@@ -252,7 +277,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
                       <Business />
                     </ListItemIcon>
                     <ListItemText
-                      primary="MSP ID"
+                      primary={isFabricIdentity ? 'Fabric MSP membership' : 'Assigned MSP (unverified)'}
                       secondary={identity.mspId}
                     />
                   </ListItem>
@@ -262,7 +287,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
                       <CardMembership />
                     </ListItemIcon>
                     <ListItemText
-                      primary="Enrollment ID"
+                      primary={isFabricIdentity ? 'Fabric CA enrollment ID' : 'Legacy local record label'}
                       secondary={identity.enrollmentId}
                     />
                   </ListItem>
@@ -276,7 +301,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
                       <Fingerprint />
                     </ListItemIcon>
                     <ListItemText
-                      primary="Certificate Hash"
+                      primary={isFabricIdentity ? 'X.509 certificate fingerprint' : 'Application record hash'}
                       secondary={`${identity.certificateHash.substring(0, 16)}...`}
                     />
                   </ListItem>
@@ -320,7 +345,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
 
             <Box display="flex" justifyContent="space-between" alignItems="center">
               <Chip
-                label={identity.status.toUpperCase()}
+                label={`${isFabricIdentity ? 'FABRIC CA' : 'APP KEY'}: ${identity.status.toUpperCase()}`}
                 color={getStatusColor(identity.status)}
                 icon={identity.status === 'active' ? <CheckCircle /> : <Block />}
               />
@@ -334,6 +359,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
                         size="small"
                         startIcon={<Refresh />}
                         onClick={() => setRenewDialogOpen(true)}
+                        disabled={!isFabricIdentity || renewing}
                       >
                         Renew
                       </Button>
@@ -346,6 +372,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
                         size="small"
                         startIcon={<Block />}
                         onClick={() => setRevokeDialogOpen(true)}
+                        disabled={!isFabricIdentity || revoking}
                       >
                         Revoke
                       </Button>
@@ -369,7 +396,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
         <DialogTitle>Revoke Blockchain Identity</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" mb={2}>
-            This will permanently revoke the user's blockchain identity. They will not be able to sign transactions.
+            This revokes the certificate at the organization's Fabric CA and removes the identity from this API wallet. Peers reject it after the organization commits the updated MSP revocation list through a channel configuration update.
           </Typography>
           <TextField
             fullWidth
@@ -399,7 +426,7 @@ const BlockchainIdentityPanel: React.FC<BlockchainIdentityPanelProps> = ({
         <DialogTitle>Renew Certificate</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            This will issue a new certificate valid for 365 days.
+            Fabric CA will issue a renewed certificate using the CA's configured validity policy.
           </Typography>
         </DialogContent>
         <DialogActions>

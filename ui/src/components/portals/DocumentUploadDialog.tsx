@@ -214,6 +214,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
     if (!selectedFiles) return;
 
     addFiles(Array.from(selectedFiles));
+    event.target.value = '';
   };
 
   const addFiles = (filesToAdd: File[]) => {
@@ -273,7 +274,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
   };
 
   const removeAllFiles = () => {
-    setFiles([]);
+    setFiles(prev => prev.filter(file => file.status === 'success' || file.status === 'uploading'));
     setValidationErrors([]);
   };
 
@@ -286,91 +287,92 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
     setFiles(prev => prev.map(f => ({ ...f, encrypt: !allEncrypted })));
   };
 
-  const uploadFiles = async () => {
-    setUploading(true);
-    
+  const uploadFileAtIndex = async (index: number): Promise<UploadedFile | null> => {
+    const fileData = files[index];
+    if (!fileData) return null;
+
+    updateFile(index, { status: 'uploading', progress: 0, error: undefined });
+
     // Use public endpoint for registration (no auth), authenticated endpoint for others
     const uploadEndpoint = entityType === 'EXPORTER_APPLICATION' 
       ? '/documents/upload-registration'
       : '/documents/upload';
-    
     const isRegistration = entityType === 'EXPORTER_APPLICATION';
 
-    // Upload all files in parallel instead of sequentially
-    const uploadPromises = files.map(async (fileData, index) => {
-      if (fileData.status === 'success') return;
+    try {
+      const formData = new FormData();
+      formData.append('file', fileData.file);
+      formData.append('fileName', fileData.file.name);
+      formData.append('documentType', fileData.category);
+      formData.append('encrypt', fileData.encrypt.toString());
+      if (fileData.description) formData.append('description', fileData.description);
+      if (entityId) formData.append('entityId', entityId);
+      if (entityType) formData.append('entityType', entityType);
 
-      updateFile(index, { status: 'uploading', progress: 0 });
+      const fetchFunction = isRegistration ? publicApiFetch : apiFetch;
+      const response = await fetchFunction(uploadEndpoint, {
+        method: 'POST',
+        headers: {},
+        body: formData,
+      });
+      const result = await response.json();
 
-      try {
-        const formData = new FormData();
-        formData.append('file', fileData.file);
-        formData.append('fileName', fileData.file.name);
-        formData.append('documentType', fileData.category);
-        formData.append('encrypt', fileData.encrypt.toString());
-        if (fileData.description) {
-          formData.append('description', fileData.description);
-        }
-        if (entityId) {
-          formData.append('entityId', entityId);
-        }
-        if (entityType) {
-          formData.append('entityType', entityType);
-        }
-
-        const fetchFunction = isRegistration ? publicApiFetch : apiFetch;
-        const response = await fetchFunction(uploadEndpoint, {
-          method: 'POST',
-          headers: {},
-          body: formData,
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          updateFile(index, {
-            status: 'success',
-            progress: 100,
-            documentId: result.data.documentId,
-            hash: result.data.hash,
-            ipfsCID: result.data.ipfsCID,
-          });
-        } else {
-          updateFile(index, {
-            status: 'error',
-            progress: 0,
-            error: result.error?.message || 'Upload failed',
-          });
-        }
-      } catch (error: any) {
-        updateFile(index, {
-          status: 'error',
-          progress: 0,
-          error: error.message || 'Network error',
-        });
+      if (!response.ok || !result.success) {
+        throw new Error(result.error?.message || 'Upload failed');
       }
-    });
 
-    // Wait for all uploads to complete in parallel
-    await Promise.all(uploadPromises);
+      const uploadedFile: UploadedFile = {
+        ...fileData,
+        status: 'success',
+        progress: 100,
+        documentId: result.data.documentId,
+        hash: result.data.hash,
+        ipfsCID: result.data.ipfsCID,
+        error: undefined,
+      };
+      updateFile(index, uploadedFile);
+      return uploadedFile;
+    } catch (error: any) {
+      updateFile(index, {
+        status: 'error',
+        progress: 0,
+        error: error.message || 'Network error',
+      });
+      return null;
+    }
+  };
 
+  const notifyUploadComplete = (uploadedFiles: UploadedFile[]) => {
+    if (onUploadComplete) onUploadComplete(uploadedFiles);
+    setFiles([]);
+    setValidationErrors([]);
+  };
+
+  const uploadSingleFile = async (index: number) => {
+    if (uploading) return;
+    setUploading(true);
+    const uploadedFile = await uploadFileAtIndex(index);
     setUploading(false);
 
-    // Notify parent of successful uploads
-    const successfulUploads = files.filter(f => f.status === 'success');
-    if (successfulUploads.length > 0 && onUploadComplete) {
-      onUploadComplete(successfulUploads);
+    if (uploadedFile && onUploadComplete) {
+      const updatedFiles = files.map((file, fileIndex) => fileIndex === index ? uploadedFile : file);
+      if (updatedFiles.length > 0 && updatedFiles.every(file => file.status === 'success')) {
+        notifyUploadComplete(updatedFiles);
+      }
     }
   };
 
   const allUploaded = files.length > 0 && files.every(f => f.status === 'success');
-  const hasErrors = files.some(f => f.status === 'error');
   const pendingFiles = files.filter(f => f.status === 'pending');
+  const retryableFiles = files.filter(f => f.status === 'pending' || f.status === 'error');
   const successfulFiles = files.filter(f => f.status === 'success');
   const errorFiles = files.filter(f => f.status === 'error');
 
   const handleClose = () => {
-    if (!uploading) {
+    if (!uploading && (successfulFiles.length === 0 || allUploaded)) {
+      if (successfulFiles.length > 0 && onUploadComplete) {
+        onUploadComplete(successfulFiles);
+      }
       setFiles([]);
       setValidationErrors([]);
       onClose();
@@ -422,7 +424,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
             )}
           </Box>
         </Box>
-        <IconButton onClick={handleClose} disabled={uploading} size="small">
+        <IconButton onClick={handleClose} disabled={uploading || (successfulFiles.length > 0 && !allUploaded)} size="small">
           <Close />
         </IconButton>
       </DialogTitle>
@@ -544,8 +546,8 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
                     </Button>
                   </Tooltip>
                 )}
-                {pendingFiles.length > 0 && (
-                  <Tooltip title="Remove all files">
+                {retryableFiles.length > 0 && (
+                    <Tooltip title="Remove pending and failed files">
                     <Button 
                       size="small" 
                       color="error"
@@ -566,7 +568,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
                 <Card sx={{ bgcolor: 'grey.50', boxShadow: 'none' }}>
                   <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
                     <Typography variant="caption" color="text.secondary">Pending</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 600 }}>{pendingFiles.length}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 600 }}>{retryableFiles.length}</Typography>
                   </CardContent>
                 </Card>
               </Grid>
@@ -702,7 +704,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
                       </Stack>
                     </Box>
 
-                    {fileData.status === 'pending' && (
+                    {(fileData.status === 'pending' || fileData.status === 'error') && (
                       <Tooltip title="Remove file">
                         <IconButton 
                           size="small" 
@@ -716,7 +718,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
                   </Box>
 
                   {/* File Configuration (Pending) */}
-                  {fileData.status === 'pending' && (
+                  {(fileData.status === 'pending' || fileData.status === 'error') && (
                     <Box>
                       <Grid container spacing={2}>
                         <Grid item xs={12} sm={6}>
@@ -765,6 +767,17 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
                           />
                         </Grid>
                       </Grid>
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.5 }}>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          startIcon={<CloudUpload />}
+                          onClick={() => uploadSingleFile(index)}
+                          disabled={uploading}
+                        >
+                          {fileData.status === 'error' ? 'Retry Upload' : 'Upload This Document'}
+                        </Button>
+                      </Box>
                     </Box>
                   )}
 
@@ -833,7 +846,7 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
       <DialogActions sx={{ px: 3, py: 2.5, bgcolor: '#fafafa' }}>
         <Button 
           onClick={handleClose} 
-          disabled={uploading}
+          disabled={uploading || (successfulFiles.length > 0 && !allUploaded)}
           variant="outlined"
           size="large"
           sx={{
@@ -848,31 +861,6 @@ export const DocumentUploadDialog: React.FC<DocumentUploadDialogProps> = ({
           }}
         >
           {allUploaded ? 'Close' : 'Cancel'}
-        </Button>
-        <Button
-          variant="contained"
-          onClick={uploadFiles}
-          disabled={pendingFiles.length === 0 || uploading}
-          startIcon={uploading ? null : <CloudUpload />}
-          size="large"
-          sx={{ 
-            minWidth: 160,
-            bgcolor: '#9b30b7',
-            textTransform: 'none',
-            px: 4,
-            '&:hover': {
-              bgcolor: '#7b1fa2',
-            },
-            '&:disabled': {
-              bgcolor: '#cccccc',
-              color: '#999999',
-            },
-          }}
-        >
-          {uploading 
-            ? 'Uploading...' 
-            : `Upload ${pendingFiles.length} File${pendingFiles.length !== 1 ? 's' : ''}`
-          }
         </Button>
       </DialogActions>
     </Dialog>

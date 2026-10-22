@@ -159,6 +159,12 @@ const CustomsPortal: React.FC = () => {
   };
   
   const visibleTabs = getRoleBasedTabs();
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.some(tab => tab.index === tabValue)) {
+      setTabValue(visibleTabs[0].index);
+    }
+  }, [tabValue, visibleTabs]);
   
   // Workflow filter state
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -591,8 +597,6 @@ ${solution}`);
           }
         }
         
-        console.log('[CUSTOMS] 💰 Customs value:', customsValue);
-        
         // STEP 6: Prepare final form data
         console.log('[CUSTOMS] 📋 Step 6: Preparing form data...');
         const extractedData = {
@@ -608,8 +612,6 @@ ${solution}`);
           portOfExit: newDeclarationForm.portOfExit,
           additionalNotes: newDeclarationForm.additionalNotes,
         };
-        
-        console.log('[CUSTOMS] 📋 Final extracted data:', extractedData);
         
         // STEP 7: Validate all required fields
         const missingFields = [];
@@ -1034,6 +1036,7 @@ ${solution}`);
             currency: d.currency || d.Currency || 'USD',
             destination: d.destination || d.Destination || 'Unknown',
             status: d.status || d.DeclarationStatus || d.declarationStatus || 'SUBMITTED',
+            rejectionReason: d.rejectionReason || d.rejection_reason || d.additionalNotes || d.additional_notes || undefined,
             submissionDate: d.submissionDate || d.SubmissionDate || d.createdAt || new Date().toISOString(),
             clearanceDate: d.clearanceDate || d.ClearanceDate || '',
             customsOfficer: d.customsOfficer || d.CustomsOfficer || d.clearedBy || d.reviewedBy || 'Officer Alemayehu T.',
@@ -1127,9 +1130,7 @@ ${solution}`);
           oneDayAgo.setDate(oneDayAgo.getDate() - 1);
           return logDate >= oneDayAgo;
         }).length;
-        const blockchainVerified = logs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = logs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         const organizationsInvolved = new Set(
           logs.map((log: any) => log.performed_by_org).filter(Boolean)
         ).size;
@@ -1152,7 +1153,6 @@ ${solution}`);
     
     try {
       console.log('[CUSTOMS] Scheduling inspection for:', declarationId);
-      console.log('[CUSTOMS] Inspection form data:', inspectionForm);
       
       // Map officer codes to readable names
       const officerNames: Record<string, string> = {
@@ -1290,7 +1290,6 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
     
     try {
       console.log('[CUSTOMS] Clearing declaration:', declarationId);
-      console.log('[CUSTOMS] Clearance form data:', clearanceForm);
       
       // Documents are verified via the documents table and displayed in detail view
       // No need for separate certificate validation here
@@ -1379,7 +1378,6 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
     
     try {
       console.log('[CUSTOMS] Rejecting declaration:', declarationId);
-      console.log('[CUSTOMS] Rejection form data:', rejectionForm);
       
       // Validate required fields
       if (!rejectionForm.detailedReason || rejectionForm.detailedReason.trim() === '') {
@@ -2095,6 +2093,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           {visibleTabs.map(tab => (
             <Tab 
               key={tab.index}
+              value={tab.index}
               label={tab.label} 
               icon={tab.icon} 
               iconPosition="start" 
@@ -2539,11 +2538,9 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   🔐 Blockchain Verification
                 </Typography>
                 <Divider sx={{ mb: 2 }} />
-                <Alert severity="success" sx={{ mb: 2 }}>
+                <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Hyperledger Fabric Blockchain:</strong> This customs declaration and all related documents are 
-                    cryptographically signed and stored on the immutable consortium blockchain. All signatures below 
-                    are verified against X.509 certificates and blockchain transaction records.
+                    <strong>Hyperledger Fabric proof:</strong> The panel below checks committed transaction status, creator and endorser signatures, and certificate trust against configured MSP CA roots. A record is labeled verified only when those checks pass.
                   </Typography>
                 </Alert>
                 <BlockchainSignatureVerification
@@ -3083,7 +3080,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   </Alert>
                   <DocumentManagementPanel
                     entityType="CUSTOMS_DECLARATION"
-                    entityId={selectedDeclaration.declarationId}
+                    entityId={selectedDeclaration.shipmentId}
                     title="Customs Documents (Customs Officers Must Sign)"
                     allowUpload={true}
                     allowSign={true}

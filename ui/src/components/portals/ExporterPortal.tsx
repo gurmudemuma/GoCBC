@@ -1,7 +1,7 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Exporter Portal - Complete Export Journey Management
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Grid,
@@ -88,6 +88,7 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
+import api from '@/utils/api';
 import { couchDBService } from '@/services/couchdbService';
 import AuditTrailTable from './AuditTrailTable';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
@@ -124,6 +125,7 @@ interface ExporterProfile {
 
 interface ExportContract {
   contractId: string;
+  buyerId?: string;
   nbeReferenceNumber: string;
   buyerName: string;
   buyerCountry: string;
@@ -135,10 +137,51 @@ interface ExportContract {
   pricePerKg: number;
   totalValue: number;
   currency: string;
-  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'NBE_APPROVED';
+  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'NBE_APPROVED' | 'REJECTED';
+  rejectionReason?: string;
+  rejectionDate?: string | null;
+  rejectedBy?: string;
+  paymentMethod?: string;
+  eudrRequired?: boolean;
+  supersedesContractId?: string;
   registrationDate?: string;
   approvalDate?: string;
 }
+
+const COFFEE_TYPE_OPTIONS = [
+  { value: 'Yirgacheffe Grade 1', label: 'Yirgacheffe Grade 1 - Washed' },
+  { value: 'Yirgacheffe Grade 2', label: 'Yirgacheffe Grade 2 - Washed' },
+  { value: 'Sidamo Grade 2', label: 'Sidamo Grade 2 - Washed' },
+  { value: 'Sidamo Grade 3', label: 'Sidamo Grade 3 - Washed' },
+  { value: 'Guji Grade 1', label: 'Guji Grade 1 - Natural' },
+  { value: 'Guji Grade 2', label: 'Guji Grade 2 - Natural' },
+  { value: 'Limu Grade 2', label: 'Limu Grade 2 - Washed' },
+  { value: 'Limu Grade 3', label: 'Limu Grade 3 - Washed' },
+  { value: 'Harrar Grade 4', label: 'Harrar Grade 4 - Natural' },
+  { value: 'Jimma Grade 5', label: 'Jimma Grade 5 - Washed' },
+] as const;
+
+const normalizeCoffeeType = (coffeeType?: string) => {
+  const storedValue = String(coffeeType || '').trim();
+  if (!storedValue || storedValue === 'Unknown') return '';
+
+  // Older records may include the species prefix, while the form stores the
+  // grade as the Select value. Convert known legacy values to the canonical
+  // option and preserve any unknown value so it remains visible/editable.
+  const withoutLegacyPrefix = storedValue.replace(/^(?:Arabica|Coffee)\s*[-:]\s*/i, '').trim();
+  return COFFEE_TYPE_OPTIONS.find(
+    (option) => option.value.toLowerCase() === withoutLegacyPrefix.toLowerCase()
+  )?.value || storedValue;
+};
+
+const isSupportedCoffeeType = (coffeeType: string) =>
+  COFFEE_TYPE_OPTIONS.some((option) => option.value === coffeeType);
+
+const hasActionableRejectionFeedback = (reason?: string) => {
+  const feedback = String(reason || '').trim();
+  if (feedback.length < 20) return false;
+  return !/^(fill|fix|correct|update|incomplete|missing|wrong|invalid|rejected?)[.!\s]*$/i.test(feedback);
+};
 
 interface ForexStatus {
   forexId: string;
@@ -262,6 +305,7 @@ const ExporterPortal: React.FC = () => {
   const [lcRequestDialogOpen, setLcRequestDialogOpen] = useState(false);
   const [selectedContractForLC, setSelectedContractForLC] = useState<ExportContract | null>(null);
   const [selectedContractForDetail, setSelectedContractForDetail] = useState<ExportContract | null>(null);
+  const [correctingRejectedContractId, setCorrectingRejectedContractId] = useState<string | null>(null);
   const [selectedShipmentForDetail, setSelectedShipmentForDetail] = useState<any>(null);
   const [isRequestingLC, setIsRequestingLC] = useState(false);
   const [selectedShipmentForCustoms, setSelectedShipmentForCustoms] = useState<ShipmentStatus | null>(null);
@@ -318,6 +362,8 @@ const ExporterPortal: React.FC = () => {
   // Document upload states - removed DocumentUploadDialog, using simple file input
   const [contractDocuments, setContractDocuments] = useState<any[]>([]);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
+  const [draftContractId, setDraftContractId] = useState('');
+  const [isEditMode, setIsEditMode] = useState(false); // Track if editing existing contract
   
   const [newContract, setNewContract] = useState({
     buyerName: '',
@@ -375,10 +421,11 @@ const ExporterPortal: React.FC = () => {
     allocatedAmount: number;
     currency: string;
     exchangeRate: number;
+    retentionRate?: number;
   } | null>(null);
 
   // Real forex rate for selected shipment contract
-  const [selectedShipmentForexRate, setSelectedShipmentForexRate] = useState<number>(115.5);
+  const [selectedShipmentForexRate, setSelectedShipmentForexRate] = useState<number>(0);
   
   const generateICOReference = (contractId: string, exporterId?: string) => {
     const exporterSegment = exporterId ? exporterId.replace(/\W/g, '').slice(-4).padStart(4, '0').toUpperCase() : '0000';
@@ -404,9 +451,7 @@ const ExporterPortal: React.FC = () => {
       icoNumber: prev.icoNumber || generateICOReference(contract.contractId, profile?.exporterId),
       ecxLotNumber: prev.ecxLotNumber || generateECXLotNumber(contract.contractId),
     }));
-    if (forexRate) {
-      setSelectedShipmentForexRate(forexRate);
-    }
+    setSelectedShipmentForexRate(Number(forexRate) || 0);
   };
 
   // Audit Trail State
@@ -480,9 +525,7 @@ const ExporterPortal: React.FC = () => {
         }).length;
         
         // Count blockchain verified activities
-        const blockchainVerified = logs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = logs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         
         // Count unique organizations involved (tracking the journey path)
         const organizationsInvolved = new Set(
@@ -694,21 +737,18 @@ const ExporterPortal: React.FC = () => {
     
     // EXPERT FIX: Load contracts from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading contracts from API...');
-      const response = await apiFetch('/contracts', { method: 'GET' });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch contracts: ${response.statusText}`);
+      console.log('[EXPORTER] 🔗 Loading all contract pages from API...');
+      const result = await api.getContracts();
+      if (!result.success) {
+        throw new Error(result.error?.message || 'Failed to fetch contracts');
       }
-      
-      const result = await response.json();
       const allDocs = result.data || [];
       console.log(`[EXPORTER] ✅ Found ${allDocs.length} total contracts from API`);
       
       // Filter contracts for current exporter only  
       const myContracts = allDocs.filter((c: any) => {
         const contractExporterId = c.exporterID || c.exporterId || c.ExporterID;
-        return contractExporterId === currentExporterId;
+        return String(contractExporterId || '').trim().toLowerCase() === String(currentExporterId || '').trim().toLowerCase();
       });
       
       console.log(`[EXPORTER] ✅ Found ${myContracts.length} contracts for exporter ${currentExporterId}`);
@@ -736,7 +776,8 @@ const ExporterPortal: React.FC = () => {
         return {
           contractId: contractId,
           nbeReferenceNumber: c.nbeReferenceNumber || c.NBEReferenceNumber || 'Pending NBE Approval',
-          buyerName: c.buyerID || c.buyerId || c.BuyerID || 'Unknown',
+          buyerId: c.buyerId || c.buyerID || c.BuyerID || '',
+          buyerName: c.buyerName || c.BuyerName || c.buyerId || c.buyerID || c.BuyerID || 'Unknown',
           buyerCountry: c.buyerCountry || c.BuyerCountry || 'Unknown',
           origin: c.origin || c.Origin || c.contractOrigin || c.contractOrigin || '',
           buyerBank: buyerBank,
@@ -746,9 +787,15 @@ const ExporterPortal: React.FC = () => {
           pricePerKg,
           totalValue,
           currency: c.currency || c.Currency || 'USD',
-          status: c.contractStatus || c.ContractStatus || 'REGISTERED',
+          status: String(c.contractStatus || c.ContractStatus || c.status || 'REGISTERED').toUpperCase() as ExportContract['status'],
           registrationDate: c.registrationDate || c.RegistrationDate || new Date().toISOString(),
-          approvalDate: c.approvalDate || c.ApprovalDate || ''
+          approvalDate: c.approvalDate || c.ApprovalDate || '',
+          rejectionReason: c.rejectionReason || c.RejectionReason || '',
+          rejectionDate: c.rejectionDate || c.RejectionDate || null,
+          rejectedBy: c.rejectedBy || c.RejectedBy || '',
+          paymentMethod: c.paymentMethod || c.PaymentMethod || 'LC',
+          eudrRequired: c.eudrRequired ?? c.EUDRRequired ?? true,
+          supersedesContractId: c.supersedesContractId || c.SupersedesContractId || '',
         };
       });
       setContracts(mappedContracts);
@@ -827,12 +874,9 @@ const ExporterPortal: React.FC = () => {
       setLCStatuses(completeLCs);
       setAllLCStatuses(completeLCs);
       console.log(`Loaded ${myLCs.length} LCs for exporter`);
-      
-      // Store for use in forex loading below
-      var loadedLCsForForex: any = completeLCs;
+
     } catch (error) {
       console.warn('Could not load LCs:', error);
-      var loadedLCsForForex: any = [];
     }
 
     // EXPERT FIX: Load Forex allocations from API (which fetches from blockchain)
@@ -863,80 +907,32 @@ const ExporterPortal: React.FC = () => {
         allocatedAmount: f.allocatedAmount || f.AllocatedAmount || 0,
         currency: f.currency || f.Currency,
         exchangeRate: f.exchangeRate || f.ExchangeRate || 0,
-        retentionRate: f.retentionRate || f.RetentionRate || 40,
+        retentionRate: f.retentionRate ?? f.RetentionRate ?? 0,
         status: f.status || f.Status,
         expiryDate: f.expiryDate || f.ExpiryDate,
         allocationDate: f.allocationDate || f.AllocationDate,
         requestDate: f.requestDate ? new Date(f.requestDate) : (f.RequestDate ? new Date(f.RequestDate) : undefined),
       }));
       
-      // Add synthetic forex for LCs with FOREX_ALLOCATED status but no forex record
-      console.log(`[EXPORTER] Checking ${loadedLCsForForex.length} loaded LCs for synthetic forex creation`);
-      if (loadedLCsForForex && loadedLCsForForex.length > 0) {
-            const forexRelatedLCs = loadedLCsForForex.filter((lc: any) => 
-              // Only include LCs with forex-related statuses (exclude REQUESTED)
-              lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED' || lc.status === 'FOREX_BACKED' || lc.status === 'UTILIZED'
-            );
-            console.log(`[EXPORTER] Found ${forexRelatedLCs.length} LCs with forex-related statuses`);
-            
-            for (const lc of forexRelatedLCs) {
-              // Check if this LC already has a forex record
-              const hasForex = mappedForex.some((f: any) => {
-                const lcIdMatch = f.lcId && f.lcId === lc.lcId;
-                const forexIdMatch = f.forexId && f.forexId.includes(lc.lcId);
-                const metadataMatch = f.contractId && f.exporterId && 
-                  f.contractId === lc.contractId && f.exporterId === currentExporterId;
-                return lcIdMatch || forexIdMatch || metadataMatch;
-              });
-              
-              if (!hasForex) {
-                // Create synthetic forex record
-                const lcStatus = String(lc.status);
-                // ISSUED or UTILIZED means forex has been allocated
-                const forexStatus = (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? 'ALLOCATED' : 'REQUESTED';
-                const syntheticForex = {
-                  forexId: `FOREX_${lc.lcId}_PENDING`,
-                  contractId: lc.contractId || '',
-                  exporterId: currentExporterId,
-                  lcId: lc.lcId,
-                  requestedAmount: Number(lc.amount || 0),
-                  allocatedAmount: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? Number(lc.amount || 0) : 0,
-                  currency: lc.currency || 'USD',
-                  exchangeRate: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? 115.5 : 0,
-                  retentionRate: 40,
-                  status: forexStatus,
-                  expiryDate: lc.expiryDate || '',
-                  allocationDate: (lcStatus === 'FOREX_ALLOCATED' || lcStatus === 'ISSUED' || lcStatus === 'UTILIZED') ? new Date().toISOString() : undefined,
-                  requestDate: new Date(),
-                };
-                mappedForex.push(syntheticForex);
-                console.log(`[EXPORTER] ➕ Added synthetic forex for ${lc.status} LC ${lc.lcId}`);
-              }
-            }
-          }
-      
       setForexStatuses(mappedForex);
       setAllForexStatuses(mappedForex);
-      console.log(`[EXPORTER] Total forex allocations (including synthetic): ${mappedForex.length}`);
+      console.log(`[EXPORTER] Total ledger forex allocations: ${mappedForex.length}`);
     } catch (error) {
       console.warn('Could not load forex allocations:', error);
     }
 
     // EXPERT FIX: Load Shipments from API (which fetches from blockchain)
     try {
-      console.log('[EXPORTER] 🔗 Loading shipments from API...');
-      const shipmentsResponse = await apiFetch('/shipments', { method: 'GET' });
-      
-      if (!shipmentsResponse.ok) {
-        throw new Error(`Failed to fetch shipments: ${shipmentsResponse.statusText}`);
+      console.log('[EXPORTER] 🔗 Loading all shipment pages from API...');
+      const shipmentsResult = await api.getShipments();
+      if (!shipmentsResult.success) {
+        throw new Error(shipmentsResult.error?.message || 'Failed to fetch shipments');
       }
-      
-      const shipmentsResult = await shipmentsResponse.json();
       const allShipmentDocs = shipmentsResult.data || [];
       console.log(`[EXPORTER] ✅ Found ${allShipmentDocs.length} total shipments from API`);
       
       const myShipments = allShipmentDocs.filter((s: any) => 
-        (s.exporterId || s.ExporterID || s.exporterID) === currentExporterId
+        String(s.exporterId || s.ExporterID || s.exporterID || '').trim().toLowerCase() === String(currentExporterId || '').trim().toLowerCase()
       );
       console.log(`[EXPORTER] ✅ Found ${myShipments.length} shipments for exporter ${currentExporterId}`);
         
@@ -1079,6 +1075,7 @@ const ExporterPortal: React.FC = () => {
                   allocatedAmount: allocated.allocatedAmount || allocated.AllocatedAmount || 0,
                   currency: allocated.currency || allocated.Currency || 'USD',
                   exchangeRate: allocated.exchangeRate || allocated.ExchangeRate || 0,
+                  retentionRate: Number(allocated.retentionRate ?? allocated.RetentionRate) || undefined,
                 });
               } else {
                 console.log(`[EXPORTER] Shipment already exists for allocated forex contract ${allocatedContractId}, not showing alert`);
@@ -1168,16 +1165,170 @@ const ExporterPortal: React.FC = () => {
     setSelectedContractForDetail(contract);
     setContractDetailDialogOpen(true);
   };
+
+  const handleCorrectRejectedContract = (contract: ExportContract) => {
+    setCorrectingRejectedContractId(contract.contractId);
+    setDraftContractId(''); // Empty - this is a NEW contract replacing rejected one, ID generated on submit
+    setIsEditMode(false); // This is a new contract, not an edit
+    setContractDocuments([]);
+    setNewContract((current) => ({
+      ...current,
+      buyerName: contract.buyerName === 'Unknown' ? '' : contract.buyerName,
+      buyerCompany: contract.buyerId || '',
+      buyerCountry: contract.buyerCountry || '',
+      buyerBank: contract.buyerBank || '',
+      exporterBank: contract.exporterBank || profile?.bankName || '',
+      coffeeType: normalizeCoffeeType(contract.coffeeType),
+      quantity: contract.quantity ? String(contract.quantity) : '',
+      pricePerKg: contract.pricePerKg ? String(contract.pricePerKg) : '',
+      currency: contract.currency || 'USD',
+      paymentMethod: contract.paymentMethod || 'LC',
+      eudrRequired: contract.eudrRequired ?? true,
+    }));
+    setContractDetailDialogOpen(false);
+    setCreateContractDialogOpen(true);
+  };
   
   const handleContractDialogClose = () => {
     setContractDialogOpen(false);
     setSelectedContract(null);
   };
 
+  const handleContractDocumentSelect = async (
+    category: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    console.log('📎 [DOCUMENT UPLOAD] Starting upload...');
+    console.log('📎 Current state:', { isEditMode, draftContractId });
+
+    const contractId = draftContractId || `CONTRACT${Date.now()}`;
+    
+    // Only set draftContractId if we don't already have one
+    if (!draftContractId) {
+      console.log('📎 Setting draftContractId for document upload:', contractId);
+      setDraftContractId(contractId);
+    } else {
+      console.log('📎 Using existing draftContractId:', contractId);
+    }
+    
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated', 'Please login again to upload contract documents');
+      return;
+    }
+
+    const queuedDocuments = files.map((file, index) => ({
+      localId: `${category}-${Date.now()}-${Math.random()}-${index}`,
+      file,
+      category,
+      encrypt: true,
+      status: 'uploading' as 'uploading' | 'success' | 'error',
+      documentId: undefined as string | undefined,
+      hash: undefined as string | undefined,
+      error: undefined as string | undefined,
+    }));
+    setContractDocuments((current) => [...current, ...queuedDocuments]);
+
+    await Promise.all(queuedDocuments.map(async (document) => {
+      try {
+        const formData = new FormData();
+        formData.append('file', document.file);
+        formData.append('fileName', document.file.name);
+        formData.append('documentType', document.category);
+        formData.append('encrypt', 'true');
+        formData.append('entityType', 'CONTRACT');
+        formData.append('entityId', contractId);
+
+        const response = await apiFetch('/documents/upload', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error?.message || 'Upload failed');
+        }
+
+        setContractDocuments((current) => current.map((item) => item.localId === document.localId
+          ? { ...item, status: 'success', documentId: result.data.documentId, hash: result.data.hash }
+          : item));
+      } catch (error: any) {
+        setContractDocuments((current) => current.map((item) => item.localId === document.localId
+          ? { ...item, status: 'error', error: error.message || 'Upload failed' }
+          : item));
+      }
+    }));
+  };
+
+  const handleCustomsDocumentSelect = async (
+    documentType: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0 || !selectedShipmentForCustoms) return;
+
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated', 'Please login again to upload customs documents');
+      return;
+    }
+
+    const queuedDocuments = files.map((file, index) => ({
+      localId: `${documentType}-${Date.now()}-${Math.random()}-${index}`,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      file,
+      documentType,
+      status: 'uploading' as 'uploading' | 'success' | 'error',
+      documentId: undefined as string | undefined,
+      error: undefined as string | undefined,
+    }));
+    setCustomsDocuments((current) => [...current, ...queuedDocuments]);
+
+    await Promise.all(queuedDocuments.map(async (document) => {
+      try {
+        const formData = new FormData();
+        formData.append('file', document.file);
+        formData.append('fileName', document.file.name);
+        formData.append('documentType', document.documentType);
+        formData.append('encrypt', 'true');
+        // Customs documents are associated with the shipment so they are visible to ECC.
+        formData.append('entityType', 'SHIPMENT');
+        formData.append('entityId', selectedShipmentForCustoms.shipmentId);
+
+        const response = await apiFetch('/documents/upload', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error?.message || 'Upload failed');
+        }
+
+        setCustomsDocuments((current) => current.map((item) => item.localId === document.localId
+          ? { ...item, status: 'success', documentId: result.data.documentId }
+          : item));
+      } catch (error: any) {
+        setCustomsDocuments((current) => current.map((item) => item.localId === document.localId
+          ? { ...item, status: 'error', error: error.message || 'Upload failed' }
+          : item));
+      }
+    }));
+  };
+
   const handleCreateContract = async () => {
     setIsCreatingContract(true);
     try {
-      console.log('Creating contract...', { profile, newContract });
+      console.log('📝 [CONTRACT SUBMIT] Starting submission...');
+      console.log('📝 Current state:', { isEditMode, draftContractId, contractDocumentsCount: contractDocuments.length });
+      console.log(isEditMode ? '📝 Updating contract...' : '📝 Creating contract...', { profile, newContract, draftContractId, isEditMode });
       
       if (!profile) {
         console.error('Profile not loaded');
@@ -1185,7 +1336,7 @@ const ExporterPortal: React.FC = () => {
         return;
       }
       
-      const contractId = `CONTRACT${Date.now()}`;
+      const contractId = draftContractId || `CONTRACT${Date.now()}`;
       const quantity = parseFloat(newContract.quantity);
       const pricePerKg = parseFloat(newContract.pricePerKg);
       
@@ -1200,69 +1351,77 @@ const ExporterPortal: React.FC = () => {
         return;
       }
       
-      // ✅ FIX: Upload documents first (if any) before creating contract
-      const uploadedDocuments = [];
-      if (contractDocuments.length > 0) {
-        for (const doc of contractDocuments) {
-          try {
-            const formData = new FormData();
-            formData.append('file', doc.file);
-            formData.append('fileName', doc.file.name);
-            formData.append('documentType', doc.category);
-            formData.append('encrypt', doc.encrypt.toString());
-            formData.append('entityType', 'CONTRACT');
-            formData.append('entityId', contractId);
-            
-            const uploadResponse = await apiFetch('/documents/upload', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`
-              },
-              body: formData
-            });
-            
-            const uploadResult = await uploadResponse.json();
-            if (uploadResult.success) {
-              uploadedDocuments.push({
-                documentId: uploadResult.data.documentId,
-                fileName: doc.file.name,
-                category: doc.category,
-                hash: uploadResult.data.hash,
-                ipfsCID: uploadResult.data.ipfsCID,
-                encrypted: doc.encrypt
-              });
-            } else {
-              console.warn(`Failed to upload document ${doc.file.name}:`, uploadResult.error);
-            }
-          } catch (uploadError) {
-            console.error(`Error uploading document ${doc.file.name}:`, uploadError);
-          }
-        }
-        console.log(`Successfully uploaded ${uploadedDocuments.length} documents for contract ${contractId}`);
+      if (contractDocuments.some((doc) => doc.status !== 'success')) {
+        showWarning('Documents Still Uploading', 'Finish uploading the selected documents first', 'Wait for each document to show Uploaded, or remove failed uploads and try again');
+        return;
       }
+      const uploadedDocuments = contractDocuments.map((doc) => ({
+        documentId: doc.documentId,
+        fileName: doc.file.name,
+        category: doc.category,
+        hash: doc.hash,
+        ipfsCID: null,
+        encrypted: doc.encrypt,
+      }));
 
-      const contractData = {
-        contractID: contractId,
-        exporterID: profile.exporterId,
+      // If updating, use PATCH with only the fields that should be updated
+      const isUpdate = isEditMode; // Use explicit edit mode flag instead of draftContractId
+      
+      const contractData = isUpdate ? {
+        // Only send fields that can be updated
         buyerID: newContract.buyerCompany.replace(/\s+/g, '_').toUpperCase(),
+        buyerName: newContract.buyerName,
         buyerCountry: newContract.buyerCountry,
-        buyerBank: newContract.buyerBank,           // Issuing bank
-        exporterBank: newContract.exporterBank,     // Advising bank
+        buyerBank: newContract.buyerBank,
+        exporterBank: newContract.exporterBank,
         coffeeType: newContract.coffeeType,
         quantity,
         pricePerKg,
         currency: newContract.currency,
-        paymentMethod: newContract.paymentMethod,   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
+        paymentMethod: newContract.paymentMethod,
         eudrRequired: newContract.eudrRequired,
-        documents: uploadedDocuments // Use uploaded document IDs
+        organicCertified: newContract.organicCertified,
+        fairTradeCertified: newContract.fairTradeCertified,
+        portOfLoading: newContract.portOfLoading,
+        portOfDestination: newContract.portOfDestination,
+        deliveryDate: newContract.deliveryDate,
+        incoterm: newContract.incoterm,
+        specialInstructions: newContract.specialInstructions,
+        documents: uploadedDocuments,
+      } : {
+        // For new contracts, send all required fields
+        contractID: contractId,
+        exporterID: profile.exporterId,
+        buyerID: newContract.buyerCompany.replace(/\s+/g, '_').toUpperCase(),
+        buyerName: newContract.buyerName,
+        buyerCountry: newContract.buyerCountry,
+        buyerBank: newContract.buyerBank,
+        exporterBank: newContract.exporterBank,
+        coffeeType: newContract.coffeeType,
+        quantity,
+        pricePerKg,
+        currency: newContract.currency,
+        paymentMethod: newContract.paymentMethod,
+        eudrRequired: newContract.eudrRequired,
+        documents: uploadedDocuments,
+        ...(correctingRejectedContractId ? { supersedesContractID: correctingRejectedContractId } : {}),
       };
 
-      console.log('Sending contract data:', contractData);
-      console.log(`Contract will link ${uploadedDocuments.length} documents to blockchain`);
+      console.log('🔍 DEBUG INFO:');
+      console.log('  - Is Update Mode?', isUpdate);
+      console.log('  - Draft Contract ID:', draftContractId);
+      console.log('  - Contract ID:', contractId);
+      console.log(isUpdate ? '  - Sending update data:' : '  - Sending contract data:', contractData);
+      console.log(`  - Document count: ${uploadedDocuments.length}`);
 
-      // Call API to register contract on blockchain
-      const response = await apiFetch('/contracts', {
-        method: 'POST',
+      // Call API - use PATCH for updates, POST for new contracts
+      const url = isUpdate ? `/contracts/${contractId}` : '/contracts';
+      const method = isUpdate ? 'PATCH' : 'POST';
+      
+      console.log(`📡 API Call: ${method} ${url}`);
+      
+      const response = await apiFetch(url, {
+        method: method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
@@ -1270,15 +1429,21 @@ const ExporterPortal: React.FC = () => {
         body: JSON.stringify(contractData)
       });
 
-      console.log('Response status:', response.status);
+      console.log('📥 Response status:', response.status);
       const result = await response.json();
-      console.log('Response data:', result);
+      console.log('📥 Response data:', result);
       
       if (result.success) {
         showSuccess(
-          'Contract Registered Successfully',
-          'Your export contract has been registered on the blockchain',
-          `Contract ID: ${contractId}\n\nNext Steps:\n1. ECTA will review compliance\n2. NBE will approve for forex allocation\n3. You can track progress in the "My Contracts" tab`
+          isUpdate ? 'Contract Updated Successfully' : (correctingRejectedContractId ? 'Corrected Contract Registered' : 'Contract Registered Successfully'),
+          isUpdate 
+            ? 'Your contract information has been updated successfully'
+            : (correctingRejectedContractId
+                ? `A replacement for rejected contract ${correctingRejectedContractId} has been registered.`
+                : 'Your export contract has been registered on the blockchain'),
+          isUpdate
+            ? `Contract ID: ${contractId}\nThe updated information has been saved and will be reflected in the system.`
+            : `Contract ID: ${contractId}\n${correctingRejectedContractId ? `Replaces: ${correctingRejectedContractId}\n` : ''}\nNext Steps:\n1. ECTA will review compliance\n2. NBE will approve for forex allocation\n3. You can track progress in the "My Contracts" tab`
         );
         setCreateContractDialogOpen(false);
         setNewContract({
@@ -1304,21 +1469,24 @@ const ExporterPortal: React.FC = () => {
           specialInstructions: ''
         });
         setContractDocuments([]); // Clear uploaded documents
+        setDraftContractId('');
+        setIsEditMode(false); // Reset edit mode
+        setCorrectingRejectedContractId(null);
         // Reload contracts
         loadExporterData();
       } else {
-        console.error('Contract registration failed:', result);
+        console.error(isUpdate ? 'Contract update failed:' : 'Contract registration failed:', result);
         showError(
-          'Contract Registration Failed',
-          result.error?.message || 'Failed to register contract',
+          isUpdate ? 'Contract Update Failed' : 'Contract Registration Failed',
+          result.error?.message || (isUpdate ? 'Failed to update contract' : 'Failed to register contract'),
           'Please verify all information and try again'
         );
       }
     } catch (error: any) {
-      console.error('Error creating contract:', error);
+      console.error(isEditMode ? 'Error updating contract:' : 'Error creating contract:', error);
       showError(
-        'Network Error',
-        'Failed to register contract',
+        isEditMode ? 'Update Failed' : 'Network Error',
+        isEditMode ? 'Failed to update contract' : 'Failed to register contract',
         error.message || 'Please check if the API server is running and try again'
       );
     } finally {
@@ -1363,9 +1531,13 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
+      if (!Number.isFinite(selectedShipmentForexRate) || selectedShipmentForexRate <= 0) {
+        showWarning('Forex Allocation Required', 'This shipment has no ledger-backed NBE exchange rate yet', 'Complete the forex allocation before registering the shipment.');
+        return;
+      }
+
       const shipmentId = `SHIP${Date.now()}`;
-      // Use real forex rate from the allocated forex for this contract, fallback to 115.5
-      const forexRate = selectedShipmentForexRate || 115.5;
+      const forexRate = selectedShipmentForexRate;
       const pricePerKg = parseFloat(((selectedContract as any).pricePerKg || (selectedContract as any).PricePerKg || '0').toString());
       const valueUSD = quantity * pricePerKg;
       const icoNumber = newShipment.icoNumber || generateICOReference(newShipment.contractId, profile.exporterId);
@@ -1424,10 +1596,6 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
-      console.log('[SHIPMENT] Sending shipment data to API:', shipmentData);
-      console.log('[SHIPMENT] API endpoint: /shipments');
-      console.log('[SHIPMENT] Using token:', token.substring(0, 20) + '...');
-
       const response = await apiFetch('/shipments', {
         method: 'POST',
         headers: {
@@ -1442,11 +1610,7 @@ const ExporterPortal: React.FC = () => {
 
       const result = await response.json();
       
-      console.log('[SHIPMENT] ===== API RESULT =====');
       console.log('[SHIPMENT] Success:', result.success);
-      console.log('[SHIPMENT] Data:', result.data);
-      console.log('[SHIPMENT] Error:', result.error);
-      console.log('[SHIPMENT] ========================');
       
       if (result.success) {
         showSuccess(
@@ -1475,7 +1639,7 @@ const ExporterPortal: React.FC = () => {
           destination: '',
           eudrCompliant: true,
         });
-        setSelectedShipmentForexRate(115.5);
+        setSelectedShipmentForexRate(0);
         
         // Wait for blockchain transaction to propagate to all peers before reloading
         setTimeout(() => {
@@ -1526,6 +1690,11 @@ const ExporterPortal: React.FC = () => {
   const handleSubmitCustomsDeclaration = async () => {
     if (!selectedShipmentForCustoms || !profile) {
       showError('Error', 'Shipment or profile not loaded', 'Please try again');
+      return;
+    }
+
+    if (customsDocuments.some((document) => document.status !== 'success')) {
+      showWarning('Documents Still Uploading', 'Finish uploading the selected documents first', 'Wait until each selected file shows Uploaded, or remove a failed upload and try again');
       return;
     }
 
@@ -1735,6 +1904,11 @@ const ExporterPortal: React.FC = () => {
         showError('LC Not Found', 'No Letter of Credit found for this contract', 'Cannot initiate payment without LC');
         return;
       }
+      const forexStatus = String(selectedForex?.status || '').toUpperCase();
+      if (!selectedForex || !['ALLOCATED', 'UTILIZED'].includes(forexStatus) || Number(selectedForex.exchangeRate) <= 0 || !Number.isFinite(Number(selectedForex.retentionRate))) {
+        showWarning('Forex Allocation Incomplete', 'A ledger-backed forex allocation and rates are required before payment settlement.', 'Complete the bank allocation and refresh this page.');
+        return;
+      }
 
       const paymentId = `PAY-${selectedShipmentForPayment.shipmentId}`;
       
@@ -1765,8 +1939,8 @@ const ExporterPortal: React.FC = () => {
       
       if (result.success) {
         const amountUSD = selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg) : 0;
-        const exchangeRate = selectedForex?.exchangeRate || 115.5;
-        const retentionRate = selectedForex?.retentionRate || 100;
+        const exchangeRate = Number(selectedForex.exchangeRate);
+        const retentionRate = Number(selectedForex.retentionRate);
         const amountETB = amountUSD * exchangeRate;
         const retainedETB = (amountETB * retentionRate) / 100;
         
@@ -2090,14 +2264,24 @@ const ExporterPortal: React.FC = () => {
     };
   };
 
-  const stats = getExporterStats();
+  const stats = useMemo(() => getExporterStats(), [
+    contracts,
+    shipments,
+    forexStatuses,
+    lcStatuses,
+    payments,
+    shipmentsWithPermits,
+    shipmentsWithDeclarations
+  ]);
 
-  // Debug logging for KPI calculations
+  // Remove excessive debug logging
+  /*
   console.log('[EXPORTER KPIs] Calculating dashboard metrics:', {
     tabValue,
     stats,
     auditStats,
   });
+  */
 
   
   const contractColumns: GridColDef[] = [
@@ -2116,6 +2300,23 @@ const ExporterPortal: React.FC = () => {
       headerName: 'Value', 
       width: 120,
       valueFormatter: (params) => params.value ? `$${Number(params.value).toLocaleString()}` : '$0',
+    },
+    {
+      field: 'rejectionReason',
+      headerName: 'ECTA Feedback',
+      width: 260,
+      sortable: false,
+      renderCell: (params) => {
+        if (params.row.status !== 'REJECTED') return <Typography color="text.secondary">—</Typography>;
+        const reason = params.value || 'No rejection reason was recorded. Contact ECTA for details.';
+        return (
+          <Tooltip title={reason}>
+            <Typography color="error.main" variant="body2" noWrap sx={{ maxWidth: '100%' }}>
+              {reason}
+            </Typography>
+          </Tooltip>
+        );
+      },
     },
     {
       field: 'status',
@@ -2192,15 +2393,39 @@ const ExporterPortal: React.FC = () => {
                   size="small"
                   color="warning"
                   onClick={() => {
-                    showInfo(
-                      'Edit Contract',
-                      `Edit Contract ${params.row.contractId}\n\n` +
-                      `You can modify:\n` +
-                      `• Buyer contact details\n` +
-                      `• Shipping preferences\n` +
-                      `• Additional notes\n\n` +
-                      `Core terms (price, quantity, quality) require amendment approval.`
-                    );
+                    console.log('🔧 Edit icon clicked for contract:', params.row.contractId);
+                    console.log('📋 Contract data:', params.row);
+                    
+                    // Open edit dialog with ALL contract data
+                    setNewContract({
+                      buyerName: params.row.buyerName || '',
+                      buyerCompany: params.row.buyerId || params.row.buyerCompany || '',
+                      buyerCountry: params.row.buyerCountry || '',
+                      buyerBank: params.row.buyerBank || '',
+                      exporterBank: params.row.exporterBank || '',
+                      buyerEmail: params.row.buyerEmail || '',
+                      buyerPhone: params.row.buyerPhone || '',
+                      coffeeType: normalizeCoffeeType(params.row.coffeeType),
+                      quantity: String(params.row.quantity || ''),
+                      pricePerKg: String(params.row.pricePerKg || params.row.price_per_kg || ''),
+                      currency: params.row.currency || 'USD',
+                      paymentMethod: params.row.paymentMethod || params.row.payment_method || 'LC',
+                      incoterm: params.row.incoterm || 'FOB',
+                      portOfLoading: params.row.portOfLoading || params.row.port_of_loading || 'Djibouti',
+                      portOfDestination: params.row.portOfDestination || params.row.port_of_destination || '',
+                      deliveryDate: params.row.deliveryDate || params.row.delivery_date || '',
+                      eudrRequired: params.row.eudrRequired !== undefined ? params.row.eudrRequired : (params.row.eudr_required !== undefined ? params.row.eudr_required : true),
+                      organicCertified: params.row.organicCertified || params.row.organic_certified || false,
+                      fairTradeCertified: params.row.fairTradeCertified || params.row.fair_trade_certified || false,
+                      specialInstructions: params.row.specialInstructions || params.row.special_instructions || '',
+                    });
+                    setDraftContractId(params.row.contractId);
+                    setIsEditMode(true); // Mark as edit mode
+                    
+                    console.log('✅ Form populated with contract data');
+                    console.log('✅ Draft Contract ID set to:', params.row.contractId);
+                    
+                    setCreateContractDialogOpen(true);
                   }}
                 >
                   <Edit />
@@ -2385,6 +2610,7 @@ const ExporterPortal: React.FC = () => {
                   color="success"
                   onClick={() => {
                     setSelectedShipmentForCustoms(shipment);
+                    setCustomsDocuments([]);
                     const selectedContract = contracts.find(c => c.contractId === shipment.contractId);
                     setCustomsForm({
                       hsCode: '090111',
@@ -2470,7 +2696,10 @@ const ExporterPortal: React.FC = () => {
             </Typography>
             <Typography variant="body2">
               Your bank has allocated <strong>${forexAllocatedAlert.allocatedAmount.toLocaleString()} {forexAllocatedAlert.currency}</strong> for contract <strong>{forexAllocatedAlert.contractId}</strong>
-              {' '}at <strong>{forexAllocatedAlert.exchangeRate} ETB/USD</strong> (40% retained in USD, 60% converted to ETB).
+              {' '}at <strong>{forexAllocatedAlert.exchangeRate || 'Unavailable'} ETB/{forexAllocatedAlert.currency}</strong>
+              {forexAllocatedAlert.retentionRate == null
+                ? ' with the retention split not yet recorded'
+                : ` (${forexAllocatedAlert.retentionRate}% retained in FCY, ${100 - forexAllocatedAlert.retentionRate}% converted)`}.
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               <strong>Your next steps:</strong>
@@ -2503,65 +2732,65 @@ const ExporterPortal: React.FC = () => {
             // Dashboard - Overall Summary
             [
               { icon: <Description />, label: 'My Contracts', value: stats.totalContracts, color: brandPrimary, clickTab: 1 },
-              { icon: <LocalShipping />, label: 'Shipments', value: stats.totalShipments, color: '#2196F3', clickTab: 3 },
+              { icon: <LocalShipping />, label: 'Shipments', value: stats.totalShipments, color: '#b366cc', clickTab: 3 },
               { icon: <AccountBalance />, label: 'Forex & Banking', value: stats.totalForexAndLC, color: '#FFD700', clickTab: 2 },
-              { icon: <AttachMoney />, label: 'LC & Payments', value: stats.totalLCs, color: '#4CAF50', clickTab: 5 },
+              { icon: <AttachMoney />, label: 'LC & Payments', value: stats.totalLCs, color: brandPrimary, clickTab: 5 },
             ]
           ) : tabValue === 1 ? (
             // My Contracts - Status Breakdown
             [
               { icon: <Description />, label: 'Total Contracts', value: stats.totalContracts, color: brandPrimary },
-              { icon: <Assessment />, label: 'Registered', value: stats.contractsRegistered, color: '#FF9800' },
-              { icon: <CheckCircle />, label: 'Approved', value: stats.contractsApproved, color: '#4CAF50' },
-              { icon: <TrendingUp />, label: 'Active', value: stats.contractsActive, color: '#2196F3' },
+              { icon: <Assessment />, label: 'Registered', value: stats.contractsRegistered, color: '#FFD700' },
+              { icon: <CheckCircle />, label: 'Approved', value: stats.contractsApproved, color: brandPrimary },
+              { icon: <TrendingUp />, label: 'Active', value: stats.contractsActive, color: '#b366cc' },
             ]
           ) : tabValue === 2 ? (
             // Forex & Banking - Forex/LC Status
             [
-              { icon: <Assessment />, label: 'Pending LC Request', value: stats.contractsPendingLC, color: '#FF9800' },
-              { icon: <CheckCircle />, label: 'Forex Allocated', value: stats.forexAllocated, color: '#4CAF50' },
-              { icon: <Description />, label: 'LC Requested', value: stats.lcRequested, color: '#2196F3' },
+              { icon: <Assessment />, label: 'Pending LC Request', value: stats.contractsPendingLC, color: '#FFD700' },
+              { icon: <CheckCircle />, label: 'Forex Allocated', value: stats.forexAllocated, color: brandPrimary },
+              { icon: <Description />, label: 'LC Requested', value: stats.lcRequested, color: '#b366cc' },
               { icon: <AccountBalance />, label: 'LC Issued', value: stats.lcIssued, color: brandPrimary },
             ]
           ) : tabValue === 3 ? (
             // Shipments - Shipment Status
             [
-              { icon: <Add />, label: 'Created', value: stats.shipmentsCreated, color: '#FF9800' },
-              { icon: <Category />, label: 'Booked', value: stats.shipmentsBooked, color: '#2196F3' },
+              { icon: <Add />, label: 'Created', value: stats.shipmentsCreated, color: '#FFD700' },
+              { icon: <Category />, label: 'Booked', value: stats.shipmentsBooked, color: '#b366cc' },
               { icon: <LocalShipping />, label: 'In Transit', value: stats.shipmentsInTransit, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'Delivered', value: stats.shipmentsDelivered, color: '#4CAF50' },
+              { icon: <CheckCircle />, label: 'Delivered', value: stats.shipmentsDelivered, color: brandPrimary },
             ]
           ) : tabValue === 4 ? (
             // Customs - Customs Status
             [
-              { icon: <Warning />, label: 'Awaiting Permit', value: stats.customsAwaitingPermit, color: '#FF9800' },
-              { icon: <Assignment />, label: 'Ready to Declare', value: stats.customsPermitIssued, color: '#9c27b0' },
-              { icon: <CheckCircle />, label: 'Declared', value: stats.customsDeclared, color: '#2196F3' },
-              { icon: <LocalShipping />, label: 'Cleared', value: stats.customsCleared, color: '#4CAF50' },
+              { icon: <Warning />, label: 'Awaiting Permit', value: stats.customsAwaitingPermit, color: '#FFD700' },
+              { icon: <Assignment />, label: 'Ready to Declare', value: stats.customsPermitIssued, color: '#b366cc' },
+              { icon: <CheckCircle />, label: 'Declared', value: stats.customsDeclared, color: brandPrimary },
+              { icon: <LocalShipping />, label: 'Cleared', value: stats.customsCleared, color: brandPrimary },
             ]
           ) : tabValue === 5 ? (
             // LC & Payments - Payment Status
             [
-              { icon: <Assessment />, label: 'Pending', value: stats.paymentsPending, color: '#FF9800' },
-              { icon: <History />, label: 'In Progress', value: stats.paymentsProcessing, color: '#2196F3' },
+              { icon: <Assessment />, label: 'Pending', value: stats.paymentsPending, color: '#FFD700' },
+              { icon: <History />, label: 'In Progress', value: stats.paymentsProcessing, color: '#b366cc' },
               { icon: <AttachMoney />, label: 'Completed', value: stats.paymentsReceived, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'Settled', value: stats.paymentsSettled, color: '#4CAF50' },
+              { icon: <CheckCircle />, label: 'Settled', value: stats.paymentsSettled, color: brandPrimary },
             ]
           ) : tabValue === 6 ? (
             // Reports - Overall Statistics
             [
-              { icon: <AttachMoney />, label: 'Total Value', value: `$${(stats.totalExportValue / 1000000).toFixed(1)}M`, color: '#4CAF50' },
-              { icon: <Category />, label: 'Total Quantity', value: `${(stats.totalQuantity / 1000).toFixed(1)}T`, color: '#2196F3' },
+              { icon: <AttachMoney />, label: 'Total Value', value: `$${(stats.totalExportValue / 1000000).toFixed(1)}M`, color: '#FFD700' },
+              { icon: <Category />, label: 'Total Quantity', value: `${(stats.totalQuantity / 1000).toFixed(1)}T`, color: '#b366cc' },
               { icon: <TrendingUp />, label: 'Avg Contract', value: `$${(stats.avgContractValue / 1000).toFixed(0)}K`, color: brandPrimary },
-              { icon: <CheckCircle />, label: 'Success Rate', value: `${stats.successRate}%`, color: '#FF9800' },
+              { icon: <CheckCircle />, label: 'Success Rate', value: `${stats.successRate}%`, color: '#FFD700' },
             ]
           ) : tabValue === 7 ? (
             // Audit Trail - Audit Statistics
             [
-              { icon: <Assessment />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
-              { icon: <Business />, label: 'Organizations', value: auditStats.organizationsInvolved, color: '#ff9800' },
-              { icon: <Timeline />, label: 'Status Changes', value: auditStats.statusChanges, color: '#4caf50' },
-              { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
+              { icon: <Assessment />, label: 'Total Activities', value: auditStats.totalActivities, color: brandPrimary },
+              { icon: <Business />, label: 'Organizations', value: auditStats.organizationsInvolved, color: '#FFD700' },
+              { icon: <Timeline />, label: 'Status Changes', value: auditStats.statusChanges, color: '#b366cc' },
+              { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: brandPrimary },
             ]
           ) : []).map((kpi: any, idx: number) => (
             <Grid item xs={12} sm={6} md={3} key={idx}>
@@ -2667,13 +2896,15 @@ const ExporterPortal: React.FC = () => {
               }
             }}
           >
-            <Tab label="Dashboard" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab value={0} label="Dashboard" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab 
+              value={1}
               label={`Contracts (${contracts.length})`}
               icon={<Description sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
             <Tab 
+              value={2}
               label={`Forex & Banking (${(() => {
                 const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
                 const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
@@ -2688,18 +2919,20 @@ const ExporterPortal: React.FC = () => {
               iconPosition="start" 
             />
             <Tab 
+              value={3}
               label={`Shipments (${shipments.length})`}
               icon={<LocalShipping sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
-            <Tab label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab value={4} label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
             <Tab 
+              value={5}
               label={`LC & Payments (${lcStatuses.length})`}
               icon={<AttachMoney sx={{ fontSize: 20 }} />} 
               iconPosition="start" 
             />
-            <Tab label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab value={6} label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
+            <Tab value={7} label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -2950,6 +3183,10 @@ const ExporterPortal: React.FC = () => {
               startIcon={<Add />}
               sx={{ bgcolor: brandPrimary }}
               onClick={() => {
+                setCorrectingRejectedContractId(null);
+                setDraftContractId(''); // Empty string for new contract - ID will be generated on submit
+                setIsEditMode(false); // Not editing, creating new
+                setContractDocuments([]);
                 // Pre-fill exporter's advising bank from their registered profile bank
                 if (profile?.bankName) {
                   setNewContract(prev => ({ ...prev, exporterBank: profile.bankName! }));
@@ -3128,8 +3365,16 @@ const ExporterPortal: React.FC = () => {
             <Box display="flex" alignItems="center" gap={1}>
               <Description />
               <Box>
-                <Typography variant="h6">Register New Sales Contract</Typography>
-                <Typography variant="caption">Complete all required fields to register your export contract</Typography>
+                <Typography variant="h6">
+                  {draftContractId && !correctingRejectedContractId ? 'Edit Contract' : correctingRejectedContractId ? 'Register Corrected Contract' : 'Register New Sales Contract'}
+                </Typography>
+                <Typography variant="caption">
+                  {draftContractId && !correctingRejectedContractId
+                    ? `Editing Contract ${draftContractId} - Update buyer details, shipping preferences, or additional notes`
+                    : correctingRejectedContractId
+                    ? `Correct the rejected details below. This creates a new contract linked to ${correctingRejectedContractId}.`
+                    : 'Complete all required fields to register your export contract'}
+                </Typography>
               </Box>
             </Box>
           </DialogTitle>
@@ -3138,7 +3383,23 @@ const ExporterPortal: React.FC = () => {
               <Grid item xs={12}>
                 <Alert severity="info" icon={<Warning />}>
                   <Typography variant="body2">
-                    <strong>Important:</strong> All contracts must comply with ECTA regulations and will be subject to NBE approval for forex allocation. Minimum FOB price: $5.00/kg
+                    {correctingRejectedContractId ? (
+                      <>
+                        <strong>Correction:</strong> The rejected contract remains in the audit history. Submitting this form registers a replacement and records which rejection it corrects. Minimum FOB price: $5.00/kg
+                        {selectedContractForDetail?.rejectionReason && (
+                          <Box sx={{ mt: 1 }}>
+                            <strong>ECTA feedback:</strong> {selectedContractForDetail.rejectionReason}
+                          </Box>
+                        )}
+                        {!hasActionableRejectionFeedback(selectedContractForDetail?.rejectionReason) && (
+                          <Box sx={{ mt: 1 }}>
+                            This feedback does not identify the field and exact change required. Ask ECTA for clarification before submitting a replacement; the portal cannot infer the rejected field.
+                          </Box>
+                        )}
+                      </>
+                    ) : (
+                      <><strong>Important:</strong> All contracts must comply with ECTA regulations and will be subject to NBE approval for forex allocation. Minimum FOB price: $5.00/kg</>
+                    )}
                   </Typography>
                 </Alert>
               </Grid>
@@ -3262,17 +3523,20 @@ const ExporterPortal: React.FC = () => {
                     label="Coffee Type"
                     onChange={(e) => setNewContract({...newContract, coffeeType: e.target.value})}
                   >
-                    <MenuItem value="Yirgacheffe Grade 1">Yirgacheffe Grade 1 - Washed</MenuItem>
-                    <MenuItem value="Yirgacheffe Grade 2">Yirgacheffe Grade 2 - Washed</MenuItem>
-                    <MenuItem value="Sidamo Grade 2">Sidamo Grade 2 - Washed</MenuItem>
-                    <MenuItem value="Sidamo Grade 3">Sidamo Grade 3 - Washed</MenuItem>
-                    <MenuItem value="Guji Grade 1">Guji Grade 1 - Natural</MenuItem>
-                    <MenuItem value="Guji Grade 2">Guji Grade 2 - Natural</MenuItem>
-                    <MenuItem value="Limu Grade 2">Limu Grade 2 - Washed</MenuItem>
-                    <MenuItem value="Limu Grade 3">Limu Grade 3 - Washed</MenuItem>
-                    <MenuItem value="Harrar Grade 4">Harrar Grade 4 - Natural</MenuItem>
-                    <MenuItem value="Jimma Grade 5">Jimma Grade 5 - Washed</MenuItem>
+                    {newContract.coffeeType && !isSupportedCoffeeType(newContract.coffeeType) && (
+                      <MenuItem value={newContract.coffeeType}>
+                        Existing value: {newContract.coffeeType}
+                      </MenuItem>
+                    )}
+                    {COFFEE_TYPE_OPTIONS.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                    ))}
                   </Select>
+                  {newContract.coffeeType && !isSupportedCoffeeType(newContract.coffeeType) && (
+                    <FormHelperText>
+                      This saved value is not in the current coffee list. Select the correct grade to replace it.
+                    </FormHelperText>
+                  )}
                 </FormControl>
               </Grid>
 
@@ -3554,117 +3818,119 @@ const ExporterPortal: React.FC = () => {
                     <strong>Recommended Documents (to support contract):</strong> Sample quality certificates, sales agreement/proforma invoice, 
                     organic/fair trade certificates (if applicable), EUDR due diligence statement (for EU buyers)
                   </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                    📋 Required Documents for Export Approval
+                  </Typography>
+                  <Typography variant="caption" component="div">
+                    Upload these documents before submitting your contract:
+                  </Typography>
+                  <Typography variant="caption" component="ul" sx={{ mt: 0.5, mb: 0, pl: 2 }}>
+                    <li><strong>Quality Certificate</strong> - Coffee quality inspection report</li>
+                    <li><strong>Certificate of Origin</strong> - Proof of Ethiopian origin</li>
+                    <li><strong>Export Permit</strong> - ECTA export authorization</li>
+                  </Typography>
+                  <Box sx={{ mt: 1.5, pt: 1, borderTop: '1px dashed rgba(0,0,0,0.12)' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                      📥 Download Sample Templates:
+                    </Typography>
+                    <Stack direction="row" spacing={1} flexWrap="wrap">
+                      <Button 
+                        size="small" 
+                        variant="outlined" 
+                        startIcon={<Download />}
+                        href="/samples/Quality_Certificate_Sample.md"
+                        download
+                        sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                      >
+                        Quality Certificate
+                      </Button>
+                      <Button 
+                        size="small" 
+                        variant="outlined" 
+                        startIcon={<Download />}
+                        href="/samples/Certificate_of_Origin_Sample.md"
+                        download
+                        sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                      >
+                        Certificate of Origin
+                      </Button>
+                      <Button 
+                        size="small" 
+                        variant="outlined" 
+                        startIcon={<Download />}
+                        href="/samples/Export_Permit_Sample.md"
+                        download
+                        sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                      >
+                        Export Permit
+                      </Button>
+                    </Stack>
+                  </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                     <strong>Note:</strong> Export documents (Bill of Lading, Commercial Invoice, etc.) are created LATER when you register the actual shipment, not now.
                   </Typography>
                 </Alert>
-                
-                <Box sx={{ 
-                  border: '2px dashed', 
-                  borderColor: contractDocuments.length > 0 ? 'success.main' : 'grey.400',
-                  borderRadius: 1, 
-                  p: 2, 
-                  textAlign: 'center',
-                  bgcolor: 'grey.50'
-                }}>
-                  {contractDocuments.length === 0 ? (
-                    <>
-                      <Upload sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
-                      <Typography variant="body2" color="text.secondary" gutterBottom>
-                        No documents uploaded yet (optional)
-                      </Typography>
-                      <input
-                        id="contract-file-input"
-                        type="file"
-                        multiple
-                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const files = e.target.files;
-                          if (!files) return;
-                          
-                          const newDocs = Array.from(files).map((file: File) => ({
-                            file,
-                            category: 'SALES_CONTRACT',
-                            description: '',
-                            encrypt: true,
-                            status: 'pending' as const,
-                            progress: 0,
-                            documentId: undefined,
-                            hash: undefined,
-                            ipfsCID: undefined
-                          }));
-                          
-                          setContractDocuments(prev => [...prev, ...newDocs]);
-                        }}
-                      />
-                      <Button 
-                        variant="outlined" 
-                        startIcon={<Upload />}
-                        onClick={() => document.getElementById('contract-file-input')?.click()}
-                        sx={{ mt: 1 }}
-                      >
-                        Upload Documents (Optional)
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
-                      <Typography variant="body2" gutterBottom>
-                        {contractDocuments.length} document{contractDocuments.length !== 1 ? 's' : ''} selected
-                      </Typography>
-                      <List dense>
-                        {contractDocuments.map((doc, idx) => (
-                          <ListItem key={doc.file.name + '-' + doc.file.size + '-' + idx}>
-                            <ListItemText 
-                              primary={doc.file.name}
-                              secondary={`${(doc.file.size / 1024).toFixed(2)} KB`}
-                            />
-                            <IconButton 
-                              size="small" 
-                              onClick={() => setContractDocuments(prev => prev.filter((_, i) => i !== idx))}
-                            >
-                              <Delete />
-                            </IconButton>
-                          </ListItem>
-                        ))}
-                      </List>
-                      <input
-                        id="contract-file-input-add"
-                        type="file"
-                        multiple
-                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const files = e.target.files;
-                          if (!files) return;
-                          
-                          const newDocs = Array.from(files).map((file: File) => ({
-                            file,
-                            category: 'SALES_CONTRACT',
-                            description: '',
-                            encrypt: true,
-                            status: 'pending' as const,
-                            progress: 0,
-                            documentId: undefined,
-                            hash: undefined,
-                            ipfsCID: undefined
-                          }));
-                          
-                          setContractDocuments(prev => [...prev, ...newDocs]);
-                        }}
-                      />
-                      <Button 
-                        variant="outlined" 
-                        startIcon={<Upload />}
-                        onClick={() => document.getElementById('contract-file-input-add')?.click()}
-                        size="small"
-                      >
-                        Add More Documents
-                      </Button>
-                    </>
-                  )}
-                </Box>
+
+                {[
+                  { value: 'QUALITY_CERTIFICATE', label: 'Quality / Sample Certificate', required: true, note: 'Required by ECTA' },
+                  { value: 'CERTIFICATE_OF_ORIGIN', label: 'Certificate of Origin', required: true, note: 'Required by ECTA' },
+                  { value: 'EXPORT_PERMIT', label: 'Export Permit', required: true, note: 'Required by ECTA' },
+                  { value: 'PROFORMA_INVOICE', label: 'Sales Agreement / Proforma Invoice' },
+                  { value: 'SALES_CONTRACT', label: 'Signed Sales Contract' },
+                  { value: 'PURCHASE_ORDER', label: 'Buyer Purchase Order' },
+                  { value: 'ORGANIC_CERTIFICATE', label: 'Organic Certificate' },
+                  { value: 'FAIR_TRADE_CERTIFICATE', label: 'Fair Trade Certificate' },
+                  { value: 'EUDR_STATEMENT', label: 'EUDR Due Diligence Statement' },
+                ].map((documentType) => {
+                  const documentsForType = contractDocuments.filter((doc) => doc.category === documentType.value);
+                  return (
+                    <Paper key={documentType.value} variant="outlined" sx={{ p: 1.5, mb: 1, bgcolor: documentType.required ? '#fff8e1' : 'grey.50', borderColor: documentType.required ? 'warning.light' : 'divider' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {documentType.label}
+                            {documentType.required && <Chip label="REQUIRED" size="small" color="warning" sx={{ ml: 1, height: 20, fontSize: '0.65rem' }} />}
+                          </Typography>
+                          {documentsForType.length === 0 && (
+                            <Typography variant="caption" color={documentType.required ? 'warning.dark' : 'text.secondary'}>
+                              {documentType.required ? (documentType.note || 'Required for ECTA approval') : 'Optional supporting document'}
+                            </Typography>
+                          )}
+                        </Box>
+                        <Button component="label" variant="outlined" size="small" startIcon={<Upload />}>
+                          Upload
+                          <input
+                            hidden
+                            type="file"
+                            multiple
+                            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                            onChange={(event) => handleContractDocumentSelect(documentType.value, event)}
+                          />
+                        </Button>
+                      </Box>
+                      {documentsForType.map((doc) => (
+                        <Box key={doc.localId} sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Description fontSize="small" sx={{ color: doc.status === 'success' ? 'success.main' : doc.status === 'error' ? 'error.main' : 'text.disabled' }} />
+                          <Typography variant="caption" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {doc.file.name} · {(doc.file.size / 1024).toFixed(1)} KB
+                          </Typography>
+                          <Chip
+                            size="small"
+                            label={doc.status === 'success' ? 'Uploaded' : doc.status === 'error' ? 'Upload failed' : 'Uploading…'}
+                            color={doc.status === 'success' ? 'success' : doc.status === 'error' ? 'error' : 'default'}
+                          />
+                          {doc.status === 'error' && (
+                            <Tooltip title={doc.error || 'Remove this failed upload and try again'}>
+                              <IconButton size="small" color="error" onClick={() => setContractDocuments((current) => current.filter((item) => item.localId !== doc.localId))}>
+                                <Delete fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
+                      ))}
+                    </Paper>
+                  );
+                })}
               </Grid>
             </Grid>
           </DialogContent>
@@ -3679,11 +3945,13 @@ const ExporterPortal: React.FC = () => {
                         !newContract.buyerBank || !newContract.exporterBank ||
                         !newContract.buyerEmail || !newContract.coffeeType || !newContract.quantity || 
                         !newContract.pricePerKg || !newContract.portOfDestination || !newContract.deliveryDate || 
-                        (parseFloat(newContract.pricePerKg) < 5.0)}
+                        (parseFloat(newContract.pricePerKg) < 5.0) || contractDocuments.some((doc) => doc.status !== 'success')}
               size="large"
               sx={{ minWidth: 150 }}
             >
-              {isCreatingContract ? 'Registering...' : 'Register Contract'}
+              {isCreatingContract 
+                ? (isEditMode ? 'Updating...' : 'Registering...') 
+                : (isEditMode ? 'Update Contract' : 'Register Contract')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -3875,24 +4143,6 @@ const ExporterPortal: React.FC = () => {
                                     </IconButton>
                                   </Tooltip>
                                   
-                                  <Tooltip title="Reject/Cancel this contract">
-                                    <IconButton
-                                      size="small"
-                                      color="error"
-                                      onClick={() => {
-                                        if (window.confirm(`Are you sure you want to reject contract ${params.row.contractId}?\n\nThis action cannot be undone.`)) {
-                                          showError(
-                                            'Contract Rejection',
-                                            'Contract rejection feature is under development. Please contact ECTA to cancel this contract.'
-                                          );
-                                          // TODO: Implement contract rejection API call
-                                          // await api.rejectContract(params.row.contractId, reason);
-                                        }
-                                      }}
-                                    >
-                                      <Delete />
-                                    </IconButton>
-                                  </Tooltip>
                                 </Box>
                               );
                             },
@@ -4179,13 +4429,13 @@ const ExporterPortal: React.FC = () => {
                     },
                     { 
                       field: 'retainedAmount', 
-                      headerName: 'Retained (40%)', 
+                      headerName: 'FCY Retained',
                       width: 140,
                       renderCell: (params) => `$${params.value.toLocaleString()}`
                     },
                     { 
                       field: 'convertedAmount', 
-                      headerName: 'Converted (60%)', 
+                      headerName: 'Converted',
                       width: 150,
                       renderCell: (params) => `$${params.value.toLocaleString()}`
                     },
@@ -4294,7 +4544,7 @@ const ExporterPortal: React.FC = () => {
             
             const allRows = [...shipments, ...contractsReadyForShipment];
             
-            console.log('[SHIPMENTS TAB] Displaying shipments:', shipments.length, 'pending:', contractsReadyForShipment.length);
+            // console.log('[SHIPMENTS TAB] Displaying shipments:', shipments.length, 'pending:', contractsReadyForShipment.length);
             
             return (
               <Box>
@@ -4328,9 +4578,9 @@ const ExporterPortal: React.FC = () => {
                       fontWeight: 700,
                     },
                     '& .pending-shipment-row': {
-                      bgcolor: 'rgba(76, 175, 80, 0.1)',
+                      bgcolor: 'rgba(155, 48, 183, 0.08)',
                       '&:hover': {
-                        bgcolor: 'rgba(76, 175, 80, 0.2)',
+                        bgcolor: 'rgba(155, 48, 183, 0.12)',
                       },
                     },
                   }}
@@ -4365,7 +4615,7 @@ const ExporterPortal: React.FC = () => {
                 const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(shipment.status);
                 const isPendingContract = (shipment as any)._isContract === true; // This is an approved contract, not a shipment yet
                 
-                console.log(`[EXPORTER] Shipment ${shipment.shipmentId}: hasPermit=${hasPermit}, hasDeclared=${hasDeclared}, isCleared=${isCleared}, isPendingContract=${isPendingContract}`);
+                // console.log(`[EXPORTER] Shipment ${shipment.shipmentId}: hasPermit=${hasPermit}, hasDeclared=${hasDeclared}, isCleared=${isCleared}, isPendingContract=${isPendingContract}`);
                 
                 // Determine quality inspection status
                 let qualityStatus = isPendingContract ? 'Awaiting Shipment' : 'Pending';
@@ -4542,6 +4792,7 @@ const ExporterPortal: React.FC = () => {
                               startIcon={<Upload />}
                               onClick={() => {
                                 setSelectedShipmentForCustoms(params.row.shipment);
+                                setCustomsDocuments([]);
                                 setCustomsForm({
                                   hsCode: '090111',
                                   portOfExit: 'Djibouti Port',
@@ -4700,19 +4951,19 @@ const ExporterPortal: React.FC = () => {
                 <Grid container spacing={3}>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">EUDR Compliance</Typography>
-                    <Typography variant="h6" fontWeight="600">100%</Typography>
+                    <Typography variant="h6" fontWeight="600">Unavailable</Typography>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">Customs Rejections</Typography>
-                    <Typography variant="h6" fontWeight="600">0</Typography>
+                    <Typography variant="h6" fontWeight="600">Unavailable</Typography>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">On-Time Delivery</Typography>
-                    <Typography variant="h6" fontWeight="600">98%</Typography>
+                    <Typography variant="h6" fontWeight="600">Unavailable</Typography>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">Quality Rating</Typography>
-                    <Typography variant="h6" fontWeight="600">A+</Typography>
+                    <Typography variant="h6" fontWeight="600">Unavailable</Typography>
                   </Grid>
                 </Grid>
               </CardContent>
@@ -5212,8 +5463,12 @@ This contract is registered with ECTA and approved by NBE.
           <Box>
             {/* Status Banner */}
             <Alert 
-              severity={selectedContractForDetail.status === 'APPROVED' || selectedContractForDetail.status === 'NBE_APPROVED' || selectedContractForDetail.status === 'ACTIVE' ? 'success' : 'info'}
-              icon={<CheckCircle />}
+              severity={selectedContractForDetail.status === 'REJECTED'
+                ? 'error'
+                : selectedContractForDetail.status === 'APPROVED' || selectedContractForDetail.status === 'NBE_APPROVED' || selectedContractForDetail.status === 'ACTIVE'
+                  ? 'success'
+                  : 'info'}
+              icon={selectedContractForDetail.status === 'REJECTED' ? <Warning /> : <CheckCircle />}
               sx={{ mb: 3 }}
             >
               <Typography variant="body2" fontWeight={600}>
@@ -5224,6 +5479,37 @@ This contract is registered with ECTA and approved by NBE.
                 {selectedContractForDetail.status === 'NBE_APPROVED' && 'Approved by NBE - Forex allocated'}
                 {selectedContractForDetail.status === 'ACTIVE' && 'Active - LC issued, ready for export'}
               </Typography>
+              {selectedContractForDetail.status === 'REJECTED' && (
+                <Box sx={{ mt: 1 }}>
+                    <Typography variant="body2" fontWeight={600}>ECTA feedback</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                      {selectedContractForDetail.rejectionReason || 'No rejection reason was recorded. Contact ECTA for details.'}
+                    </Typography>
+                    {!hasActionableRejectionFeedback(selectedContractForDetail.rejectionReason) && (
+                      <Alert severity="warning" sx={{ mt: 1 }}>
+                        ECTA's note does not identify which field to change or what value is required. Ask ECTA for a specific correction before registering a replacement; do not guess.
+                      </Alert>
+                    )}
+                    {(selectedContractForDetail.rejectedBy || selectedContractForDetail.rejectionDate) && (
+                      <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+                        {selectedContractForDetail.rejectedBy ? `Rejected by ${selectedContractForDetail.rejectedBy}` : ''}
+                        {selectedContractForDetail.rejectedBy && selectedContractForDetail.rejectionDate ? ' · ' : ''}
+                        {selectedContractForDetail.rejectionDate
+                          ? new Date(selectedContractForDetail.rejectionDate).toLocaleDateString()
+                          : ''}
+                      </Typography>
+                    )}
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="error"
+                      sx={{ mt: 1.5 }}
+                      onClick={() => handleCorrectRejectedContract(selectedContractForDetail)}
+                    >
+                      Correct details and register replacement
+                    </Button>
+                </Box>
+              )}
             </Alert>
 
             {/* Main Contract Information */}
@@ -5363,6 +5649,14 @@ This contract is registered with ECTA and approved by NBE.
                       {selectedContractForDetail.nbeReferenceNumber || 'Pending'}
                     </Typography>
                   </Grid>
+                  {selectedContractForDetail.supersedesContractId && (
+                    <Grid item xs={12}>
+                      <Typography variant="caption" color="text.secondary">Replacement for rejected contract</Typography>
+                      <Typography variant="body1" fontWeight={600}>
+                        {selectedContractForDetail.supersedesContractId}
+                      </Typography>
+                    </Grid>
+                  )}
                 </Grid>
               </CardContent>
             </Card>
@@ -5735,85 +6029,63 @@ This contract is registered with ECTA and approved by NBE.
               </Typography>
             </Alert>
 
-            {/* Document Upload Section */}
+            {/* Upload each document from its checklist row. Files are linked to this shipment immediately. */}
             <Paper elevation={2} sx={{ p: 3, mb: 3, bgcolor: '#f9f9f9' }}>
               <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Upload />
-                Upload Supporting Documents
+                Supporting Documents
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Upload all required documents listed above. Accepted formats: PDF, JPG, PNG (max 10MB per file)
+                Choose each document beside its name. It uploads to this shipment as soon as you select it.
               </Typography>
-              
-              <Button
-                variant="outlined"
-                component="label"
-                startIcon={<AttachFile />}
-                sx={{ mb: 2 }}
-              >
-                Choose Files
-                <input
-                  type="file"
-                  hidden
-                  multiple
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files || []);
-                    const newDocs = files.map(file => ({
-                      name: file.name,
-                      size: file.size,
-                      type: file.type,
-                      file: file,
-                      uploadedAt: new Date().toISOString(),
-                    }));
-                    setCustomsDocuments([...customsDocuments, ...newDocs]);
-                  }}
-                />
-              </Button>
-
-              {customsDocuments.length > 0 && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
-                    Uploaded Documents ({customsDocuments.length}):
-                  </Typography>
-                  {customsDocuments.map((doc, index) => (
-                    <Box
-                      key={doc.file?.name || doc.name || `customs-doc-${index}`}
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        p: 1.5,
-                        mb: 1,
-                        bgcolor: 'white',
-                        borderRadius: 1,
-                        border: '1px solid #e0e0e0',
-                      }}
-                    >
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Description color="primary" />
-                        <Box>
-                          <Typography variant="body2" fontWeight={600}>
-                            {doc.name}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {(doc.size / 1024).toFixed(1)} KB
-                          </Typography>
-                        </Box>
-                      </Box>
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => {
-                          setCustomsDocuments(customsDocuments.filter((_, i) => i !== index));
-                        }}
-                      >
-                        <Delete />
-                      </IconButton>
+              {[
+                { value: 'COMMERCIAL_INVOICE', label: 'Commercial Invoice' },
+                { value: 'PACKING_LIST', label: 'Packing List' },
+                { value: 'EXPORT_PERMIT', label: 'ECTA Export Permit' },
+                { value: 'CERTIFICATE_OF_ORIGIN', label: 'Certificate of Origin' },
+                { value: 'BILL_OF_LADING', label: 'Bill of Lading / Waybill' },
+                { value: 'PHYTOSANITARY_CERTIFICATE', label: 'Phytosanitary Certificate' },
+                { value: 'EUDR_STATEMENT', label: 'EUDR Due Diligence Statement' },
+              ].map((documentType) => {
+                const documentsForType = customsDocuments.filter((doc) => doc.documentType === documentType.value);
+                return (
+                  <Box key={documentType.value} sx={{ p: 1.5, mb: 1, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+                      <Typography variant="body2" fontWeight={600}>{documentType.label}</Typography>
+                      <Button component="label" variant="outlined" size="small" startIcon={<AttachFile />}>
+                        Upload
+                        <input
+                          hidden
+                          type="file"
+                          multiple
+                          accept=".pdf,.jpg,.jpeg,.png"
+                          onChange={(event) => handleCustomsDocumentSelect(documentType.value, event)}
+                        />
+                      </Button>
                     </Box>
-                  ))}
-                </Box>
-              )}
+                    {documentsForType.map((doc) => (
+                      <Box key={doc.localId} sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Description fontSize="small" sx={{ color: doc.status === 'success' ? 'success.main' : doc.status === 'error' ? 'error.main' : 'text.disabled' }} />
+                        <Typography variant="caption" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {doc.name} · {(doc.size / 1024).toFixed(1)} KB
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={doc.status === 'success' ? 'Uploaded' : doc.status === 'error' ? 'Upload failed' : 'Uploading…'}
+                          color={doc.status === 'success' ? 'success' : doc.status === 'error' ? 'error' : 'default'}
+                        />
+                        {doc.status === 'error' && (
+                          <Tooltip title={doc.error || 'Remove this failed upload and try again'}>
+                            <IconButton size="small" color="error" onClick={() => setCustomsDocuments((current) => current.filter((item) => item.localId !== doc.localId))}>
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                );
+              })}
             </Paper>
           </>
         )}
@@ -5829,7 +6101,7 @@ This contract is registered with ECTA and approved by NBE.
         <AnimatedButton
           variant="contained"
           brandColor={brandPrimary}
-          disabled={isSubmittingCustoms}
+          disabled={isSubmittingCustoms || customsDocuments.some((document) => document.status !== 'success')}
           onClick={handleSubmitCustomsDeclaration}
         >
           {isSubmittingCustoms ? 'Submitting...' : 'Submit to ECC'}
@@ -6046,9 +6318,17 @@ This contract is registered with ECTA and approved by NBE.
                 );
               }
 
+              if (!selectedForex || Number(selectedForex.exchangeRate) <= 0 || !Number.isFinite(Number(selectedForex.retentionRate))) {
+                return (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    No ledger-backed forex rate and retention record is available for this contract. The bank must complete the forex allocation before payment can be submitted.
+                  </Alert>
+                );
+              }
+
               const amountUSD = selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg) : 0;
-              const exchangeRate = selectedForex?.exchangeRate || 115.5;
-              const retentionRate = selectedForex?.retentionRate || 100;
+              const exchangeRate = Number(selectedForex.exchangeRate);
+              const retentionRate = Number(selectedForex.retentionRate);
               const amountETB = amountUSD * exchangeRate;
               const retainedETB = (amountETB * retentionRate) / 100;
 
@@ -6212,7 +6492,8 @@ This contract is registered with ECTA and approved by NBE.
             !paymentForm.beneficiaryName || 
             !paymentForm.beneficiaryAccount ||
             !paymentForm.beneficiaryBank ||
-            !paymentForm.beneficiaryBankBIC
+            !paymentForm.beneficiaryBankBIC ||
+            !forexStatuses.some((fx) => fx.contractId === selectedShipmentForPayment?.contractId && ['ALLOCATED', 'UTILIZED'].includes(String(fx.status).toUpperCase()) && Number(fx.exchangeRate) > 0 && Number.isFinite(Number(fx.retentionRate)))
           }
           onClick={handleInitiatePayment}
         >
@@ -6942,16 +7223,16 @@ This contract is registered with ECTA and approved by NBE.
                         🔒 Blockchain Guarantees:
                       </Typography>
                       <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
-                        ✓ Every transaction above is immutably recorded on the distributed ledger
+                        Ledger entries show their Fabric transaction ID, block, validation code, creator, and endorsements when available.
                       </Typography>
                       <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
-                        ✓ All changes are cryptographically signed by authorized organizations
+                        “Verified” requires a valid block entry, valid transaction signatures, and certificates trusted by configured MSP roots.
                       </Typography>
                       <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
-                        ✓ History cannot be altered, deleted, or tampered with
+                        A transaction ID confirms a ledger reference; it does not alone prove signature or certificate validity.
                       </Typography>
                       <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem' }}>
-                        ✓ Full audit trail visible to all consortium members
+                        Ledger history and details are available subject to channel membership and application permissions.
                       </Typography>
                     </Box>
 
@@ -6993,7 +7274,7 @@ This contract is registered with ECTA and approved by NBE.
                 const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
                 if (contract) {
                   const forex = forexStatuses.find(f => f.contractId === contract.contractId);
-                  applyContractToShipment(contract, forex?.exchangeRate || 115.5);
+                  applyContractToShipment(contract, forex?.exchangeRate || 0);
                 }
                 setCreateShipmentDialogOpen(true);
               }}

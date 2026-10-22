@@ -15,12 +15,13 @@ interface AllocationForm {
 interface Props {
   open: boolean;
   form: AllocationForm;
+  ratePolicyReady: boolean;
   onChange: (f: AllocationForm) => void;
   onClose: () => void;
   onConfirm: (f: AllocationForm) => Promise<void> | void;
 }
 
-const ForexAllocationDialog: React.FC<Props> = ({ open, form, onChange, onClose, onConfirm }) => {
+const ForexAllocationDialog: React.FC<Props> = ({ open, form, ratePolicyReady, onChange, onClose, onConfirm }) => {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Allocate Forex</DialogTitle>
@@ -29,16 +30,16 @@ const ForexAllocationDialog: React.FC<Props> = ({ open, form, onChange, onClose,
           <TextField label="Forex ID" size="small" value={form.forexId} disabled />
           <TextField label="LC Reference" size="small" value={form.lcId} onChange={(e) => onChange({ ...form, lcId: e.target.value })} />
           <TextField label="Amount (USD)" size="small" type="number" value={form.amount} onChange={(e) => onChange({ ...form, amount: Number(e.target.value) })} />
-          <TextField label="Exchange Rate (ETB/USD)" size="small" type="number" value={form.exchangeRate} onChange={(e) => onChange({ ...form, exchangeRate: Number(e.target.value) })} />
-          <TextField label="Retention Rate (%)" size="small" type="number" value={form.retentionRate} onChange={(e) => onChange({ ...form, retentionRate: Number(e.target.value) })} />
+          <TextField label="Active NBE Exchange Rate (ETB per currency)" size="small" type="number" value={form.exchangeRate} InputProps={{ readOnly: true }} helperText={ratePolicyReady ? 'Read from the active ledger rate' : 'No active ledger rate'} />
+          <TextField label="Active NBE Retention Policy (%)" size="small" type="number" value={form.retentionRate} InputProps={{ readOnly: true }} helperText={ratePolicyReady ? 'Read from the active COFFEE ledger policy' : 'No active ledger policy'} />
           <TextField label="Officer" size="small" value={form.officer} onChange={(e) => onChange({ ...form, officer: e.target.value })} />
           <TextField label="Approval Ref" size="small" value={form.approvalRef} onChange={(e) => onChange({ ...form, approvalRef: e.target.value })} />
-          <TextField label="Expiry Date" size="small" type="date" value={form.expiryDate ? form.expiryDate.split('T')[0] : ''} onChange={(e) => onChange({ ...form, expiryDate: new Date(e.target.value).toISOString() })} InputLabelProps={{ shrink: true }} />
+          <TextField label="Expiry Date" size="small" type="date" value={form.expiryDate ? form.expiryDate.split('T')[0] : ''} onChange={(e) => onChange({ ...form, expiryDate: e.target.value ? new Date(e.target.value).toISOString() : '' })} InputLabelProps={{ shrink: true }} />
         </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={async () => await onConfirm(form)} sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}>Allocate</Button>
+        <Button variant="contained" disabled={!ratePolicyReady || form.amount <= 0 || !form.lcId || !form.officer.trim() || !form.approvalRef.trim()} onClick={async () => await onConfirm(form)} sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}>Allocate</Button>
       </DialogActions>
     </Dialog>
   );

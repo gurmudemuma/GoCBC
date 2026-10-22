@@ -111,8 +111,8 @@ const BlockchainSignatureCard: React.FC<BlockchainSignatureCardProps> = ({
           
           <Chip
             icon={<CheckCircle />}
-            label="VERIFIED"
-            color="success"
+            label={isVerified ? 'VALID BLOCK' : validationCode}
+            color={isVerified ? 'success' : 'warning'}
             size="small"
             sx={{ fontWeight: 600 }}
           />
@@ -120,11 +120,13 @@ const BlockchainSignatureCard: React.FC<BlockchainSignatureCardProps> = ({
 
         {/* Verification Status Alert */}
         <Alert 
-          severity="success" 
+          severity={isVerified ? 'success' : 'warning'} 
           icon={<VerifiedUser />}
           sx={{ mb: 2, bgcolor: 'rgba(76, 175, 80, 0.1)' }}
         >
-          Verification: {chaincodeFunction} - Blockchain Verified ✓
+          {isVerified
+            ? `Fabric marked ${chaincodeFunction} as VALID in block ${blockNumber ?? 'unknown'}. Certificate trust is shown separately.`
+            : `Fabric validation status for ${chaincodeFunction}: ${validationCode}.`}
         </Alert>
 
         {/* Blockchain Transaction ID */}

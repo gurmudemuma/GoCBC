@@ -175,13 +175,13 @@ const AdminPortal: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
   const [blockchainHealth, setBlockchainHealth] = useState<BlockchainHealth>({
-    status: 'healthy',
-    blockHeight: 12450,
-    transactionsPerSecond: 45,
-    averageBlockTime: 2.3,
-    peers: 4,
-    orderers: 1,
-    chaincodes: 3,
+    status: 'warning',
+    blockHeight: 0,
+    transactionsPerSecond: 0,
+    averageBlockTime: 0,
+    peers: 0,
+    orderers: 0,
+    chaincodes: 0,
   });
   const [organizationStats, setOrganizationStats] = useState<OrganizationStats[]>([]);
   const [recentActivities, setRecentActivities] = useState<RecentActivity[]>([]);
@@ -251,7 +251,7 @@ const AdminPortal: React.FC = () => {
         const identities = identitiesResponse.data.data;
         setStats(prev => ({
           ...prev,
-          enrolledIdentities: identities.length,
+          enrolledIdentities: identities.filter((identity: any) => ['CA_ISSUED', 'VERIFIED'].includes(identity.fabricMspMembership)).length,
         }));
       }
 
@@ -311,12 +311,22 @@ const AdminPortal: React.FC = () => {
         };
 
         const organizations = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING', 'EXPORTERS'];
+        const mspByOrganization: Record<string, string> = {
+          ECTA: 'ECTAMSP',
+          ECX: 'ECXMSP',
+          NBE: 'NBEMSP',
+          BANKS: 'BanksMSP',
+          CUSTOMS: 'CustomsMSP',
+          SHIPPING: 'ShippingMSP',
+          EXPORTERS: 'ECTAMSP',
+        };
         const orgStats: OrganizationStats[] = organizations.map(org => {
           const orgUsers = users.filter((u: any) => u.organization === org || (org === 'EXPORTERS' && u.role === 'EXPORTER'));
           
           // Count REAL enrolled identities for this organization
           const orgIdentities = identities.filter((id: any) => 
-            id.mspId === `${org}MSP` || (org === 'EXPORTERS' && id.mspId === 'ExportersMSP')
+            ['CA_ISSUED', 'VERIFIED'].includes(id.fabricMspMembership) &&
+            id.mspId === mspByOrganization[org]
           );
           
           return {
@@ -398,9 +408,9 @@ const AdminPortal: React.FC = () => {
           blockHeight: data.blockHeight || 0, // REAL from ledger
           transactionsPerSecond: data.transactionsPerSecond || 0, // REAL calculated
           averageBlockTime: data.averageBlockTime || 0, // REAL calculated
-          peers: data.peers || 1,
-          orderers: data.orderers || 1,
-          chaincodes: data.chaincodes || 3,
+          peers: data.peers ?? 0,
+          orderers: data.orderers ?? 0,
+          chaincodes: data.chaincodes ?? 0,
         });
       }
     } catch (error) {
@@ -418,9 +428,7 @@ const AdminPortal: React.FC = () => {
         // Calculate statistics
         const uniqueEntities = new Set(allLogs.map((log: any) => `${log.entity_type}-${log.entity_id}`)).size;
         const uniqueUsers = new Set(allLogs.map((log: any) => log.performed_by)).size;
-        const blockchainVerified = allLogs.filter((log: any) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = allLogs.filter((log: any) => log.metadata?.blockchainVerified === true).length;
         
         setTraceabilityStats({
           totalActivities: allLogs.length,
@@ -702,11 +710,11 @@ const AdminPortal: React.FC = () => {
             subtitle: 'Certificates',
           },
           {
-            title: 'Chaincodes',
+            title: 'Configured Chaincode',
             value: blockchainHealth.chaincodes,
             icon: <Gavel sx={{ color: '#9b30b7' }} />,
             bgcolor: 'rgba(155, 48, 183, 0.08)',
-            subtitle: 'Deployed',
+            subtitle: blockchainHealth.chaincodes > 0 ? 'Available' : 'Unavailable',
           },
           {
             title: 'Orderers',
@@ -764,18 +772,18 @@ const AdminPortal: React.FC = () => {
             subtitle: 'Consortium members',
           },
           {
-            title: 'Blockchain IDs',
+            title: 'Fabric MSP IDs',
             value: stats.enrolledIdentities,
             icon: <VerifiedUser sx={{ color: '#9b30b7' }} />,
             bgcolor: 'rgba(155, 48, 183, 0.08)',
-            subtitle: 'Enrolled identities',
+            subtitle: 'CA-verified identities',
           },
           {
-            title: 'Certificates',
+            title: 'Legacy credentials',
             value: stats.expiringCertificates,
             icon: <Assessment sx={{ color: stats.expiringCertificates > 0 ? '#1a1a1a' : '#FFD700' }} />,
             bgcolor: stats.expiringCertificates > 0 ? 'rgba(26, 26, 26, 0.08)' : 'rgba(255, 215, 0, 0.08)',
-            subtitle: 'Expiring soon',
+            subtitle: 'Application-side expiry metadata',
           },
         ];
     }

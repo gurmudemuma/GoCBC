@@ -95,6 +95,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadingRequiredType, setUploadingRequiredType] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -196,6 +197,55 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
       setError(err.response?.data?.error?.message || 'Upload failed');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleRequiredFileSelect = async (
+    requiredType: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      setUploading(true);
+      setUploadingRequiredType(requiredType);
+      setError(null);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('entityType', entityType);
+      formData.append('entityId', entityId);
+      formData.append('documentType', requiredType);
+      formData.append('fileName', file.name);
+
+      const token = localStorage.getItem('authToken');
+      const response = await axios.post(
+        'http://localhost:3001/api/v1/documents/upload',
+        formData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      if (!response.data.success) {
+        throw new Error(response.data.error?.message || 'Upload failed');
+      }
+
+      await fetchDocuments();
+      if (onDocumentUploaded && response.data.data) {
+        onDocumentUploaded(response.data.data);
+      }
+    } catch (err: any) {
+      console.error('Required document upload error:', err);
+      setError(err.response?.data?.error?.message || err.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+      setUploadingRequiredType(null);
     }
   };
 
@@ -342,17 +392,78 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
         {missingDocs.length > 0 && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             <Typography variant="body2" fontWeight="bold">
-              Missing Required Documents:
+              {entityType === 'CONTRACT' && (requiredDocuments.includes('CERTIFICATE_OF_ORIGIN') || requiredDocuments.includes('EXPORT_PERMIT'))
+                ? 'ECTA Documents Required:'
+                : 'Missing Required Documents:'}
             </Typography>
             <Typography variant="caption">
+              {entityType === 'CONTRACT' && (requiredDocuments.includes('CERTIFICATE_OF_ORIGIN') || requiredDocuments.includes('EXPORT_PERMIT'))
+                ? 'ECTA staff must upload these documents after inspection and verification: '
+                : ''}
               {missingDocs.join(', ')}
             </Typography>
           </Alert>
         )}
 
+        {allowUpload && requiredDocuments.length > 0 && (
+          <Stack spacing={1} sx={{ mb: 2 }}>
+            {requiredDocuments.map((requiredType) => {
+              const existingDocument = filteredDocuments.find(
+                (doc) => normalizeDocType(doc.document_type) === normalizeDocType(requiredType)
+              );
+              return (
+                <Box
+                  key={requiredType}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 2,
+                    p: 1.25,
+                    border: '1px solid',
+                    borderColor: existingDocument ? 'success.light' : 'divider',
+                    borderRadius: 1,
+                    bgcolor: existingDocument ? '#f1f8e9' : 'background.paper',
+                  }}
+                >
+                  <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={600}>
+                      {requiredType.replace(/_/g, ' ')}
+                    </Typography>
+                    <Typography variant="caption" color={existingDocument ? 'success.main' : 'text.secondary'} noWrap>
+                      {existingDocument ? existingDocument.file_name : 'Required document — upload here'}
+                    </Typography>
+                  </Stack>
+                  {existingDocument ? (
+                    <Chip label="Uploaded" size="small" color="success" icon={<CheckCircleIcon />} />
+                  ) : (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      component="label"
+                      startIcon={uploadingRequiredType === requiredType ? <CircularProgress size={16} /> : <UploadIcon />}
+                      disabled={uploading}
+                    >
+                      {uploadingRequiredType === requiredType ? 'Uploading…' : 'Upload'}
+                      <input
+                        type="file"
+                        hidden
+                        onChange={(event) => handleRequiredFileSelect(requiredType, event)}
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                      />
+                    </Button>
+                  )}
+                </Box>
+              );
+            })}
+          </Stack>
+        )}
+
         {filteredDocuments.length === 0 ? (
           <Alert severity="info">
-            No documents uploaded yet. {allowUpload && 'Click "Upload Document" to add files.'}
+            No documents uploaded yet. {allowUpload && (requiredDocuments.length > 0
+              ? 'Use the upload control beside each required document above.'
+              : 'Click "Upload Document" to add files.')}
           </Alert>
         ) : (
           <TableContainer component={Paper} variant="outlined">
@@ -591,7 +702,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                                   textShadow: '0 0 10px rgba(76, 175, 80, 0.3)',
                                 }}
                               >
-                                ⛓️ Blockchain Verified
+                                ⛓️ Signature Recorded
                               </Typography>
                             </Box>
                           </>

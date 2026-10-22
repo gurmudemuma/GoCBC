@@ -479,8 +479,8 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
 
             <TabPane tab="📄 Documents & Signatures" key="documents">
               <Alert
-                message="Document Blockchain Verification"
-                description="All documents related to this LC are cryptographically signed and verified on the blockchain."
+                message="Document signature and ledger proof"
+                description="Review each document's signature, signer certificate trust, and Fabric transaction status below. A transaction ID alone does not establish verification."
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
@@ -494,7 +494,7 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
             <TabPane tab="🔐 Blockchain Verification" key="blockchain">
               <Alert
                 message="Blockchain-Verified Signatures"
-                description="All documents and actions in this LC are cryptographically signed and stored on the immutable Hyperledger Fabric blockchain. This provides tamper-proof audit trail and non-repudiation."
+                description="Ledger proof is shown when the corresponding Fabric transaction is found. Verification checks the block validation code, creator and endorser signatures, and certificate trust against configured consortium MSP roots."
                 type="success"
                 showIcon
                 style={{ marginBottom: 16 }}

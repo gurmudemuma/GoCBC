@@ -89,10 +89,10 @@ interface ApiEnvelope<T> {
   error?: { message?: string };
 }
 
-const forest = '#123d32';
-const green = '#176b4d';
-const gold = '#d8ad55';
-const muted = '#6f7d77';
+const forest = '#7a2592';
+const green = '#9b30b7';
+const gold = '#FFD700';
+const muted = '#666666';
 
 const formatDate = (value?: string) => {
   if (!value) return 'Not recorded';
@@ -235,13 +235,13 @@ const ProfilePage: React.FC = () => {
         <meta name="description" content="Exporter account profile, licensing details, and account history." />
       </Head>
 
-      <Box sx={{ minHeight: '100vh', bgcolor: '#f4f7f4', pb: 7 }}>
+      <Box sx={{ minHeight: '100vh', bgcolor: '#f8f5fa', pb: 7 }}>
         <Box
           sx={{
             position: 'relative',
             overflow: 'hidden',
             color: 'white',
-            background: `linear-gradient(118deg, ${forest} 0%, #1d6048 60%, #397c5d 100%)`,
+            background: `linear-gradient(118deg, ${forest} 0%, #9b30b7 60%, #b366cc 100%)`,
             px: { xs: 2, md: 5 },
             pt: { xs: 3, md: 4 },
             pb: { xs: 7, md: 9 },
@@ -275,14 +275,14 @@ const ProfilePage: React.FC = () => {
                 <Avatar
                   sx={{
                     width: { xs: 68, md: 82 }, height: { xs: 68, md: 82 },
-                    bgcolor: 'rgba(255,255,255,.13)', color: '#f6d987',
+                    bgcolor: 'rgba(255,255,255,.13)', color: gold,
                     border: '1px solid rgba(255,255,255,.28)',
                   }}
                 >
                   {companyName ? <Business sx={{ fontSize: 38 }} /> : <Coffee sx={{ fontSize: 38 }} />}
                 </Avatar>
                 <Box>
-                  <Typography variant="overline" sx={{ color: '#e4c879', letterSpacing: 2, fontWeight: 700 }}>
+                  <Typography variant="overline" sx={{ color: gold, letterSpacing: 2, fontWeight: 700 }}>
                     {user?.role === 'EXPORTER' ? 'EXPORTER ACCOUNT' : 'ACCOUNT PROFILE'}
                   </Typography>
                   <Typography variant="h3" sx={{ fontWeight: 750, letterSpacing: '-.035em', fontSize: { xs: 28, md: 38 } }}>
@@ -300,7 +300,7 @@ const ProfilePage: React.FC = () => {
                   label={profile?.licenseStatus || user?.status || 'Registry status unavailable'}
                   sx={{
                     color: 'white', fontWeight: 700, textTransform: 'capitalize',
-                    bgcolor: profile?.licenseStatus?.toUpperCase() === 'ACTIVE' ? 'rgba(43,143,99,.36)' : 'rgba(255,255,255,.12)',
+                    bgcolor: profile?.licenseStatus?.toUpperCase() === 'ACTIVE' ? 'rgba(155,48,183,.36)' : 'rgba(255,255,255,.12)',
                     border: '1px solid rgba(255,255,255,.24)',
                   }}
                 />
@@ -325,9 +325,9 @@ const ProfilePage: React.FC = () => {
               { label: 'Last recorded activity', value: lastActivity ? formatDate(lastActivity) : 'No activity recorded', icon: <Event /> },
             ].map((item) => (
               <Grid item xs={12} sm={6} md={3} key={item.label}>
-                <Card elevation={0} sx={{ height: '100%', borderRadius: 3, border: '1px solid #e5ebe6', boxShadow: '0 12px 30px rgba(24,62,45,.06)' }}>
+                <Card elevation={0} sx={{ height: '100%', borderRadius: 3, border: '1px solid #f0e6f2', boxShadow: '0 12px 30px rgba(122,37,146,.06)' }}>
                   <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 1.6, p: '20px !important' }}>
-                    <Avatar sx={{ bgcolor: '#edf5ef', color: green, width: 42, height: 42 }}>{item.icon}</Avatar>
+                    <Avatar sx={{ bgcolor: '#f3e5f5', color: green, width: 42, height: 42 }}>{item.icon}</Avatar>
                     <Box sx={{ minWidth: 0 }}>
                       <Typography variant="caption" sx={{ color: muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em' }}>
                         {item.label}
@@ -355,9 +355,9 @@ const ProfilePage: React.FC = () => {
 
           <Grid container spacing={3} sx={{ mt: 0.3 }}>
             <Grid item xs={12} md={7}>
-              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #e5ebe6', overflow: 'hidden' }}>
+              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #f0e6f2', overflow: 'hidden' }}>
                 <Box sx={{ px: 3, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.3 }}>
-                  <Avatar sx={{ bgcolor: '#edf5ef', color: green }}><Business /></Avatar>
+                  <Avatar sx={{ bgcolor: '#f3e5f5', color: green }}><Business /></Avatar>
                   <Box>
                     <Typography variant="h6" sx={{ color: forest, fontWeight: 750 }}>Business profile</Typography>
                     <Typography variant="body2" color="text.secondary">Identity and registration information</Typography>
@@ -383,9 +383,9 @@ const ProfilePage: React.FC = () => {
                 </Grid>
               </Paper>
 
-              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #e5ebe6', overflow: 'hidden', mt: 3 }}>
+              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #f0e6f2', overflow: 'hidden', mt: 3 }}>
                 <Box sx={{ px: 3, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.3 }}>
-                  <Avatar sx={{ bgcolor: '#fbf4e3', color: '#a87817' }}><VerifiedUser /></Avatar>
+                  <Avatar sx={{ bgcolor: '#fff8e1', color: gold }}><VerifiedUser /></Avatar>
                   <Box>
                     <Typography variant="h6" sx={{ color: forest, fontWeight: 750 }}>Licensing & quality</Typography>
                     <Typography variant="body2" color="text.secondary">ECTA credentials and certification status</Typography>
@@ -422,9 +422,9 @@ const ProfilePage: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} md={5}>
-              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #e5ebe6', overflow: 'hidden', height: '100%' }}>
+              <Paper elevation={0} sx={{ borderRadius: 3, border: '1px solid #f0e6f2', overflow: 'hidden', height: '100%' }}>
                 <Box sx={{ px: 3, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.3 }}>
-                  <Avatar sx={{ bgcolor: '#edf5ef', color: green }}><History /></Avatar>
+                  <Avatar sx={{ bgcolor: '#f3e5f5', color: green }}><History /></Avatar>
                   <Box>
                     <Typography variant="h6" sx={{ color: forest, fontWeight: 750 }}>Account history</Typography>
                     <Typography variant="body2" color="text.secondary">Recent recorded actions and status changes</Typography>
@@ -439,7 +439,7 @@ const ProfilePage: React.FC = () => {
                   </Stack>
                 ) : activities.length === 0 ? (
                   <Box sx={{ p: 4, textAlign: 'center' }}>
-                    <Avatar sx={{ mx: 'auto', mb: 1.5, bgcolor: '#f1f4f1', color: muted }}><History /></Avatar>
+                    <Avatar sx={{ mx: 'auto', mb: 1.5, bgcolor: '#f3e5f5', color: muted }}><History /></Avatar>
                     <Typography fontWeight={700} color={forest}>No history to show yet</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                       Account actions and exporter workflow events will appear here when they are recorded.
@@ -449,27 +449,25 @@ const ProfilePage: React.FC = () => {
                   <Box sx={{ p: { xs: 2, sm: 3 } }}>
                     <Stack spacing={0}>
                       {activities.map((activity, index) => {
-                        const verified = activity.metadata?.blockchainVerified ||
-                          activity.metadata?.source === 'HYPERLEDGER_FABRIC' ||
-                          Boolean(activity.metadata?.txId || activity.metadata?.transactionId);
+                        const verified = activity.metadata?.blockchainVerified === true;
                         return (
                           <Box key={activity.id || `${activity.entity_id}-${activity.action}-${activity.created_at}-${index}`} sx={{ display: 'flex', gap: 1.8, minHeight: 95 }}>
                             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                              <Box sx={{ width: 11, height: 11, mt: 0.7, borderRadius: '50%', bgcolor: index === 0 ? gold : '#72a18a', boxShadow: '0 0 0 4px #eef5ef' }} />
-                              {index < activities.length - 1 && <Box sx={{ width: 1, flex: 1, bgcolor: '#e2ebe4', my: 0.8 }} />}
+                              <Box sx={{ width: 11, height: 11, mt: 0.7, borderRadius: '50%', bgcolor: index === 0 ? gold : '#b366cc', boxShadow: '0 0 0 4px #f3e5f5' }} />
+                              {index < activities.length - 1 && <Box sx={{ width: 1, flex: 1, bgcolor: '#f0e6f2', my: 0.8 }} />}
                             </Box>
                             <Box sx={{ pb: 2.2, minWidth: 0, flex: 1 }}>
                               <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
                                 <Typography sx={{ color: forest, fontWeight: 750 }}>
                                   {(activity.action || 'Activity').replace(/_/g, ' ')}
                                 </Typography>
-                                {verified && <Chip size="small" label="Ledger" sx={{ height: 21, color: green, bgcolor: '#edf5ef', fontSize: 11 }} />}
+                                {verified && <Chip size="small" label="Ledger" sx={{ height: 21, color: green, bgcolor: '#f3e5f5', fontSize: 11 }} />}
                               </Stack>
                               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.3 }}>
                                 {[activity.entity_type, activity.entity_id].filter(Boolean).join(' · ') || 'Account activity'}
                               </Typography>
                               {activity.reason && (
-                                <Typography variant="body2" sx={{ color: '#42544a', mt: 0.7, overflowWrap: 'anywhere' }}>
+                                <Typography variant="body2" sx={{ color: '#666666', mt: 0.7, overflowWrap: 'anywhere' }}>
                                   {activity.reason}
                                 </Typography>
                               )}
@@ -488,9 +486,9 @@ const ProfilePage: React.FC = () => {
             </Grid>
           </Grid>
 
-          <Paper elevation={0} sx={{ mt: 3, borderRadius: 3, border: '1px solid #e5ebe6', overflow: 'hidden' }}>
+          <Paper elevation={0} sx={{ mt: 3, borderRadius: 3, border: '1px solid #f0e6f2', overflow: 'hidden' }}>
             <Box sx={{ px: 3, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.3 }}>
-              <Avatar sx={{ bgcolor: '#f0eef8', color: '#6750a4' }}><AccountBalance /></Avatar>
+              <Avatar sx={{ bgcolor: '#f3e5f5', color: '#9b30b7' }}><AccountBalance /></Avatar>
               <Box>
                 <Typography variant="h6" sx={{ color: forest, fontWeight: 750 }}>Account & banking contacts</Typography>
                 <Typography variant="body2" color="text.secondary">Contact details associated with your signed-in account</Typography>
@@ -552,7 +550,7 @@ interface DetailProps {
 
 const Detail: React.FC<DetailProps> = ({ label, value, icon }) => (
   <Box sx={{ display: 'flex', gap: 1.2, py: 1.25, px: { xs: 0, sm: 1 }, minWidth: 0 }}>
-    <Box sx={{ color: '#789187', mt: 0.25, display: 'flex' }}>{icon}</Box>
+    <Box sx={{ color: green, mt: 0.25, display: 'flex' }}>{icon}</Box>
     <Box sx={{ minWidth: 0 }}>
       <Typography variant="caption" sx={{ color: muted, display: 'block', fontWeight: 650 }}>{label}</Typography>
       <Typography variant="body2" sx={{ color: forest, fontWeight: 650, mt: 0.3, overflowWrap: 'anywhere' }}>

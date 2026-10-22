@@ -457,7 +457,18 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
               renderItem={(alert) => (
                 <List.Item
                   actions={[
-                    <Button type="link" icon={<EyeOutlined />}>
+                    <Button
+                      key={`review-alert-${alert.id}`}
+                      type="link"
+                      icon={<EyeOutlined />}
+                      onClick={() => {
+                        const message = messages.find((item) => item.messageId === alert.messageId);
+                        if (message) {
+                          setSelectedMessage(message);
+                          setApprovalModalVisible(true);
+                        }
+                      }}
+                    >
                       Review
                     </Button>,
                   ]}

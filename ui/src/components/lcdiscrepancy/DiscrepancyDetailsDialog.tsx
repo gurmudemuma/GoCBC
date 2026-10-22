@@ -73,6 +73,18 @@ const DiscrepancyDetailsDialog: React.FC<DiscrepancyDetailsDialogProps> = ({ ope
                 <Typography variant="body2" fontWeight={600}>{discrepancy.affectedClauses}</Typography>
               </Box>
             )}
+            {discrepancy.recommendedAction && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">Recommended Action:</Typography>
+                <Typography variant="body2" fontWeight={600}>{discrepancy.recommendedAction}</Typography>
+              </Box>
+            )}
+            {discrepancy.resolution && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">Resolution:</Typography>
+                <Typography variant="body2" fontWeight={600}>{discrepancy.resolution}</Typography>
+              </Box>
+            )}
           </CardContent>
         </Card>
 
@@ -92,7 +104,7 @@ const DiscrepancyDetailsDialog: React.FC<DiscrepancyDetailsDialogProps> = ({ ope
                 <AccessTime sx={{ fontSize: 18 }} />
                 <Typography variant="caption" color="text.secondary">Reported Date</Typography>
               </Box>
-              <Typography variant="body2" fontWeight={600}>{new Date(discrepancy.reportedDate).toLocaleString()}</Typography>
+              <Typography variant="body2" fontWeight={600}>{discrepancy.reportedDate ? new Date(discrepancy.reportedDate).toLocaleString() : 'N/A'}</Typography>
             </Box>
           </Grid>
         </Grid>
@@ -100,8 +112,8 @@ const DiscrepancyDetailsDialog: React.FC<DiscrepancyDetailsDialogProps> = ({ ope
         {discrepancy.txId && (
           <Box sx={{ mt: 3, p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BlockchainStatusIcon status="VERIFIED" />
-              <Typography variant="caption" fontWeight={600}>Blockchain Verified</Typography>
+              <BlockchainStatusIcon status="RECORDED" txId={discrepancy.txId} />
+              <Typography variant="caption" fontWeight={600}>Ledger transaction recorded</Typography>
             </Box>
             <Typography variant="caption" color="text.secondary">TX: {discrepancy.txId}</Typography>
           </Box>

@@ -293,6 +293,12 @@ const ECXPortal: React.FC = () => {
   
   const visibleTabs = getRoleBasedTabs();
 
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.some(tab => tab.index === tabValue)) {
+      setTabValue(visibleTabs[0].index);
+    }
+  }, [tabValue, visibleTabs]);
+
   const stats = {
     warehoused: lots.filter(l => l.status === 'WAREHOUSED').length,
     graded: lots.filter(l => l.status === 'GRADED').length,
@@ -424,6 +430,7 @@ const ECXPortal: React.FC = () => {
             {visibleTabs.map((tab) => (
               <Tab 
                 key={tab.index}
+                value={tab.index}
                 label={tab.index === 0 ? `${tab.label} (${allLots.length})` : tab.label} 
                 icon={tab.icon} 
                 iconPosition="start" 

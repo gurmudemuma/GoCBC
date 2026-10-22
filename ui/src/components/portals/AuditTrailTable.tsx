@@ -698,7 +698,7 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
                                         Verification Status
                                       </Typography>
                                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                                        {log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC' ? (
+                                        {log.metadata?.blockchainVerified === true ? (
                                           <>
                                             <CheckCircle fontSize="small" sx={{ color: '#4caf50' }} />
                                             <Box>
@@ -786,7 +786,7 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
                                   <Box>
                                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
                                       {log.metadata.source === 'HYPERLEDGER_FABRIC' ? 
-                                        '🔐 BLOCKCHAIN CRYPTOGRAPHIC DETAILS' : 
+                                        'FABRIC LEDGER DETAILS' : 
                                         'ADDITIONAL METADATA'}
                                     </Typography>
                                     

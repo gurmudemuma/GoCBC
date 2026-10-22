@@ -17,7 +17,7 @@ const PhysicalInspectionDialog: React.FC<PhysicalInspectionDialogProps> = ({ ope
   const handleSubmit = async () => {
     try {
       setSubmitting(true);
-      const response = await apiFetch(`/api/v1/bordercrossing/${crossing.borderCrossingId}/inspect`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(form) });
+      const response = await apiFetch(`/bordercrossing/${crossing.borderCrossingId}/inspect`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
       if (result.success) { showSuccess('Success', 'Physical inspection completed'); onSuccess(); onClose(); }
       else showError('Error', result.error || 'Failed');

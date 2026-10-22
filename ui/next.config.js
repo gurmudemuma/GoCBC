@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
+  // Keep builds reliable in containers and CI environments with process limits.
+  experimental: {
+    cpus: 1,
+  },
   reactStrictMode: false,
   swcMinify: true,
   typescript: {

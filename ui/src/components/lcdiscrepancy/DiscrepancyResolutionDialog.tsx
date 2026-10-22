@@ -12,16 +12,51 @@ interface DiscrepancyResolutionDialogProps { open: boolean; onClose: () => void;
 const DiscrepancyResolutionDialog: React.FC<DiscrepancyResolutionDialogProps> = ({ open, onClose, discrepancy, onSuccess }) => {
   const { showSuccess, showError } = useNotification();
   const [submitting, setSubmitting] = useState(false);
-  const [resolutionMethod, setResolutionMethod] = useState<'waiver' | 'amendment' | 'correction' | 'reject'>('waiver');
-  const [form, setForm] = useState({ resolutionNotes: '', waiverApproval: '', amendmentDetails: '', correctionRequired: '' });
+  const [resolutionMethod, setResolutionMethod] = useState<'waiver' | 'correction' | 'reject'>('correction');
+  const [form, setForm] = useState({ resolutionNotes: '', waiverApproval: '', correctionRequired: '' });
 
   const handleSubmit = async () => {
     try {
       setSubmitting(true);
-      const response = await apiFetch(`/api/v1/banking/discrepancy/${discrepancy.discrepancyId}/resolve`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ resolutionMethod, ...form }) });
+      const lcId = discrepancy?.lcId;
+      const discrepancyId = discrepancy?.discrepancyId;
+      if (!lcId || !discrepancyId) {
+        showError('Error', 'The LC reference is missing for this discrepancy');
+        return;
+      }
+
+      let endpoint: string;
+      let payload: Record<string, string>;
+      if (resolutionMethod === 'waiver') {
+        const waiverReason = [form.waiverApproval.trim() && `Waiver approval reference: ${form.waiverApproval.trim()}`, form.resolutionNotes.trim()].filter(Boolean).join('\n');
+        if (waiverReason.length < 10) {
+          showError('Validation', 'Provide the waiver approval reference or at least 10 characters of resolution notes');
+          return;
+        }
+        endpoint = `/banking/lc/${encodeURIComponent(lcId)}/discrepancy/${encodeURIComponent(discrepancyId)}/waive`;
+        payload = { waiverReason };
+      } else if (resolutionMethod === 'reject') {
+        const rejectionReason = form.resolutionNotes.trim();
+        if (rejectionReason.length < 10) {
+          showError('Validation', 'Provide at least 10 characters explaining why the documents are being rejected');
+          return;
+        }
+        endpoint = `/banking/lc/${encodeURIComponent(lcId)}/documents/reject`;
+        payload = { rejectionReason };
+      } else {
+        const resolution = form.correctionRequired.trim() || form.resolutionNotes.trim();
+        if (resolution.length < 10) {
+          showError('Validation', 'Describe how the corrected documents were reviewed in at least 10 characters');
+          return;
+        }
+        endpoint = `/banking/lc/${encodeURIComponent(lcId)}/discrepancy/${encodeURIComponent(discrepancyId)}/resolve`;
+        payload = { resolution };
+      }
+
+      const response = await apiFetch(endpoint, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(payload) });
       const result = await response.json();
-      if (result.success) { showSuccess('Success', 'Discrepancy resolved successfully'); onSuccess(); onClose(); }
-      else showError('Error', result.error || 'Failed');
+      if (response.ok && result.success) { showSuccess('Success', 'Discrepancy action recorded on the consortium ledger'); onSuccess(); onClose(); }
+      else showError('Error', result.error?.message || result.error || 'Failed to resolve discrepancy');
     } catch (error) { showError('Error', 'Failed to resolve discrepancy'); } finally { setSubmitting(false); }
   };
 
@@ -39,42 +74,36 @@ const DiscrepancyResolutionDialog: React.FC<DiscrepancyResolutionDialogProps> = 
         <Alert severity="info" sx={{ mb: 3 }}>Select resolution method and provide necessary details</Alert>
 
         <RadioGroup value={resolutionMethod} onChange={(e) => setResolutionMethod(e.target.value as any)}>
-          <FormControlLabel value="waiver" control={<Radio />} label={<Typography fontWeight={600}>Accept with Waiver - Buyer accepts discrepancy</Typography>} />
-          <FormControlLabel value="amendment" control={<Radio />} label={<Typography fontWeight={600}>Request LC Amendment - Modify LC terms</Typography>} />
-          <FormControlLabel value="correction" control={<Radio />} label={<Typography fontWeight={600}>Request Document Correction - Resubmit corrected docs</Typography>} />
-          <FormControlLabel value="reject" control={<Radio />} label={<Typography fontWeight={600}>Reject Documents - Refuse payment</Typography>} />
+          <FormControlLabel value="correction" control={<Radio />} label={<Typography fontWeight={600}>Confirm corrected documents were reviewed</Typography>} />
+          <FormControlLabel value="waiver" control={<Radio />} label={<Typography fontWeight={600}>Accept with an authorized waiver</Typography>} />
+          <FormControlLabel value="reject" control={<Radio />} label={<Typography fontWeight={600}>Reject the documents and stop payment</Typography>} />
         </RadioGroup>
 
         <Divider sx={{ my: 3 }} />
 
         {resolutionMethod === 'waiver' && (
           <Grid container spacing={2}>
-            <Grid item xs={12}><TextField fullWidth label="Waiver Approval Reference" value={form.waiverApproval} onChange={(e) => setForm({...form, waiverApproval: e.target.value})} placeholder="Buyer's waiver approval reference" /></Grid>
+            <Grid item xs={12}><TextField fullWidth label="Waiver Approval Reference" value={form.waiverApproval} onChange={(e) => setForm({...form, waiverApproval: e.target.value})} placeholder="Authorized waiver approval reference" /></Grid>
             <Grid item xs={12}><Alert severity="success">Discrepancy will be waived and payment will proceed</Alert></Grid>
-          </Grid>
-        )}
-
-        {resolutionMethod === 'amendment' && (
-          <Grid container spacing={2}>
-            <Grid item xs={12}><TextField fullWidth multiline rows={3} label="Amendment Details" value={form.amendmentDetails} onChange={(e) => setForm({...form, amendmentDetails: e.target.value})} placeholder="Specify what needs to be amended in the LC..." /></Grid>
-            <Grid item xs={12}><Alert severity="info">LC amendment process will be initiated</Alert></Grid>
           </Grid>
         )}
 
         {resolutionMethod === 'correction' && (
           <Grid container spacing={2}>
-            <Grid item xs={12}><TextField fullWidth multiline rows={3} label="Correction Required" value={form.correctionRequired} onChange={(e) => setForm({...form, correctionRequired: e.target.value})} placeholder="Specify what documents need correction..." /></Grid>
-            <Grid item xs={12}><Alert severity="warning">Exporter will be notified to resubmit corrected documents</Alert></Grid>
+            <Grid item xs={12}><TextField fullWidth multiline rows={3} label="Correction Verification Details" value={form.correctionRequired} onChange={(e) => setForm({...form, correctionRequired: e.target.value})} placeholder="Record what was corrected and how it was checked..." /></Grid>
+            <Grid item xs={12}><Alert severity="info">Only record resolution after corrected documents have been received and reviewed.</Alert></Grid>
           </Grid>
         )}
 
         {resolutionMethod === 'reject' && (
           <Grid container spacing={2}>
-            <Grid item xs={12}><Alert severity="error">Documents will be rejected and payment will not be released</Alert></Grid>
+            <Grid item xs={12}><Alert severity="error">Rejecting documents moves the LC to a terminal state and prevents payment release.</Alert></Grid>
           </Grid>
         )}
 
-        <TextField fullWidth multiline rows={3} label="Resolution Notes" value={form.resolutionNotes} onChange={(e) => setForm({...form, resolutionNotes: e.target.value})} placeholder="Add any additional notes..." sx={{ mt: 3 }} />
+        {resolutionMethod !== 'correction' && (
+          <TextField fullWidth multiline rows={3} label={resolutionMethod === 'reject' ? 'Document Rejection Reason *' : 'Resolution Notes'} value={form.resolutionNotes} onChange={(e) => setForm({...form, resolutionNotes: e.target.value})} placeholder={resolutionMethod === 'reject' ? 'Explain the unresolved discrepancy and why payment must stop...' : 'Add the waiver decision and supporting notes...'} sx={{ mt: 3 }} />
+        )}
       </DialogContent>
       <Divider />
       <DialogActions sx={{ p: 2 }}>

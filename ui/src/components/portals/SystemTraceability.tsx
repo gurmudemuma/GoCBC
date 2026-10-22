@@ -155,9 +155,7 @@ const SystemTraceability: React.FC<SystemTraceabilityProps> = ({
         // Calculate statistics
         const uniqueEntities = new Set(allLogs.map((log: AuditLog) => `${log.entity_type}-${log.entity_id}`)).size;
         const uniqueUsers = new Set(allLogs.map((log: AuditLog) => log.performed_by)).size;
-        const blockchainVerified = allLogs.filter((log: AuditLog) => 
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        ).length;
+        const blockchainVerified = allLogs.filter((log: AuditLog) => log.metadata?.blockchainVerified === true).length;
         
         setStats({
           totalActivities: allLogs.length,
@@ -215,9 +213,7 @@ const SystemTraceability: React.FC<SystemTraceabilityProps> = ({
       
       // Check if searching for "blockchain" to show only verified activities
       if (query === 'blockchain' || query === 'verified' || query === 'blockchain-verified') {
-        filtered = filtered.filter(log =>
-          log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC'
-        );
+        filtered = filtered.filter(log => log.metadata?.blockchainVerified === true);
       } else {
         filtered = filtered.filter(log =>
           log.entity_id.toLowerCase().includes(query) ||
@@ -702,7 +698,7 @@ const SystemTraceability: React.FC<SystemTraceabilityProps> = ({
                           </Tooltip>
                         </TableCell>
                         <TableCell align="center">
-                          {log.metadata?.blockchainVerified || log.metadata?.source === 'HYPERLEDGER_FABRIC' ? (
+                          {log.metadata?.blockchainVerified === true ? (
                             <Tooltip title="Blockchain Verified">
                               <VerifiedUser fontSize="small" color="success" />
                             </Tooltip>

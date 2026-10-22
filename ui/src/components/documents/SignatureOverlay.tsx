@@ -161,7 +161,7 @@ export const SignatureOverlay: React.FC<SignatureOverlayProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            Blockchain Verified
+            Signature Recorded
           </Typography>
         </Box>
       )}
@@ -297,7 +297,7 @@ export const SignatureOverlay: React.FC<SignatureOverlayProps> = ({
                             variant="caption"
                             sx={{ color: colors.text, fontWeight: 600 }}
                           >
-                            Blockchain Verified
+                            Ledger transaction recorded
                           </Typography>
                         </Stack>
                         <Tooltip title="Transaction ID">

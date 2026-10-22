@@ -2,6 +2,7 @@
 // API Utility Functions
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { API_BASE_URL } from '@/config/api.config';
 import { 
   ApiResponse, 
   PaginatedResponse, 
@@ -20,7 +21,7 @@ class CECBSApi {
 
   constructor() {
     this.client = axios.create({
-      baseURL: process.env.CECBS_API_URL || 'http://localhost:3001/api/v1',
+      baseURL: process.env.CECBS_API_URL || API_BASE_URL,
       timeout: 120000, // Increased to 120s for document signing operations
       headers: {
         'Content-Type': 'application/json',
@@ -113,8 +114,11 @@ class CECBSApi {
     offset?: number;
     status?: string;
   }): Promise<PaginatedResponse<Exporter>> {
-    const response = await this.client.get('/exporters', { params });
-    return response.data;
+    if (params?.limit !== undefined || params?.offset !== undefined) {
+      const response = await this.client.get('/exporters', { params });
+      return response.data;
+    }
+    return this.getAllPages<Exporter>('/exporters', params);
   }
 
   async getExporter(exporterId: string): Promise<ApiResponse<Exporter>> {
@@ -140,8 +144,17 @@ class CECBSApi {
     status?: string;
     eudrRequired?: boolean;
   }): Promise<PaginatedResponse<SalesContract>> {
-    const response = await this.client.get('/contracts', { params });
-    return response.data;
+    const { exporterId, ...query } = params || {};
+    const requestParams = {
+      ...query,
+      ...(exporterId ? { exporterID: exporterId } : {}),
+    };
+
+    if (params?.limit !== undefined || params?.offset !== undefined) {
+      const response = await this.client.get('/contracts', { params: requestParams });
+      return response.data;
+    }
+    return this.getAllPages<SalesContract>('/contracts', requestParams);
   }
 
   async getContract(contractId: string): Promise<ApiResponse<SalesContract>> {
@@ -166,8 +179,68 @@ class CECBSApi {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<PaginatedResponse<CoffeeShipment>> {
-    const response = await this.client.get('/shipments', { params });
-    return response.data;
+    const { exporterId, ...query } = params || {};
+    const requestParams = {
+      ...query,
+      ...(exporterId ? { exporterID: exporterId } : {}),
+    };
+
+    if (params?.limit !== undefined || params?.offset !== undefined) {
+      const response = await this.client.get('/shipments', { params: requestParams });
+      return response.data;
+    }
+    return this.getAllPages<CoffeeShipment>('/shipments', requestParams);
+  }
+
+  /**
+   * Fetch every page for list endpoints whose UI paginates locally.
+   * The API defaults to 50 records, so a single request can silently hide
+   * matching records from a portal's filters and dashboards.
+   */
+  private async getAllPages<T>(
+    endpoint: string,
+    params?: object
+  ): Promise<PaginatedResponse<T>> {
+    const pageSize = 100;
+    const pageLimit = 1000;
+    const records: T[] = [];
+    let offset = 0;
+    let total = 0;
+
+    for (let page = 0; page < pageLimit; page += 1) {
+      const response: AxiosResponse<PaginatedResponse<T>> = await this.client.get(endpoint, {
+        params: { ...params, limit: pageSize, offset },
+      });
+      const payload = response.data;
+
+      if (!payload.success || !Array.isArray(payload.data)) {
+        return payload;
+      }
+
+      records.push(...payload.data);
+      total = payload.pagination?.total ?? records.length;
+
+      if (!payload.pagination?.hasMore) {
+        return {
+          ...payload,
+          data: records,
+          pagination: {
+            total,
+            limit: records.length,
+            offset: 0,
+            hasMore: false,
+          },
+        };
+      }
+
+      const nextOffset = payload.pagination.offset + payload.pagination.limit;
+      if (!Number.isFinite(nextOffset) || nextOffset <= offset) {
+        throw new Error(`Invalid pagination metadata returned by ${endpoint}`);
+      }
+      offset = nextOffset;
+    }
+
+    throw new Error(`Pagination limit exceeded while loading ${endpoint}`);
   }
 
   async getShipment(shipmentId: string): Promise<ApiResponse<CoffeeShipment>> {
@@ -330,13 +403,10 @@ class CECBSApi {
 
   async rejectContract(contractId: string, reason: string, rejectedBy?: string): Promise<ApiResponse<any>> {
     const url = `/contracts/${contractId}/reject`;
-    console.log('[API] Calling reject contract:', url, { reason, rejectedBy });
-    console.log('[API] Full URL:', `${this.client.defaults.baseURL}${url}`);
     const response = await this.client.post(url, {
       reason,
       rejectedBy,
     });
-    console.log('[API] Reject response:', response.status, response.data);
     return response.data;
   }
 

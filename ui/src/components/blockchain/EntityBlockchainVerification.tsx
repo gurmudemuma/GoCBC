@@ -35,7 +35,7 @@ import {
   AccountBalance as BankIcon,
   Info as InfoIcon,
 } from '@mui/icons-material';
-import axios from 'axios';
+import api from '@/utils/api';
 
 interface BlockchainSignature {
   txId: string;
@@ -43,17 +43,23 @@ interface BlockchainSignature {
   creator: {
     mspId: string;
     identity: string;
+    signatureValid?: boolean | null;
+    certificateTrustStatus?: string;
   };
   chaincodeName: string;
-  chaincodeFunction: string;
+  chaincodeFunction: string | null;
   args: string[];
   endorsers: Array<{
     mspId: string;
-    endpoint: string;
+    identity?: string;
+    endpoint?: string;
+    signatureValid?: boolean | null;
+    certificateTrustStatus?: string;
   }>;
   validationCode: string;
-  blockNumber: number;
-  blockHash: string;
+  cryptographicallyVerified?: boolean;
+  blockNumber: number | null;
+  blockHash: string | null;
 }
 
 interface VerificationSummary {
@@ -81,14 +87,9 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
       setLoading(true);
       setError(null);
 
-      const token = localStorage.getItem('authToken');
-      
       // Fetch blockchain signatures for this entity
-      const response = await axios.get(
-        `http://localhost:3001/api/v1/blockchain-signatures/entity/${entityType}/${entityId}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+      const response = await api.get(
+        `/blockchain-signatures/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`
       );
 
       if (response.data.success) {
@@ -104,7 +105,7 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
         setSummary({
           total: sum.total,
           verified: sum.verified,
-          pending: 0,
+          pending: Math.max(0, sum.total - sum.verified),
           uniqueSigners: sum.organizations.length,
           organizations: sum.organizations,
           latestSignature: sum.latestTx
@@ -140,14 +141,16 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
     }
   }, [entityType, entityId]);
 
-  const getActionIcon = (func: string) => {
+  const getActionIcon = (func: string | null) => {
+    if (!func) return <InfoIcon />;
     if (func.includes('Request')) return <InfoIcon color="info" />;
     if (func.includes('Allocate') || func.includes('Approve') || func.includes('Issue')) return <GavelIcon color="success" />;
     if (func.includes('Verify')) return <VerifiedIcon color="primary" />;
     return <InfoIcon />;
   };
 
-  const getActionColor = (func: string) => {
+  const getActionColor = (func: string | null) => {
+    if (!func) return 'default';
     if (func.includes('Request')) return 'info';
     if (func.includes('Allocate') || func.includes('Approve') || func.includes('Issue')) return 'success';
     if (func.includes('Verify')) return 'primary';
@@ -193,7 +196,7 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
                 🔐 Blockchain Transaction Verification
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                All transactions cryptographically signed and recorded on blockchain
+                Ledger status, transaction creator, endorsement signatures, and block details are read from Fabric.
               </Typography>
             </Box>
             <Tooltip title="Refresh verification">
@@ -207,9 +210,9 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
             <Stack direction="row" spacing={2} sx={{ mt: 2 }} flexWrap="wrap">
               <Chip
                 icon={<VerifiedIcon />}
-                label={`${summary.verified} Blockchain TX`}
-                color="success"
-                variant="filled"
+                label={`${summary.verified} Verified / ${summary.total} Transactions`}
+                color={summary.verified === summary.total && summary.total > 0 ? 'success' : 'warning'}
+                variant="outlined"
               />
               {summary.pending > 0 && (
                 <Chip
@@ -247,8 +250,8 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
                 </Typography>
               </Box>
               <Chip
-                label={sig.validationCode === 'VALID' ? 'VERIFIED' : 'PENDING'}
-                color={sig.validationCode === 'VALID' ? 'success' : 'warning'}
+                label={sig.validationCode === 'VALID' ? 'VALID IN LEDGER' : sig.validationCode}
+                color={sig.validationCode === 'VALID' ? 'success' : 'error'}
                 size="small"
                 variant="filled"
               />
@@ -258,9 +261,12 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
           <AccordionDetails>
             <Stack spacing={2}>
               {/* Blockchain Status */}
-              <Alert severity={sig.validationCode === 'VALID' ? 'success' : 'info'}>
+              <Alert severity={sig.cryptographicallyVerified ? 'success' : sig.validationCode === 'VALID' ? 'warning' : 'error'}>
                 <Typography variant="body2">
-                  <strong>Blockchain Status:</strong> Transaction validated and committed to block #{sig.blockNumber}
+                  <strong>Fabric validation:</strong> {sig.validationCode}; block #{sig.blockNumber}
+                  {sig.cryptographicallyVerified
+                    ? ' · transaction signatures and MSP certificate trust verified'
+                    : ' · full signature and certificate trust verification did not pass'}
                 </Typography>
               </Alert>
 
@@ -328,13 +334,19 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
                       <TableCell variant="head" sx={{ fontWeight: 'bold', width: '200px' }}>
                         Identity (DN)
                       </TableCell>
-                      <TableCell>{sig.creator.identity}</TableCell>
+                      <TableCell>{sig.creator.identity} (signature {sig.creator.signatureValid === true ? 'valid' : sig.creator.signatureValid === false ? 'invalid' : 'unavailable'})</TableCell>
                     </TableRow>
                     <TableRow>
                       <TableCell variant="head" sx={{ fontWeight: 'bold' }}>
                         MSP ID
                       </TableCell>
                       <TableCell>{sig.creator.mspId}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell variant="head" sx={{ fontWeight: 'bold' }}>
+                        MSP CA trust
+                      </TableCell>
+                      <TableCell>{sig.creator.certificateTrustStatus || 'unavailable'}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
@@ -401,7 +413,7 @@ const EntityBlockchainVerification: React.FC<Props> = ({ entityType, entityId })
                   {sig.endorsers.map((endorser, idx) => (
                     <Chip
                       key={idx}
-                      label={`${endorser.mspId} @ ${endorser.endpoint}`}
+                      label={`${endorser.mspId}${endorser.identity ? ` @ ${endorser.identity}` : ''} · signature ${endorser.signatureValid === true ? 'valid' : endorser.signatureValid === false ? 'invalid' : 'unavailable'} · CA ${endorser.certificateTrustStatus || 'unavailable'}`}
                       size="small"
                       sx={{ mr: 1, mb: 1 }}
                     />

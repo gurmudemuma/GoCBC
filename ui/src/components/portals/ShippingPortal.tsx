@@ -198,8 +198,11 @@ const ShippingPortal: React.FC = () => {
     { index: 6, label: 'In Transit', icon: <DirectionsBoat />, status: 'IN_TRANSIT', description: 'Ocean/air freight journey' },
     { index: 7, label: 'Destination Arrived', icon: <LocationOn />, status: 'DESTINATION_ARRIVED', description: 'Arrived at buyer\'s port' },
     { index: 8, label: 'Delivered', icon: <CheckCircle />, status: 'DELIVERED', description: 'Completed deliveries' },
-    { index: 9, label: 'Users', icon: <Person />, status: '', description: 'User management' },
+    { index: 9, label: 'Users', icon: <Person />, status: '', description: 'User management', roles: ['ADMIN', 'SHIPPING', 'Shipping Portal Administrator'] },
   ];
+  const visibleMainTabs = mainTabs.filter(tab =>
+    tab.index !== 9 || (tab.roles || []).includes(userRole)
+  );
 
   // Lifecycle progress and stage colors used by the per-status tab tables
   const lifecycleProgressMap: { [key: string]: number } = {
@@ -435,11 +438,9 @@ const ShippingPortal: React.FC = () => {
     }
 
     try {
-      // STEP 1: Load shipments from blockchain (with cache-busting timestamp)
-      const shipmentsResponse = await apiFetch(`/shipments?_t=${Date.now()}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const shipmentsResult = await shipmentsResponse.json();
+      // STEP 1: Load every shipment page. The table paginates locally, so it
+      // needs the complete API result before applying filters and grouping.
+      const shipmentsResult = await api.getShipments();
       
       // STEP 2: Load customs clearances from database (to catch shipments where blockchain update failed)
       const clearancesResponse = await apiFetch('/customs/clearances', {
@@ -699,7 +700,7 @@ const ShippingPortal: React.FC = () => {
       if (shipment.contractId || shipment.contractID) {
         try {
           const contractId = shipment.contractId || shipment.contractID;
-          const contractResponse = await apiFetch(`/blockchain/contract/${contractId}`, {
+          const contractResponse = await apiFetch(`/contracts/${contractId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const contractData = await contractResponse.json();
@@ -890,22 +891,28 @@ const ShippingPortal: React.FC = () => {
           
           // Step 6: NBE Foreign Exchange Approval (if available)
           try {
-            const nbeResponse = await apiFetch(`/nbe/approvals?contractId=${contractInfo?.contractId || contractInfo?.ContractID}`, {
+            const nbeResponse = await apiFetch('/forex', {
               headers: { 'Authorization': `Bearer ${token}` }
             });
             const nbeData = await nbeResponse.json();
-            if (nbeData.success && nbeData.data && nbeData.data.length > 0) {
-              const nbeApproval = nbeData.data[0];
+            const contractId = contractInfo?.contractId || contractInfo?.ContractID;
+            const nbeApproval = (nbeData.data || []).find((forex: any) =>
+              String(forex.contractId || forex.ContractID || '') === String(contractId || '') &&
+              ['CONFIRMED', 'ALLOCATED', 'PAYMENT_RELEASED', 'COMPLETED'].includes(String(forex.status || '').toUpperCase())
+            );
+            if (nbeData.success && nbeApproval) {
               workflowSteps.push({
                 step: 'NBE Foreign Exchange Approval',
                 status: 'completed',
-                completedAt: nbeApproval.approved_at || nbeApproval.created_at,
-                officer: nbeApproval.approved_by || 'NBE Officer',
+                completedAt: nbeApproval.confirmedAt || nbeApproval.approvalDate || nbeApproval.updatedAt || nbeApproval.createdAt,
+                officer: nbeApproval.confirmedBy || nbeApproval.nbeOfficer || 'NBE Officer',
                 documents: [],
                 details: {
-                  approvalNumber: nbeApproval.approval_number,
-                  forexAmount: nbeApproval.forex_amount ? `$${nbeApproval.forex_amount.toLocaleString()}` : 'N/A',
-                  exchangeRate: nbeApproval.exchange_rate || 'Market Rate',
+                  approvalNumber: nbeApproval.nbeApprovalRef || nbeApproval.forexId,
+                  forexAmount: Number(nbeApproval.allocatedAmount || nbeApproval.requestedAmount || 0)
+                    ? `$${Number(nbeApproval.allocatedAmount || nbeApproval.requestedAmount).toLocaleString()}`
+                    : 'N/A',
+                  exchangeRate: nbeApproval.exchangeRate || 'Market Rate',
                   status: nbeApproval.status
                 }
               });
@@ -916,23 +923,28 @@ const ShippingPortal: React.FC = () => {
           
           // Step 7: Bank Letter of Credit (if available)
           try {
-            const lcResponse = await apiFetch(`/banking/letters-of-credit?shipmentId=${shipmentId}`, {
+            const lcResponse = await apiFetch('/banking/lc', {
               headers: { 'Authorization': `Bearer ${token}` }
             });
             const lcData = await lcResponse.json();
-            if (lcData.success && lcData.data && lcData.data.length > 0) {
-              const lc = lcData.data[0];
+            const contractId = contractInfo?.contractId || contractInfo?.ContractID;
+            const lc = (lcData.data || []).find((record: any) =>
+              String(record.contractId || record.ContractID || '') === String(contractId || '')
+            );
+            if (lcData.success && lc) {
               workflowSteps.push({
                 step: 'Letter of Credit Issued',
                 status: 'completed',
-                completedAt: lc.issued_date || lc.created_at,
-                officer: lc.issuing_bank || 'Bank',
+                completedAt: lc.issueDate || lc.issuedDate || lc.createdAt || lc.created_at,
+                officer: lc.issuingBank || lc.issuing_bank || 'Bank',
                 documents: [],
                 details: {
-                  lcNumber: lc.lc_number,
-                  issuingBank: lc.issuing_bank,
-                  lcAmount: lc.lc_amount ? `$${lc.lc_amount.toLocaleString()}` : 'N/A',
-                  expiryDate: formatDate(lc.expiry_date),
+                  lcNumber: lc.lcNumber || lc.lcId || lc.lc_number,
+                  issuingBank: lc.issuingBank || lc.issuing_bank,
+                  lcAmount: Number(lc.amount || lc.lcAmount || lc.lc_amount || 0)
+                    ? `$${Number(lc.amount || lc.lcAmount || lc.lc_amount).toLocaleString()}`
+                    : 'N/A',
+                  expiryDate: formatDate(lc.expiryDate || lc.expiry_date),
                   status: lc.status
                 }
               });
@@ -1331,26 +1343,26 @@ const ShippingPortal: React.FC = () => {
     const token = localStorage.getItem('authToken');
     
     try {
-      // Log rejection to audit trail
-      await apiFetch(`/audit/log`, {
+      const rejectionResponse = await apiFetch(`/shipments/${shipmentId}/reject-action`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          entity_type: 'SHIPMENT',
-          entity_id: shipmentId,
-          action: `REJECTED_${actionType}`,
-          status: 'rejected',
+          proposedAction: actionType,
           reason: rejectionReason,
-          timestamp: new Date().toISOString()
         })
       });
+
+      const rejectionResult = await rejectionResponse.json();
+      if (!rejectionResponse.ok || !rejectionResult.success) {
+        throw new Error(rejectionResult.error?.message || 'Failed to record shipping rejection on the blockchain');
+      }
       
       setSnackbar({
         open: true,
-        message: `✅ Action rejected and logged. Reason: ${rejectionReason}`,
+        message: `✅ Rejection recorded on the blockchain (TX ${rejectionResult.txId || 'confirmed'}). Shipment remains at its current status.`,
         severity: 'success'
       });
       setApprovalDialog({ ...approvalDialog, open: false });
@@ -1361,7 +1373,7 @@ const ShippingPortal: React.FC = () => {
       console.error('[REJECTION] Failed:', error);
       setSnackbar({
         open: true,
-        message: '❌ Failed to log rejection. Please try again.',
+        message: error instanceof Error ? `❌ ${error.message}` : '❌ Failed to record rejection. Please try again.',
         severity: 'error'
       });
     }
@@ -2742,9 +2754,10 @@ const ShippingPortal: React.FC = () => {
               }
             }}
           >
-            {mainTabs.map(tab => (
+            {visibleMainTabs.map(tab => (
               <Tab 
                 key={tab.index}
+                value={tab.index}
                 label={tab.label} 
                 icon={tab.icon} 
                 iconPosition="start"
@@ -3505,11 +3518,9 @@ const ShippingPortal: React.FC = () => {
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   🔐 Blockchain Verification
                 </Typography>
-                <Alert severity="success" sx={{ mb: 2 }}>
+                <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Hyperledger Fabric Blockchain:</strong> This shipment and all related documents (Bill of Lading, 
-                    customs clearance, etc.) are cryptographically signed and stored on the immutable consortium blockchain. 
-                    All signatures below are verified against X.509 certificates and blockchain transaction records.
+                    <strong>Hyperledger Fabric proof:</strong> The panel below checks committed transaction status, creator and endorser signatures, and certificate trust against configured MSP CA roots. A record is labeled verified only when those checks pass.
                   </Typography>
                 </Alert>
                 <BlockchainSignatureVerification

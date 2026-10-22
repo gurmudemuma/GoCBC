@@ -162,9 +162,9 @@ export const loadNBEData = async (): Promise<NBEPortalData> => {
     const exchangeRates: ExchangeRate[] = (ratesData.data || []).map((rate: any) => ({
       rateId: rate.rateId || rate.id || '',
       currency: rate.currency || 'USD',
-      buyRate: rate.buyRate || 0,
-      sellRate: rate.sellRate || 0,
-      officialRate: rate.officialRate || rate.sellRate || 0,
+      buyRate: rate.buyingRate ?? rate.buyRate ?? 0,
+      sellRate: rate.sellingRate ?? rate.sellRate ?? 0,
+      officialRate: rate.midRate ?? rate.officialRate ?? rate.sellingRate ?? rate.sellRate ?? 0,
       effectiveDate: rate.effectiveDate || rate.createdAt || new Date().toISOString(),
       setBy: rate.setBy || 'NBE',
       status: rate.status || 'ACTIVE',
@@ -272,7 +272,7 @@ export const calculateNBEStats = (data: NBEPortalData) => {
 
     // Tab 1: Exchange Rates
     exchangeRates: {
-      currentRate: data.exchangeRates.find(r => r.status === 'ACTIVE' && r.currency === 'USD')?.officialRate || 115.50,
+      currentRate: data.exchangeRates.find(r => r.status === 'ACTIVE' && r.currency === 'USD')?.officialRate || 0,
       dailyChange: calculateDailyChange(data.exchangeRates),
       weeklyAvg: calculateWeeklyAverage(data.exchangeRates),
       totalRates: data.exchangeRates.length,
@@ -355,14 +355,14 @@ function calculateWeeklyAverage(rates: ExchangeRate[]): number {
     r => r.currency === 'USD' && new Date(r.effectiveDate) >= weekAgo
   );
   
-  if (recentRates.length === 0) return 115.50;
+  if (recentRates.length === 0) return 0;
   
   const sum = recentRates.reduce((acc, r) => acc + r.officialRate, 0);
   return sum / recentRates.length;
 }
 
 function calculateComplianceRate(checks: ComplianceCheck[]): number {
-  if (checks.length === 0) return 100;
+  if (checks.length === 0) return 0;
   
   const compliant = checks.filter(c => c.status === 'COMPLIANT' || c.status === 'RESOLVED').length;
   return (compliant / checks.length) * 100;

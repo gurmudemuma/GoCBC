@@ -17,6 +17,8 @@ export type UserRole =
   | 'EXPORTER' 
   | 'ADMIN'
   // ECTA specific roles
+  | 'ECTA_SUPERVISOR'
+  | 'ECTA_INSPECTOR'
   | 'Quality Inspector'
   | 'Lab Analyst'
   | 'Phytosanitary Officer'

@@ -324,10 +324,9 @@ const ExporterTraceability: React.FC<ExporterTraceabilityProps> = ({ exporterId 
                     />
                     {stage.blockchainTxId && (
                       <Chip
-                        icon={<VerifiedIcon />}
-                        label="Blockchain Verified"
+                        label="Fabric transaction recorded"
                         size="small"
-                        color="success"
+                        color="info"
                         variant="outlined"
                       />
                     )}

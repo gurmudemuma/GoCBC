@@ -24,31 +24,29 @@ const BlockchainBadge: React.FC<BlockchainBadgeProps> = ({
   channel = 'coffeechannel',
   compact = false,
   txId,
-  verified = true
+  verified = false
 }) => {
-  if (!verified && !entityId) {
+  if (!verified && !txId) {
     return null;
   }
 
-  const tooltipText = entityId 
-    ? `Blockchain Verified\nEntity: ${entityType || 'Unknown'}\nID: ${entityId}\nChaincode: ${chaincode}\nChannel: ${channel}`
-    : txId
-    ? `Blockchain TX: ${txId.substring(0, 16)}...`
-    : 'Blockchain Verified';
+  const tooltipText = verified
+    ? `Fabric transaction verified\nEntity: ${entityType || 'Unknown'}\nID: ${entityId || 'Unknown'}\nChaincode: ${chaincode}\nChannel: ${channel}${txId ? `\nTX: ${txId}` : ''}`
+    : `Transaction ID present; block validation has not been checked here.\nTX: ${txId}`;
 
   return (
     <Tooltip title={<div style={{ whiteSpace: 'pre-line' }}>{tooltipText}</div>}>
       <Chip
         icon={<Verified />}
-        label={compact ? "⛓️" : "Blockchain"}
+        label={verified ? (compact ? "✓" : "Ledger Verified") : (compact ? "⛓️" : "Transaction Recorded")}
         size="small"
-        color="primary"
+        color={verified ? "success" : "info"}
         variant="outlined"
         sx={{
           fontWeight: 600,
           borderWidth: 2,
           '& .MuiChip-icon': {
-            color: '#1976d2'
+            color: verified ? '#2e7d32' : '#1976d2'
           }
         }}
       />

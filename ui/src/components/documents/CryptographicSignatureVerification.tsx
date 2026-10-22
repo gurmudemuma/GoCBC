@@ -57,10 +57,12 @@ interface VerificationResult {
   signatureCount: number;
   cryptoSignatureCount: number;
   allSignaturesCryptographic: boolean;
-  overallStatus: 'VERIFIED' | 'TAMPERED' | 'PARTIAL' | 'UNSIGNED' | 'UNVERIFIED';
+  overallStatus: 'VERIFIED' | 'TAMPERED' | 'PARTIAL' | 'UNSIGNED' | 'UNVERIFIED' | 'CRYPTOGRAPHICALLY_VALID_UNANCHORED';
   cryptographicVerification?: {
     isValid: boolean;
     isTampered: boolean;
+    cryptographicSignaturesValid: boolean;
+    certificateTrustStatus: string;
     documentHash: string;
     verificationTimestamp: string;
     signatures: Array<{
@@ -68,6 +70,8 @@ interface VerificationResult {
       organization: string;
       signedAt: string;
       certificateValid: boolean;
+      signatureValid: boolean;
+      certificateTrusted: boolean;
       certificateIssuer: string;
       certificateSubject: string;
       blockchainTxId?: string;
@@ -229,6 +233,7 @@ export const CryptographicSignatureVerification: React.FC<SignatureVerificationP
               {verificationResult.overallStatus === 'PARTIAL' && '⚠ Partially Signed'}
               {verificationResult.overallStatus === 'UNSIGNED' && 'ℹ Document Unsigned'}
               {verificationResult.overallStatus === 'UNVERIFIED' && '? Verification Incomplete'}
+              {verificationResult.overallStatus === 'CRYPTOGRAPHICALLY_VALID_UNANCHORED' && 'Signature Valid · Certificate Unanchored'}
             </Typography>
             <Typography variant="body2" sx={{ mt: 1, opacity: 0.9 }}>
               {verificationResult.fileName} ({verificationResult.documentType})
@@ -253,6 +258,12 @@ export const CryptographicSignatureVerification: React.FC<SignatureVerificationP
           <AlertTitle>⚠ DOCUMENT HAS BEEN TAMPERED WITH</AlertTitle>
           This document has been modified after it was signed. The cryptographic signature is invalid.
           <strong> DO NOT TRUST THIS DOCUMENT.</strong>
+        </Alert>
+      )}
+
+      {verificationResult.overallStatus === 'CRYPTOGRAPHICALLY_VALID_UNANCHORED' && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          The detached signature and file hash match. The signing certificate is not anchored to a consortium CA, so signer trust is not confirmed.
         </Alert>
       )}
 

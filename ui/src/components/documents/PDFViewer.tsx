@@ -18,8 +18,8 @@ if (typeof window !== 'undefined') {
 interface PDFViewerProps {
   documentId: string;
   token: string;
-  width?: number;
-  height?: number;
+  width?: number | string;
+  height?: number | string;
 }
 
 export const PDFViewer: React.FC<PDFViewerProps> = ({ documentId, token, width, height = 500 }) => {
