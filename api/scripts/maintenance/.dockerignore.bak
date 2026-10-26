@@ -1,0 +1,17 @@
+# For prebuild Dockerfile - allow node_modules and dist
+coverage
+logs
+uploads
+wallet
+crypto-keys
+certificates
+licenses
+.env
+.env.*
+!.env.example
+.git
+npm-debug.log*
+src
+scripts
+tsconfig.json
+*.md

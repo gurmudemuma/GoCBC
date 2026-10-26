@@ -1,0 +1,14 @@
+NodeOUs:
+  Enable: true
+  ClientOUIdentifier:
+    Certificate: cacerts/channel-root-262695889c9b10a7.pem
+    OrganizationalUnitIdentifier: client
+  PeerOUIdentifier:
+    Certificate: cacerts/channel-root-262695889c9b10a7.pem
+    OrganizationalUnitIdentifier: peer
+  AdminOUIdentifier:
+    Certificate: cacerts/channel-root-262695889c9b10a7.pem
+    OrganizationalUnitIdentifier: admin
+  OrdererOUIdentifier:
+    Certificate: cacerts/channel-root-262695889c9b10a7.pem
+    OrganizationalUnitIdentifier: orderer

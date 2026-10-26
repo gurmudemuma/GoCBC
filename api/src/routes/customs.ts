@@ -1,0 +1,1180 @@
+import { Router, Request, Response } from 'express';
+import { body, param, validationResult } from 'express-validator';
+import { authMiddleware } from '../middleware/auth';
+import { DatabaseService } from '../services/databaseService';
+import { FabricService } from '../services/fabricService';
+import { CustomsService } from '../services/customsService';
+import { logger } from '../utils/logger';
+
+const router = Router();
+const postgresDb = DatabaseService.getInstance();
+const fabricService = FabricService.getInstance();
+const customsService = CustomsService.getInstance();
+
+const validateRequest = (req: Request, res: Response, next: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid input data', details: errors.array() },
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+};
+
+/**
+ * POST /api/v1/customs — Submit customs declaration (wrapper endpoint)
+ */
+router.post('/',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        customsID,
+        shipmentID,
+        exporterID,
+        hsCode,
+        quantity,
+        value,
+        currency,
+        destination,
+        status
+      } = req.body;
+
+      logger.info(`[CUSTOMS] 📝 Submitting customs declaration: ${customsID}`);
+
+      const declarationNumber = customsID || req.body.declarationNumber || `CD-${Date.now()}`;
+      const shipmentId = shipmentID || req.body.shipmentId || '';
+      const exporterId = exporterID || req.body.exporterId || '';
+      const contractId = req.body.contractID || req.body.contractId || '';
+
+      if (!declarationNumber || !shipmentId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Missing required fields: customsID, shipmentID',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Call blockchain to submit customs declaration
+      await fabricService.connectAsOrg('CustomsMSP');
+      
+      const result = await fabricService.invokeChaincode('SubmitCustomsDeclaration', [
+        declarationNumber,
+        shipmentId,
+        contractId,
+        exporterId,
+        hsCode || '0901.21',
+        String(quantity || 10000),
+        String(value || 85000),
+        currency || 'USD',
+        destination || 'Germany',
+        new Date().toISOString().split('T')[0] // Submission date
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [CUSTOMS] Declaration submitted: ${declarationNumber}`);
+        res.status(201).json({
+          success: true,
+          message: 'Customs declaration submitted successfully',
+          data: { customsID: declarationNumber, declarationNumber, status: 'submitted' },
+          txId: result.txId,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        logger.error(`❌ [CUSTOMS] Failed to submit: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SUBMISSION_FAILED',
+            message: result.error || 'Failed to submit customs declaration',
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error submitting declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/customs/declarations
+ * Get all customs declarations (for checking which shipments have declarations)
+ */
+router.get('/declarations',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching all customs declarations');
+
+      const declarations = await postgresDb.all(
+        `SELECT 
+          declaration_number, 
+          shipment_id, 
+          contract_id,
+          exporter_id,
+          declaration_type,
+          hs_code,
+          quantity,
+          customs_value_usd,
+          duty_amount,
+          currency,
+          destination,
+          port_of_exit,
+          eudr_compliant,
+          additional_notes,
+          status,
+          customs_officer,
+          inspection_required,
+          duty_paid,
+          clearance_date,
+          blockchain_tx_id,
+          created_at,
+          updated_at
+        FROM customs_declarations 
+        ORDER BY created_at DESC`
+      );
+
+      logger.info(`[CUSTOMS] Found ${declarations.length} declarations`);
+
+      // Map to camelCase for frontend
+      const mappedDeclarations = declarations.map((d: any) => ({
+        declarationId: d.declaration_number,
+        declarationNumber: d.declaration_number,
+        shipmentId: d.shipment_id,
+        shipmentID: d.shipment_id,
+        contractId: d.contract_id,
+        contractID: d.contract_id,
+        exporterId: d.exporter_id,
+        exporterID: d.exporter_id,
+        declarationType: d.declaration_type,
+        hsCode: d.hs_code,
+        quantity: parseFloat(d.quantity || 0),
+        value: parseFloat(d.customs_value_usd || 0),
+        customsValueUSD: parseFloat(d.customs_value_usd || 0),
+        dutyAmount: parseFloat(d.duty_amount || 0),
+        currency: d.currency,
+        destination: d.destination,
+        portOfExit: d.port_of_exit,
+        eudrCompliant: d.eudr_compliant,
+        additionalNotes: d.additional_notes,
+        status: d.status,
+        customsOfficer: d.customs_officer,
+        inspectionRequired: d.inspection_required,
+        dutyPaid: d.duty_paid,
+        clearanceDate: d.clearance_date,
+        blockchainTxId: d.blockchain_tx_id,
+        submissionDate: d.created_at,
+        createdAt: d.created_at,
+        updatedAt: d.updated_at
+      }));
+
+      res.json({
+        success: true,
+        data: mappedDeclarations,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching declarations:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+router.post('/risk-assessment',
+  authMiddleware,
+  [
+    body('shipmentID').notEmpty(),
+    body('exporterID').notEmpty(),
+    body('riskLevel').notEmpty(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID, exporterID, riskFactors, riskLevel, inspectionRequired } = req.body;
+      const assessmentID = `RISK-${Date.now()}`;
+      const user = (req as any).user;
+
+      logger.info(`✅ Risk assessment created: ${assessmentID} for shipment ${shipmentID}`);
+
+      // Persist to database
+      await postgresDb.run(
+        `INSERT INTO customs_risk_assessments (
+          assessment_id, shipment_id, exporter_id, risk_factors, risk_level,
+          inspection_required, assessed_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [assessmentID, shipmentID, exporterID, JSON.stringify(riskFactors || {}),
+         riskLevel, inspectionRequired || false, user.username]
+      );
+
+      res.json({
+        success: true,
+        data: { assessmentID, riskLevel },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Risk assessment error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+router.post('/clearance',
+  authMiddleware,
+  [body('shipmentID').notEmpty(), body('clearanceNumber').notEmpty()],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID, clearanceNumber, status, clearedBy, clearedDate } = req.body;
+      const clearanceID = `CLR-${Date.now()}`;
+      const user = (req as any).user;
+
+      // ✅ Record clearance (skip audit for now - testing mode)
+      logger.info(`✅ Customs clearance created: ${clearanceID} for shipment ${shipmentID}`);
+
+      // Persist to database
+      await postgresDb.run(
+        `INSERT INTO customs_clearances (
+          clearance_id, shipment_id, clearance_number, status, cleared_by, cleared_date
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [clearanceID, shipmentID, clearanceNumber, status || 'SUBMITTED',
+         clearedBy || user?.username || 'system', clearedDate || new Date().toISOString()]
+      );
+
+      res.json({
+        success: true,
+        data: { 
+          clearanceID, 
+          clearanceNumber, 
+          status: status || 'SUBMITTED',
+          id: clearanceID
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Clearance error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+router.get('/clearances',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status } = req.query;
+      
+      // JOIN customs_clearances with customs_declarations to get complete data
+      let query = `
+        SELECT 
+          cc.*,
+          cd.declaration_number,
+          cd.customs_value_usd,
+          cd.quantity,
+          cd.currency,
+          cd.hs_code,
+          cd.destination,
+          cd.port_of_exit,
+          cd.declaration_type,
+          cd.eudr_compliant
+        FROM customs_clearances cc
+        LEFT JOIN customs_declarations cd ON cc.shipment_id = cd.shipment_id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+      
+      if (status) {
+        query += ' AND cc.status = $1';
+        params.push(status);
+      }
+      
+      query += ' ORDER BY cc.created_at DESC';
+      const clearances = await postgresDb.all(query, params);
+
+      // Normalize field names for frontend
+      const normalizedClearances = clearances.map((c: any) => ({
+        clearanceID: c.clearance_id,
+        clearanceId: c.clearance_id,
+        clearanceNumber: c.clearance_number,
+        shipmentID: c.shipment_id,
+        shipmentId: c.shipment_id,
+        declarationNumber: c.declaration_number,
+        status: c.status,
+        clearedBy: c.cleared_by,
+        clearedDate: c.cleared_date,
+        dutyAmount: c.duty_amount,
+        taxAmount: c.tax_amount,
+        exitPoint: c.exit_point,
+        remarks: c.remarks,
+        customsValueUSD: c.customs_value_usd,
+        quantity: c.quantity,
+        currency: c.currency,
+        hsCode: c.hs_code,
+        destination: c.destination,
+        portOfExit: c.port_of_exit,
+        declarationType: c.declaration_type,
+        eudrCompliant: c.eudr_compliant,
+        blockchainTxId: c.blockchain_tx_id,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }));
+
+      res.json({ 
+        success: true, 
+        data: normalizedClearances,
+        timestamp: new Date().toISOString() 
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/customs/permit-ready
+ * Returns all shipments that have received export permits from ECTA Quality Control
+ * Status: permit_issued means ECTA has issued the export permit
+ */
+router.get('/permit-ready',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching permit-ready shipments (status=permit_issued)');
+      
+      // Fetch all inspections with status 'permit_issued'
+      const inspections = await postgresDb.all(`
+        SELECT 
+          qi.inspection_id,
+          qi.shipment_id,
+          qi.exporter_id,
+          qi.contract_id,
+          qi.coffee_type,
+          qi.quantity,
+          qi.status,
+          qi.passed,
+          qi.grade,
+          qi.certification_number,
+          qi.requested_date,
+          qi.inspection_date,
+          qi.remarks,
+          qi.created_at,
+          qi.updated_at,
+          cd.declaration_number
+        FROM quality_inspections qi
+        LEFT JOIN customs_declarations cd ON qi.shipment_id = cd.shipment_id
+        WHERE qi.status = 'permit_issued'
+          AND cd.declaration_number IS NULL
+        ORDER BY qi.updated_at DESC, qi.created_at DESC
+      `);
+      
+      logger.info(`[CUSTOMS] Found ${inspections.length} quality inspections with permit_issued status (excluding already declared)`);
+      
+      // Transform to camelCase and extract permit number and score from remarks
+      const transformed = inspections.map((insp: any) => {
+        // Extract permit number from remarks (format: "EXPORT PERMIT ISSUED: PERMIT123456...")
+        let exportPermitNo = 'N/A';
+        let totalScore: number | null = null;
+        
+        if (insp.remarks) {
+          // Extract permit number
+          const permitMatch = insp.remarks.match(/EXPORT PERMIT ISSUED:\s*([A-Z0-9]+)/);
+          if (permitMatch) exportPermitNo = permitMatch[1];
+          
+          // Extract overall score (format: "Overall score: 87")
+          const scoreMatch = insp.remarks.match(/Overall score:\s*(\d+)/i);
+          if (scoreMatch) totalScore = parseInt(scoreMatch[1], 10);
+        }
+        
+        return {
+          inspectionId: insp.inspection_id,
+          shipmentId: insp.shipment_id,
+          exporterId: insp.exporter_id,
+          contractId: insp.contract_id,
+          coffeeType: insp.coffee_type,
+          quantity: parseFloat(insp.quantity || 0),
+          status: insp.status,
+          passed: insp.passed,
+          qualityGrade: insp.grade,
+          classification: insp.grade, // Alias for grade
+          totalScore: totalScore, // Extract from remarks
+          certificateNo: insp.certification_number,
+          exportPermitNo: exportPermitNo,
+          requestedDate: insp.requested_date,
+          inspectionDate: insp.inspection_date,
+          remarks: insp.remarks,
+          createdAt: insp.created_at,
+          updatedAt: insp.updated_at
+        };
+      });
+      
+      logger.info(`[CUSTOMS] Found ${transformed.length} permit-ready shipments`);
+      
+      res.json({ 
+        success: true, 
+        data: transformed,
+        timestamp: new Date().toISOString() 
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching permit-ready shipments:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/customs/declarations
+ * Returns all customs declarations with their complete data
+ */
+router.get('/declarations',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      logger.info('[CUSTOMS] Fetching all customs declarations');
+
+      const declarations = await postgresDb.all(
+        `SELECT 
+          declaration_number, 
+          shipment_id, 
+          contract_id,
+          exporter_id,
+          declaration_type,
+          hs_code,
+          quantity,
+          customs_value_usd,
+          duty_amount,
+          currency,
+          destination,
+          port_of_exit,
+          eudr_compliant,
+          additional_notes,
+          status,
+          customs_officer,
+          inspection_required,
+          duty_paid,
+          clearance_date,
+          blockchain_tx_id,
+          created_at,
+          updated_at
+        FROM customs_declarations 
+        ORDER BY created_at DESC`
+      );
+
+      logger.info(`[CUSTOMS] Found ${declarations.length} declarations`);
+
+      // Map to camelCase for frontend
+      const mappedDeclarations = declarations.map((d: any) => ({
+        declarationId: d.declaration_number,
+        declarationNumber: d.declaration_number,
+        shipmentId: d.shipment_id,
+        shipmentID: d.shipment_id,
+        contractId: d.contract_id,
+        contractID: d.contract_id,
+        exporterId: d.exporter_id,
+        exporterID: d.exporter_id,
+        declarationType: d.declaration_type,
+        hsCode: d.hs_code,
+        quantity: parseFloat(d.quantity || 0),
+        value: parseFloat(d.customs_value_usd || 0),
+        customsValueUSD: parseFloat(d.customs_value_usd || 0),
+        dutyAmount: parseFloat(d.duty_amount || 0),
+        currency: d.currency,
+        destination: d.destination,
+        portOfExit: d.port_of_exit,
+        eudrCompliant: d.eudr_compliant,
+        additionalNotes: d.additional_notes,
+        status: d.status,
+        customsOfficer: d.customs_officer,
+        inspectionRequired: d.inspection_required,
+        dutyPaid: d.duty_paid,
+        clearanceDate: d.clearance_date,
+        blockchainTxId: d.blockchain_tx_id,
+        submissionDate: d.created_at,
+        createdAt: d.created_at,
+        updatedAt: d.updated_at
+      }));
+
+      res.json({
+        success: true,
+        data: mappedDeclarations,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching declarations:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/declaration/submit
+ * Submit a new customs declaration for a shipment with export permit
+ */
+router.post('/declaration/submit',
+  authMiddleware,
+  [
+    body('declarationID').notEmpty(),
+    body('shipmentID').notEmpty(),
+    body('exporterID').notEmpty(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        declarationID,
+        shipmentID,
+        exporterID,
+        contractID: contractIdUpper,
+        contractId: contractIdLower,
+        declarationType,
+        hsCode,
+        quantity,
+        value,
+        currency,
+        destination,
+        portOfExit,
+        eudrCompliant,
+        additionalNotes
+      } = req.body;
+
+      logger.info(`[CUSTOMS] Submitting declaration ${declarationID} for shipment ${shipmentID}`);
+
+      // Check if declaration already exists for this shipment
+      const existingDeclaration = await postgresDb.get(
+        `SELECT declaration_number FROM customs_declarations WHERE shipment_id = $1`,
+        [shipmentID]
+      );
+
+      if (existingDeclaration) {
+        logger.warn(`[CUSTOMS] Declaration for shipment ${shipmentID} already exists (${existingDeclaration.declaration_number})`);
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'DECLARATION_EXISTS', 
+            message: 'A customs declaration has already been submitted for this shipment. Please contact customs if you need to update it.' 
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // ✅ BLOCKCHAIN-FIRST: Submit declaration to chaincode BEFORE DB write
+      const blockchainResult = await fabricService.invokeChaincode(
+        'SubmitCustomsDeclaration',
+        [
+          declarationID,
+          shipmentID,
+          exporterID,
+          declarationType || 'STANDARD',
+          hsCode || '090111',
+          String(quantity || 0),
+          String(value || 0),
+          currency || 'USD',
+          destination || 'Unknown',
+          portOfExit || 'Djibouti Port',
+          String(eudrCompliant || false)
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
+
+      // Now persist to database with blockchain TX ID
+      await postgresDb.run(
+        `INSERT INTO customs_declarations (
+          declaration_id, declaration_number, shipment_id, contract_id, exporter_id,
+          declaration_type, hs_code, quantity, customs_value_usd, currency,
+          destination, port_of_exit, eudr_compliant, additional_notes, status,
+          inspection_required, blockchain_tx_id, created_at
+        ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())`,
+        [
+          declarationID,
+          shipmentID,
+          contractIdUpper || contractIdLower || null,
+          exporterID,
+          declarationType || 'STANDARD',
+          hsCode || '090111',
+          quantity || 0,
+          value || 0,
+          currency || 'USD',
+          destination || 'Unknown',
+          portOfExit || 'Djibouti Port',
+          eudrCompliant || false,
+          additionalNotes || '',
+          'SUBMITTED',
+          true,
+          blockchain_tx_id
+        ]
+      );
+
+      logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationID,
+          shipmentID,
+          status: 'SUBMITTED',
+          blockchain_tx_id,
+          message: 'Declaration submitted successfully and ready for customs officer review'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error submitting declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/test-shipment-update/:shipmentId
+ * Test endpoint to manually update shipment status to CUSTOMS_CLEARED
+ */
+router.post('/test-shipment-update/:shipmentId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentId } = req.params;
+      
+      logger.info(`[CUSTOMS TEST] Checking shipment ${shipmentId}...`);
+      
+      // Check if shipment exists
+      const shipment = await fabricService.getShipment(shipmentId);
+      
+      if (!shipment.success || !shipment.data) {
+        return res.json({
+          success: false,
+          error: 'Shipment not found on blockchain',
+          shipmentId
+        });
+      }
+      
+      const currentStatus = shipment.data.status || shipment.data.Status;
+      logger.info(`[CUSTOMS TEST] Current status: ${currentStatus}`);
+      
+      // Update to CUSTOMS_CLEARED
+      const result = await fabricService.invokeChaincode('UpdateShipmentStatus', [
+        shipmentId,
+        'CUSTOMS_CLEARED'
+      ]);
+      
+      logger.info(`[CUSTOMS TEST] Update result:`, result);
+      
+      // Verify the update
+      const updatedShipment = await fabricService.getShipment(shipmentId);
+      const newStatus = updatedShipment.data?.status || updatedShipment.data?.Status;
+      
+      res.json({
+        success: true,
+        shipmentId,
+        oldStatus: currentStatus,
+        newStatus: newStatus,
+        updateResult: result
+      });
+      
+    } catch (error: any) {
+      logger.error('[CUSTOMS TEST] Error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+);
+
+/**
+ * GET /customs/declarations/:declarationID
+ * Get a specific customs declaration by ID
+ * @access Authenticated
+ */
+router.get('/declarations/:declarationID',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationID } = req.params;
+      
+      logger.info(`[CUSTOMS] Fetching declaration: ${declarationID}`);
+      
+      const declaration = await postgresDb.get(
+        `SELECT cd.*, cc.clearance_number, cc.duty_amount, cc.cleared_by, cc.cleared_date
+         FROM customs_declarations cd
+         LEFT JOIN customs_clearances cc ON cd.shipment_id = cc.shipment_id
+         WHERE cd.declaration_number = $1`,
+        [declarationID]
+      );
+      
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Declaration ${declarationID} not found` },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Normalize field names
+      const normalized = {
+        declarationID: declaration.declaration_number,
+        declarationId: declaration.declaration_number,
+        declarationNumber: declaration.declaration_number,
+        shipmentID: declaration.shipment_id,
+        contractID: declaration.contract_id,
+        exporterID: declaration.exporter_id,
+        declarationType: declaration.declaration_type,
+        hsCode: declaration.hs_code,
+        description: declaration.description,
+        quantity: declaration.quantity,
+        value: declaration.customs_value_usd,
+        customsValueUSD: declaration.customs_value_usd,
+        currency: declaration.currency,
+        destination: declaration.destination,
+        destinationCountry: declaration.destination_country || declaration.destination,
+        portOfExit: declaration.port_of_exit,
+        eudrCompliant: declaration.eudr_compliant,
+        additionalNotes: declaration.additional_notes,
+        status: declaration.status,
+        clearanceNumber: declaration.clearance_number,
+        dutiesAmount: declaration.duty_amount,
+        dutyPaid: declaration.duty_paid,
+        clearedBy: declaration.cleared_by,
+        clearedDate: declaration.cleared_date,
+        clearanceDate: declaration.clearance_date,
+        customsOfficer: declaration.customs_officer,
+        inspectionRequired: declaration.inspection_required,
+        inspectionNotes: declaration.inspection_notes,
+        createdAt: declaration.created_at,
+        updatedAt: declaration.updated_at,
+        blockchainTxId: declaration.blockchain_tx_id
+      };
+      
+      res.json({
+        success: true,
+        data: normalized,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error fetching declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+export default router;
+
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/review
+ * Schedule inspection and assign customs officer
+ */
+router.post('/declaration/:declarationId/review',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { assignedInspector, scheduledDate, priorityLevel, location, inspectionType, inspectorNotes } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Scheduling inspection for declaration ${declarationId} by ${user.username}`);
+
+      // Use the assigned inspector's username directly (no more mapping)
+      const officerName = assignedInspector || user.username || 'Customs Officer';
+
+      // ✅ BLOCKCHAIN-FIRST: Call ReviewCustomsDeclaration chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'ReviewCustomsDeclaration',
+        [
+          declarationId,
+          officerName,
+          inspectionType || 'STANDARD',
+          inspectorNotes || 'Inspection scheduled'
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+
+      // Now update declaration with assigned officer and status
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW() 
+         WHERE declaration_number = $4`,
+        [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
+      );
+
+      logger.info(`[CUSTOMS] Declaration ${declarationId} updated: officer=${officerName}, status=UNDER_INSPECTION`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          status: 'UNDER_INSPECTION',
+          assignedOfficer: officerName,
+          blockchain_tx_id,
+          message: 'Inspection scheduled successfully'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error scheduling inspection:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * Complete inspection and move declaration to UNDER_REVIEW status
+ */
+router.post('/declaration/:declarationId/complete-inspection',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { inspectionResult, inspectorComments, completedDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Completing inspection for declaration ${declarationId} by ${user.username}`);
+
+      // ✅ BLOCKCHAIN-FIRST: Call CompleteInspection chaincode BEFORE DB update
+      const blockchainResult = await fabricService.invokeChaincode(
+        'CompleteInspection',
+        [
+          declarationId,
+          inspectorComments || 'Inspection completed'
+        ]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Inspection completion recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+
+      // Now update declaration status to UNDER_REVIEW after inspection
+      await postgresDb.run(
+        `UPDATE customs_declarations 
+         SET status = $1, blockchain_tx_id = $2, updated_at = NOW() 
+         WHERE declaration_number = $3`,
+        ['UNDER_REVIEW', blockchain_tx_id, declarationId]
+      );
+
+      logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} inspection completed: status=UNDER_REVIEW`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          status: 'UNDER_REVIEW',
+          inspectionResult: inspectionResult || 'PASSED',
+          message: 'Inspection completed successfully. Declaration moved to UNDER_REVIEW for final clearance.'
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error completing inspection:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * Reject a customs declaration on the consortium ledger and keep the
+ * PostgreSQL read model aligned for portal lists and rejection details.
+ */
+router.post('/declaration/:declarationId/reject',
+  authMiddleware,
+  [
+    param('declarationId').notEmpty(),
+    body('rejectionReason').trim().notEmpty(),
+    body('rejectedBy').optional().isString(),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    const { declarationId } = req.params;
+    const { rejectionReason, rejectedBy } = req.body;
+    const user = (req as any).user;
+    const officer = rejectedBy || user?.username || 'Customs Officer';
+
+    try {
+      const result = await fabricService.rejectCustomsDeclaration(
+        declarationId,
+        officer,
+        rejectionReason
+      );
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'REJECTION_FAILED', message: result.error || 'Failed to reject customs declaration' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      try {
+        await postgresDb.run(
+          `UPDATE customs_declarations
+           SET status = $1,
+               customs_officer = $2,
+               additional_notes = CASE
+                 WHEN COALESCE(additional_notes, '') = '' THEN $3
+                 ELSE additional_notes || E'\\n\\nRejection: ' || $3
+               END,
+               blockchain_tx_id = $4,
+               updated_at = NOW()
+           WHERE declaration_number = $5`,
+          ['REJECTED', officer, rejectionReason, result.txId || null, declarationId]
+        );
+      } catch (syncError: any) {
+        // The ledger commit is authoritative; expose the mirror condition so
+        // operators can reconcile it without inviting a duplicate rejection.
+        logger.error(`[CUSTOMS] Rejection committed but read-model sync failed for ${declarationId}:`, syncError);
+        return res.status(202).json({
+          success: true,
+          data: { declarationId, status: 'REJECTED', rejectionReason, rejectedBy: officer },
+          txId: result.txId,
+          readModelSynchronized: false,
+          warning: 'The ledger rejection committed, but the portal read model needs reconciliation.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: { declarationId, status: 'REJECTED', rejectionReason, rejectedBy: officer },
+        txId: result.txId,
+        readModelSynchronized: true,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error(`[CUSTOMS] Error rejecting declaration ${declarationId}:`, error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message || 'Failed to reject customs declaration' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/clear
+ * Clear a customs declaration (final approval)
+ */
+router.post('/declaration/:declarationId/clear',
+  authMiddleware,
+  param('declarationId').notEmpty(),
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { 
+        clearanceNumber, 
+        clearedBy, 
+        clearanceDate,
+        clearanceType,
+        exportDuty,
+        vatAmount,
+        exitPoint,
+        validityPeriod,
+        transportMode,
+        finalDestinationPort,
+        estimatedDepartureDate,
+        containerNumber,
+        sealNumber,
+        shippingLine,
+        clearanceRemarks,
+        officerNotes
+      } = req.body;
+      
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Clearing declaration ${declarationId} by ${user.username}`);
+
+      // Fetch declaration from database first
+      const declaration = await postgresDb.get(
+        `SELECT * FROM customs_declarations WHERE declaration_number = $1`,
+        [declarationId]
+      );
+
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'DECLARATION_NOT_FOUND',
+            message: `Declaration ${declarationId} not found`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Use CustomsService to clear declaration
+      const result = await customsService.clearDeclaration({
+        declarationID: declarationId,
+        clearanceNumber: clearanceNumber || `CLR-${Date.now()}`,
+        clearedBy: clearedBy || user.username,
+        duties: exportDuty || 0,
+        taxes: vatAmount || 0,
+        clearanceNotes: clearanceRemarks,
+        userId: user.username,
+        userOrg: user.org || 'CustomsMSP'
+      });
+
+      logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully`);
+
+      // Update shipment status on blockchain if shipment exists
+      if (declaration.shipment_id) {
+        try {
+          // Connect as CustomsMSP to have authority to update shipment status
+          await fabricService.connectAsOrg('CustomsMSP');
+          logger.info(`[CUSTOMS] Connected as CustomsMSP`);
+          
+          // First verify the shipment exists on blockchain
+          const shipmentCheck = await fabricService.queryChaincode('ReadShipment', [declaration.shipment_id]);
+          
+          if (!shipmentCheck.success || !shipmentCheck.data) {
+            logger.error(`[CUSTOMS] ❌ Shipment ${declaration.shipment_id} not found on blockchain!`);
+            logger.error(`[CUSTOMS] Shipment check result:`, JSON.stringify(shipmentCheck));
+          } else {
+            const currentStatus = shipmentCheck.data.status || shipmentCheck.data.Status;
+            logger.info(`[CUSTOMS] Current blockchain status: ${currentStatus}`);
+            
+            // Use direct chaincode invocation to update status
+            // CustomsMSP has authority to set CUSTOMS_CLEARED directly
+            const result = await fabricService.invokeChaincode('UpdateShipmentStatus', [
+              declaration.shipment_id,
+              'CUSTOMS_CLEARED'
+            ]);
+            
+            if (result.success) {
+              logger.info(`[CUSTOMS] ✅ Shipment ${declaration.shipment_id} status updated to CUSTOMS_CLEARED on blockchain`);
+              
+              // Also record the full clearance details to blockchain for audit
+              try {
+                const clearanceData = {
+                  declarationNumber: declarationId,
+                  shipmentID: declaration.shipment_id,
+                  status: 'CLEARED',
+                  clearedBy: clearedBy || user.username,
+                  clearedDate: clearanceDate || new Date().toISOString(),
+                  customsValueUSD: declaration?.customs_value_usd || 0,
+                  quantity: declaration?.quantity || 0,
+                  currency: declaration?.currency || 'USD',
+                  dutyAmount: exportDuty || 0,
+                  taxAmount: vatAmount || 0,
+                  totalFees: (exportDuty || 0) + (vatAmount || 0),
+                  exitPoint: exitPoint || null,
+                  transportMode: transportMode || null,
+                  finalDestinationPort: finalDestinationPort || null,
+                  remarks: clearanceRemarks || null,
+                  timestamp: new Date().toISOString()
+                };
+                
+                // Store clearance details on blockchain using a metadata update
+                const metadataResult = await fabricService.invokeChaincode('UpdateShipmentMetadata', [
+                  declaration.shipment_id,
+                  JSON.stringify({
+                    customsClearance: clearanceData
+                  })
+                ]);
+                
+                if (metadataResult.success) {
+                  logger.info(`[CUSTOMS] ✅ Clearance details recorded to blockchain`);
+                } else {
+                  logger.warn(`[CUSTOMS] ⚠️ Could not record clearance details to blockchain:`, metadataResult.error);
+                }
+              } catch (metadataError: any) {
+                logger.warn(`[CUSTOMS] ⚠️ Exception recording clearance details:`, metadataError.message);
+                // Continue - main status update succeeded
+              }
+              
+              // Verify the update worked
+              const verifyCheck = await fabricService.queryChaincode('ReadShipment', [declaration.shipment_id]);
+              const newStatus = verifyCheck.data?.status || verifyCheck.data?.Status;
+              logger.info(`[CUSTOMS] ✅ Verified new blockchain status: ${newStatus}`);
+            } else {
+              logger.error(`[CUSTOMS] ❌ Failed to update shipment status:`, result.error);
+            }
+          }
+        } catch (shipmentError: any) {
+          logger.error(`[CUSTOMS] ❌ Exception updating shipment status:`, shipmentError);
+          logger.error(`[CUSTOMS] Error stack:`, shipmentError.stack);
+          // Continue even if blockchain update fails - clearance is recorded in DB
+        }
+      } else {
+        logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId}`);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          declarationId,
+          clearanceNumber,
+          shipmentID: declaration.shipment_id,
+          status: 'CLEARED',
+          clearedBy: clearedBy || user.username,
+          message: 'Declaration cleared successfully',
+          debug: {
+            shipmentIdFound: !!declaration.shipment_id,
+            shipmentIdValue: declaration.shipment_id
+          }
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error clearing declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);

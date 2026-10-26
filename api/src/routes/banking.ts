@@ -1,0 +1,3743 @@
+// Ethiopian Coffee Export Consortium Blockchain System (CECBS)
+// Banking API Routes - Letter of Credit, Forex & Export Permits
+
+import express, { Request, Response } from 'express';
+import { FabricService } from '../services/fabricService';
+import { LCService } from '../services/lcService';
+import { BlockchainSignatureService } from '../services/blockchainSignatureService';
+import { DatabaseService } from '../services/databaseService';
+import { logger } from '../utils/logger';
+import { validateRequest } from '../middleware/validation';
+import { authMiddleware } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
+import { dedupeById, isValidLC } from '../utils/dataFilters';
+import { body, param } from 'express-validator';
+import { resolveDocumentPath } from '../utils/fileUtils';
+
+const router = express.Router();
+const fabricService = FabricService.getInstance();
+const lcService = LCService.getInstance();
+const signatureService = BlockchainSignatureService.getInstance();
+const dbService = DatabaseService.getInstance();
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/request:
+ *   post:
+ *     summary: Request Letter of Credit
+ *     tags: [Banking]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - lcID
+ *               - contractID
+ *               - exporterID
+ *               - bankName
+ *               - amount
+ *               - currency
+ *               - expiryDate
+ *             properties:
+ *               lcID:
+ *                 type: string
+ *               contractID:
+ *                 type: string
+ *               exporterID:
+ *                 type: string
+ *               bankName:
+ *                 type: string
+ *               amount:
+ *                 type: string
+ *               currency:
+ *                 type: string
+ *               expiryDate:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: LC requested successfully
+ */
+router.post('/lc/request',
+  authMiddleware,
+  requireRole(['EXPORTER', 'ECTA', 'ECTA_ADMIN', 'ADMIN']),  // ✅ Exporters and ECTA admins can request LCs
+  [
+    body('lcID').notEmpty().withMessage('LC ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('bankName').notEmpty().withMessage('Bank name is required'),
+    body('amount').notEmpty().withMessage('Amount is required'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+    body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        lcID,
+        contractID,
+        exporterID,
+        bankName,
+        amount,
+        currency,
+        expiryDate,
+      } = req.body;
+      const requester = (req as any).user;
+      if (String(requester?.role || '').toUpperCase() === 'EXPORTER' &&
+          String(requester?.exporterId || requester?.username || '') !== String(exporterID)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'Exporters can request LCs only for their own exporter account' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // AUTO-MAPPING: Fetch contract data to auto-populate LC fields
+      let autoMappedData: any = {};
+      try {
+        const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID]);
+        if (contractResult.success && contractResult.data) {
+          const contract = contractResult.data;
+          autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
+          autoMappedData.currency = contract.Currency || contract.currency || 'USD';
+          
+          // Calculate LC amount from contract value if not provided
+          const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+          const quantity = parseFloat(contract.Quantity || contract.quantity || '0');
+          autoMappedData.calculatedAmount = (pricePerKg * quantity).toFixed(2);
+          
+          logger.info(`[LC] Auto-mapped from contract: exporterID=${autoMappedData.exporterID}, amount=${autoMappedData.calculatedAmount}, currency=${autoMappedData.currency}`);
+        }
+      } catch (error) {
+        logger.warn('[LC] Could not fetch contract for auto-mapping:', error);
+      }
+
+      // DUPLICATE CHECK: Ensure no LC already exists for this contract
+      try {
+        const allLCsResult = await fabricService.queryChaincode('QueryAllLCs', []);
+        if (allLCsResult.success && allLCsResult.data) {
+          const existingLC = allLCsResult.data.find((lc: any) => 
+            (lc.contractId === contractID || lc.ContractID === contractID)
+          );
+          
+          if (existingLC) {
+            logger.warn(`[LC] Duplicate LC request blocked for contract ${contractID}. Existing LC: ${existingLC.lcId || existingLC.LCID}`);
+            return res.status(409).json({
+              success: false,
+              error: {
+                code: 'DUPLICATE_LC',
+                message: `An LC already exists for contract ${contractID}`,
+                existingLC: existingLC.lcId || existingLC.LCID,
+                existingStatus: existingLC.status || existingLC.Status,
+              },
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn('[LC] Could not check for duplicate LCs:', error);
+        // Continue anyway - if check fails, let chaincode handle it
+      }
+
+      // Use provided values or auto-mapped values
+      const finalExporterID = exporterID || autoMappedData.exporterID || '';
+      const finalAmount = amount || autoMappedData.calculatedAmount || '0';
+      const finalCurrency = currency || autoMappedData.currency || 'USD';
+
+      // 🔐 CRITICAL: Connect as ECTAMSP (exporters use ECTA as intermediary)
+      // Exporters are NOT blockchain consortium members - they use the system through ECTA
+      await fabricService.connectAsOrg('ECTAMSP');
+      logger.info(`[LC REQUEST] Connected as ECTAMSP (ECTA facilitates exporter LC requests)`);
+
+      const result = await fabricService.requestLC(
+        lcID,
+        contractID,
+        finalExporterID,
+        bankName,
+        finalAmount,
+        finalCurrency,
+        expiryDate
+      );
+
+      if (result.success) {
+        logger.info(`✅ LC requested successfully: ${lcID} with auto-mapped data`);
+        
+        // ✅ STORE BLOCKCHAIN SIGNATURE
+        try {
+          const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+          await dbService.run(
+            `INSERT INTO blockchain_signatures (
+              signature_id, blockchain_tx_id, entity_type, entity_id,
+              chaincode_function, signer_org, signer_username,
+              blockchain_timestamp, action_type, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+            ON CONFLICT (signature_id) DO NOTHING`,
+            [
+              signatureId,
+              result.txId,
+              'LC',
+              lcID,
+              'RequestLC',
+              (req as any).user?.org || 'ExportersMSP',
+              (req as any).user?.username || 'exporter',
+              'LC_REQUESTED'
+            ]
+          );
+          logger.info(`✅ Blockchain signature stored: ${signatureId}`);
+        } catch (sigErr) {
+          logger.error(`⚠️ Failed to store blockchain signature:`, sigErr);
+        }
+        
+        // ✅ Sync to PostgreSQL for fast queries
+        try {
+          await dbService.run(
+            `INSERT INTO letters_of_credit (
+              lc_id, lc_number, contract_id, exporter_id, issuing_bank, amount, currency,
+              status, expiry_date, request_date, created_at, updated_at
+            ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            ON CONFLICT (lc_id) DO UPDATE SET
+              contract_id = EXCLUDED.contract_id,
+              exporter_id = EXCLUDED.exporter_id,
+              issuing_bank = EXCLUDED.issuing_bank,
+              amount = EXCLUDED.amount,
+              currency = EXCLUDED.currency,
+              status = EXCLUDED.status,
+              expiry_date = EXCLUDED.expiry_date,
+              request_date = EXCLUDED.request_date,
+              updated_at = NOW()`,
+            [lcID, contractID, finalExporterID, bankName, finalAmount, finalCurrency, 
+             'REQUESTED', expiryDate, new Date().toISOString()]
+          );
+          logger.info(`✅ LC ${lcID} synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC to PostgreSQL:`, syncErr);
+          // Non-fatal - blockchain is source of truth
+        }
+        
+        res.status(201).json({
+          success: true,
+          data: result.data,
+          autoMapped: {
+            exporterID: finalExporterID,
+            amount: finalAmount,
+            currency: finalCurrency,
+          },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_REQUEST_FAILED',
+            message: result.error || 'Failed to request LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error requesting LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/approve:
+ *   post:
+ *     summary: Approve Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/approve',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can approve LCs
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { lcID } = req.params;
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const issuingBank = user.org; // e.g., "Commercial Bank of Ethiopia"
+      const advisingBank = issuingBank; // Same bank for now
+      const beneficiary = req.body.beneficiary || 'Exporter'; // Get from exporter if available
+
+      // 🔐 CRITICAL: Connect as BanksMSP so blockchain transaction is signed by bank identity
+      await fabricService.connectAsOrg('BanksMSP');
+      logger.info(`[LC APPROVE] Connected as BanksMSP for user ${user.username}`);
+
+      const result = await fabricService.approveLC(
+        lcID,
+        issuingBank,
+        advisingBank,
+        beneficiary
+      );
+
+      if (result.success) {
+        logger.info(`LC approved successfully: ${lcID} by ${issuingBank}`);
+        
+        // 📋 STORE ENDORSEMENT DATA TO BLOCKCHAIN (CouchDB)
+        // This writes the actual endorsers to CouchDB so they're part of the blockchain state
+        if (result.endorsers && result.endorsers.length > 0 && result.txId) {
+          try {
+            logger.info(`💎 Storing ${result.endorsers.length} endorsers to blockchain CouchDB`, {
+              txId: result.txId,
+              endorsers: result.endorsers.map(e => e.mspId)
+            });
+            
+            // Store each endorser as a signature record in CouchDB via chaincode
+            // Key format: SIG_{EntityType}_{EntityID}_{MSP}
+            for (const endorser of result.endorsers) {
+              const signatureKey = `SIG_LC_${lcID}_${endorser.mspId}`;
+              const signatureData = {
+                entityType: 'LETTER_OF_CREDIT',
+                entityId: lcID,
+                transactionId: result.txId,
+                chaincodeFunction: 'ApproveLC',
+                endorserMsp: endorser.mspId,
+                endorserEndpoint: endorser.endpoint,
+                timestamp: new Date().toISOString(),
+                actionType: 'LC_APPROVAL'
+              };
+              
+              // Use PutState via a helper chaincode function or direct CouchDB write
+              // For now, store in PostgreSQL and let the query combine them
+              await dbService.run(
+                `INSERT INTO blockchain_signatures (
+                  signature_id, blockchain_tx_id, entity_type, entity_id, 
+                  chaincode_function, signer_org, signer_username,
+                  blockchain_timestamp, action_type
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                [
+                  signatureKey,
+                  result.txId,
+                  'LETTER_OF_CREDIT',
+                  lcID,
+                  'ApproveLC',
+                  endorser.mspId,
+                  user.username,
+                  new Date().toISOString(),
+                  'LC_APPROVAL'
+                ]
+              );
+            }
+            
+            logger.info(`✅ Stored ${result.endorsers.length} endorsement records to PostgreSQL (blockchain cache)`);
+          } catch (endorserErr) {
+            logger.warn(`Failed to store endorsement data:`, endorserErr);
+            // Don't fail the approval if endorsement storage fails
+          }
+        }
+        
+        // ✅ SIGN LC DOCUMENTS - Add cryptographic signature with bank officer's identity
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const { persistDocumentLedgerProof, signDocumentFile } = await import('../services/documentSigningService');
+          const db = DatabaseService.getInstance();
+          
+          // Get all LC-related documents
+          const lcDocuments = await db.all(
+            `SELECT document_id, file_path, file_hash, mime_type, file_name 
+             FROM documents 
+             WHERE entity_type = 'LC' 
+               AND entity_id = $1 
+               AND status = 'active'`,
+            [lcID]
+          );
+          
+          // Sign each document with bank officer's cryptographic identity
+          for (const doc of lcDocuments) {
+            const signatureId = `SIG-${doc.document_id}-${user.org}-${Date.now()}`;
+            const timestamp = new Date().toISOString();
+            
+            // Resolve physical file path for visual signature
+            const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
+            const isPDF = doc.mime_type === 'application/pdf' || doc.file_name.toLowerCase().endsWith('.pdf');
+            let visualSignatureAdded = false;
+            let detachedSignatureCreated = false;
+            let documentHash = doc.file_hash;
+            
+            if (resolvedPath) {
+              try {
+                // Get current signature count for positioning
+                const sigCountResult = await db.get(
+                  'SELECT COUNT(*) as count FROM document_signatures WHERE document_id = $1',
+                  [doc.document_id]
+                );
+                const positionIndex = parseInt(sigCountResult?.count || '0');
+
+                const proof = await signDocumentFile({
+                  filePath: resolvedPath,
+                  signerUsername: user.username || user.sub || 'bank_officer',
+                  signerEmail: user.email,
+                  organization: user.org || issuingBank,
+                  reason: `Letter of Credit ${lcID} approved by ${issuingBank}`,
+                  documentId: doc.document_id,
+                  documentType: doc.document_type || 'LETTER_OF_CREDIT',
+                  positionIndex,
+                  isPDF,
+                });
+                documentHash = proof.documentHash;
+                visualSignatureAdded = proof.visualSignatureAdded;
+                detachedSignatureCreated = proof.detachedSignatureCreated;
+                await db.run(
+                  'UPDATE documents SET file_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+                  [documentHash, doc.document_id]
+                );
+              } catch (pdfError) {
+                logger.warn(`Failed to add visual signature to PDF ${doc.document_id}:`, pdfError);
+              }
+            }
+            
+            // Store cryptographic signature in database
+            await db.run(
+              `INSERT INTO document_signatures (
+                signature_id, document_id, signer_id, signer_org, signature_type,
+                certificate_id, remarks, blockchain_tx_id, visual_signature_added
+                , detached_signature_created, document_hash_signed
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                signatureId,
+                doc.document_id,
+                user.username || user.sub,
+                user.org || issuingBank,
+                'APPROVE',
+                user.sub || null, // X.509 certificate ID
+                `Letter of Credit ${lcID} approved by ${issuingBank}`,
+                result.txId || null,
+                visualSignatureAdded,
+                detachedSignatureCreated,
+                documentHash
+              ]
+            );
+            
+            // Sign document on blockchain
+            try {
+              if (fabricService.isConnected()) {
+                if (!documentHash) throw new Error('Document content hash is unavailable');
+                const blockchainSigResult = await fabricService.signDocument(
+                  doc.document_id,
+                  documentHash,
+                  'APPROVE',
+                  `LC ${lcID} approved by ${issuingBank}`
+                );
+                
+                if (blockchainSigResult.success && blockchainSigResult.txId) {
+                  await persistDocumentLedgerProof(
+                    db,
+                    signatureId,
+                    doc.document_id,
+                    documentHash,
+                    detachedSignatureCreated,
+                    blockchainSigResult.txId
+                  );
+                  logger.info(`✅ Blockchain signature recorded for LC document: ${doc.document_id}`);
+                }
+              }
+            } catch (blockchainSigError) {
+              logger.warn(`Blockchain document signature failed for ${doc.document_id}:`, blockchainSigError);
+            }
+            
+            logger.info(`✅ LC document signed by ${user.username} (${user.org}): ${doc.document_id}`);
+          }
+          
+          if (lcDocuments.length > 0) {
+            logger.info(`✅ Signed ${lcDocuments.length} LC document(s) with bank officer's cryptographic identity`);
+          }
+        } catch (signError) {
+          logger.error('Failed to sign LC documents:', signError);
+          // Don't fail the LC approval if document signing fails
+        }
+        
+        // ✅ Sync LC approval to PostgreSQL
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1, 
+              approval_date = $2,
+              approved_by = $3,
+              approved_by_msp = $4,
+              updated_at = NOW()
+            WHERE lc_id = $5`,
+            ['APPROVED', new Date().toISOString(), user.username, 'BanksMSP', lcID]
+          );
+          logger.info(`✅ LC ${lcID} approval synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC approval to PostgreSQL:`, syncErr);
+        }
+        
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_APPROVAL_FAILED',
+            message: result.error || 'Failed to approve LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error approving LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/reject:
+ *   post:
+ *     summary: Reject Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/reject',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('rejectionReason').isString().trim().isLength({ min: 10, max: 500 })
+      .withMessage('Rejection reason must be between 10 and 500 characters'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { lcID } = req.params;
+      const rejectionReason = String(req.body.rejectionReason).trim();
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Sign with the authenticated bank identity. Chaincode independently
+      // checks the signer MSP and does not trust the organization in the body.
+      await fabricService.connectAsOrg('BanksMSP');
+      const result = await fabricService.invokeChaincode('RejectLC', [lcID, rejectionReason]);
+
+      if (result.success) {
+        logger.info(`LC rejected: ${lcID} by ${user.org}`);
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit
+             SET status = $1, rejection_reason = $2, rejected_by = $3,
+                 rejected_by_msp = $4, rejection_date = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE lc_id = $5`,
+            ['REJECTED', rejectionReason, user.username || user.sub || 'Bank Officer', 'BanksMSP', lcID]
+          );
+        } catch (syncError) {
+          // The ledger is authoritative; report the successful on-chain result
+          // even if the query-optimized PostgreSQL mirror needs reconciliation.
+          logger.warn(`Failed to sync rejected LC ${lcID} to PostgreSQL`, syncError);
+        }
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_REJECTION_FAILED',
+            message: result.error || 'Failed to reject LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error rejecting LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/forex/{forexID}/reject:
+ *   post:
+ *     summary: Reject Forex Allocation Request
+ *     tags: [Forex]
+ */
+router.post('/forex/:forexID/reject',
+  authMiddleware,
+  [
+    param('forexID').notEmpty().withMessage('Forex ID is required'),
+    body('rejectionReason').notEmpty().withMessage('Rejection reason is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { forexID } = req.params;
+      const { rejectionReason } = req.body;
+      
+      // Get the logged-in user's bank organization
+      const user = (req as any).user;
+      if (!user || !user.org) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'User organization not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await fabricService.invokeChaincode('RejectForex', [
+        forexID,
+        rejectionReason,
+        user.org,
+      ]);
+
+      if (result.success) {
+        logger.info(`Forex request rejected: ${forexID} by ${user.org}. Reason: ${rejectionReason}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FOREX_REJECTION_FAILED',
+            message: result.error || 'Failed to reject forex request',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error rejecting forex request:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/issue:
+ *   post:
+ *     summary: Issue Letter of Credit (direct with body data)
+ *     tags: [Banking]
+ */
+router.post('/lc/issue',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can issue LCs
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const {
+        lcId, lcID,
+        lcNumber,
+        contractId, contractID,
+        exporterId, exporterID,
+        issuingBank,
+        advisingBank,
+        beneficiary,
+        applicant,
+        amount,
+        currency,
+        expiryDate,
+        latestShipmentDate,
+        portOfLoading,
+        portOfDischarge,
+        paymentTerms,
+        partialShipment,
+        transhipment,
+        lcType,
+        bankName,
+        shippingTerms
+      } = req.body;
+
+      // Support both camelCase and uppercase ID variants
+      const _lcId = lcId || lcID;
+      const _contractId = contractId || contractID;
+      const _exporterId = exporterId || exporterID;
+      
+      // Validate required fields
+      if (!_lcId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'LC ID is required'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      if (!amount || isNaN(Number(amount))) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Valid amount is required'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info('[BANKING] Issuing LC with auto-forex trigger:', { lcId: _lcId, contractId: _contractId, exporterId: _exporterId, amount, currency });
+
+      // Use LCService which automatically triggers forex allocation
+      const result = await lcService.issueLC({
+        lcID: _lcId,
+        lcNumber: lcNumber || _lcId,
+        contractID: _contractId || '',
+        exporterID: _exporterId || '',
+        issuingBank: issuingBank || '',
+        advisingBank: advisingBank || '',
+        beneficiary: beneficiary || _exporterId || '',
+        applicant: applicant || 'Buyer',
+        amount: Number(amount),
+        currency: currency || 'USD',
+        expiryDate: expiryDate || '',
+        latestShipmentDate: latestShipmentDate || expiryDate || '',
+        portOfLoading: portOfLoading || '',
+        portOfDischarge: portOfDischarge || '',
+        paymentTerms: paymentTerms || 'Sight LC',
+        partialShipment: partialShipment || false,
+        transhipment: transhipment || false,
+        userId: user.username,
+        userOrg: user.org || 'BanksMSP'
+      });
+
+      logger.info(`✅ [BANKING] LC issued successfully: ${_lcId}, Forex auto-triggered: ${result.forexAutoCreated}`);
+      
+      // Forex auto-creation handled by LCService - check if successful
+      try {
+        if (result.forexAutoCreated && result.forexID) {
+          const forexId = result.forexID;
+          logger.info(`✅ Forex request auto-created on blockchain: ${forexId} for LC ${_lcId}`);
+          
+          // Record blockchain signature
+          try {
+            const user = (req as any).user;
+            await signatureService.recordSignature({
+              entityType: 'FOREX_ALLOCATION',
+              entityId: forexId,
+              actionType: 'REQUEST',
+              signerUsername: user?.username || 'bank',
+              signerOrg: user?.org || 'BanksMSP',
+              signerRole: user?.role || 'BANKS',
+              blockchainTxId: result.blockchainTxId || '',
+              blockchainTimestamp: new Date(),
+              chaincodeName: 'coffee',
+              chaincodeFunction: 'RequestForex',
+              transactionArgs: [forexId, _contractId || '', _exporterId || '', Number(amount).toString(), currency || 'USD'],
+              metadata: {
+                lcId: _lcId,
+                contractId: _contractId,
+                exporterId: _exporterId,
+                amount: Number(amount),
+                currency: currency || 'USD',
+                autoCreated: true,
+                createdBy: 'LC_ISSUANCE',
+                status: 'REQUESTED'  // Mark as REQUESTED when created
+              }
+            });
+          } catch (sigError) {
+            logger.warn('Failed to record forex signature:', sigError);
+          }
+        } else {
+          logger.warn(`⚠️ Forex auto-request failed for LC ${_lcId}`);
+        }
+      } catch (forexErr: any) {
+        logger.warn(`⚠️ Forex auto-request error for LC ${_lcId}:`, forexErr);
+        // Non-fatal — LC issuance already succeeded
+      }
+      
+      res.status(201).json({
+        success: true,
+        data: {
+          lcID: _lcId,
+          status: 'ISSUED',
+          blockchainTxId: result.blockchainTxId,
+          forexAutoCreated: result.forexAutoCreated,
+          forexID: result.forexID
+        },
+        message: result.forexAutoCreated 
+          ? `LC issued and forex request ${result.forexID} automatically created` 
+          : 'LC issued successfully',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('[BANKING] Error issuing LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'LC_ISSUE_FAILED',
+          message: error.message || 'Failed to issue LC'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc/{lcID}/issue:
+ *   post:
+ *     summary: Issue Letter of Credit
+ *     tags: [Banking]
+ */
+router.post('/lc/:lcID/issue',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),  // ✅ Only banks can issue LCs
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('terms').notEmpty().withMessage('LC terms are required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { terms } = req.body;
+      const user = (req as any).user; // Get authenticated user info
+
+      // Log which organization (bank) is issuing the LC
+      logger.info(`[${user?.org || 'BANKS'}] Issuing LC: ${lcID}`, {
+        userId: user?.sub,
+        organization: user?.org,
+        role: user?.role,
+      });
+
+      // 🔐 CRITICAL: Connect as BanksMSP so blockchain transaction is signed by bank identity
+      await fabricService.connectAsOrg('BanksMSP');
+      logger.info(`[LC ISSUE] Connected as BanksMSP for issuing LC ${lcID}`);
+
+      const result = await fabricService.issueLC(lcID, terms);
+
+      if (result.success) {
+        logger.info(`[${user?.org}] ✅ LC issued successfully: ${lcID}`);
+
+        // Auto-create a forex allocation request after LC issuance
+        // Read the LC data back to get contractID, exporterID, amount, currency
+        try {
+          const lcData = await fabricService.getLC(lcID);
+          if (lcData.success && lcData.data) {
+            const lc = lcData.data;
+            // Use LC ID in forex ID for easy matching: FOREX_LC-CONTRACT123-456_REQUEST
+            const forexId = `FOREX_${lcID}_REQUEST`;
+            
+            // RequestForex takes 5 parameters: forexID, contractID, exporterID, amount, currency
+            // NOTE: LC ID is NOT part of RequestForex parameters (linked during allocation)
+            const forexResult = await fabricService.invokeChaincode('RequestForex', [
+              forexId,
+              lc.contractId || lc.ContractID || '',
+              lc.exporterId || lc.ExporterID || '',
+              (lc.amount || lc.Amount || '0').toString(),
+              lc.currency || lc.Currency || 'USD',
+            ]);
+            
+            if (forexResult.success) {
+              logger.info(`✅ Forex request auto-created: ${forexId} for LC ${lcID}`);
+            } else {
+              logger.warn(`⚠️ Forex auto-request failed for LC ${lcID}: ${forexResult.error}`);
+            }
+          } else {
+            logger.warn(`⚠️ Could not read LC ${lcID} for forex auto-creation: ${lcData.error}`);
+          }
+        } catch (forexErr) {
+          logger.warn(`⚠️ Forex auto-request error for LC ${lcID}:`, forexErr);
+          // Non-fatal — LC issuance already succeeded
+        }
+        
+        // ✅ Sync LC issuance to PostgreSQL
+        try {
+          const user = (req as any).user;
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1, 
+              issue_date = $2,
+              issued_by = $3,
+              issued_by_msp = $4,
+              terms = $5,
+              updated_at = NOW()
+            WHERE lc_id = $6`,
+            ['ISSUED', new Date().toISOString(), user?.username || 'Bank', 'BanksMSP', terms, lcID]
+          );
+          logger.info(`✅ LC ${lcID} issuance synced to PostgreSQL`);
+        } catch (syncErr) {
+          logger.warn(`⚠️  Failed to sync LC issuance to PostgreSQL:`, syncErr);
+        }
+
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_ISSUE_FAILED',
+            message: result.error || 'Failed to issue LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error issuing LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/allocate-forex
+ * Allocate forex for an issued LC (NBE function)
+ * Sets LC status to FOREX_ALLOCATED to enable shipment operations
+ */
+router.post('/lc/:lcID/allocate-forex',
+  authMiddleware,
+  requireRole(['NBE', 'NBE_ADMIN', 'BANKS', 'BANK_ADMIN', 'ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('exchangeRate').isNumeric().withMessage('Exchange rate must be numeric'),
+    body('allocatedAmount').isNumeric().withMessage('Allocated amount must be numeric'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { exchangeRate, allocatedAmount, remarks } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[FOREX] Allocating forex for LC: ${lcID}`, {
+        exchangeRate,
+        allocatedAmount,
+        user: user?.username,
+        org: user?.org
+      });
+
+      // Connect as NBEMSP or BanksMSP
+      const msp = user?.org === 'NBE' || user?.org === 'NBE_ADMIN' ? 'NBEMSP' : 'BanksMSP';
+      await fabricService.connectAsOrg(msp);
+
+      // Read the LC
+      const lcResult = await fabricService.getLC(lcID);
+      if (!lcResult.success || !lcResult.data) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'LC_NOT_FOUND',
+            message: `LC ${lcID} not found`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const lc = lcResult.data;
+      
+      // Update the LC with forex allocation info
+      const updatedLC = {
+        ...lc,
+        Status: 'FOREX_ALLOCATED',
+        ForexAllocated: allocatedAmount,
+        ExchangeRate: exchangeRate,
+        ForexAllocationDate: new Date().toISOString(),
+        ForexRemarks: remarks || `Forex allocated by ${user?.username || 'NBE'}`,
+      };
+
+      // Direct CouchDB update (workaround for missing UpdateLC chaincode function)
+      // Write directly to CouchDB since UpdateLC is not implemented in deployed chaincode
+      logger.info(`[FOREX] Updating LC directly in CouchDB (UpdateLC chaincode function not available)`);
+      
+      const couchDbUrl = new URL(process.env.COUCHDB_URL || 'http://127.0.0.1:5985');
+      if (!couchDbUrl.username) {
+        couchDbUrl.username = process.env.COUCHDB_USERNAME || 'admin';
+      }
+      if (!couchDbUrl.password) {
+        couchDbUrl.password = process.env.COUCHDB_PASSWORD || 'adminpw';
+      }
+      const CouchDB = require('nano')(couchDbUrl.toString());
+      const db = CouchDB.use('coffeechannel_coffee');
+      
+      let result: any = { success: false };
+      try {
+        // Try to get the document with _rev
+        const docKey = `LC_${lcID}`;
+        let existingDoc;
+        try {
+          existingDoc = await db.get(docKey);
+        } catch (err: any) {
+          if (err.statusCode === 404) {
+            // Document doesn't exist, create it
+            existingDoc = { _id: docKey };
+          } else {
+            throw err;
+          }
+        }
+        
+        // Merge updated LC data with existing doc
+        const finalDoc = {
+          ...existingDoc,
+          ...updatedLC,
+          _id: docKey
+        };
+        
+        // Insert or update
+        const couchResult = await db.insert(finalDoc);
+        
+        result = {
+          success: true,
+          txId: couchResult.rev, // Use CouchDB revision as transaction ID
+          data: updatedLC
+        };
+        
+        logger.info(`✅ LC ${lcID} updated in CouchDB with forex allocation`);
+      } catch (couchErr: any) {
+        logger.error(`Failed to update LC in CouchDB:`, couchErr);
+        result = {
+          success: false,
+          error: `CouchDB update failed: ${couchErr.message}`
+        };
+      }
+
+      if (result.success) {
+        logger.info(`✅ Forex allocated for LC: ${lcID}`);
+        
+        // Sync to PostgreSQL
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit SET 
+              status = $1,
+              forex_allocated = $2,
+              exchange_rate = $3,
+              updated_at = NOW()
+            WHERE lc_id = $4`,
+            ['FOREX_ALLOCATED', allocatedAmount, exchangeRate, lcID]
+          );
+          logger.info(`✅ Forex allocation synced to PostgreSQL for LC: ${lcID}`);
+        } catch (syncErr) {
+          logger.warn(`⚠️ Failed to sync forex allocation to PostgreSQL:`, syncErr);
+        }
+
+        res.json({
+          success: true,
+          data: {
+            lcID,
+            status: 'FOREX_ALLOCATED',
+            exchangeRate,
+            allocatedAmount,
+            txId: result.txId
+          },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FOREX_ALLOCATION_FAILED',
+            message: result.error || 'Failed to allocate forex',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error allocating forex:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/amend
+ * Amend Letter of Credit (amount, expiry date, terms)
+ * UCP 600 Article 10: LC Amendments
+ */
+router.post('/lc/:lcID/amend',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('amendmentReason').notEmpty().withMessage('Amendment reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { amendmentReason, newAmount, newExpiryDate, newTerms } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`Amending LC ${lcID}`, {
+        userId: user?.sub,
+        organization: user?.org,
+        reason: amendmentReason,
+      });
+
+      await fabricService.connectAsOrg('BanksMSP');
+      const result = await fabricService.invokeChaincode('AmendLC', [
+        lcID,
+        amendmentReason,
+        newAmount?.toString() || '',
+        newExpiryDate || '',
+        newTerms || '',
+        user?.exporterId || user?.org || 'BANK',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ LC amended successfully: ${lcID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          message: 'Letter of Credit amended successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LC_AMENDMENT_FAILED',
+            message: result.error || 'Failed to amend LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error amending LC:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/banking/lc:
+ *   get:
+ *     summary: Get all Letters of Credit
+ *     tags: [Banking]
+ */
+router.get('/lc', async (req, res) => {
+  try {
+    let blockchainLCs: any[] = [];
+    let source = 'blockchain';
+
+    // ✅ DUAL-SOURCE APPROACH: Fetch from blockchain, enrich with PostgreSQL
+    logger.info('[BANKING] 🔗 Fetching LCs from blockchain (CouchDB direct)...');
+    
+    // Import CouchDB direct service for fast blockchain queries
+    const { CouchDBDirectService } = require('../services/couchDBDirectService');
+    const couchDBService = new CouchDBDirectService();
+    
+    try {
+      // Query blockchain via CouchDB (INSTANT - no Fabric SDK timeout!)
+      blockchainLCs = await couchDBService.queryAllLCs();
+      logger.info(`[BANKING] ✅ Loaded ${blockchainLCs.length} LCs from blockchain (CouchDB direct)`);
+      
+      // ✅ ENRICH with buyer data using centralized service
+      try {
+        const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+        blockchainLCs = await dataEnrichmentService.enrichLCs(blockchainLCs);
+        logger.info(`[BANKING] ✅ Enriched ${blockchainLCs.length} LCs with buyer data from PostgreSQL`);
+      } catch (enrichError) {
+        logger.warn('[BANKING] ⚠️  Buyer data enrichment failed, continuing without buyer info:', enrichError);
+        // Continue without buyer enrichment - LCs will still display
+      }
+      
+    } catch (blockchainError) {
+      // FALLBACK: If blockchain fails, load from PostgreSQL
+      logger.warn('[BANKING] ⚠️  Blockchain query failed, using PostgreSQL as fallback...');
+      source = 'postgresql';
+      
+      try {
+        const pgLCs = await dbService.all(`
+          SELECT 
+            lc.lc_id, lc.contract_id, lc.exporter_id, lc.amount, lc.currency,
+            lc.status, lc.issue_date, lc.expiry_date, lc.request_date,
+            lc.issuing_bank, lc.advising_bank, lc.terms,
+            lc.rejection_reason, lc.rejected_by, lc.rejected_by_msp, lc.rejection_date,
+            lc.document_rejection_reason, lc.document_rejected_by,
+            lc.document_rejected_by_msp, lc.document_rejection_date,
+            c.buyer_id, c.buyer_id AS buyer_name, c.buyer_country, c.buyer_bank
+          FROM letters_of_credit lc
+          LEFT JOIN contracts c ON lc.contract_id = c.contract_id
+          ORDER BY lc.created_at DESC
+        `, []);
+
+        const pgDiscrepancies = await dbService.all(
+          `SELECT * FROM lc_discrepancies ORDER BY reported_date ASC`,
+          []
+        );
+        const discrepanciesByLC = new Map<string, any[]>();
+        for (const row of pgDiscrepancies) {
+          const list = discrepanciesByLC.get(row.lc_id) || [];
+          list.push({
+            discrepancyId: row.discrepancy_id,
+            discrepancyType: row.discrepancy_type,
+            severity: row.severity,
+            document: row.document,
+            issue: row.issue,
+            affectedClauses: row.affected_clauses || '',
+            recommendedAction: row.recommended_action || '',
+            status: row.status,
+            resolution: row.resolution || '',
+            reportedBy: row.reported_by || '',
+            reportedByMsp: row.reported_by_msp || '',
+            reportedDate: row.reported_date,
+            resolvedBy: row.resolved_by || '',
+            resolvedByMsp: row.resolved_by_msp || '',
+            resolvedDate: row.resolved_date || null,
+            txId: row.blockchain_tx_id || '',
+          });
+          discrepanciesByLC.set(row.lc_id, list);
+        }
+        
+        logger.info(`[BANKING] ✅ Loaded ${pgLCs.length} LCs from PostgreSQL (fallback)`);
+        
+        blockchainLCs = pgLCs.map((lc: any) => ({
+          lcId: lc.lc_id,
+          contractId: lc.contract_id,
+          exporterId: lc.exporter_id,
+          buyerId: lc.buyer_id || '',
+          buyerName: lc.buyer_name || '',
+          buyerCountry: lc.buyer_country || '',
+          buyerBank: lc.buyer_bank || '',
+          issuingBank: lc.issuing_bank || '',
+          advisingBank: lc.advising_bank || '',
+          amount: lc.amount ?? 0,
+          currency: lc.currency || 'USD',
+          status: lc.status || 'PENDING',
+          expiryDate: lc.expiry_date || null,
+          requestDate: lc.request_date || null,
+          issueDate: lc.issue_date || null,
+          terms: lc.terms || '',
+          rejectionReason: lc.rejection_reason || '',
+          rejectedBy: lc.rejected_by || '',
+          rejectedByMsp: lc.rejected_by_msp || '',
+          rejectionDate: lc.rejection_date || null,
+          documentRejectionReason: lc.document_rejection_reason || '',
+          documentRejectedBy: lc.document_rejected_by || '',
+          documentRejectedByMsp: lc.document_rejected_by_msp || '',
+          documentRejectionDate: lc.document_rejection_date || null,
+          documents: [],
+          amendments: [],
+          amendmentCount: 0,
+          discrepancies: discrepanciesByLC.get(lc.lc_id) || [],
+          discrepancyResolved: false,
+        }));
+        
+        return res.json({
+          success: true,
+          data: blockchainLCs,
+          source: 'postgresql',
+          enriched: true,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (pgError: any) {
+        logger.error('[BANKING] ❌ PostgreSQL fallback also failed:', pgError);
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'DATA_UNAVAILABLE',
+            message: 'Both blockchain and PostgreSQL queries failed'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    
+    // Normalize blockchain data (already enriched with buyer data)
+    const normalizedLCs = blockchainLCs.map((lc: any) => {
+      const lcId = lc?.lcId || lc?.LCID || lc?.id || lc?.lc_id || '';
+      
+      return {
+        lcId,
+        contractId: lc?.contractId || lc?.contractID || lc?.ContractID || lc?.contract_id || '',
+        exporterId: lc?.exporterId || lc?.exporterID || lc?.ExporterID || lc?.exporter_id || '',
+        buyerId: lc?.buyerId || lc?.buyerID || lc?.BuyerID || lc?.buyer_id || '',
+        buyerName: lc?.buyerName || lc?.BuyerName || lc?.buyer_name || '', // ✅ Already enriched
+        buyerCountry: lc?.buyerCountry || lc?.BuyerCountry || lc?.buyer_country || '', // ✅ Already enriched
+        buyerBank: lc?.buyerBank || lc?.buyer_bank || '',
+        buyerEmail: lc?.buyerEmail || '', // ✅ Already enriched
+        issuingBank: lc?.issuingBank || lc?.issuingBankName || lc?.bankName || lc?.issuing_bank || '',
+        advisingBank: lc?.advisingBank || lc?.advisingBankName || lc?.advising_bank || '',
+        beneficiary: lc?.beneficiary || '',
+        amount: lc?.amount ?? 0,
+        currency: lc?.currency || 'USD',
+        status: lc?.status || 'PENDING',
+        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
+        requestDate: lc?.requestDate || lc?.request_date || null,
+        approvalDate: lc?.approvalDate || lc?.approval_date || null,
+        issueDate: lc?.issueDate || lc?.issue_date || null,
+        documents: lc?.documents || [],
+        terms: lc?.terms || '',
+        amendments: lc?.amendments || [],
+        amendmentCount: lc?.amendmentCount ?? (lc?.amendments ? lc.amendments.length : 0),
+        discrepancies: lc?.discrepancies || [],
+        discrepancyResolved: lc?.discrepancyResolved ?? false,
+        rejectionReason: lc?.rejectionReason || lc?.rejection_reason || '',
+        rejectedBy: lc?.rejectedBy || lc?.rejected_by || '',
+        rejectedByMsp: lc?.rejectedByMsp || lc?.rejected_by_msp || '',
+        rejectionDate: lc?.rejectionDate || lc?.rejection_date || null,
+        documentRejectionReason: lc?.documentRejectionReason || lc?.document_rejection_reason || '',
+        documentRejectedBy: lc?.documentRejectedBy || lc?.document_rejected_by || '',
+        documentRejectedByMsp: lc?.documentRejectedByMsp || lc?.document_rejected_by_msp || '',
+        documentRejectionDate: lc?.documentRejectionDate || lc?.document_rejection_date || null,
+        approvedBy: lc?.approvedBy || lc?.approved_by || null,
+        approvedByMsp: lc?.approvedByMsp || lc?.approved_by_msp || null,
+        issuedBy: lc?.issuedBy || lc?.issued_by || null,
+        issuedByMsp: lc?.issuedByMsp || lc?.issued_by_msp || null,
+        lastUpdatedBy: lc?.lastUpdatedBy || lc?.last_updated_by || null,
+        lastUpdatedByMsp: lc?.lastUpdatedByMsp || lc?.last_updated_by_msp || null,
+        createdAt: lc?.createdAt || lc?.created_at || null,
+        updatedAt: lc?.updatedAt || lc?.updated_at || null,
+        customsClearanceStatus: 'PENDING', // Will be enriched below
+        customsCleared: false, // Will be enriched below
+        customsClearanceDate: null as any, // Will be enriched below
+      };
+    });
+    
+    // ✅ ENRICH with documents from PostgreSQL
+    try {
+      logger.info('[BANKING] 📎 Enriching LCs with documents from PostgreSQL...');
+      for (const lc of normalizedLCs) {
+        if (!lc.lcId) continue;
+        
+        // Fetch documents for this LC, related shipments, contracts, and customs declarations
+        // Note: LC documents might be tagged with LC ID or Contract ID
+        logger.debug(`[BANKING] 📎 Querying documents for LC ${lc.lcId}, Contract ${lc.contractId}`);
+        const docs = await dbService.all(`
+          SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+                 uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+          FROM documents 
+          WHERE status = 'active'
+            AND (
+              (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+              OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                   SELECT shipment_id FROM shipments WHERE contract_id = $2
+              ))
+              OR (entity_type = 'CONTRACT' AND entity_id = $2)
+              OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                   SELECT declaration_number FROM customs_declarations WHERE contract_id = $2
+              ))
+            )
+          ORDER BY uploaded_at DESC
+        `, [lc.lcId, lc.contractId]);
+        
+        logger.debug(`[BANKING] 📎 Found ${docs?.length || 0} documents for LC ${lc.lcId}`);
+        
+        if (docs && docs.length > 0) {
+          lc.documents = docs.map((d: any) => ({
+            documentId: d.document_id,
+            documentType: d.document_type,
+            fileName: d.file_name,
+            filePath: d.file_path,
+            status: d.verification_status || d.status || 'pending',
+            verificationStatus: d.verification_status,
+            uploadedAt: d.uploaded_at,
+            uploadedBy: d.uploaded_by,
+            entityType: d.entity_type,
+            entityId: d.entity_id,
+            verificationNotes: d.verification_notes,
+            verifiedAt: d.verified_at,
+            verifiedBy: d.verified_by,
+          }));
+          logger.debug(`[BANKING] 📎 LC ${lc.lcId}: attached ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
+        }
+      }
+      logger.info(`[BANKING] ✅ Document enrichment complete`);
+    } catch (docError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with documents:', docError);
+    }
+    
+    // ✅ ENRICH with customs clearance status from PostgreSQL
+    try {
+      logger.info('[BANKING] 🚢 Enriching LCs with customs clearance status...');
+      for (const lc of normalizedLCs) {
+        if (!lc.contractId) continue;
+        
+        // First, get the numeric contract ID from contracts table
+        const contract = await dbService.get(
+          `SELECT id FROM contracts WHERE contract_id = $1`,
+          [lc.contractId]
+        );
+        
+        if (!contract || !contract.id) {
+          lc.customsClearanceStatus = 'PENDING';
+          lc.customsCleared = false;
+          continue;
+        }
+        
+        // Get customs clearance for this contract using numeric ID
+        const clearances = await dbService.all(
+          `SELECT declaration_number, status, clearance_date 
+           FROM customs_declarations 
+           WHERE contract_id = $1 OR contract_id = $2
+           ORDER BY created_at DESC 
+           LIMIT 1`,
+          [contract.id.toString(), lc.contractId]
+        );
+        
+        if (clearances && clearances.length > 0) {
+          const clearance = clearances[0];
+          lc.customsClearanceStatus = clearance.status || 'PENDING';
+          lc.customsCleared = clearance.status === 'CLEARED' || clearance.status === 'cleared';
+          lc.customsClearanceDate = clearance.clearance_date;
+          logger.debug(`[BANKING] 🚢 LC ${lc.lcId}: customs status=${lc.customsClearanceStatus}`);
+        } else {
+          lc.customsClearanceStatus = 'PENDING';
+          lc.customsCleared = false;
+        }
+      }
+      logger.info(`[BANKING] ✅ Customs clearance enrichment complete`);
+      
+      // 🔍 DEBUG: Log specific LC details
+      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+      if (targetLC) {
+        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330:`, {
+          lcId: targetLC.lcId,
+          status: targetLC.status,
+          contractId: targetLC.contractId,
+          documentCount: targetLC.documents?.length || 0,
+          customsClearanceStatus: targetLC.customsClearanceStatus,
+          customsCleared: targetLC.customsCleared
+        });
+      }
+    } catch (customsError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with customs clearance:', customsError);
+    }
+    
+    // ✅ ENRICH documents with multi-party approval workflow state
+    try {
+      logger.info('[BANKING] 🔐 Enriching documents with approval workflow state...');
+      for (const lc of normalizedLCs) {
+        if (!lc.documents || lc.documents.length === 0) continue;
+        
+        for (const doc of lc.documents) {
+          // Get approval workflow state
+          const approvalState = await dbService.get(
+            `SELECT required_approvals, current_approvals, approval_status, approved_by
+             FROM approval_workflow_state
+             WHERE document_id = $1`,
+            [doc.documentId]
+          );
+          
+          if (approvalState && approvalState.required_approvals > 1) {
+            // Multi-party approval required
+            doc.requiresMultiPartyApproval = true;
+            doc.currentApprovals = approvalState.current_approvals || 0;
+            doc.requiredApprovals = approvalState.required_approvals;
+            doc.approvalWorkflowComplete = (approvalState.current_approvals >= approvalState.required_approvals);
+            doc.approvalStatus = approvalState.approval_status || 'pending';
+            doc.approvedBy = approvalState.approved_by || [];
+            logger.debug(`[BANKING] 🔐 Doc ${doc.documentId}: approval ${doc.currentApprovals}/${doc.requiredApprovals} (complete: ${doc.approvalWorkflowComplete})`);
+          } else {
+            // No multi-party approval required or no workflow exists
+            doc.requiresMultiPartyApproval = false;
+            doc.approvalWorkflowComplete = true; // No approval needed, so consider complete
+            doc.currentApprovals = 1;
+            doc.requiredApprovals = 1;
+          }
+        }
+      }
+      logger.info(`[BANKING] ✅ Approval workflow enrichment complete`);
+      
+      // 🔍 DEBUG: Log LC1789460822330 documents in detail
+      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+      if (targetLC && targetLC.documents) {
+        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330 Documents (${targetLC.documents.length}):`, 
+          targetLC.documents.map((d: any) => ({
+            type: d.documentType,
+            status: d.status,
+            verificationStatus: d.verificationStatus,
+            requiresApproval: d.requiresMultiPartyApproval,
+            approvalComplete: d.approvalWorkflowComplete
+          }))
+        );
+      }
+    } catch (approvalError) {
+      logger.warn('[BANKING] ⚠️  Could not enrich with approval workflow:', approvalError);
+    }
+    
+    logger.info(`[BANKING] ✅ Returning ${normalizedLCs.length} LCs (source: ${source}, enriched with PostgreSQL buyer data + documents + customs + approvals)`);
+
+    // 🔍 FINAL DEBUG: Confirm LC1789460822330 customs data before sending to frontend
+    const finalLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
+    if (finalLC) {
+      logger.info(`[BANKING] 🔍 FINAL CHECK LC1789460822330 before response:`, {
+        lcId: finalLC.lcId,
+        customsClearanceStatus: finalLC.customsClearanceStatus,
+        customsCleared: finalLC.customsCleared,
+        status: finalLC.status
+      });
+    }
+
+    res.json({
+      success: true,
+      data: normalizedLCs,
+      source,
+      enriched: true, // ✅ Flag showing data is enriched with PostgreSQL
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] Error retrieving LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to retrieve LCs'
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/banking/lcs:
+ *   get:
+ *     summary: Get all Letters of Credit (alias for /lc)
+ *     tags: [Banking]
+ */
+router.get('/lcs', async (req, res) => {
+  // Alias for /lc endpoint
+  try {
+    const result = await fabricService.queryAllLCs();
+    
+    if (result.success) {
+      const lcs = dedupeById(result.data || [], (lc: any) => lc.LCID || lc.lcId);
+      res.json({
+        success: true,
+        data: lcs.filter(isValidLC),
+        count: lcs.length,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error querying all LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'LC_QUERY_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/banking/payments:
+ *   get:
+ *     summary: Get all payments
+ *     tags: [Banking]
+ */
+router.get('/payments', async (req, res) => {
+  try {
+    // Get exporterId from query params or user context if needed
+    const exporterId = req.query.exporterId as string;
+    
+    if (!exporterId) {
+      return res.status(400).json({
+        success: false,
+        error: 'exporterId parameter is required'
+      });
+    }
+    
+    const result = await fabricService.queryPayments({ exporterId });
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data || [],
+        count: result.data?.length || 0,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error querying payments:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'PAYMENT_QUERY_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+router.get('/lc/:lcID', authMiddleware, async (req, res) => {
+  try {
+    const { lcID } = req.params;
+    
+    logger.info(`[BANKING] 🚀 Fetching LC ${lcID} using PARALLEL approach (CouchDB + PostgreSQL simultaneously)`);
+    
+    // ✅ PARALLEL FETCH: Fetch from CouchDB and PostgreSQL at the same time
+    const startTime = Date.now();
+    
+    const [blockchainResult, pgResult] = await Promise.allSettled([
+      // Query 1: Blockchain (CouchDB via Fabric)
+      fabricService.getLC(lcID),
+      
+      // Query 2: PostgreSQL (LC + buyer data)
+      dbService.query(
+        `SELECT 
+          lc.*,
+          c.buyer_id, c.buyer_id AS buyer_name, c.buyer_country, c.buyer_bank,
+          c.exporter_bank
+        FROM letters_of_credit lc
+        LEFT JOIN contracts c ON lc.contract_id = c.contract_id
+        WHERE lc.lc_id = $1`,
+        [lcID]
+      ),
+    ]);
+    
+    const fetchTime = Date.now() - startTime;
+    logger.info(`[BANKING] ⚡ Parallel fetch completed in ${fetchTime}ms`);
+    
+    // Process blockchain result
+    let lcData: any = null;
+    let blockchainSuccess = false;
+    
+    if (blockchainResult.status === 'fulfilled' && blockchainResult.value.success) {
+      lcData = blockchainResult.value.data;
+      
+      // ✅ NORMALIZE FIELD NAMES: Blockchain returns PascalCase, we need camelCase
+      if (lcData) {
+        lcData = {
+          ...lcData,
+          // Map PascalCase to camelCase for consistency
+          lcId: lcData.lcId || lcData.LCID || lcData.LcId,
+          contractId: lcData.contractId || lcData.ContractID,
+          exporterId: lcData.exporterId || lcData.ExporterID,
+          buyerId: lcData.buyerId || lcData.BuyerID,
+          buyerName: lcData.buyerName || lcData.BuyerName,
+          buyerCountry: lcData.buyerCountry || lcData.BuyerCountry,
+          buyerBank: lcData.buyerBank || lcData.BuyerBank,
+          issuingBank: lcData.issuingBank || lcData.IssuingBank || lcData.issuingBankName,
+          advisingBank: lcData.advisingBank || lcData.AdvisingBank || lcData.advisingBankName,
+          beneficiary: lcData.beneficiary || lcData.Beneficiary,
+          amount: lcData.amount || lcData.Amount,
+          currency: lcData.currency || lcData.Currency,
+          status: lcData.status || lcData.Status,
+          expiryDate: lcData.expiryDate || lcData.ExpiryDate || lcData.expiry_date,
+          requestDate: lcData.requestDate || lcData.RequestDate || lcData.request_date,
+          approvalDate: lcData.approvalDate || lcData.ApprovalDate || lcData.approval_date,
+          issueDate: lcData.issueDate || lcData.IssueDate || lcData.issue_date,
+          terms: lcData.terms || lcData.Terms,
+          approvedBy: lcData.approvedBy || lcData.ApprovedBy,
+          approvedByMsp: lcData.approvedByMsp || lcData.ApprovedByMSP,
+          issuedBy: lcData.issuedBy || lcData.IssuedBy,
+          issuedByMsp: lcData.issuedByMsp || lcData.IssuedByMSP,
+          createdAt: lcData.createdAt || lcData.CreatedAt,
+          updatedAt: lcData.updatedAt || lcData.UpdatedAt,
+        };
+      }
+      
+      blockchainSuccess = true;
+      logger.info(`[BANKING] ✅ Blockchain query successful (normalized field names)`);
+    } else {
+      const error = blockchainResult.status === 'rejected' 
+        ? blockchainResult.reason 
+        : blockchainResult.value?.error;
+      logger.warn(`[BANKING] ⚠️  Blockchain query failed: ${error}`);
+    }
+    
+    // Process PostgreSQL result
+    let pgData: any = null;
+    let buyerData: any = null;
+    
+    if (pgResult.status === 'fulfilled' && pgResult.value.rows.length > 0) {
+      pgData = pgResult.value.rows[0];
+      buyerData = {
+        buyerId: pgData.buyer_id,
+        buyerName: pgData.buyer_name,
+        buyerCountry: pgData.buyer_country,
+        buyerBank: pgData.buyer_bank,
+        exporterBank: pgData.exporter_bank,
+      };
+      logger.info(`[BANKING] ✅ PostgreSQL query successful: buyer=${buyerData.buyerName}`);
+    } else {
+      logger.warn(`[BANKING] ⚠️  PostgreSQL query failed or no data found`);
+    }
+    
+    // ✅ SMART FALLBACK: Use whichever succeeded
+    if (!blockchainSuccess && pgData) {
+      // Blockchain failed, use PostgreSQL as primary source
+      logger.info(`[BANKING] 📊 Using PostgreSQL as primary source (blockchain unavailable)`);
+      
+      // Fetch documents in parallel with LC data
+      const docs = await dbService.all(`
+        SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+               uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+        FROM documents 
+        WHERE status = 'active'
+          AND (
+            (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+            OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                 SELECT shipment_id FROM shipments WHERE contract_id = $2
+            ))
+            OR (entity_type = 'CONTRACT' AND entity_id = $2)
+            OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                 SELECT declaration_number FROM customs_declarations WHERE contract_id::text = $2
+            ))
+          )
+        ORDER BY uploaded_at DESC
+      `, [lcID, pgData.contract_id || '']);
+      
+      const allDocuments = docs.map((d: any) => ({
+        documentId: d.document_id,
+        documentType: d.document_type,
+        fileName: d.file_name,
+        filePath: d.file_path,
+        status: d.verification_status || d.status || 'pending',
+        verificationStatus: d.verification_status,
+        uploadedAt: d.uploaded_at,
+        uploadedBy: d.uploaded_by,
+        entityType: d.entity_type,
+        entityId: d.entity_id,
+        verificationNotes: d.verification_notes,
+        verifiedAt: d.verified_at,
+        verifiedBy: d.verified_by,
+      }));
+
+      const persistedDiscrepancies = await dbService.all(
+        `SELECT * FROM lc_discrepancies WHERE lc_id = $1 ORDER BY reported_date ASC`,
+        [lcID]
+      );
+      const discrepancyRecords = persistedDiscrepancies.map((row: any) => ({
+        discrepancyId: row.discrepancy_id,
+        discrepancyType: row.discrepancy_type,
+        severity: row.severity,
+        document: row.document,
+        issue: row.issue,
+        affectedClauses: row.affected_clauses || '',
+        recommendedAction: row.recommended_action || '',
+        status: row.status,
+        resolution: row.resolution || '',
+        reportedBy: row.reported_by || '',
+        reportedByMsp: row.reported_by_msp || '',
+        reportedDate: row.reported_date,
+        resolvedBy: row.resolved_by || '',
+        resolvedByMsp: row.resolved_by_msp || '',
+        resolvedDate: row.resolved_date || null,
+        txId: row.blockchain_tx_id || '',
+      }));
+      
+      logger.info(`[BANKING] ✅ Returning PostgreSQL data: ${allDocuments.length} documents`);
+      
+      return res.json({
+        success: true,
+        data: {
+          lcId: pgData.lc_id,
+          contractId: pgData.contract_id,
+          exporterId: pgData.exporter_id,
+          buyerId: pgData.buyer_id,
+          buyerName: pgData.buyer_name,
+          buyerCountry: pgData.buyer_country,
+          buyerBank: pgData.buyer_bank,
+          issuingBank: pgData.issuing_bank || 'Commercial Bank of Ethiopia',
+          advisingBank: pgData.advising_bank || pgData.exporter_bank,
+          amount: pgData.amount,
+          currency: pgData.currency || 'USD',
+          status: pgData.status,
+          expiryDate: pgData.expiry_date,
+          issueDate: pgData.issue_date,
+          requestDate: pgData.request_date,
+          terms: pgData.terms || '',
+          rejectionReason: pgData.rejection_reason || '',
+          rejectedBy: pgData.rejected_by || '',
+          rejectedByMsp: pgData.rejected_by_msp || '',
+          rejectionDate: pgData.rejection_date || null,
+          documentRejectionReason: pgData.document_rejection_reason || '',
+          documentRejectedBy: pgData.document_rejected_by || '',
+          documentRejectedByMsp: pgData.document_rejected_by_msp || '',
+          documentRejectionDate: pgData.document_rejection_date || null,
+          documents: allDocuments,
+          amendments: [],
+          amendmentCount: 0,
+          discrepancies: discrepancyRecords,
+          discrepancyResolved: false,
+        },
+        source: 'postgresql-primary',
+        fetchTimeMs: fetchTime,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    
+    if (blockchainSuccess) {
+      // Blockchain succeeded, enrich with PostgreSQL data if available
+      logger.info(`[BANKING] 🔗 Using blockchain as primary, enriching with PostgreSQL data`);
+      
+      // Merge buyer data if available from PostgreSQL
+      if (buyerData?.buyerName) {
+        lcData = {
+          ...lcData,
+          buyerId: buyerData.buyerId || lcData.buyerId,
+          buyerName: buyerData.buyerName || lcData.buyerName,
+          buyerCountry: buyerData.buyerCountry || lcData.buyerCountry,
+          buyerBank: buyerData.buyerBank || lcData.buyerBank,
+          advisingBank: buyerData.exporterBank || lcData.advisingBank,
+        };
+      } else {
+        // Try enrichment service as fallback
+        try {
+          const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+          const enriched = await dataEnrichmentService.enrichLCs([lcData]);
+          if (enriched.length > 0) {
+            lcData = enriched[0];
+            logger.info(`[BANKING] ✅ Enriched with enrichment service`);
+          }
+        } catch (enrichError) {
+          logger.warn('[BANKING] ⚠️  Enrichment service failed');
+        }
+      }
+      
+      // 3. Fetch ALL documents for this LC (LC, Contract, Shipment, Customs)
+      let allDocuments: any[] = [];
+      const contractId = lcData?.contractId || lcData?.contractID || lcData?.ContractID || pgData?.contract_id || '';
+      
+      if (contractId) {
+        try {
+          logger.debug(`[BANKING] 📎 Fetching ALL documents for LC ${lcID}, Contract ${contractId}`);
+          const docs = await dbService.all(`
+            SELECT document_id, document_type, file_name, file_path, status, verification_status, 
+                   uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+            FROM documents 
+            WHERE status = 'active'
+              AND (
+                (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
+                OR (entity_type = 'SHIPMENT' AND entity_id IN (
+                     SELECT shipment_id FROM shipments WHERE contract_id = $2
+                ))
+                OR (entity_type = 'CONTRACT' AND entity_id = $2)
+                OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
+                     SELECT declaration_number FROM customs_declarations WHERE contract_id::text = $2
+                ))
+              )
+            ORDER BY uploaded_at DESC
+          `, [lcID, contractId]);
+          
+          if (docs && docs.length > 0) {
+            allDocuments = docs.map((d: any) => ({
+              documentId: d.document_id,
+              documentType: d.document_type,
+              fileName: d.file_name,
+              filePath: d.file_path,
+              status: d.verification_status || d.status || 'pending',
+              verificationStatus: d.verification_status,
+              uploadedAt: d.uploaded_at,
+              uploadedBy: d.uploaded_by,
+              entityType: d.entity_type,
+              entityId: d.entity_id,
+              verificationNotes: d.verification_notes,
+              verifiedAt: d.verified_at,
+              verifiedBy: d.verified_by,
+            }));
+            logger.info(`[BANKING] 📎 LC ${lcID}: Found ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
+          } else {
+            logger.warn(`[BANKING] 📎 No documents found for LC ${lcID}, Contract ${contractId}`);
+          }
+        } catch (docError) {
+          logger.warn('[BANKING] ⚠️  Could not fetch documents:', docError);
+        }
+      }
+      
+      // 4. Merge data from all sources
+      const requiredFields = {
+        lcId: lcData?.lcId || lcData?.LCID || lcData?.id || lcID,
+        contractId,
+        exporterId: lcData?.exporterId || lcData?.exporterID || lcData?.ExporterID || pgData?.exporter_id || '',
+        
+        // ✅ BUYER DATA (enriched from PostgreSQL)
+        buyerId: lcData?.buyerId || buyerData?.buyerId || '',
+        buyerName: lcData?.buyerName || buyerData?.buyerName || '',
+        buyerCountry: lcData?.buyerCountry || buyerData?.buyerCountry || '',
+        buyerBank: lcData?.buyerBank || buyerData?.buyerBank || '',
+        
+        // ✅ BANKING DETAILS (with exporter's bank as advising bank)
+        issuingBank: lcData?.issuingBank || lcData?.issuingBankName || lcData?.bankName || pgData?.issuing_bank || '',
+        advisingBank: lcData?.advisingBank || lcData?.advisingBankName || buyerData?.exporterBank || pgData?.advising_bank || '',
+        beneficiary: lcData?.beneficiary || '',
+        
+        amount: lcData?.amount ?? pgData?.amount ?? 0,
+        currency: lcData?.currency || pgData?.currency || 'USD',
+        status: lcData?.status || pgData?.status || 'PENDING',
+        expiryDate: lcData?.expiryDate || lcData?.expiry_date || pgData?.expiry_date || null,
+        requestDate: lcData?.requestDate || lcData?.request_date || pgData?.request_date || null,
+        approvalDate: lcData?.approvalDate || lcData?.approval_date || pgData?.approval_date || null,
+        issueDate: lcData?.issueDate || lcData?.issue_date || pgData?.issue_date || null,
+        documents: allDocuments,  // ✅ ALL DOCUMENTS (LC + Contract + Shipment + Customs)
+        terms: lcData?.terms || pgData?.terms || '',
+        amendments: lcData?.amendments || [],
+        amendmentCount: lcData?.amendmentCount ?? (lcData?.amendments ? lcData.amendments.length : 0),
+        discrepancies: lcData?.discrepancies || [],
+        discrepancyResolved: lcData?.discrepancyResolved ?? false,
+        createdAt: lcData?.createdAt || lcData?.created_at || pgData?.created_at || null,
+        updatedAt: lcData?.updatedAt || lcData?.updated_at || pgData?.updated_at || null,
+        
+        // ACTOR FIELDS: Use CouchDB first (source of truth), fallback to PostgreSQL
+        approvedBy: lcData?.approvedBy || pgData?.approved_by || null,
+        approvedByMsp: lcData?.approvedByMsp || pgData?.approved_by_msp || null,
+        issuedBy: lcData?.issuedBy || pgData?.issued_by || null,
+        issuedByMsp: lcData?.issuedByMsp || pgData?.issued_by_msp || null,
+        lastUpdatedBy: lcData?.lastUpdatedBy || pgData?.last_updated_by || null,
+        lastUpdatedByMsp: lcData?.lastUpdatedByMsp || pgData?.last_updated_by_msp || null,
+      };
+      
+      // Log which database provided fields
+      logger.info(`[BANKING] ✅ LC data merged - Buyer: ${requiredFields.buyerName || 'N/A'}, Advising Bank: ${requiredFields.advisingBank || 'N/A'}`);
+
+      res.json({
+        success: true,
+        data: {
+          ...lcData,
+          ...requiredFields,
+        },
+        enriched: true, // ✅ Flag showing enrichment was applied
+        sources: {
+          blockchain: blockchainSuccess,
+          postgresql: pgData !== null,
+          buyerEnriched: !!buyerData?.buyerName,
+        },
+        fetchTimeMs: fetchTime,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      // Both blockchain and PostgreSQL failed
+      logger.error(`[BANKING] ❌ Both blockchain and PostgreSQL queries failed for LC ${lcID}`);
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'LC not found in any database',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving LC:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/forex:
+ *   get:
+ *     summary: Get all forex allocations
+ *     tags: [Forex]
+ */
+router.get('/forex', async (req, res) => {
+  try {
+    const result = await fabricService.queryAllForex();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data || [],
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_FAILED',
+          message: result.error || 'Failed to retrieve forex allocations',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving forex:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// ==================== PAYMENT DOCUMENT SUBMISSION ====================
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/submit-documents
+ * Exporter submits shipping documents for LC compliance
+ */
+router.post('/payment/:paymentID/submit-documents',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('documents').isArray().withMessage('Documents array is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { documents } = req.body;
+
+      const result = await fabricService.submitPaymentDocuments(paymentID, documents);
+
+      if (result.success) {
+        logger.info(`Payment documents submitted: ${paymentID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_SUBMISSION_FAILED',
+            message: result.error || 'Failed to submit documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error submitting payment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/verify-documents
+ * Bank verifies submitted documents against LC terms
+ */
+router.post('/payment/:paymentID/verify-documents',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('verifiedBy').notEmpty().withMessage('Verified by is required'),
+    body('comments').optional().isString(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { verifiedBy, comments } = req.body;
+
+      const result = await fabricService.verifyPaymentDocuments(
+        paymentID,
+        verifiedBy,
+        comments || 'Documents verified against LC terms'
+      );
+
+      if (result.success) {
+        logger.info(`Payment documents verified: ${paymentID} by ${verifiedBy}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_VERIFICATION_FAILED',
+            message: result.error || 'Failed to verify documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error verifying payment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+
+// ==================== PAYMENT METHOD-SPECIFIC ROUTES ====================
+// Added June 26, 2026 for payment method differentiation
+
+/**
+ * POST /api/v1/banking/payment/initiate
+ * Initiate payment with specific payment method
+ * Supports: LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
+ */
+router.post('/payment/initiate',
+  authMiddleware,
+  [
+    body('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('amount').notEmpty().withMessage('Amount is required'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+    body('receivingBank').notEmpty().withMessage('Receiving bank is required'),
+    body('receivingBankBIC').notEmpty().withMessage('Receiving bank BIC is required'),
+    body('beneficiaryName').notEmpty().withMessage('Beneficiary name is required'),
+    body('beneficiaryAccount').notEmpty().withMessage('Beneficiary account is required'),
+    body('paymentMethod').isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE'])
+      .withMessage('Invalid payment method. Must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        paymentID,
+        contractID,
+        exporterID,
+        lcID,
+        amount,
+        currency,
+        receivingBank,
+        receivingBankBIC,
+        beneficiaryName,
+        beneficiaryAccount,
+        paymentMethod,
+      } = req.body;
+
+      // AUTO-MAPPING: Fetch contract data to auto-populate payment fields
+      let autoMappedData: any = {};
+      try {
+        const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID]);
+        if (contractResult.success && contractResult.data) {
+          const contract = contractResult.data;
+          autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
+          autoMappedData.currency = contract.Currency || contract.currency || 'USD';
+          autoMappedData.paymentMethod = contract.PaymentMethod || contract.paymentMethod || paymentMethod;
+          
+          // Calculate payment amount from contract value if not provided
+          const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+          const quantity = parseFloat(contract.Quantity || contract.quantity || '0');
+          autoMappedData.calculatedAmount = (pricePerKg * quantity).toFixed(2);
+          
+          logger.info(`[PAYMENT] Auto-mapped from contract: exporterID=${autoMappedData.exporterID}, amount=${autoMappedData.calculatedAmount}, method=${autoMappedData.paymentMethod}`);
+        }
+      } catch (error) {
+        logger.warn('[PAYMENT] Could not fetch contract for auto-mapping:', error);
+      }
+
+      // Use provided values or auto-mapped values
+      const finalExporterID = exporterID || autoMappedData.exporterID || '';
+      const finalAmount = amount || autoMappedData.calculatedAmount || '0';
+      const finalCurrency = currency || autoMappedData.currency || 'USD';
+      const finalPaymentMethod = paymentMethod || autoMappedData.paymentMethod || 'LC';
+
+      const result = await fabricService.initiatePayment(
+        paymentID,
+        contractID,
+        finalExporterID,
+        lcID || '',
+        finalAmount.toString(),
+        finalCurrency,
+        receivingBank,
+        receivingBankBIC,
+        beneficiaryName,
+        beneficiaryAccount,
+        finalPaymentMethod
+      );
+
+      if (result.success) {
+        logger.info(`✅ Payment initiated: ${paymentID} (method: ${finalPaymentMethod}) with auto-mapped data`);
+        res.status(201).json({
+          success: true,
+          data: result.data,
+          autoMapped: {
+            exporterID: finalExporterID,
+            amount: finalAmount,
+            currency: finalCurrency,
+            paymentMethod: finalPaymentMethod,
+          },
+          txId: result.txId,
+          metadata: {
+            paymentMethod: finalPaymentMethod,
+            riskProfile: getRiskProfile(finalPaymentMethod),
+            bankGuarantee: finalPaymentMethod === 'LC',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PAYMENT_INITIATION_FAILED',
+            message: result.error || 'Failed to initiate payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error initiating payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/release-documents
+ * Release documents to buyer (CAD/LC only, after payment confirmed)
+ */
+router.post('/payment/:paymentID/release-documents',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+
+      const result = await fabricService.releaseDocumentsToBuyer(paymentID);
+
+      if (result.success) {
+        logger.info(`Documents released to buyer for payment: ${paymentID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Documents released to buyer successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DOCUMENT_RELEASE_FAILED',
+            message: result.error || 'Failed to release documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error releasing documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/receive-advance
+ * Receive advance payment (TT_ADVANCE/ADVANCE methods only)
+ */
+router.post('/payment/:paymentID/receive-advance',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('advancePercentage').isFloat({ min: 0, max: 100 })
+      .withMessage('Advance percentage must be between 0 and 100'),
+    body('amountReceived').isFloat({ min: 0 })
+      .withMessage('Amount received must be a positive number'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { advancePercentage, amountReceived } = req.body;
+
+      const result = await fabricService.receiveAdvancePayment(
+        paymentID,
+        advancePercentage.toString(),
+        amountReceived.toString()
+      );
+
+      if (result.success) {
+        logger.info(`Advance payment received: ${paymentID} (${advancePercentage}%)`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: `Advance payment of ${advancePercentage}% received successfully`,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'ADVANCE_PAYMENT_FAILED',
+            message: result.error || 'Failed to record advance payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error receiving advance payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/receive-balance
+ * Receive balance payment after advance
+ */
+router.post('/payment/:paymentID/receive-balance',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('amountReceived').isFloat({ min: 0 })
+      .withMessage('Amount received must be a positive number'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { amountReceived } = req.body;
+
+      const result = await fabricService.receiveBalancePayment(
+        paymentID,
+        amountReceived.toString()
+      );
+
+      if (result.success) {
+        logger.info(`Balance payment received: ${paymentID}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Balance payment received successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'BALANCE_PAYMENT_FAILED',
+            message: result.error || 'Failed to record balance payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error receiving balance payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/banking/payment/:paymentID/status
+ * Update payment status (validates transition per payment method)
+ */
+router.put('/payment/:paymentID/status',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('status').notEmpty().withMessage('New status is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const { status } = req.body;
+
+      const result = await fabricService.updatePaymentStatus(paymentID, status);
+
+      if (result.success) {
+        logger.info(`Payment status updated: ${paymentID} → ${status}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: `Payment status updated to ${status}`,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'STATUS_UPDATE_FAILED',
+            message: result.error || 'Failed to update payment status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error updating payment status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/payment/by-method/:method
+ * Query payments by payment method
+ */
+router.get('/payment/by-method/:method',
+  authMiddleware,
+  [
+    param('method').isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE'])
+      .withMessage('Invalid payment method'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { method } = req.params;
+
+      // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info(`[BANKING] 🔗 Fetching payments for method: ${method} from blockchain (CouchDB direct)...`);
+      
+      const payments = await couchDBService.queryPaymentsByMethod(method);
+      
+      logger.info(`[BANKING] ✅ Loaded ${payments.length} payments for method ${method} from blockchain (CouchDB direct)`);
+
+      res.json({
+        success: true,
+        data: payments || [],
+        metadata: {
+          paymentMethod: method,
+          count: (payments || []).length,
+          riskProfile: getRiskProfile(method),
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('Error retrieving payments by method:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/settle
+ * Settle payment with retention and exchange rate
+ */
+router.post('/payment/:paymentID/settle',
+  authMiddleware,
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('exchangeRate').isFloat({ min: 0 }).withMessage('Exchange rate must be positive'),
+    body('retentionRate').isFloat({ min: 0, max: 100 })
+      .withMessage('Retention rate must be between 0 and 100'),
+    body('payingBank').notEmpty().withMessage('Paying bank is required'),
+    body('payingBankBIC').notEmpty().withMessage('Paying bank BIC is required'),
+    body('swiftReference').notEmpty().withMessage('SWIFT reference is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { paymentID } = req.params;
+      const {
+        exchangeRate,
+        retentionRate,
+        payingBank,
+        payingBankBIC,
+        swiftReference,
+        nbeApprovalRef,
+      } = req.body;
+
+      const result = await fabricService.settlePayment(
+        paymentID,
+        exchangeRate.toString(),
+        retentionRate.toString(),
+        payingBank,
+        payingBankBIC,
+        swiftReference,
+        nbeApprovalRef || ''
+      );
+
+      if (result.success) {
+        logger.info(`Payment settled: ${paymentID} (SWIFT: ${swiftReference})`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Payment settled successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SETTLEMENT_FAILED',
+            message: result.error || 'Failed to settle payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error settling payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/cad - Register documentary collection
+ */
+router.post('/cad',
+  authMiddleware,
+  [
+    body('collectionID').notEmpty().withMessage('Collection ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('drawerName').notEmpty().withMessage('Drawer name is required'),
+    body('draweeName').notEmpty().withMessage('Drawee name is required'),
+    body('draweeAddress').notEmpty().withMessage('Drawee address is required'),
+    body('amount').isNumeric().withMessage('Amount must be numeric'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+    body('paymentTerm').isIn(['SIGHT', 'ACCEPTANCE']).withMessage('Payment term must be SIGHT or ACCEPTANCE'),
+    body('remittingBank').notEmpty().withMessage('Remitting bank is required'),
+    body('remittingBankBIC').notEmpty().withMessage('Remitting bank BIC is required'),
+    body('collectingBank').notEmpty().withMessage('Collecting bank is required'),
+    body('collectingBankBIC').notEmpty().withMessage('Collecting bank BIC is required'),
+    body('documents').isArray().withMessage('Documents array is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        collectionID, contractID, exporterID, drawerName, draweeName, draweeAddress,
+        amount, currency, paymentTerm, acceptanceDays, remittingBank, remittingBankBIC,
+        collectingBank, collectingBankBIC, instructions, documents
+      } = req.body;
+
+      const result = await fabricService.invokeChaincode('RegisterDocumentaryCollection', [
+        collectionID, contractID, exporterID, drawerName, draweeName, draweeAddress,
+        amount.toString(), currency, paymentTerm, (acceptanceDays || '0').toString(),
+        remittingBank, remittingBankBIC, collectingBank, collectingBankBIC,
+        instructions || 'Present documents directly to drawee',
+        JSON.stringify(documents)
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Documentary collection registered: ${collectionID} (${paymentTerm})`);
+        res.status(201).json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Documentary collection registered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CAD_REGISTRATION_FAILED',
+            message: result.error || 'Failed to register documentary collection',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error registering documentary collection:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/banking/cad/:collectionID/status
+ * Update documentary collection status
+ */
+router.put('/cad/:collectionID/status',
+  authMiddleware,
+  [
+    param('collectionID').notEmpty().withMessage('Collection ID is required'),
+    body('status').isIn(['SENT', 'FORWARDED', 'PRESENTED', 'ACCEPTED', 'PAID', 'REJECTED'])
+      .withMessage('Invalid CAD status'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { collectionID } = req.params;
+      const { status, notes } = req.body;
+
+      const result = await fabricService.invokeChaincode('UpdateCADStatus', [
+        collectionID, status, notes || ''
+      ]);
+
+      if (result.success) {
+        logger.info(`CAD status updated: ${collectionID} → ${status}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: `Documentary collection status updated to ${status}`,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CAD_STATUS_UPDATE_FAILED',
+            message: result.error || 'Failed to update CAD status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error updating CAD status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/cad/:collectionID/payment
+ * Record payment received for documentary collection
+ */
+router.post('/cad/:collectionID/payment',
+  authMiddleware,
+  [
+    param('collectionID').notEmpty().withMessage('Collection ID is required'),
+    body('amountReceived').isFloat({ min: 0 }).withMessage('Amount must be positive'),
+    body('paymentReference').notEmpty().withMessage('Payment reference is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { collectionID } = req.params;
+      const { amountReceived, paymentReference } = req.body;
+
+      const result = await fabricService.invokeChaincode('RecordCADPayment', [
+        collectionID, paymentReference, amountReceived.toString()
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ CAD payment recorded: ${collectionID} (${amountReceived})`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'CAD payment recorded successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CAD_PAYMENT_FAILED',
+            message: result.error || 'Failed to record CAD payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error recording CAD payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/cad/exporter/:exporterID
+ * Get all documentary collections for exporter
+ */
+router.get('/cad/exporter/:exporterID',
+  authMiddleware,
+  [
+    param('exporterID').notEmpty().withMessage('Exporter ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { exporterID } = req.params;
+
+      // Use QueryAllCollections if exporterID is "ALL", otherwise filter by exporter
+      let result;
+      if (exporterID === 'ALL') {
+        result = await fabricService.queryChaincode('QueryAllCollections', []);
+      } else {
+        result = await fabricService.queryChaincode('QueryCollectionsByExporter', [exporterID]);
+      }
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data || [],
+          count: (result.data || []).length,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: {
+            code: 'QUERY_FAILED',
+            message: result.error || 'Failed to retrieve documentary collections',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving documentary collections:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/cad/:collectionID
+ * Get documentary collection details
+ */
+router.get('/cad/:collectionID',
+  authMiddleware,
+  [
+    param('collectionID').notEmpty().withMessage('Collection ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { collectionID } = req.params;
+
+      const result = await fabricService.queryChaincode('ReadDocumentaryCollection', [collectionID]);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: result.error || 'Documentary collection not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving documentary collection:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ==================== CONSIGNMENT ROUTES ====================
+// Added July 2, 2026 - CBE Section 3.2.iv (LIMITED TO: Fruits, Flowers, Meat)
+
+/**
+ * POST /api/v1/banking/consignment/register
+ * Issue consignment export permit (limited commodities only)
+ */
+router.post('/consignment/register',
+  authMiddleware,
+  [
+    body('consignmentID').notEmpty().withMessage('Consignment ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('commodityType').isIn(['FRUITS', 'FLOWERS', 'MEAT'])
+      .withMessage('Commodity type must be FRUITS, FLOWERS, or MEAT'),
+    body('description').notEmpty().withMessage('Description is required'),
+    body('buyerName').notEmpty().withMessage('Buyer name is required'),
+    body('buyerAddress').notEmpty().withMessage('Buyer address is required'),
+    body('buyerCountry').notEmpty().withMessage('Buyer country is required'),
+    body('permitAmount').isFloat({ min: 0 }).withMessage('Permit amount must be positive'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        consignmentID, exporterID, commodityType, description, buyerName,
+        buyerAddress, buyerCountry, permitAmount, currency, permitNumber
+      } = req.body;
+
+      const result = await fabricService.invokeChaincode('RegisterConsignment', [
+        consignmentID, exporterID, commodityType, description, buyerName,
+        buyerAddress, buyerCountry, permitAmount.toString(),
+        currency || 'USD', permitNumber || `CNS-${Date.now()}`
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Consignment permit issued: ${consignmentID} (${commodityType})`);
+        res.status(201).json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Consignment permit issued successfully',
+          warning: 'Settlement due within 90 days per CBE Section 3.2.iv',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONSIGNMENT_REGISTRATION_FAILED',
+            message: result.error || 'Failed to register consignment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error registering consignment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/banking/consignment/:consignmentID/status
+ * Update consignment status
+ */
+router.put('/consignment/:consignmentID/status',
+  authMiddleware,
+  [
+    param('consignmentID').notEmpty().withMessage('Consignment ID is required'),
+    body('status').isIn(['PERMITTED', 'SHIPPED', 'SOLD', 'SETTLED', 'OUTSTANDING'])
+      .withMessage('Invalid consignment status'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { consignmentID } = req.params;
+      const { status, notes } = req.body;
+
+      const result = await fabricService.invokeChaincode('UpdateConsignmentStatus', [
+        consignmentID, status, notes || ''
+      ]);
+
+      if (result.success) {
+        logger.info(`Consignment status updated: ${consignmentID} → ${status}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: `Consignment status updated to ${status}`,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONSIGNMENT_STATUS_UPDATE_FAILED',
+            message: result.error || 'Failed to update consignment status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error updating consignment status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/consignment/:consignmentID/payment
+ * Record payment received from consignment sale
+ */
+router.post('/consignment/:consignmentID/payment',
+  authMiddleware,
+  [
+    param('consignmentID').notEmpty().withMessage('Consignment ID is required'),
+    body('amountReceived').isFloat({ min: 0 }).withMessage('Amount must be positive'),
+    body('paymentReference').notEmpty().withMessage('Payment reference is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { consignmentID } = req.params;
+      const { amountReceived, paymentReference } = req.body;
+
+      const result = await fabricService.invokeChaincode('RecordConsignmentPayment', [
+        consignmentID, amountReceived.toString(), paymentReference
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Consignment payment recorded: ${consignmentID} (${amountReceived})`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          message: 'Consignment payment recorded successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONSIGNMENT_PAYMENT_FAILED',
+            message: result.error || 'Failed to record consignment payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error recording consignment payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/consignment/exporter/:exporterID
+ * Get all consignments for exporter
+ */
+router.get('/consignment/exporter/:exporterID',
+  authMiddleware,
+  [
+    param('exporterID').notEmpty().withMessage('Exporter ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { exporterID } = req.params;
+
+      const result = await fabricService.queryChaincode('QueryConsignmentsByExporter', [exporterID]);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data || [],
+          count: (result.data || []).length,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: {
+            code: 'QUERY_FAILED',
+            message: result.error || 'Failed to retrieve consignments',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving consignments:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/consignment/outstanding
+ * Get all consignments with outstanding balance
+ */
+router.get('/consignment/outstanding',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      // ✅ Use CouchDB direct query instead of Fabric SDK to avoid timeout
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info('[BANKING] 🔗 Fetching outstanding consignments from blockchain (CouchDB direct)...');
+      
+      const consignments = await couchDBService.queryOutstandingConsignments();
+      
+      logger.info(`[BANKING] ✅ Loaded ${consignments.length} outstanding consignments from blockchain (CouchDB direct)`);
+
+      res.json({
+        success: true,
+        data: consignments || [],
+        count: (consignments || []).length,
+        warning: 'Outstanding consignments require settlement',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('Error retrieving outstanding consignments:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/banking/consignment/:consignmentID
+ * Get consignment details
+ */
+router.get('/consignment/:consignmentID',
+  authMiddleware,
+  [
+    param('consignmentID').notEmpty().withMessage('Consignment ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { consignmentID } = req.params;
+
+      const result = await fabricService.queryChaincode('ReadConsignment', [consignmentID]);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: result.error || 'Consignment not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving consignment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// Helper function to get risk profile
+function getRiskProfile(paymentMethod: string): string {
+  const riskProfiles: { [key: string]: string } = {
+    'LC': 'LOW',
+    'CAD': 'MEDIUM',
+    'TT_ADVANCE': 'LOW',
+    'TT_POST': 'HIGH',
+    'ADVANCE': 'LOW',
+  };
+  return riskProfiles[paymentMethod] || 'UNKNOWN';
+}
+
+export default router;
+
+
+/**
+ * POST /api/v1/banking/lc/:lcID/examine-documents
+ * Bank examines shipping documents against LC terms (UCP 600 Article 14)
+ * Workflow: After shipment, bank verifies documents comply with LC requirements
+ */
+router.post('/lc/:lcID/examine-documents',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('compliant').isBoolean().withMessage('Compliance status is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { compliant, discrepancies, examinationDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`Examining LC documents for ${lcID}`, {
+        userId: user?.sub,
+        compliant,
+        discrepancies: discrepancies || 'none',
+      });
+
+      const result = await fabricService.invokeChaincode('ExamineLCDocuments', [
+        lcID,
+        compliant.toString(),
+        discrepancies || '',
+        examinationDate || new Date().toISOString(),
+        user?.org || 'BANK',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ LC documents examined: ${lcID}, compliant: ${compliant}`);
+        
+        // ✅ BLOCKCHAIN-FIRST: Update PostgreSQL after successful blockchain update
+        try {
+          const { DatabaseService } = await import('../services/databaseService');
+          const db = DatabaseService.getInstance();
+          
+          if (compliant) {
+            // Update LC status to UTILIZED if documents are compliant
+            await db.run(
+              `UPDATE letters_of_credit 
+               SET status = 'UTILIZED', updated_at = NOW() 
+               WHERE lc_id = $1`,
+              [lcID]
+            );
+            logger.info(`✅ PostgreSQL updated: LC ${lcID} status set to UTILIZED`);
+          }
+        } catch (dbError) {
+          logger.warn(`⚠️  Failed to update PostgreSQL for LC ${lcID}:`, dbError);
+          // Don't fail the request since blockchain update succeeded
+        }
+        
+        res.json({
+          success: true,
+          data: result.data,
+          message: compliant ? 'Documents comply with LC terms' : 'Discrepancies found in documents',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'EXAMINATION_FAILED',
+            message: result.error || 'Failed to examine documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error examining LC documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/release-payment
+ * Bank releases payment to exporter after document compliance (UCP 600 Article 7)
+ * Workflow: Final step - bank transfers funds via SWIFT after all checks pass
+ */
+router.post('/lc/:lcID/release-payment',
+  authMiddleware,
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('amount').notEmpty().withMessage('Payment amount is required'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const { amount, currency, paymentDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`Releasing payment for LC ${lcID}`, {
+        userId: user?.sub,
+        amount,
+        currency,
+      });
+
+      // ✅ DOCUMENT VERIFICATION: Check shipping documents before payment release
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        
+        // Get LC details to find associated shipment
+        const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
+        if (lcResult.success && lcResult.data) {
+          const lc = lcResult.data;
+          const shipmentID = lc.ShipmentID || lc.shipmentID || lc.shipmentId;
+          
+          if (shipmentID) {
+            const db = DatabaseService.getInstance();
+            const documents = await db.all(
+              `SELECT document_type, verification_status FROM documents 
+               WHERE entity_type = 'shipping' AND entity_id = ? AND status = 'active'`,
+              [shipmentID]
+            );
+            
+            // Required shipping documents for payment release
+            const requiredDocs = ['BILL_OF_LADING', 'COMMERCIAL_INVOICE', 'PACKING_LIST'];
+            const docTypes = documents.map((d: any) => d.document_type);
+            const missing = requiredDocs.filter(type => !docTypes.includes(type));
+            
+            if (missing.length > 0) {
+              logger.warn(`Payment release ${lcID} blocked: Missing ${missing.length} shipping documents`);
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'MISSING_SHIPPING_DOCUMENTS',
+                  message: 'Cannot release payment: Required shipping documents are missing',
+                  missing: missing,
+                  hint: 'Upload all required shipping documents (Bill of Lading, Commercial Invoice, Packing List) before payment release'
+                }
+              });
+            }
+            
+            // Check if all required documents are verified
+            const unverifiedRequired = documents.filter((d: any) => 
+              requiredDocs.includes(d.document_type) && d.verification_status !== 'verified'
+            );
+            
+            if (unverifiedRequired.length > 0) {
+              logger.warn(`Payment release ${lcID} blocked: ${unverifiedRequired.length} unverified shipping documents`);
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'UNVERIFIED_SHIPPING_DOCUMENTS',
+                  message: 'Cannot release payment: All shipping documents must be verified',
+                  unverified: unverifiedRequired.map((d: any) => d.document_type),
+                  hint: 'Bank must verify all shipping documents before payment release'
+                }
+              });
+            }
+            
+            logger.info(`✅ Payment ${lcID}: All required shipping documents verified`);
+          }
+        }
+      } catch (docCheckError) {
+        logger.warn(`Non-fatal: Document check failed for payment ${lcID}:`, docCheckError);
+        // Continue with payment release - document check is best-effort
+      }
+
+      const result = await fabricService.invokeChaincode('ReleaseLCPayment', [
+        lcID,
+        amount.toString(),
+        currency,
+        paymentDate || new Date().toISOString(),
+        user?.org || 'BANK',
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Payment released for LC ${lcID}: ${currency} ${amount}`);
+        res.json({
+          success: true,
+          data: result.data,
+          message: 'Payment released successfully via SWIFT',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PAYMENT_RELEASE_FAILED',
+            message: result.error || 'Failed to release payment',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error releasing LC payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+
+// ==================== LC DISCREPANCY ROUTES ====================
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/report — Report LC discrepancy
+router.post('/lc/:lcId/discrepancy/report', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN']), [
+  param('lcId').notEmpty(),
+  body('discrepancyId').isString().trim().notEmpty(),
+  body('discrepancyType').isString().trim().notEmpty(),
+  body('severity').isIn(['MINOR', 'MAJOR', 'CRITICAL']),
+  body('affectedDocument').isString().trim().notEmpty(),
+  body('description').isString().trim().isLength({ min: 10, max: 500 }),
+], validateRequest, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    const { discrepancyId, discrepancyType, severity, affectedDocument, description, affectedClauses, recommendedAction } = req.body;
+    const user = (req as any).user;
+
+    logger.info(`[BANKING] ⚠️  Reporting LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    await fabricService.connectAsOrg('BanksMSP');
+    const result = await fabricService.submitTransaction('ReportLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      discrepancyType,
+      severity,
+      affectedDocument,
+      description,
+      affectedClauses || '',
+      recommendedAction || ''
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to report discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    try {
+      await dbService.run(
+        `INSERT INTO lc_discrepancies (
+           discrepancy_id, lc_id, discrepancy_type, severity, document, issue,
+           affected_clauses, recommended_action, status, reported_by, reported_by_msp,
+           reported_date, blockchain_tx_id, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,'BanksMSP',CURRENT_TIMESTAMP,$10,CURRENT_TIMESTAMP)
+         ON CONFLICT (discrepancy_id) DO UPDATE SET
+           lc_id = EXCLUDED.lc_id, discrepancy_type = EXCLUDED.discrepancy_type,
+           severity = EXCLUDED.severity, document = EXCLUDED.document,
+           issue = EXCLUDED.issue, affected_clauses = EXCLUDED.affected_clauses,
+           recommended_action = EXCLUDED.recommended_action,
+           status = 'OPEN', resolution = NULL, reported_by = EXCLUDED.reported_by,
+           reported_by_msp = EXCLUDED.reported_by_msp, reported_date = EXCLUDED.reported_date,
+           blockchain_tx_id = EXCLUDED.blockchain_tx_id, updated_at = CURRENT_TIMESTAMP`,
+        [discrepancyId, lcId, discrepancyType, severity, affectedDocument, description, affectedClauses || '', recommendedAction || '', user?.username || user?.sub || 'Bank Officer', result.transactionId]
+      );
+    } catch (syncError) {
+      logger.warn(`Failed to sync discrepancy ${discrepancyId} to PostgreSQL`, syncError);
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy reported: ${discrepancyId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'LC discrepancy reported successfully',
+      data: { lcId, discrepancyId },
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error reporting discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/:discrepancyId/resolve — Resolve discrepancy
+router.post('/lc/:lcId/discrepancy/:discrepancyId/resolve', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN']), [
+  param('lcId').notEmpty(),
+  param('discrepancyId').notEmpty(),
+  body('resolution').isString().trim().isLength({ min: 1, max: 500 }),
+], validateRequest, async (req: Request, res: Response) => {
+  try {
+    const { lcId, discrepancyId } = req.params;
+    const { resolution } = req.body;
+    const user = (req as any).user;
+
+    logger.info(`[BANKING] ✅ Resolving LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    await fabricService.connectAsOrg('BanksMSP');
+    const result = await fabricService.submitTransaction('ResolveLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      resolution
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to resolve discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    try {
+      await dbService.run(
+        `UPDATE lc_discrepancies
+         SET status = 'RESOLVED', resolution = $1, resolved_by = $2,
+             resolved_by_msp = 'BanksMSP', resolved_date = CURRENT_TIMESTAMP,
+             blockchain_tx_id = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE lc_id = $4 AND discrepancy_id = $5`,
+        [resolution, user?.username || user?.sub || 'Bank Officer', result.transactionId, lcId, discrepancyId]
+      );
+    } catch (syncError) {
+      logger.warn(`Failed to sync discrepancy resolution ${discrepancyId} to PostgreSQL`, syncError);
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy resolved: ${discrepancyId}`);
+
+    res.json({
+      success: true,
+      message: 'LC discrepancy resolved successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error resolving discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/discrepancy/:discrepancyId/waive — Waive discrepancy
+router.post('/lc/:lcId/discrepancy/:discrepancyId/waive', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN']), [
+  param('lcId').notEmpty(),
+  param('discrepancyId').notEmpty(),
+  body('waiverReason').isString().trim().isLength({ min: 1, max: 500 }),
+], validateRequest, async (req: Request, res: Response) => {
+  try {
+    const { lcId, discrepancyId } = req.params;
+    const { waiverReason } = req.body;
+    const user = (req as any).user;
+
+    logger.info(`[BANKING] 📋 Waiving LC discrepancy: ${lcId} / ${discrepancyId}`);
+
+    await fabricService.connectAsOrg('BanksMSP');
+    const result = await fabricService.submitTransaction('WaiveLCDiscrepancy',
+      lcId,
+      discrepancyId,
+      waiverReason
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to waive discrepancy: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    try {
+      await dbService.run(
+        `UPDATE lc_discrepancies
+         SET status = 'WAIVED', resolution = $1, resolved_by = $2,
+             resolved_by_msp = 'BanksMSP', resolved_date = CURRENT_TIMESTAMP,
+             blockchain_tx_id = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE lc_id = $4 AND discrepancy_id = $5`,
+        [waiverReason, user?.username || user?.sub || 'Bank Officer', result.transactionId, lcId, discrepancyId]
+      );
+    } catch (syncError) {
+      logger.warn(`Failed to sync discrepancy waiver ${discrepancyId} to PostgreSQL`, syncError);
+    }
+
+    logger.info(`[BANKING] ✅ Discrepancy waived: ${discrepancyId}`);
+
+    res.json({
+      success: true,
+      message: 'LC discrepancy waived successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error waiving discrepancy:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/banking/lc/:lcId/documents/reject — Reject LC documents
+router.post('/lc/:lcId/documents/reject', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN']), [
+  param('lcId').notEmpty(),
+  body('rejectionReason').isString().trim().isLength({ min: 10, max: 500 }),
+], validateRequest, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    const { rejectionReason } = req.body;
+    const user = (req as any).user;
+
+    logger.info(`[BANKING] ❌ Rejecting LC documents: ${lcId}`);
+
+    await fabricService.connectAsOrg('BanksMSP');
+    const result = await fabricService.submitTransaction('RejectLCDocuments',
+      lcId,
+      rejectionReason
+    );
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to reject documents: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BANKING] ✅ LC documents rejected: ${lcId}`);
+    try {
+      await dbService.run(
+        `UPDATE letters_of_credit
+         SET status = $1, document_rejection_reason = $2, document_rejected_by = $3,
+             document_rejected_by_msp = $4, document_rejection_date = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE lc_id = $5`,
+        ['EXPIRED', String(rejectionReason).trim(), user?.username || user?.sub || 'Bank Officer', 'BanksMSP', lcId]
+      );
+    } catch (syncError) {
+      logger.warn(`Failed to sync document rejection for LC ${lcId} to PostgreSQL`, syncError);
+    }
+
+    res.json({
+      success: true,
+      message: 'LC documents rejected successfully',
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error rejecting documents:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// GET /api/v1/banking/lc/:lcId/discrepancies — Get all discrepancies for an LC
+router.get('/lc/:lcId/discrepancies', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { lcId } = req.params;
+    logger.info(`[BANKING] 🔍 Fetching discrepancies for LC: ${lcId}`);
+
+    const result = await fabricService.evaluateTransaction('GetLCDiscrepancies', lcId);
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to fetch discrepancies: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    const discrepancies = result.data || [];
+
+    res.json({
+      success: true,
+      data: discrepancies,
+      count: discrepancies.length,
+      source: 'blockchain'
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error fetching discrepancies:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// GET /api/v1/banking/lc/discrepancies/pending — Get all LCs with unresolved discrepancies
+router.get('/lc/discrepancies/pending', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[BANKING] 🔍 Fetching LCs with pending discrepancies');
+
+    const result = await fabricService.evaluateTransaction('QueryLCsWithDiscrepancies');
+
+    if (!result.success) {
+      logger.error(`[BANKING] ❌ Failed to fetch LCs: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    const lcs = result.data || [];
+
+    res.json({
+      success: true,
+      data: lcs,
+      count: lcs.length,
+      source: 'blockchain'
+    });
+  } catch (error: any) {
+    logger.error('[BANKING] ❌ Error fetching LCs:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+

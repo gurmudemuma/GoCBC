@@ -1,0 +1,30 @@
+# Fabric chaincode packaging ignore file
+# Exclude compiled binaries
+*.exe
+chaincode
+chaincode.*
+coffee.exe
+coffee
+
+# Exclude old packages and archives
+package-v*
+*.tar.gz
+*.zip
+
+# Exclude version control
+.git/
+.gitignore
+
+# Exclude logs and temp files
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Exclude IDE files
+.vscode/
+.idea/
+node_modules/
+
+# NOTE: vendor/ is NOT excluded - needed for Docker build

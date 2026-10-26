@@ -1,0 +1,109 @@
+{
+  "channel": "coffeechannel",
+  "chaincode": "coffee",
+  "version": "2.2",
+  "sequence": 21,
+  "status": "COMMITTED",
+  "packageId": "coffee_2.2:c748a1d9ec2c13d63bfd18c08479442c8241bdffd2bff9296537a3d142232c39",
+  "packageArchive": "coffee_2.2.tgz",
+  "packageArchiveSha256": "c748a1d9ec2c13d63bfd18c08479442c8241bdffd2bff9296537a3d142232c39",
+  "sourceManifest": "coffee_2.2-source.sha256",
+  "validationPolicy": {
+    "type": "AND",
+    "organizations": [
+      "ECTAMSP",
+      "ECXMSP",
+      "BanksMSP",
+      "NBEMSP",
+      "CustomsMSP",
+      "ShippingMSP"
+    ],
+    "principal": "peer"
+  },
+  "lifecycle": {
+    "approvals": {
+      "ECTAMSP": true,
+      "ECXMSP": true,
+      "BanksMSP": true,
+      "NBEMSP": true,
+      "CustomsMSP": true,
+      "ShippingMSP": true
+    },
+    "commitTransactionId": "deb0c751bcfe69404bab4ce0d47fc075cb2ece9d4220d6436649ad68cbfbcb11",
+    "commitStatus": "VALID",
+    "supersedes": {
+      "version": "2.1",
+      "sequence": 20,
+      "reason": "Read-only live audit query exposed legacy response-schema incompatibility; 2.2 preserves legacy hash semantics while normalizing returned audit fields."
+    }
+  },
+  "chaincodeAsAService": {
+    "image": "coffee-chaincode:2.2",
+    "imageId": "sha256:5cb3ea78d15b5d247802531c3e84234ed53824fb4b92a5e050c87460b8773783",
+    "tls": true,
+    "clientAuthentication": false,
+    "hostPortPublished": false
+  },
+  "databaseMigration": {
+    "migration": "039_create_system_alerts",
+    "status": "APPLIED",
+    "table": "system_alerts",
+    "indexCount": 3
+  },
+  "validation": {
+    "apiBuild": "passed",
+    "uiTypeCheck": "passed",
+    "chaincodeGoTest": "passed; package contains no test files",
+    "readOnlyChaincodeQueries": {
+      "QueryAllContracts": {
+        "passed": true,
+        "count": 3
+      },
+      "QueryAllExporters": {
+        "passed": true,
+        "count": 1
+      },
+      "QueryAllAuditLogs": {
+        "passed": true,
+        "count": 55
+      },
+      "VerifyAuditTrail": {
+        "passed": true,
+        "message": "Audit trail verified successfully"
+      }
+    }
+  },
+  "latestRuntimeCheck": {
+    "checkedAt": "2026-10-20T19:56:51Z",
+    "api": {
+      "health": "healthy",
+      "readiness": "ready",
+      "database": true,
+      "blockchain": true,
+      "ordererConfiguration": {
+        "ready": true,
+        "ordererType": "etcdraft",
+        "requiredConsenters": 1,
+        "configuredConsenters": 1,
+        "reachableOrderers": 1
+      }
+    },
+    "peerLedgerSync": {
+      "peerCount": 6,
+      "allPeersAtSameHeight": true,
+      "height": 235,
+      "currentBlockHashBase64": "P3GcCZnvnVuOjkCsN0CSBmRnUSmkT4IvfGxdZ5qLkzM="
+    },
+    "committedChaincodeDefinition": {
+      "name": "coffee",
+      "version": "2.2",
+      "sequence": 21,
+      "approvalCount": 6,
+      "validationPolicy": "AND('ECTAMSP.peer','ECXMSP.peer','BanksMSP.peer','NBEMSP.peer','CustomsMSP.peer','ShippingMSP.peer')"
+    }
+  },
+  "operationalNotes": [
+    "The API startup logged that development identity admin-ECTAMSP is not anchored to the configured MSP root; production must use the configured CA-issued identity.",
+    "The running etcdraft orderer configuration has one consenter. The current readiness threshold accepts one, so this verifies service readiness but not multi-orderer fault tolerance."
+  ]
+}

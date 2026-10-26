@@ -1,0 +1,73 @@
+# Build artifacts
+*.tar.gz
+*.tar
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+**/.next/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+**/logs/
+api/logs/
+ui/logs/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker volumes
+data/
+postgres-data/
+
+# Blockchain artifacts
+wallet/
+**/wallet/
+*.id
+
+# Cache
+.cache/
+.turbo/
+.webpack/
+
+# Misc
+.vercel
+.eslintcache
+.stylelintcache
+
+# Hyperledger Fabric binaries
+bin/
+config/

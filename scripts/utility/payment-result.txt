@@ -1,0 +1,131 @@
+[1m
+██████████████████████████████████████████████████████████████████████[0m
+[1m█  CECBS PAYMENT METHODS COMPREHENSIVE TEST SUITE[0m
+[1m█  Testing all 5 payment methods with their unique workflows[0m
+[1m██████████████████████████████████████████████████████████████████████
+[0m
+[35m
+██████████████████████████████████████████████████████████████████████[0m
+[35m█  TESTING: LC - Letter of Credit (Documentary Credit with Bank Guarantee)[0m
+[35m██████████████████████████████████████████████████████████████████████[0m
+[36m
+======================================================================[0m
+[1m[LC] STEP 1: Setup: Create Contract, Shipment, and Issue LC[0m
+[36m======================================================================[0m
+[32m✅ Prerequisites created: Contract, Shipment, LC issued[0m
+[36m
+======================================================================[0m
+[1m[LC] STEP 2: Initiate Payment[0m
+[36m======================================================================[0m
+[32m✅ Payment initiated: PAY_PM_802784_LC[0m
+[36m
+======================================================================[0m
+[1m[LC] STEP 3: Submit Payment Documents[0m
+[36m======================================================================[0m
+[32m✅ Documents submitted for bank verification[0m
+[36m
+======================================================================[0m
+[1m[LC] STEP 4: Verify Payment Documents[0m
+[36m======================================================================[0m
+[32m✅ Documents verified by bank[0m
+[36m
+======================================================================[0m
+[1m[LC] STEP 5: Settle Payment with NBE Retention[0m
+[36m======================================================================[0m
+[32m✅ Payment settled: $170,000 with 30% NBE retention[0m
+[33mℹ️  LC Method: Bank guaranteed, lowest risk, highest security[0m
+[35m
+██████████████████████████████████████████████████████████████████████[0m
+[35m█  TESTING: CAD - Cash Against Documents (Documentary Collection, No Guarantee)[0m
+[35m██████████████████████████████████████████████████████████████████████[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 1: Setup: Create Contract and Shipment[0m
+[36m======================================================================[0m
+[32m✅ Prerequisites created (No LC required for CAD)[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 2: Initiate CAD Payment[0m
+[36m======================================================================[0m
+[32m✅ CAD payment initiated: PAY_PM_802784_CAD[0m
+[33mℹ️  CAD: Bank acts as intermediary, no payment guarantee[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 3: Update Status: Goods Shipped[0m
+[36m======================================================================[0m
+[32m✅ Status updated: GOODS_SHIPPED[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 4: Update Status: Documents Sent to Bank[0m
+[36m======================================================================[0m
+[32m✅ Documents sent to bank[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 5: Update Status: Documents Forwarded[0m
+[36m======================================================================[0m
+[32m✅ Documents forwarded to buyer bank[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 6: Update Status: Buyer Notified[0m
+[36m======================================================================[0m
+[32m✅ Buyer notified to release payment[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 7: Update Status: Payment Received from Buyer[0m
+[36m======================================================================[0m
+[32m✅ Buyer payment received[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 8: Update Status: Documents Released[0m
+[36m======================================================================[0m
+[32m✅ Documents released to buyer[0m
+[36m
+======================================================================[0m
+[1m[CAD] STEP 9: Settle Payment (via status update)[0m
+[36m======================================================================[0m
+[32m✅ CAD settled: $170,000 with 40% NBE retention[0m
+[33mℹ️  CAD Method: Medium risk, buyer pays on document presentation[0m
+[35m
+██████████████████████████████████████████████████████████████████████[0m
+[35m█  TESTING: TT_ADVANCE - Telegraphic Transfer Advance (Payment Before Shipment)[0m
+[35m██████████████████████████████████████████████████████████████████████[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 1: Setup: Create Contract[0m
+[36m======================================================================[0m
+[32m✅ Contract created (Shipment created after advance payment)[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 2: Initiate TT Advance Payment[0m
+[36m======================================================================[0m
+[32m✅ TT_ADVANCE payment initiated: PAY_PM_802784_TTA[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 3: Receive Advance Payment (30%)[0m
+[36m======================================================================[0m
+[32m✅ Advance received: $51,000 (30%)[0m
+[33mℹ️  Exporter can now source coffee and prepare shipment[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 4: Create Shipment After Advance[0m
+[36m======================================================================[0m
+[32m✅ Shipment created and goods ready[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 5: Receive Balance Payment (70%)[0m
+[36m======================================================================[0m
+[32m✅ Balance received: $119,000 (70%)[0m
+[36m
+======================================================================[0m
+[1m[TT_ADVANCE] STEP 6: Settle Complete Payment (via status update)[0m
+[36m======================================================================[0m
+[32m✅ TT_ADVANCE settled: $170,000 total with 30% NBE retention[0m
+[33mℹ️  TT_ADVANCE Method: Low risk for exporter, advance helps with cash flow[0m
+[35m
+██████████████████████████████████████████████████████████████████████[0m
+[35m█  TESTING: TT_POST - Telegraphic Transfer Post-Shipment (Payment After Shipment)[0m
+[35m██████████████████████████████████████████████████████████████████████[0m
+[36m
+======================================================================[0m
+[1m[TT_POST] STEP 1: Setup: Create Contract and Shipment[0m
+[36m======================================================================[0m

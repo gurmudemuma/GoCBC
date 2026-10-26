@@ -1,0 +1,46 @@
+EXPERT SOLUTION: Progressive Disclosure Pattern
+
+Replace the forex dialog blockchain section (around line 3730) with:
+
+```tsx
+              {/* EXPERT PATTERN: Progressive Disclosure - Fast initial load, advanced features on-demand */}
+              <Box sx={{ mt: 3 }}>
+                <Divider sx={{ my: 2 }} />
+                
+                <Typography variant="h6" gutterBottom>
+                  Activity Timeline
+                </Typography>
+                
+                {forexDetailsOpen && (
+                  <BusinessActivityTimeline
+                    entityType="FOREX"
+                    entityId={selectedForex.forexId || ''}
+                  />
+                )}
+                
+                <Divider sx={{ my: 3 }} />
+                
+                {/* Collapsible advanced verification - only loads when user clicks */}
+                <Accordion>
+                  <AccordionSummary expandIcon={<ExpandMore />}>
+                    <Typography variant="subtitle1" fontWeight={600}>
+                      🔐 Cryptographic Signatures & Blockchain Verification
+                    </Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    {forexDetailsOpen && (
+                      <BlockchainSignatureVerification
+                        entityType="FOREX_ALLOCATION"
+                        entityId={selectedForex.forexId || ''}
+                      />
+                    )}
+                  </AccordionDetails>
+                </Accordion>
+              </Box>
+```
+
+This is the expert solution because:
+1. Dialog opens instantly (<1s) - critical data shown first
+2. Heavy blockchain verification deferred until user expands accordion
+3. User control - they decide if they need cryptographic proof
+4. Best practice: Progressive disclosure pattern from UX research

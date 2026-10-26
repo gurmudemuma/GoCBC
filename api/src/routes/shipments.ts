@@ -1,0 +1,2983 @@
+// Ethiopian Coffee Export Consortium Blockchain System (CECBS)
+// Shipments API Routes
+
+import express, { Request, Response } from 'express';
+import { FabricService } from '../services/fabricService';
+import { ShipmentService } from '../services/shipmentService';
+import { DatabaseService } from '../services/databaseService';
+import { logger } from '../utils/logger';
+import { validateRequest } from '../middleware/validation';
+import { body, param, query } from 'express-validator';
+import { dedupeById, isValidShipment } from '../utils/dataFilters';
+import { statusManager } from '../utils/statusManager';
+import { authMiddleware, requireRole } from '../middleware/auth';
+
+const router = express.Router();
+const fabricService = FabricService.getInstance();
+const shipmentService = ShipmentService.getInstance();
+const postgresDb = DatabaseService.getInstance();
+
+/**
+ * @swagger
+ * /api/v1/shipments:
+ *   post:
+ *     summary: Create a new coffee shipment
+ *     tags: [Shipments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - shipmentID
+ *               - exporterID
+ *               - buyerID
+ *               - origin
+ *               - quantity
+ *               - grade
+ *               - icoNumber
+ *               - channel
+ *               - forexRate
+ *               - valueUSD
+ *               - eudrCompliant
+ *             properties:
+ *               shipmentID:
+ *                 type: string
+ *               exporterID:
+ *                 type: string
+ *               buyerID:
+ *                 type: string
+ *               origin:
+ *                 type: string
+ *               quantity:
+ *                 type: number
+ *               grade:
+ *                 type: string
+ *               icoNumber:
+ *                 type: string
+ *               ecxLotNumber:
+ *                 type: string
+ *                 description: 'Required only when channel is ECX'
+ *               bondReference:
+ *                 type: string
+ *                 description: 'Required only when channel is Direct Export'
+ *               unionApprovalReference:
+ *                 type: string
+ *                 description: 'Required only when channel is Union/Cooperative'
+ *               channel:
+ *                 type: string
+ *               forexRate:
+ *                 type: number
+ *               valueUSD:
+ *                 type: number
+ *               eudrCompliant:
+ *                 type: boolean
+ *     responses:
+ *       201:
+ *         description: Shipment created successfully
+ *       400:
+ *         description: Invalid input data
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/',
+  [
+    body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('contractID').notEmpty().withMessage('Contract ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('buyerID').notEmpty().withMessage('Buyer ID is required'),
+    body('origin').notEmpty().withMessage('Origin is required'),
+    body('quantity').isNumeric().withMessage('Quantity must be a number'),
+    body('grade').notEmpty().withMessage('Grade is required'),
+    body('icoNumber').notEmpty().withMessage('ICO number is required'),
+    body('channel').notEmpty().withMessage('Channel is required'),
+    body('ecxLotNumber')
+      .if(body('channel').equals('ECX'))
+      .notEmpty().withMessage('ECX lot number is required when channel is ECX'),
+    body('unionApprovalReference')
+      .if(body('channel').equals('Union'))
+      .notEmpty().withMessage('Union approval reference is required when channel is Union/Cooperative'),
+    body('bondReference')
+      .optional()
+      .if(body('channel').equals('Direct Export'))
+      .notEmpty().withMessage('Bond reference is required when channel is Direct Export'),
+    body('forexRate').isNumeric().withMessage('Forex rate must be a number'),
+    body('valueUSD').isNumeric().withMessage('Value USD must be a number'),
+    body('eudrCompliant').isBoolean().withMessage('EUDR compliant must be a boolean'),
+    body('documents').optional().isArray(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const {
+        shipmentID,
+        contractID,
+        exporterID,
+        buyerID,
+        origin,
+        quantity,
+        grade,
+        icoNumber,
+        ecxLotNumber,
+        channel,
+        forexRate,
+        valueUSD,
+        eudrCompliant,
+        documents,
+      } = req.body;
+
+      // DUPLICATE PREVENTION: Check if shipment already exists for this contract
+      try {
+        logger.info(`[SHIPMENT] Checking for existing shipments on contract ${contractID}...`);
+        const existingShipmentsResult = await fabricService.queryChaincode('QueryShipmentsByContract', [contractID]);
+        
+        if (existingShipmentsResult.success) {
+          if (existingShipmentsResult.data && Array.isArray(existingShipmentsResult.data) && existingShipmentsResult.data.length > 0) {
+            const existingShipments = existingShipmentsResult.data;
+            logger.warn(`[SHIPMENT] Duplicate prevention: Shipment already exists for contract ${contractID}`);
+            return res.status(400).json({
+              success: false,
+              error: {
+                code: 'DUPLICATE_SHIPMENT',
+                message: `A shipment already exists for contract ${contractID}`,
+                existingShipmentId: existingShipments[0].ShipmentID || existingShipments[0].shipmentID,
+              },
+              timestamp: new Date().toISOString(),
+            });
+          } else {
+            logger.info(`[SHIPMENT] No existing shipments found for contract ${contractID}`);
+          }
+        } else {
+          logger.error(`[SHIPMENT] Failed to query existing shipments: ${existingShipmentsResult.error}`);
+          // Continue with shipment creation - duplicate check is best-effort
+        }
+      } catch (dupCheckError) {
+        logger.error('[SHIPMENT] Error during duplicate check:', dupCheckError);
+        // Continue with shipment creation - duplicate check is best-effort
+      }
+
+      // AUTO-MAPPING: Fetch contract data to auto-populate fields
+      let autoMappedData: any = {};
+      try {
+        const contractResult = await fabricService.queryChaincode('ReadSalesContract', [contractID]);
+        if (contractResult.success && contractResult.data) {
+          const contract = contractResult.data;
+          autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
+          autoMappedData.buyerID = contract.BuyerID || contract.buyerID || buyerID;
+          autoMappedData.quantity = contract.Quantity || contract.quantity || quantity;
+          autoMappedData.grade = contract.CoffeeType || contract.coffeeType || grade;
+          
+          // Calculate valueUSD from contract price if not provided
+          const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
+          const qty = parseFloat(autoMappedData.quantity || quantity || '0');
+          autoMappedData.calculatedValueUSD = (pricePerKg * qty).toFixed(2);
+          
+          logger.info(`[SHIPMENT] Auto-mapped from contract: exporterID=${autoMappedData.exporterID}, quantity=${autoMappedData.quantity}, valueUSD=${autoMappedData.calculatedValueUSD}`);
+        }
+      } catch (error) {
+        logger.warn('[SHIPMENT] Could not fetch contract for auto-mapping:', error);
+      }
+
+      // Use provided values or auto-mapped values
+      const finalExporterID = exporterID || autoMappedData.exporterID || '';
+      const finalBuyerID = buyerID || autoMappedData.buyerID || '';
+      const finalQuantity = quantity || autoMappedData.quantity || 0;
+      const finalGrade = grade || autoMappedData.grade || '';
+      const finalValueUSD = valueUSD || autoMappedData.calculatedValueUSD || 0;
+
+      // MANDATORY FIELD VALIDATION: Ensure all required fields are filled after auto-mapping
+      const validationErrors: string[] = [];
+      
+      if (!finalExporterID || finalExporterID.trim() === '') {
+        validationErrors.push('Exporter ID is required and cannot be empty');
+      }
+      if (!finalBuyerID || finalBuyerID.trim() === '') {
+        validationErrors.push('Buyer ID is required and cannot be empty');
+      }
+      if (!origin || origin.trim() === '') {
+        validationErrors.push('Origin is required and cannot be empty');
+      }
+      if (!finalQuantity || finalQuantity <= 0) {
+        validationErrors.push('Quantity must be greater than 0');
+      }
+      if (!finalGrade || finalGrade.trim() === '') {
+        validationErrors.push('Grade is required and cannot be empty. Please specify the coffee grade (e.g., Grade 1, Grade 2, etc.)');
+      }
+      if (!icoNumber || icoNumber.trim() === '') {
+        validationErrors.push('ICO Number is required and cannot be empty');
+      }
+      if (!finalValueUSD || finalValueUSD <= 0) {
+        validationErrors.push('Value USD must be greater than 0');
+      }
+      
+      // If there are validation errors, return them to the user
+      if (validationErrors.length > 0) {
+        logger.warn(`[SHIPMENT] Validation failed for shipment ${shipmentID}:`, validationErrors);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Shipment creation failed: Required fields are missing or empty',
+            details: validationErrors,
+            hint: 'All required fields must be filled. Auto-mapping from contract could not populate missing fields.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // ✅ DOCUMENT VERIFICATION: Check quality documents before shipment creation
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        
+        const db = DatabaseService.getInstance();
+        const documents = await db.all(
+          `SELECT document_type, verification_status FROM documents 
+           WHERE entity_type = 'shipment' AND entity_id = ? AND status = 'active'`,
+          [shipmentID]
+        );
+        
+        // Required quality documents for shipment
+        const requiredDocs = ['QUALITY_CERTIFICATE', 'CUPPING_REPORT'];
+        const docTypes = documents.map((d: any) => d.document_type);
+        const missing = requiredDocs.filter(type => !docTypes.includes(type));
+        
+        if (missing.length > 0) {
+          logger.warn(`Shipment ${shipmentID} creation: Missing ${missing.length} quality documents (non-blocking)`);
+          // Note: This is informational only - we don't block shipment creation
+          // Quality documents can be uploaded after shipment creation
+        } else {
+          logger.info(`✅ Shipment ${shipmentID}: Quality documents already uploaded`);
+        }
+      } catch (docCheckError) {
+        logger.warn(`Non-fatal: Document check failed for shipment ${shipmentID}:`, docCheckError);
+        // Continue with shipment creation - document check is best-effort
+      }
+
+      // Extract document IDs for blockchain storage
+      let documentIDs: string[] = [];
+      if (documents && Array.isArray(documents)) {
+        documentIDs = documents.map((doc: any) => doc.documentId || doc.id).filter(Boolean);
+        logger.info(`Shipment ${shipmentID}: Linking ${documentIDs.length} documents to blockchain`);
+      }
+
+      let result;
+      let blockchainWriteSuccessful = false;
+      
+      try {
+        result = await fabricService.createShipment(
+          shipmentID,
+          contractID,
+          finalExporterID,
+          finalBuyerID,
+          origin,
+          finalQuantity.toString(),
+          finalGrade,
+          icoNumber,
+          ecxLotNumber || '', // Default to empty string if not provided
+          channel,
+          forexRate.toString(),
+          finalValueUSD.toString(),
+          eudrCompliant.toString(),
+          JSON.stringify(documentIDs)
+        );
+        blockchainWriteSuccessful = result.success;
+      } catch (blockchainError: any) {
+        // ✅ FIX: Don't fail the entire request if blockchain times out
+        logger.error(`⚠️ Blockchain write failed for shipment ${shipmentID}: ${blockchainError.message}`);
+        result = {
+          success: false,
+          error: blockchainError.message,
+          txId: null
+        };
+      }
+
+      // ✅ FIX: Always save to PostgreSQL regardless of blockchain status
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      try {
+        await db.run(
+          `INSERT INTO shipments (
+            shipment_id, contract_id, exporter_id, buyer_id, origin, quantity, grade,
+            ico_number, ecx_lot_number, channel, forex_rate, value_usd, eudr_compliant,
+            status, blockchain_tx_id, blockchain_synced, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)`,
+          [
+            shipmentID,
+            contractID,
+            finalExporterID,
+            finalBuyerID,
+            origin,
+            finalQuantity,
+            finalGrade,
+            icoNumber,
+            ecxLotNumber || '',
+            channel,
+            forexRate,
+            finalValueUSD,
+            eudrCompliant,
+            'pending', // Initial status
+            result.txId || null,
+            blockchainWriteSuccessful,
+          ]
+        );
+        logger.info(`✅ Shipment ${shipmentID} saved to PostgreSQL (blockchain: ${blockchainWriteSuccessful ? 'synced' : 'pending'})`);
+        
+        // ✅ OPTIMIZATION: Invalidate cache for this shipment and related queries
+        const { CacheInvalidation } = await import('../services/blockchainCacheService');
+        CacheInvalidation.shipment(shipmentID, contractID);
+        
+      } catch (dbError: any) {
+        logger.error(`❌ Failed to save shipment ${shipmentID} to PostgreSQL: ${dbError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'DATABASE_ERROR',
+            message: 'Failed to save shipment to database'
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (blockchainWriteSuccessful) {
+        logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
+        
+        // AUTO-CREATE QUALITY INSPECTION TASK using ShipmentService
+        try {
+          await shipmentService.createQualityInspectionTask({
+            shipmentID,
+            contractID,
+            exporterID: finalExporterID,
+            coffeeType: finalGrade,
+            quantity: finalQuantity
+          });
+          logger.info(`✅ Quality inspection task auto-created for shipment ${shipmentID}`);
+        } catch (qualityError: any) {
+          logger.warn(`⚠️ Failed to auto-create quality inspection task: ${qualityError.message}`);
+          // Non-fatal - shipment is still created
+        }
+        
+        // DON'T link shipment to LC yet - this will be done after ECTA quality approval
+        // The LC status should only change to SHIPPED after quality inspection is approved
+        logger.info(`[SHIPMENT] Shipment ${shipmentID} created for contract ${contractID}. LC linking will happen after ECTA quality approval.`);
+        
+        res.status(201).json({
+          success: true,
+          data: { shipmentID, status: 'pending', blockchainSynced: true },
+          autoMapped: {
+            exporterID: finalExporterID,
+            buyerID: finalBuyerID,
+            quantity: finalQuantity,
+            grade: finalGrade,
+            valueUSD: finalValueUSD,
+          },
+          documentsLinked: documentIDs.length,
+          qualityInspectionCreated: true,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        // ✅ FIX: Return 202 Accepted instead of 400
+        logger.warn(`Shipment ${shipmentID} saved to database but blockchain write failed. Will retry later.`);
+        res.status(202).json({
+          success: true,
+          warning: 'Shipment saved but blockchain sync pending',
+          data: { shipmentID, status: 'pending', blockchainSynced: false },
+          autoMapped: {
+            exporterID: finalExporterID,
+            buyerID: finalBuyerID,
+            quantity: finalQuantity,
+            grade: finalGrade,
+            valueUSD: finalValueUSD,
+          },
+          documentsLinked: documentIDs.length,
+          txId: null,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error creating shipment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /api/v1/shipments:
+ *   get:
+ *     summary: Get all shipments
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: query
+ *         name: exporterID
+ *         schema:
+ *           type: string
+ *         description: Filter by exporter ID
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *         description: Filter by shipment status
+ *       - in: query
+ *         name: eudrCompliant
+ *         schema:
+ *           type: boolean
+ *         description: Filter EUDR-compliant shipments
+ *       - in: query
+ *         name: dateFrom
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter from date
+ *       - in: query
+ *         name: dateTo
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter to date
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *         description: Number of results to return
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *         description: Number of results to skip
+ *     responses:
+ *       200:
+ *         description: List of shipments retrieved successfully
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/', async (req, res) => {
+  try {
+    const { exporterID, eudrCompliant, status: statusFilter } = req.query;
+    
+    // Import enrichment service
+    const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
+    
+    let shipments: any[] = [];
+    let source = 'blockchain';
+    
+    // ✅ Try CouchDB first with error handling and PostgreSQL fallback
+    try {
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      
+      logger.info(`[SHIPMENTS] 🔗 Fetching shipments from blockchain (CouchDB direct)...`);
+      shipments = await couchDBService.queryAllShipments();
+      logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from blockchain (CouchDB direct)`);
+    } catch (couchError: any) {
+      // ✅ FALLBACK: Use PostgreSQL if CouchDB fails
+      logger.warn(`[SHIPMENTS] CouchDB query failed, falling back to PostgreSQL: ${couchError.message}`);
+      source = 'database';
+      
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      const dbShipments = await db.all(
+        `SELECT * FROM shipments ORDER BY created_at DESC`
+      );
+      
+      shipments = dbShipments.map((s: any) => ({
+        shipmentId: s.shipment_id,
+        contractId: s.contract_id,
+        exporterId: s.exporter_id,
+        buyerId: s.buyer_id,
+        origin: s.origin,
+        destination: s.destination,
+        quantity: s.quantity,
+        grade: s.grade,
+        icoNumber: s.ico_number,
+        ecxLotNumber: s.ecx_lot_number,
+        channel: s.channel,
+        status: s.status,
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
+        eudrCompliant: s.eudr_compliant,
+        ecxLots: [],
+        documents: []
+      }));
+      
+      logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from PostgreSQL (fallback)`);
+    }
+    
+    // Apply filters
+    if (exporterID) {
+      shipments = shipments.filter((s: any) => 
+        s.exporterId === exporterID || s.ExporterID === exporterID || s.exporterID === exporterID
+      );
+    }
+    
+    if (eudrCompliant === 'true') {
+      shipments = shipments.filter((s: any) => 
+        s.eudrCompliant === true || s.EUDRCompliant === true
+      );
+    }
+    
+    if (statusFilter) {
+      shipments = shipments.filter((s: any) => 
+        (s.status || s.Status || '').toUpperCase() === (statusFilter as string).toUpperCase()
+      );
+    }
+    
+    // ✅ ENRICH with buyer data from PostgreSQL
+    shipments = await dataEnrichmentService.enrichShipments(shipments);
+    
+    logger.info(`[SHIPMENTS] Returning ${shipments.length} shipments (enriched with buyer data)`);
+    
+    const normalizedShipments = shipments.map((shipment: any) => ({
+      shipmentId: shipment?.shipmentId || shipment?.ShipmentID || shipment?.id || '',
+      contractId: shipment?.contractId || shipment?.ContractID || shipment?.contractID || '',
+      exporterId: shipment?.exporterId || shipment?.ExporterID || shipment?.exporterID || '',
+      buyerId: shipment?.buyerId || shipment?.BuyerID || shipment?.buyerID || '',
+        buyerName: shipment?.buyerName || shipment?.BuyerName || '', // ✅ NOW ENRICHED
+        buyerCountry: shipment?.buyerCountry || '', // ✅ NOW ENRICHED
+        origin: shipment?.origin || shipment?.Origin || '',
+        destination: shipment?.destination || shipment?.Destination || '',
+        quantity: shipment?.quantity ?? shipment?.Quantity ?? 0,
+        grade: shipment?.grade || shipment?.Grade || '',
+        icoNumber: shipment?.icoNumber || shipment?.ICONumber || shipment?.icoNumber || '',
+        status: shipment?.status || shipment?.Status || 'CREATED',
+        createdAt: shipment?.createdAt || shipment?.created_at || shipment?.createdAt || null,
+        updatedAt: shipment?.updatedAt || shipment?.updated_at || shipment?.updatedAt || null,
+        eudrCompliant: shipment?.eudrCompliant ?? shipment?.EUDRCompliant ?? false,
+        ecxLots: Array.isArray(shipment?.ecxLots) ? shipment.ecxLots : [],
+        documents: Array.isArray(shipment?.documents) ? shipment.documents : [],
+        // Shipping & Transport Fields
+        transportMode: shipment?.transportMode || shipment?.TransportMode || '',
+        shippingLine: shipment?.shippingLine || shipment?.ShippingLine || '',
+        trackingNumber: shipment?.trackingNumber || shipment?.TrackingNumber || '',
+        // Sea Freight fields
+        billOfLadingNo: shipment?.billOfLadingNo || shipment?.BillOfLadingNo || '',
+        billOfLadingDate: shipment?.billOfLadingDate || shipment?.BillOfLadingDate || '',
+        vesselName: shipment?.vesselName || shipment?.VesselName || '',
+        voyageNumber: shipment?.voyageNumber || shipment?.VoyageNumber || '',
+        containerNumber: shipment?.containerNumber || shipment?.ContainerNumber || '',
+        containerType: shipment?.containerType || shipment?.ContainerType || '',
+        // Air Freight fields
+        airwayBill: shipment?.airwayBill || shipment?.AirwayBill || '',
+        flightNumber: shipment?.flightNumber || shipment?.FlightNumber || '',
+        // Ports & Timeline
+        departurePort: shipment?.departurePort || shipment?.DeparturePort || '',
+        destinationPort: shipment?.destinationPort || shipment?.DestinationPort || '',
+        estimatedArrival: shipment?.estimatedArrival || shipment?.EstimatedArrival || '',
+        actualArrival: shipment?.actualArrival || shipment?.ActualArrival || '',
+        // Land Transport
+        landTransportCompany: shipment?.landTransportCompany || shipment?.LandTransportCompany || '',
+        truckPlateNumber: shipment?.truckPlateNumber || shipment?.TruckPlateNumber || '',
+        driverName: shipment?.driverName || shipment?.DriverName || '',
+        departureFromAddis: shipment?.departureFromAddis || shipment?.DepartureFromAddis || '',
+        arrivalAtDjibouti: shipment?.arrivalAtDjibouti || shipment?.ArrivalAtDjibouti || '',
+        landTransportStatus: shipment?.landTransportStatus || shipment?.LandTransportStatus || '',
+        // Container Stuffing
+        stuffingDate: shipment?.stuffingDate || shipment?.StuffingDate || '',
+        stuffingLocation: shipment?.stuffingLocation || shipment?.StuffingLocation || '',
+        containerCondition: shipment?.containerCondition || shipment?.ContainerCondition || '',
+        // Packaging
+        packagingType: shipment?.packagingType || shipment?.PackagingType || '',
+        bagWeight: shipment?.bagWeight || shipment?.BagWeight || 0,
+        totalBags: shipment?.totalBags || shipment?.TotalBags || 0,
+        netWeight: shipment?.netWeight || shipment?.NetWeight || 0,
+        grossWeight: shipment?.grossWeight || shipment?.GrossWeight || 0,
+      }));
+
+      const validShipments = dedupeById(normalizedShipments.filter(isValidShipment), (shipment: any) => shipment.shipmentId);
+      const { status, dateFrom, dateTo, limit = 50, offset = 0 } = req.query;
+
+      // Apply additional filters
+      let filteredShipments = validShipments;
+      if (status) {
+        filteredShipments = filteredShipments.filter((shipment: any) => shipment.status === status);
+      }
+      if (dateFrom || dateTo) {
+        filteredShipments = filteredShipments.filter((shipment: any) => {
+          const shipmentDate = new Date(shipment.createdAt);
+          if (dateFrom && shipmentDate < new Date(dateFrom as string)) return false;
+          if (dateTo && shipmentDate > new Date(dateTo as string)) return false;
+          return true;
+        });
+      }
+
+      // Apply pagination
+      const paginatedShipments = filteredShipments.slice(
+        parseInt(offset as string),
+        parseInt(offset as string) + parseInt(limit as string)
+      );
+
+      res.json({
+        success: true,
+        data: paginatedShipments,
+        pagination: {
+          total: filteredShipments.length,
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+          hasMore: parseInt(offset as string) + parseInt(limit as string) < filteredShipments.length,
+        },
+        timestamp: new Date().toISOString(),
+      });
+  } catch (error: any) {
+    logger.error('[SHIPMENTS] Error retrieving shipments:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to retrieve shipments',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/documents:
+ *   get:
+ *     summary: Get all documents for a shipment
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ */
+router.get('/:shipmentID/documents',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { DatabaseService } = await import('../services/databaseService');
+      const { checkRequiredDocuments, DOCUMENT_TYPES } = await import('../utils/documentValidation');
+      
+      const db = DatabaseService.getInstance();
+      
+      // Get all documents for this shipment (PostgreSQL uses $1 placeholders; entity_type casing varies)
+      const documents = await db.all(
+        `SELECT * FROM documents 
+         WHERE LOWER(entity_type) = 'shipment' AND entity_id = $1 AND status != 'deleted'
+         ORDER BY uploaded_at DESC`,
+        [shipmentID]
+      );
+      
+      // Parse metadata
+      documents.forEach((doc: any) => {
+        try {
+          doc.metadata = JSON.parse(doc.metadata || '{}');
+        } catch {
+          doc.metadata = {};
+        }
+      });
+      
+      // Check requirements
+      const docTypes = documents
+        .filter((d: any) => d.status === 'active')
+        .map((d: any) => d.document_type);
+      const requirementCheck = checkRequiredDocuments('shipment', docTypes);
+      
+      // Get requirement details for shipment
+      const shipmentRequirements = ['QUALITY_CERTIFICATE', 'CUPPING_REPORT', 'EXPORT_PERMIT', 
+                                     'PHYTOSANITARY_CERTIFICATE', 'CERTIFICATE_OF_ORIGIN'];
+      const requirements = shipmentRequirements
+        .filter(type => type in DOCUMENT_TYPES)
+        .map(type => ({
+          type,
+          name: (DOCUMENT_TYPES as any)[type].name,
+          required: (DOCUMENT_TYPES as any)[type].required,
+          uploaded: docTypes.includes(type)
+        }));
+      
+      res.json({
+        success: true,
+        data: {
+          documents,
+          count: documents.length,
+          requirements: {
+            allRequired: requirementCheck.valid,
+            missing: requirementCheck.errors,
+            details: requirements
+          }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error fetching shipment documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}:
+ *   get:
+ *     summary: Get shipment details by ID
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     responses:
+ *       200:
+ *         description: Shipment details retrieved successfully
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/:shipmentID',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { blockchainCache, CacheKeys } = await import('../services/blockchainCacheService');
+      
+      // ✅ OPTIMIZATION: Try cache first, then blockchain, then PostgreSQL
+      let shipmentData = null;
+      let source = 'cache';
+      
+      try {
+        shipmentData = await blockchainCache.get(
+          CacheKeys.shipment(shipmentID),
+          async () => {
+            const result = await fabricService.getShipment(shipmentID);
+            if (result.success) {
+              const data = result.data;
+              // Handle null values
+              if (data) {
+                if (data.ecxLots === null || data.ecxLots === undefined) {
+                  data.ecxLots = [];
+                }
+                if (data.documents === null || data.documents === undefined) {
+                  data.documents = [];
+                }
+              }
+              return data;
+            }
+            throw new Error('Shipment not found on blockchain');
+          },
+          5 * 60 * 1000 // 5 minute cache
+        );
+        
+        source = 'blockchain'; // Either cache hit or fresh fetch
+      } catch (blockchainError: any) {
+        logger.warn(`Blockchain query failed for shipment ${shipmentID}, falling back to PostgreSQL: ${blockchainError.message}`);
+      }
+      
+      // Fall back to PostgreSQL if blockchain failed
+      if (!shipmentData) {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        
+        const shipment = await db.get(
+          `SELECT * FROM shipments WHERE shipment_id = $1`,
+          [shipmentID]
+        );
+        
+        if (shipment) {
+          source = 'database';
+          shipmentData = {
+            shipmentID: shipment.shipment_id,
+            contractID: shipment.contract_id,
+            exporterID: shipment.exporter_id,
+            buyerID: shipment.buyer_id,
+            origin: shipment.origin,
+            destination: shipment.destination,
+            quantity: shipment.quantity,
+            grade: shipment.grade,
+            icoNumber: shipment.ico_number,
+            ecxLotNumber: shipment.ecx_lot_number,
+            channel: shipment.channel,
+            forexRate: shipment.forex_rate,
+            valueUSD: shipment.value_usd,
+            eudrCompliant: shipment.eudr_compliant,
+            status: shipment.status,
+            blockchainTxId: shipment.blockchain_tx_id,
+            blockchainSynced: shipment.blockchain_synced || false,
+            createdAt: shipment.created_at,
+            ecxLots: [],
+            documents: []
+          } as any;
+        }
+      }
+
+      if (shipmentData) {
+        res.json({
+          success: true,
+          data: shipmentData,
+          source: source,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Shipment not found in blockchain or database',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving shipment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/status:
+ *   put:
+ *     summary: Update shipment status
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [CREATED, QUALITY_CONTROL, CUSTOMS_CLEARANCE, SHIPPED, DELIVERED]
+ *     responses:
+ *       200:
+ *         description: Shipment status updated successfully
+ *       400:
+ *         description: Invalid input data
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.put('/:shipmentID/status',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('status').notEmpty().withMessage('Status is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { status } = req.body;
+
+      // Get current shipment status for validation
+      const shipmentData = await fabricService.getShipment(shipmentID);
+      if (!shipmentData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
+      
+      // Validate status transition
+      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
+            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await fabricService.updateShipmentStatus(shipmentID, status);
+
+      if (result.success) {
+        // Update status with cascading effects
+        await statusManager.updateEntityStatus('SHIPMENT', shipmentID, currentStatus, status);
+        
+        logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
+        res.json({
+          success: true,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'UPDATE_FAILED',
+            message: result.error || 'Failed to update shipment status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error updating shipment status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/buyer:
+ *   patch:
+ *     summary: Update shipment buyer ID (admin/correction function)
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - buyerId
+ *             properties:
+ *               buyerId:
+ *                 type: string
+ *                 description: New buyer ID
+ *     responses:
+ *       200:
+ *         description: Buyer updated successfully
+ *       400:
+ *         description: Invalid request
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.patch('/:shipmentID/buyer',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('buyerId').notEmpty().withMessage('Buyer ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { buyerId } = req.body;
+
+      logger.info(`Updating shipment buyer: ${shipmentID} → ${buyerId}`);
+
+      // Invoke chaincode to update buyer
+      await fabricService.connectAsOrg('ECTAMSP');
+      
+      const result = await fabricService.invokeChaincode('UpdateShipmentBuyer', [
+        shipmentID,
+        buyerId
+      ]);
+
+      if (result.success) {
+        logger.info(`Shipment buyer updated successfully: ${shipmentID} → ${buyerId}`);
+        res.json({
+          success: true,
+          data: { shipmentID, buyerId },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'UPDATE_FAILED',
+            message: result.error || 'Failed to update shipment buyer',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error updating shipment buyer:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/reconcile-status:
+ *   post:
+ *     summary: Reconcile shipment status between database and blockchain
+ *     description: Forces blockchain status to match the expected workflow state. Admin use only.
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               targetStatus:
+ *                 type: string
+ *                 description: The status to set on blockchain
+ *                 example: CUSTOMS_CLEARED
+ *     responses:
+ *       200:
+ *         description: Status reconciled successfully
+ *       400:
+ *         description: Invalid request
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/reconcile-status',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('targetStatus').notEmpty().withMessage('Target status is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { targetStatus } = req.body;
+
+      logger.info(`🔄 Reconciling shipment status: ${shipmentID} → ${targetStatus}`);
+
+      // Get current blockchain status
+      const shipmentData = await fabricService.getShipment(shipmentID);
+      if (!shipmentData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status;
+      logger.info(`Current blockchain status: ${currentStatus} → Target: ${targetStatus}`);
+
+      // Force update status on blockchain (admin override)
+      await fabricService.connectAsOrg('ECTAMSP');
+      
+      const result = await fabricService.invokeChaincode('UpdateShipmentStatus', [
+        shipmentID,
+        targetStatus
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Status reconciled: ${shipmentID} ${currentStatus} → ${targetStatus}`);
+        res.json({
+          success: true,
+          data: {
+            shipmentID,
+            previousStatus: currentStatus,
+            newStatus: targetStatus,
+            reconciled: true
+          },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RECONCILE_FAILED',
+            message: result.error || 'Failed to reconcile shipment status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error reconciling shipment status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/history:
+ *   get:
+ *     summary: Get shipment transaction history
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     responses:
+ *       200:
+ *         description: Shipment history retrieved successfully
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/:shipmentID/history',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const result = await fabricService.getShipmentHistory(shipmentID);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: result.error || 'Shipment history not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving shipment history:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/traceability:
+ *   get:
+ *     summary: Get complete traceability data for a shipment
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     responses:
+ *       200:
+ *         description: Complete traceability data retrieved successfully
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/:shipmentID/traceability',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const result = await fabricService.getCompleteTraceability(shipmentID);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          data: result.data,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: result.error || 'Traceability data not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('Error retrieving traceability data:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ==================== SHIPPING & LOGISTICS ROUTES ====================
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/bill-of-lading:
+ *   post:
+ *     summary: Record Bill of Lading for a shipment
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - billOfLadingNo
+ *               - vesselName
+ *               - departurePort
+ *               - destinationPort
+ *               - estimatedArrival
+ *             properties:
+ *               billOfLadingNo:
+ *                 type: string
+ *               vesselName:
+ *                 type: string
+ *               departurePort:
+ *                 type: string
+ *               destinationPort:
+ *                 type: string
+ *               estimatedArrival:
+ *                 type: string
+ *                 format: date
+ *               trackingNumber:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Bill of Lading recorded successfully
+ *       400:
+ *         description: Invalid input data
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/bill-of-lading',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('billOfLadingNo').notEmpty().withMessage('B/L number is required'),
+    body('vesselName').notEmpty().withMessage('Vessel name is required'),
+    body('departurePort').notEmpty().withMessage('Departure port is required'),
+    body('destinationPort').notEmpty().withMessage('Destination port is required'),
+    body('estimatedArrival').notEmpty().withMessage('Estimated arrival is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const {
+        billOfLadingNo,
+        vesselName,
+        departurePort,
+        destinationPort,
+        estimatedArrival,
+        trackingNumber
+      } = req.body;
+
+      logger.info(`[SHIPPING] Recording B/L for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('RecordBillOfLading', [
+        shipmentID,
+        billOfLadingNo,
+        vesselName,
+        departurePort,
+        destinationPort,
+        estimatedArrival,
+        trackingNumber || ''
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] B/L recorded successfully: ${billOfLadingNo}`);
+        res.json({
+          success: true,
+          message: 'Bill of Lading recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record B/L: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RECORDING_FAILED',
+            message: result.error || 'Failed to record Bill of Lading',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording Bill of Lading:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/shipping-status:
+ *   put:
+ *     summary: Update shipping status and location
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               location:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED]
+ *     responses:
+ *       200:
+ *         description: Shipping status updated successfully
+ *       400:
+ *         description: Invalid input data
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.put('/:shipmentID/shipping-status',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('status').notEmpty().withMessage('Status is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { location, status } = req.body;
+
+      logger.info(`[SHIPPING] Updating shipping status: ${shipmentID} -> ${status}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('UpdateShipmentLocation', [
+        shipmentID,
+        location || '',
+        status
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Shipping status updated: ${shipmentID} -> ${status}`);
+        res.json({
+          success: true,
+          message: 'Shipping status updated successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to update shipping status: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'UPDATE_FAILED',
+            message: result.error || 'Failed to update shipping status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error updating shipping status:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/pickup:
+ *   post:
+ *     summary: Mark shipment as picked up (CUSTOMS_CLEARED -> IN_TRANSIT)
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pickupLocation
+ *               - pickupBy
+ *             properties:
+ *               pickupLocation:
+ *                 type: string
+ *               pickupBy:
+ *                 type: string
+ *               vehicleNumber:
+ *                 type: string
+ *               driverName:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Shipment marked as picked up
+ *       400:
+ *         description: Invalid input data or shipment not ready for pickup
+ *       500:
+ *         description: Internal server error
+ */
+
+/**
+ * @swagger
+ * /api/v1/shipments/:shipmentID/book-freight:
+ *   post:
+ *     summary: Book freight for customs-cleared shipment
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - freightForwarder
+ *               - transportMode
+ *               - estimatedDepartureDate
+ *             properties:
+ *               freightForwarder:
+ *                 type: string
+ *               transportMode:
+ *                 type: string
+ *                 enum: [SEA, AIR]
+ *               vesselName:
+ *                 type: string
+ *               containerNumber:
+ *                 type: string
+ *               estimatedDepartureDate:
+ *                 type: string
+ *                 format: date
+ *               estimatedArrivalDate:
+ *                 type: string
+ *                 format: date
+ *               portOfLoading:
+ *                 type: string
+ *               portOfDischarge:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Freight booked successfully
+ *       400:
+ *         description: Shipment not customs cleared or invalid data
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/book-freight',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('freightForwarder').notEmpty().withMessage('Freight forwarder is required'),
+    body('transportMode').notEmpty().isIn(['SEA', 'AIR']).withMessage('Transport mode must be SEA or AIR'),
+    body('estimatedDepartureDate').notEmpty().withMessage('Estimated departure date is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const {
+        freightForwarder,
+        transportMode,
+        vesselName,
+        containerNumber,
+        estimatedDepartureDate,
+        estimatedArrivalDate,
+        portOfLoading,
+        portOfDischarge,
+      } = req.body;
+
+      logger.info(`[SHIPPING] Booking freight for shipment: ${shipmentID}`);
+
+      // Verify shipment is customs cleared
+      await fabricService.connectAsOrg('ShippingMSP');
+      const shipmentResult = await fabricService.queryChaincode('ReadShipment', [shipmentID]);
+      
+      if (!shipmentResult.success || !shipmentResult.data) {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Shipment not found' }
+        });
+      }
+
+      const shipment = shipmentResult.data;
+      const currentStatus = shipment.Status || shipment.status;
+      
+      if (currentStatus !== 'CUSTOMS_CLEARED') {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            message: `Shipment must be customs cleared before booking freight. Current status: ${currentStatus}` 
+          }
+        });
+      }
+
+      // Update shipment with freight booking details
+      const freightData = {
+        freightForwarder,
+        transportMode,
+        vesselName: vesselName || '',
+        containerNumber: containerNumber || '',
+        estimatedDepartureDate,
+        estimatedArrivalDate: estimatedArrivalDate || '',
+        portOfLoading: portOfLoading || 'Djibouti Port',
+        portOfDischarge: portOfDischarge || '',
+        bookingDate: new Date().toISOString(),
+        bookingStatus: 'CONFIRMED'
+      };
+
+      // Store freight booking (you may need to add this chaincode function)
+      // For now, update shipment status to FREIGHT_BOOKED
+      const statusUpdate = await fabricService.updateShipmentStatus(shipmentID, 'FREIGHT_BOOKED');
+      
+      if (statusUpdate.success) {
+        logger.info(`✅ [SHIPPING] Freight booked for ${shipmentID} via ${freightForwarder}`);
+        
+        res.json({
+          success: true,
+          message: 'Freight booked successfully',
+          shipmentID,
+          freightData,
+          nextStep: {
+            action: 'GENERATE_BILL_OF_LADING',
+            description: 'Generate bill of lading with freight booking details',
+            endpoint: `/api/v1/shipments/${shipmentID}/bill-of-lading`
+          },
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        throw new Error('Failed to update shipment status');
+      }
+    } catch (error: any) {
+      logger.error(`[SHIPPING] Error booking freight:`, error);
+      res.status(500).json({
+        success: false,
+        error: { message: error.message }
+      });
+    }
+  }
+);
+
+router.post('/:shipmentID/pickup',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('pickupBy').notEmpty().withMessage('Pickup by (shipping company) is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { pickupBy, pickupLocation, vehicleNumber, driverName } = req.body;
+
+      logger.info(`[SHIPPING] Recording pickup for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      // Generate tracking number if not provided
+      const trackingNumber = `TRK-${Date.now()}`;
+      
+      // Determine transport mode from shipment data
+      const shipmentResult = await fabricService.getShipment(shipmentID);
+      let transportMode = 'SEA'; // Default
+      if (shipmentResult.success && shipmentResult.data) {
+        transportMode = shipmentResult.data.transportMode || shipmentResult.data.TransportMode || 'SEA';
+      }
+
+      // Call blockchain with correct parameters: shipmentID, shippingCompany, transportMode, trackingNumber
+      const result = await fabricService.invokeChaincode('PickupShipment', [
+        shipmentID,
+        pickupBy, // shippingCompany
+        transportMode,
+        trackingNumber
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Shipment picked up: ${shipmentID} by ${pickupBy}`);
+        res.json({
+          success: true,
+          message: 'Shipment marked as picked up',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record pickup: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PICKUP_FAILED',
+            message: result.error || 'Failed to record pickup',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording pickup:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/delivery:
+ *   post:
+ *     summary: Confirm shipment delivery (IN_TRANSIT -> DELIVERED)
+ *     tags: [Shipping]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - deliveryLocation
+ *               - deliveredTo
+ *             properties:
+ *               deliveryLocation:
+ *                 type: string
+ *               deliveredTo:
+ *                 type: string
+ *               receivedBy:
+ *                 type: string
+ *               receiverSignature:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Shipment delivery confirmed
+ *       400:
+ *         description: Invalid input data or shipment not in transit
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/delivery',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { deliveryLocation, deliveredTo, receivedBy, receiverSignature } = req.body;
+
+      logger.info(`[SHIPPING] Confirming delivery for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      // Blockchain ConfirmDelivery only needs: shipmentID, deliveryNotes
+      const deliveryNotes = `Delivered to ${deliveredTo || 'buyer'} at ${deliveryLocation || 'destination'}`;
+
+      const result = await fabricService.invokeChaincode('ConfirmDelivery', [
+        shipmentID,
+        deliveryNotes
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Shipment delivered: ${shipmentID} to ${deliveredTo || 'buyer'}`);
+        res.json({
+          success: true,
+          message: 'Shipment delivery confirmed',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to confirm delivery: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DELIVERY_FAILED',
+            message: result.error || 'Failed to confirm delivery',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error confirming delivery:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/lc-documents:
+ *   post:
+ *     summary: Submit LC documents after shipment (updates LC to DOCUMENTS_SUBMITTED)
+ *     tags: [Shipments, LC]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shipment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - lcID
+ *               - documentIDs
+ *             properties:
+ *               lcID:
+ *                 type: string
+ *               documentIDs:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: LC documents submitted successfully
+ *       400:
+ *         description: Invalid input data
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:shipmentID/lc-documents',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('lcID').notEmpty().withMessage('LC ID is required'),
+    body('documentIDs').isArray().withMessage('Document IDs must be an array'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { lcID, documentIDs } = req.body;
+
+      logger.info(`[SHIPMENT] Submitting LC documents for shipment: ${shipmentID}, LC: ${lcID}`);
+
+      await fabricService.connectAsOrg('ExporterMSP');
+
+      const result = await fabricService.invokeChaincode('SubmitLCDocuments', [
+        lcID,
+        JSON.stringify(documentIDs)
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPMENT] LC documents submitted: LC ${lcID}, ${documentIDs.length} documents`);
+        res.json({
+          success: true,
+          message: 'LC documents submitted successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPMENT] Failed to submit LC documents: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SUBMISSION_FAILED',
+            message: result.error || 'Failed to submit LC documents',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPMENT] Error submitting LC documents:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ==================== COMPLETE COFFEE EXPORT SHIPPING WORKFLOW ENDPOINTS ====================
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/land-transport/start
+ * Start land transport from Addis to Djibouti (CUSTOMS_CLEARED → LAND_TRANSPORT)
+ */
+router.post('/:shipmentID/land-transport/start',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('transportCompany').notEmpty().withMessage('Transport company is required'),
+    body('truckPlateNumber').notEmpty().withMessage('Truck plate number is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { transportCompany, truckPlateNumber, driverName, sealNumber } = req.body;
+
+      logger.info(`[SHIPPING] Starting land transport for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('StartLandTransport', [
+        shipmentID,
+        transportCompany,
+        truckPlateNumber || '',
+        driverName || '',
+        sealNumber || `SEAL-${Date.now()}`
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Land transport started: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'Land transport started',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to start land transport: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'LAND_TRANSPORT_START_FAILED',
+            message: result.error || 'Failed to start land transport',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error starting land transport:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/port/arrive
+ * Record arrival at Djibouti Port (LAND_TRANSPORT → PORT_ARRIVED)
+ */
+router.post('/:shipmentID/port/arrive',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording port arrival for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('ArriveAtPort', [
+        shipmentID,
+        notes || 'Arrived at Djibouti Port'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Port arrival recorded: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'Port arrival recorded',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record port arrival: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PORT_ARRIVAL_FAILED',
+            message: result.error || 'Failed to record port arrival',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording port arrival:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/container/stuff
+ * Record container stuffing (PORT_ARRIVED → CONTAINER_STUFFED)
+ */
+router.post('/:shipmentID/container/stuff',
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('containerNumber').notEmpty().withMessage('Container number is required'),
+    body('containerType').notEmpty().withMessage('Container type is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { containerNumber, containerType, sealNumber, stuffedBy, location } = req.body;
+
+      logger.info(`[SHIPPING] Recording container stuffing for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('StuffContainer', [
+        shipmentID,
+        containerNumber,
+        containerType || 'DRY',
+        sealNumber || `SEAL-${Date.now()}`,
+        stuffedBy || 'Port Authority',
+        location || 'Djibouti Port'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Container stuffed: ${shipmentID} → ${containerNumber}`);
+        res.json({
+          success: true,
+          message: 'Container stuffing recorded',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record container stuffing: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONTAINER_STUFFING_FAILED',
+            message: result.error || 'Failed to record container stuffing',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording container stuffing:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/vessel/load
+ * Record container loaded on vessel (CONTAINER_STUFFED → VESSEL_LOADED)
+ */
+router.post('/:shipmentID/vessel/load',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording vessel loading for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('LoadOnVessel', [
+        shipmentID,
+        notes || 'Container loaded on vessel'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Vessel loaded: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'Vessel loading recorded',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record vessel loading: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VESSEL_LOADING_FAILED',
+            message: result.error || 'Failed to record vessel loading',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording vessel loading:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/vessel/depart
+ * Record vessel departure (VESSEL_LOADED → DEPARTED)
+ */
+router.post('/:shipmentID/vessel/depart',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording vessel departure for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('DepartFromPort', [
+        shipmentID,
+        notes || 'Vessel departed from Djibouti'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Vessel departed: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'Vessel departure recorded',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record vessel departure: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VESSEL_DEPARTURE_FAILED',
+            message: result.error || 'Failed to record vessel departure',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording vessel departure:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/in-transit/update
+ * Update to in-transit status (DEPARTED → IN_TRANSIT)
+ */
+router.post('/:shipmentID/in-transit/update',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { trackingNumber } = req.body;
+
+      logger.info(`[SHIPPING] Updating to in-transit for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('UpdateToInTransit', [
+        shipmentID,
+        trackingNumber || ''
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] In-transit updated: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'In-transit status updated',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to update in-transit: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'IN_TRANSIT_UPDATE_FAILED',
+            message: result.error || 'Failed to update in-transit status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error updating in-transit:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/destination/arrive
+ * Record arrival at destination port (IN_TRANSIT → DESTINATION_ARRIVED)
+ */
+router.post('/:shipmentID/destination/arrive',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording destination arrival for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('ArriveAtDestination', [
+        shipmentID,
+        notes || 'Arrived at destination port'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Destination arrival recorded: ${shipmentID}`);
+        res.json({
+          success: true,
+          message: 'Destination arrival recorded',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record destination arrival: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DESTINATION_ARRIVAL_FAILED',
+            message: result.error || 'Failed to record destination arrival',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error recording destination arrival:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipments/{shipmentID}/delivery/complete
+ * Complete final delivery (DESTINATION_ARRIVED → DELIVERED)
+ */
+router.post('/:shipmentID/delivery/complete',
+  [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { shipmentID } = req.params;
+      const { deliveryNotes } = req.body;
+
+      logger.info(`[SHIPPING] Completing delivery for shipment: ${shipmentID}`);
+
+      await fabricService.connectAsOrg('ShippingMSP');
+
+      const result = await fabricService.invokeChaincode('CompleteDelivery', [
+        shipmentID,
+        deliveryNotes || 'Delivery completed'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ [SHIPPING] Delivery completed: ${shipmentID}`);
+        
+        // Initialize post-delivery workflow
+        try {
+          const PostDeliveryWorkflowService = require('../services/postDeliveryWorkflowService').default;
+          const workflowService = new PostDeliveryWorkflowService();
+          const userId = (req as any).user?.userId || 1;
+          
+          await workflowService.initializePostDeliveryWorkflow(
+            shipmentID,
+            new Date().toISOString(),
+            userId
+          );
+          
+          logger.info(`📦 Post-delivery workflow initialized for: ${shipmentID}`);
+        } catch (workflowError) {
+          logger.warn(`Failed to initialize post-delivery workflow (non-critical):`, workflowError);
+          // Don't fail the delivery completion if workflow initialization fails
+        }
+        
+        res.json({
+          success: true,
+          message: 'Delivery completed',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to complete delivery: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'DELIVERY_COMPLETION_FAILED',
+            message: result.error || 'Failed to complete delivery',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      logger.error('[SHIPPING] Error completing delivery:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// POST /shipments/:shipmentID/status - Update shipment status
+router.post('/:shipmentID/status',
+  authMiddleware,
+  [body('status').notEmpty()],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID } = req.params;
+      const { status, location, updatedBy } = req.body;
+      const user = (req as any).user;
+
+      // ✅ BLOCKCHAIN-FIRST: Call UpdateShipmentStatus chaincode BEFORE DB write
+      const blockchainResult = await fabricService.invokeChaincode(
+        'UpdateShipmentStatus',
+        [shipmentID, status]
+      );
+      
+      const blockchain_tx_id = blockchainResult?.txId || null;
+      logger.info(`✅ Shipment status updated on blockchain: ${shipmentID}, Status: ${status}, TX: ${blockchain_tx_id}`);
+
+      // Now record status history in database with blockchain TX ID
+      await postgresDb.run(
+        `INSERT INTO shipment_status_history (
+          shipment_id, status, location, updated_by, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [shipmentID, status, location || null, updatedBy || user.username, blockchain_tx_id]
+      );
+
+      res.json({
+        success: true,
+        data: { shipmentID, status, blockchain_tx_id },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Shipment status update error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// POST /shipments/:shipmentID/reject-action - record a rejected proposed step on the ledger.
+router.post('/:shipmentID/reject-action',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('proposedAction').isIn([
+      'START_LAND_TRANSPORT',
+      'RECORD_PORT_ARRIVAL',
+      'CONTAINER_STUFFING',
+      'VESSEL_LOADING',
+      'VESSEL_DEPARTURE',
+      'IN_TRANSIT_UPDATE',
+      'DESTINATION_ARRIVAL',
+      'DELIVERY_COMPLETE',
+    ]).withMessage('Unsupported shipping workflow action'),
+    body('reason').trim().isLength({ min: 3, max: 1000 }).withMessage('A rejection reason of 3 to 1000 characters is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    const { shipmentID } = req.params;
+    const { proposedAction } = req.body;
+    const reason = String(req.body.reason).trim();
+
+    try {
+      const result = await fabricService.recordShipmentActionRejection(shipmentID, proposedAction, reason);
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'REJECTION_FAILED', message: result.error || 'Failed to record shipping rejection on the ledger' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        data: { shipmentID, proposedAction, reason, shipmentStatusChanged: false },
+        txId: result.txId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error(`[SHIPPING] Failed to record rejection for ${shipmentID}:`, error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to record shipping rejection' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Universal shipping document route - handles both Bill of Lading (SEA) and Airway Bill (AIR)
+ * POST /shipments/:shipmentID/shipping-document
+ */
+router.post('/:shipmentID/shipping-document',
+  authMiddleware,
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('transportMode').isIn(['SEA', 'AIR']).withMessage('Transport mode must be SEA or AIR'),
+    body('documentNo').notEmpty().withMessage('Document number is required'),
+    body('carrierName').notEmpty().withMessage('Carrier name is required'),
+    body('vesselOrFlight').notEmpty().withMessage('Vessel or flight is required'),
+    body('departurePoint').notEmpty().withMessage('Departure point is required'),
+    body('destinationPoint').notEmpty().withMessage('Destination point is required'),
+    body('estimatedArrival').notEmpty().withMessage('Estimated arrival is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID } = req.params;
+      const {
+        transportMode,
+        documentNo,
+        carrierName,
+        vesselOrFlight,
+        departurePoint,
+        destinationPoint,
+        estimatedArrival,
+        trackingNumber,
+        containerNumber,
+        containerType,
+        voyageNumber,
+      } = req.body;
+
+      logger.info(`[SHIPPING] Recording ${transportMode} document for shipment: ${shipmentID}`);
+      logger.info(`[SHIPPING] Carrier: ${carrierName}, Document: ${documentNo}`);
+
+      // Connect as ECTA organization (exporters submit shipping docs)
+      await fabricService.connectAsOrg('ECTAMSP');
+
+      // Update shipment in blockchain using RecordShippingDetails
+      const result = await fabricService.invokeChaincode('RecordShippingDetails', [
+        shipmentID,
+        transportMode,
+        documentNo,
+        carrierName,
+        vesselOrFlight,
+        departurePoint,
+        destinationPoint,
+        estimatedArrival,
+        trackingNumber || '',
+        containerNumber || '',
+        containerType || '',
+        voyageNumber || ''
+      ]);
+
+      if (result.success) {
+        const docType = transportMode === 'SEA' ? 'Bill of Lading' : 'Airway Bill';
+        logger.info(`✅ [SHIPPING] ${docType} recorded successfully: ${documentNo}`);
+        res.json({
+          success: true,
+          message: `${docType} recorded successfully`,
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        logger.error(`❌ [SHIPPING] Failed to record ${transportMode} document: ${result.error}`);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RECORDING_FAILED',
+            message: result.error || `Failed to record ${transportMode} document`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording shipping document:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ============================================================================
+// SHIPPING WORKFLOW ENDPOINTS (Container → Vessel → Transit → Delivery)
+// ============================================================================
+
+/**
+ * Record container stuffing at port
+ */
+router.post('/:shipmentId/container/stuff',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const {
+        containerNumber,
+        containerType,
+        stuffingDate,
+        stuffingLocation,
+        stuffedBy,
+        containerCondition,
+        sealNumber
+      } = req.body;
+
+      logger.info(`[SHIPPING] Recording container stuffing for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('RecordContainerStuffing', [
+        shipmentId,
+        containerNumber || `CNT-${Date.now()}`,
+        containerType || 'DRY',
+        stuffingDate || new Date().toISOString(),
+        stuffingLocation || 'Djibouti Port',
+        stuffedBy || 'Port Authority',
+        containerCondition || 'GOOD',
+        sealNumber || `SEAL-${Date.now()}`
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Container stuffing recorded: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'Container stuffing recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'STUFFING_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording container stuffing:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Record vessel loading
+ */
+router.post('/:shipmentId/vessel/load',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording vessel loading for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('RecordVesselLoading', [
+        shipmentId,
+        new Date().toISOString(),
+        notes || 'Container loaded on vessel'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Vessel loading recorded: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'Vessel loading recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'LOADING_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording vessel loading:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Record vessel departure
+ */
+router.post('/:shipmentId/vessel/depart',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording vessel departure for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('RecordVesselDeparture', [
+        shipmentId,
+        new Date().toISOString(),
+        notes || 'Vessel departed from Djibouti'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Vessel departure recorded: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'Vessel departure recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'DEPARTURE_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording vessel departure:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Update to in-transit status
+ */
+router.post('/:shipmentId/in-transit/update',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const { trackingNumber } = req.body;
+
+      logger.info(`[SHIPPING] Updating to in-transit for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('UpdateToInTransit', [
+        shipmentId,
+        trackingNumber || `TRK-${Date.now()}`
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ In-transit status updated: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'In-transit status updated successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'UPDATE_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error updating in-transit status:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Record destination arrival
+ */
+router.post('/:shipmentId/destination/arrive',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const { notes } = req.body;
+
+      logger.info(`[SHIPPING] Recording destination arrival for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('RecordDestinationArrival', [
+        shipmentId,
+        new Date().toISOString(),
+        notes || 'Arrived at destination port'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Destination arrival recorded: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'Destination arrival recorded successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'ARRIVAL_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording destination arrival:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * Complete final delivery
+ */
+router.post('/:shipmentId/delivery/complete',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { shipmentId } = req.params;
+      const { deliveryNotes } = req.body;
+
+      logger.info(`[SHIPPING] Completing delivery for: ${shipmentId}`);
+
+      const result = await fabricService.invokeChaincode('CompleteDelivery', [
+        shipmentId,
+        new Date().toISOString(),
+        deliveryNotes || 'Delivery completed successfully'
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ Delivery completed: ${shipmentId}`);
+        res.json({
+          success: true,
+          message: 'Delivery completed successfully',
+          data: result.data,
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'COMPLETION_FAILED', message: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error completing delivery:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+
+
+/**
+ * @swagger
+ * /api/v1/shipments/{shipmentID}/logistics-status:
+ *   put:
+ *     summary: Update shipment logistics/tracking status
+ *     description: Update the logistics tracking status (PENDING → BOOKED → LOADED → IN_TRANSIT → DELIVERED)
+ *     tags: [Shipments]
+ *     parameters:
+ *       - in: path
+ *         name: shipmentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - logisticsStatus
+ *             properties:
+ *               logisticsStatus:
+ *                 type: string
+ *                 enum: [PENDING, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED, CONFIRMED]
+ *               location:
+ *                 type: string
+ *               notes:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Logistics status updated successfully
+ *       400:
+ *         description: Invalid status value
+ *       404:
+ *         description: Shipment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.put('/:shipmentID/logistics-status',
+  authMiddleware,
+  [
+    param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
+    body('logisticsStatus')
+      .notEmpty()
+      .withMessage('Logistics status is required')
+      .isIn(['PENDING', 'BOOKED', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'DELIVERED', 'CONFIRMED'])
+      .withMessage('Invalid logistics status value'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentID } = req.params;
+      const { logisticsStatus, location, notes } = req.body;
+      const userId = (req as any).user?.userId || 'system';
+      const userOrg = (req as any).user?.organization || 'SYSTEM';
+
+      logger.info(`[SHIPMENTS] Updating logistics status for ${shipmentID} to ${logisticsStatus}`);
+
+      const result = await shipmentService.updateLogisticsStatus(
+        shipmentID,
+        logisticsStatus,
+        userId,
+        userOrg,
+        { location, notes }
+      );
+
+      res.json({
+        success: true,
+        data: result,
+        message: `Logistics status updated to ${logisticsStatus}`,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error(`[SHIPMENTS] Error updating logistics status:`, error);
+      
+      if (error.message.includes('not found')) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: error.message,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      } else if (error.message.includes('Invalid')) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_STATUS',
+            message: error.message,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: error.message || 'Failed to update logistics status',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+  }
+);
+
+export default router;

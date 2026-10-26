@@ -1,0 +1,337 @@
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                  LETTER OF CREDIT WORKFLOW WITH FOREX ALLOCATION                 ║
+║           Ethiopian Coffee Export Consortium Blockchain System (CECBS)           ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+PARTICIPANTS:
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│     BUYER       │  │     SELLER      │  │  ISSUING BANK   │  │  ADVISING BANK  │
+│  (Applicant)    │  │  (Beneficiary)  │  │   (Foreign)     │  │     (CBE)       │
+│  International  │  │   Ethiopian     │  │                 │  │   Ethiopian     │
+└─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 1: CONTRACT & LC APPLICATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+STEP 1: SALES CONTRACT
+┌─────────────┐                                           ┌─────────────┐
+│   BUYER     │────────(1) Contract Negotiation──────────►│   SELLER    │
+└─────────────┘                                           └─────────────┘
+                              ▼
+                    ┌──────────────────┐
+                    │  ECTA Registers  │
+                    │    Contract      │
+                    │  Status: PENDING │
+                    └──────────────────┘
+                              ▼
+                    ┌──────────────────┐
+                    │   NBE Approves   │
+                    │     Contract     │
+                    │Status: APPROVED  │
+                    └──────────────────┘
+
+
+STEP 2: LC APPLICATION
+┌─────────────┐                                           ┌─────────────┐
+│   BUYER     │───────(2) LC Application Request─────────►│ISSUING BANK │
+└─────────────┘                                           └─────────────┘
+                                                                  │
+                              System Status: LC REQUESTED         │
+                                                                  ▼
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 2: LC ISSUANCE & FOREX ALLOCATION ⭐ CRITICAL PHASE
+═══════════════════════════════════════════════════════════════════════════════════
+
+STEP 3: LC ISSUANCE
+                    ┌─────────────┐         (3) LC Issuance        ┌─────────────┐
+                    │ISSUING BANK │────────(Irrevocable)──────────►│ADVISING BANK│
+                    └─────────────┘                                └─────────────┘
+                                                                           │
+                    System Status: LC ISSUED                               │
+                    Auto-Trigger: Create Forex Request                     │
+                                                                           │
+
+STEP 4: LC ADVISING
+                                                                           │
+                                                      ┌────────────────────▼──────┐
+                                                      │  (4) Advising Bank        │
+                                                      │   Notifies Seller         │
+                                                      │   of LC Terms             │
+                                                      └────────────────────┬──────┘
+                                                                           │
+                                                                           ▼
+                                                                    ┌─────────────┐
+                                                                    │   SELLER    │
+                                                                    │ Receives LC │
+                                                                    └─────────────┘
+
+⭐ STEP 5: FOREX ALLOCATION (NEW - NBE REQUIREMENT)
+══════════════════════════════════════════════════════════════════════════════════
+
+                    ┌──────────────────────────────────────────┐
+                    │    ADVISING BANK FOREX ALLOCATION        │
+                    │                                          │
+                    │  1. Review LC Amount                     │
+                    │  2. Set Exchange Rate (NBE Rate)         │
+                    │  3. Set Retention Rate (30-50%)          │
+                    │  4. Set Expiry Date                      │
+                    │                                          │
+                    │  NBE POLICY:                             │
+                    │  ✓ 30-50% retained in FCY (USD)         │
+                    │  ✓ 50-70% converted to ETB              │
+                    │                                          │
+                    └──────────────┬───────────────────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────────────────┐
+                    │   BLOCKCHAIN FOREX RECORD                │
+                    │                                          │
+                    │   Forex ID: FOREX_<LCID>_<timestamp>    │
+                    │   Status: REQUESTED → ALLOCATED          │
+                    │   Amount: [LC Amount]                    │
+                    │   Exchange Rate: [NBE Rate]              │
+                    │   Retention: 50%                         │
+                    │   Expiry: [Date]                         │
+                    └──────────────────────────────────────────┘
+
+                    🚨 SELLER CANNOT SHIP UNTIL THIS STEP COMPLETES 🚨
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 3: SHIPMENT & DOCUMENTATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+STEP 6: SHIPMENT OF GOODS
+                    ┌─────────────┐                           ┌─────────────┐
+                    │   SELLER    │───(5) Ships Coffee───────►│   BUYER     │
+                    └─────────────┘                           └─────────────┘
+                          │
+                          │ Prerequisites:
+                          │ ✓ LC Issued
+                          │ ✓ Forex Allocated ⭐
+                          │ ✓ Export Permit (ECTA)
+                          │ ✓ Quality Inspection Passed
+                          │ ✓ Phytosanitary Certificate
+                          │
+                          ▼
+                    Shipment Status: IN_TRANSIT
+
+
+STEP 7: DOCUMENT SUBMISSION
+                    ┌─────────────┐                           ┌─────────────┐
+                    │   SELLER    │───(7) Submit Documents───►│ADVISING BANK│
+                    └─────────────┘                           └─────────────┘
+                                                                     │
+                    Required Documents:                              │
+                    • Commercial Invoice                             │
+                    • Bill of Lading                                 │
+                    • Packing List                                   │
+                    • Certificate of Origin                          │
+                    • Insurance Certificate                          │
+                    • Quality Certificate (ECTA)                     │
+                    • Phytosanitary Certificate                      │
+                    • Export Permit (ECTA)                           │
+                                                                     │
+
+STEP 8: DOCUMENT VERIFICATION
+                                                                     │
+                                                      ┌──────────────▼──────────────┐
+                                                      │  Advising Bank Verifies     │
+                                                      │  Documents vs LC Terms      │
+                                                      │                             │
+                                                      │  ✓ Completeness Check       │
+                                                      │  ✓ Compliance Check         │
+                                                      │  ✓ Discrepancy Review       │
+                                                      └──────────────┬──────────────┘
+                                                                     │
+
+STEP 9: DOCUMENTS FORWARDED
+                                                                     │
+                    ┌─────────────┐      (9) Forward Docs      ┌────▼────────┐
+                    │ISSUING BANK │◄──────via SWIFT MT700──────│ADVISING BANK│
+                    └─────────────┘                            └─────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 4: PAYMENT SETTLEMENT & FOREX UTILIZATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+STEP 10: BUYER DEBIT
+                    ┌─────────────┐
+                    │ISSUING BANK │
+                    └──────┬──────┘
+                           │
+                           │ (10) Debit Buyer Account
+                           ▼
+                    ┌─────────────┐
+                    │   BUYER     │
+                    │Account Debited
+                    │Receives Docs│
+                    └─────────────┘
+
+
+STEP 11: INTERBANK SETTLEMENT
+                    ┌─────────────┐      (11) Payment Transfer     ┌─────────────┐
+                    │ISSUING BANK │────────via SWIFT MT103────────►│ADVISING BANK│
+                    └─────────────┘                                └──────┬──────┘
+                                                                          │
+                                                                          │
+
+⭐ STEP 12: FOREX UTILIZATION & RETENTION (NBE COMPLIANCE)
+══════════════════════════════════════════════════════════════════════════════════
+                                                                          │
+                                                      ┌───────────────────▼───────┐
+                                                      │  FOREX RETENTION SPLIT    │
+                                                      │                           │
+                                                      │  Payment Amount: $100,000 │
+                                                      │                           │
+                                                      │  50% → FCY Account (USD)  │
+                                                      │       $50,000 retained    │
+                                                      │                           │
+                                                      │  50% → Converted to ETB   │
+                                                      │       $50,000 @ NBE rate  │
+                                                      │                           │
+                                                      └───────────────────────────┘
+                                                                  │
+                                                                  ▼
+                                            ┌──────────────────────────────────────┐
+                                            │  UPDATE FOREX RECORD IN BLOCKCHAIN   │
+                                            │                                      │
+                                            │  Status: ALLOCATED → UTILIZED        │
+                                            │  UtilizedAmount: $100,000            │
+                                            │  UtilizationDate: [Timestamp]        │
+                                            │  RetentionCompliance: ✓              │
+                                            │                                      │
+                                            └──────────────────────────────────────┘
+
+
+STEP 13: SELLER PAYMENT
+                                                                          │
+                                                      ┌───────────────────▼───────┐
+                                                      │     FINAL PAYMENT         │
+                                                      │     TO SELLER             │
+                                                      │                           │
+                                                      │  FCY Account (USD):       │
+                                                      │  + $50,000                │
+                                                      │                           │
+                                                      │  Local Account (ETB):     │
+                                                      │  + [ETB equivalent]       │
+                                                      │                           │
+                                                      │  Less: Bank Charges       │
+                                                      └───────────────────────────┘
+                                                                  │
+                                                                  ▼
+                                                           ┌─────────────┐
+                                                           │   SELLER    │
+                                                           │   PAID      │
+                                                           └─────────────┘
+
+                                TRANSACTION COMPLETE ✓
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+STATUS FLOW SUMMARY
+═══════════════════════════════════════════════════════════════════════════════════
+
+CONTRACT:   REGISTERED ──► NBE_APPROVED
+
+LC:         REQUESTED ──► APPROVED ──► ISSUED ──► UTILIZED
+
+FOREX:      REQUESTED ──► ALLOCATED ──► UTILIZED  ⭐ NEW
+
+SHIPMENT:   PENDING ──► IN_TRANSIT ──► DELIVERED
+
+DOCUMENTS:  SUBMITTED ──► VERIFIED ──► FORWARDED
+
+PAYMENT:    INITIATED ──► SWIFT_RECEIVED ──► SETTLED
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+KEY INNOVATIONS vs STANDARD LC WORKFLOW
+═══════════════════════════════════════════════════════════════════════════════════
+
+⭐ FOREX ALLOCATION (Step 5)
+   • Added to comply with Ethiopian NBE regulations
+   • MANDATORY before shipment
+   • Enforces 30-50% forex retention in FCY
+   • Blockchain-recorded for NBE audit
+
+⭐ DUAL PAYMENT SPLIT (Step 13)
+   • 50% USD retained in FCY account
+   • 50% converted to ETB at official rate
+   • Automatic compliance enforcement
+   • Immutable audit trail
+
+⭐ BLOCKCHAIN INTEGRATION
+   • All steps recorded immutably
+   • Smart contract validation
+   • Multi-party transparency
+   • Automated NBE reporting
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+SYSTEM IMPLEMENTATION NOTES
+═══════════════════════════════════════════════════════════════════════════════════
+
+FRONTEND: Banks Portal
+  └─ Payment Methods Tab
+      └─ Letter of Credit Sub-tab
+           • Step 1-3: LC Request → Approval → Issuance
+           • Step 4: Navigate to Forex Tab
+  └─ Banking Operations Tab
+      └─ Forex Allocation Sub-tab ⭐
+           • Step 5: Allocate Forex
+           • View all forex requests
+           • Set rates and retention
+  └─ Back to Payment Methods
+      └─ Letter of Credit Sub-tab
+           • Step 6-8: Shipment → Documents → Verification
+           • Step 9-13: Payment Release → Settlement
+
+BACKEND: API Endpoints
+  • POST /api/v1/banking/lc/:lcID/issue (auto-creates forex request)
+  • GET  /api/v1/forex
+  • POST /api/v1/forex/allocate
+  • POST /api/v1/forex/utilize
+  • POST /api/v1/payments/settle
+
+BLOCKCHAIN: Chaincode Functions
+  • RequestForex(forexID, contractID, exporterID, amount, currency)
+  • AllocateForex(forexID, lcID, amount, rate, retention, officer, ref, expiry)
+  • UtilizeForex(forexID, utilizedAmount)
+  • QueryAllForex()
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+COMPLIANCE & REGULATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+NBE (National Bank of Ethiopia)
+  ✓ Forex allocation mandatory
+  ✓ 30-50% retention enforced
+  ✓ Official exchange rates applied
+  ✓ Complete audit trail
+  ✓ Automatic reporting
+
+ECTA (Ethiopian Coffee & Tea Authority)
+  ✓ Contract approval
+  ✓ Quality inspection
+  ✓ Export permit issuance
+  ✓ Phytosanitary certification
+
+UCP 600 (International)
+  ✓ Documentary credit standards
+  ✓ SWIFT messaging
+  ✓ Bank obligations
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+Document Version: 1.0
+Last Updated: 2026-07-15
+System: CECBS (Hyperledger Fabric 2.2)
+Status: ACTIVE IMPLEMENTATION
+═══════════════════════════════════════════════════════════════════════════════════

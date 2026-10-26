@@ -1,0 +1,10 @@
+[
+  {
+    "documentId": "DOC_CERT_ORIGIN_1792162422504",
+    "signatureTimestamp": "2026-10-18T07:43:01.404Z",
+    "signerName": "admin",
+    "organization": "ECTAMSP",
+    "documentHash": "b03aaad88e116e7fc6126e2d6cfd59bb1abaea70c192b2543e464dc3a2cfa4b9",
+    "blockchainTxId": "SIG-DOC_CERT_ORIGIN_1792162422504-ECTAMSP-1792309381363"
+  }
+]
