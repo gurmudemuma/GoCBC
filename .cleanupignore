@@ -1,0 +1,51 @@
+# Files and directories to preserve during cleanup
+# Created: June 4, 2026
+
+# === Core Application Files ===
+/api/
+/ui/
+/blockchain/
+/chaincodes/coffee/*.go
+/chaincodes/coffee/go.mod
+/chaincodes/coffee/go.sum
+/chaincodes/coffee/Dockerfile
+/chaincodes/coffee/connection.json
+/chaincodes/coffee/vendor/
+
+# === Configuration Files ===
+/config/
+/.github/
+/.vscode/
+/.gitignore
+/docker-compose-fabric.yml
+/README.md
+
+# === Current Production Artifacts ===
+/chaincodes/coffee/coffee-v14-ccaas.tar.gz
+/chaincodes/coffee/chaincode-linux
+/chaincodes/coffee/package-v14/
+
+# === Active Scripts ===
+/scripts/install-v1.4-now.ps1
+/scripts/start.sh
+/scripts/stop.sh
+/scripts/init-db.sql
+/scripts/generate-artifacts.sh
+/scripts/generate-crypto.sh
+/scripts/create-channel.sh
+/scripts/join-peers-to-channel.sh
+
+# === Documentation ===
+/Docs/ARCHITECTURE.md
+/Docs/CHAINCODE-V1.4-DEPLOYED-SUCCESS.md
+/Docs/CHAINCODE-V1.4-IMPLEMENTATION-COMPLETE.md
+/Docs/V1.4-QUICK-START-GUIDE.md
+/Docs/API-DOCUMENTATION.md
+/Docs/ORGANIZATION-ROLES-RESPONSIBILITIES.md
+/Docs/USER-MANAGEMENT-SYSTEM.md
+/Docs/EXPORTER-REQUIREMENTS-2026.md
+
+# === Build Artifacts (Keep for rollback) ===
+/bin/
+/builders/
+/fabric-samples/

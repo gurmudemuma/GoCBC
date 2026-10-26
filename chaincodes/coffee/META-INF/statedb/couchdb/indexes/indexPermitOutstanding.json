@@ -1,0 +1,8 @@
+{
+  "index": {
+    "fields": ["outstanding", "exporterId", "paymentMethod"]
+  },
+  "ddoc": "indexPermitOutstanding",
+  "name": "indexPermitOutstanding",
+  "type": "json"
+}

@@ -1,0 +1,8 @@
+tls/
+*.pem
+*.tgz
+*.tar.gz
+coffee
+coffee-chaincode
+pkg/
+pkg-temp/

@@ -1,0 +1,1420 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+)
+
+// ==================== CRYPTOGRAPHIC SIGNATURE & AUDIT TRAIL ====================
+
+// TransactionSignature captures caller and action metadata. Actual creator and
+// peer endorsement signatures are in Fabric's committed transaction envelope.
+type TransactionSignature struct {
+	TransactionID     string    `json:"transactionId"`     // Unique blockchain transaction ID
+	ChannelID         string    `json:"channelId"`         // Channel name
+	Timestamp         time.Time `json:"timestamp"`         // When action occurred
+	FunctionName      string    `json:"functionName"`      // What action was performed
+	Arguments         []string  `json:"arguments"`         // Function parameters (sanitized)
+	Caller            Identity  `json:"caller"`            // WHO performed the action
+	DataHash          string    `json:"dataHash"`          // SHA-256 hash of the data modified
+	PreviousStateHash string    `json:"previousStateHash"` // Hash of previous state (for verification)
+	NewStateHash      string    `json:"newStateHash"`      // Hash of new state after modification
+	EndorsementPolicy string    `json:"endorsementPolicy"` // Informational only; chaincode execution cannot resolve committed policy
+	EndorsingPeers    []string  `json:"endorsingPeers"`    // Which peers endorsed this transaction
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// Identity captures the cryptographic identity of the transaction submitter
+type Identity struct {
+	MSPID             string `json:"mspId"`             // Organization (ECTAMSP, BanksMSP, NBEMSP, etc.)
+	CertificateIssuer string `json:"certificateIssuer"` // CA that issued the certificate
+	CommonName        string `json:"commonName"`        // CN from certificate (e.g., Admin@ecta.cecbs.et)
+	OrganizationUnit  string `json:"organizationUnit"`  // OU from certificate
+	Certificate       string `json:"certificate"`       // Base64 encoded X.509 certificate
+	CertificateHash   string `json:"certificateHash"`   // SHA-256 hash of certificate (for quick lookup)
+	UserID            string `json:"userId"`            // Application-level user ID (if available)
+	Email             string `json:"email"`             // User email (if available)
+	Role              string `json:"role"`              // User role (exporter, bank_officer, ecta_inspector, etc.)
+}
+
+// AuditLog stores immutable audit trail for compliance and forensics
+type AuditLog struct {
+	LogID          string               `json:"logId"`          // Unique log entry ID
+	ActionType     string               `json:"actionType"`     // CREATE, UPDATE, DELETE, APPROVE, REJECT, etc.
+	EntityType     string               `json:"entityType"`     // EXPORTER, CONTRACT, SHIPMENT, LC, PAYMENT, etc.
+	EntityID       string               `json:"entityId"`       // ID of the entity affected
+	Signature      TransactionSignature `json:"signature"`      // Audit metadata; envelope signatures are queried through QSCC
+	StatusBefore   string               `json:"statusBefore"`   // Previous status
+	StatusAfter    string               `json:"statusAfter"`    // New status
+	Changes        []FieldChange        `json:"changes"`        // Detailed field-level changes
+	Reason         string               `json:"reason"`         // Reason for action (if applicable)
+	ComplianceData ComplianceMetadata   `json:"complianceData"` // Regulatory compliance metadata
+	CreatedAt      time.Time            `json:"createdAt"`
+	HashVersion    uint32               `json:"hashVersion"`
+}
+
+// normalizeAuditLogResponse fills fields introduced after legacy audit records
+// were written so Fabric's contract response schema accepts both old and new
+// ledger entries without rewriting immutable state.
+func normalizeAuditLogResponse(auditLog *AuditLog) *AuditLog {
+	if auditLog != nil && auditLog.Changes == nil {
+		auditLog.Changes = []FieldChange{}
+	}
+	return auditLog
+}
+
+type auditLogHashPayload struct {
+	HashVersion    uint32             `json:"hashVersion"`
+	LogID          string             `json:"logId"`
+	ActionType     string             `json:"actionType"`
+	EntityType     string             `json:"entityType"`
+	EntityID       string             `json:"entityId"`
+	StatusBefore   string             `json:"statusBefore"`
+	StatusAfter    string             `json:"statusAfter"`
+	Changes        []FieldChange      `json:"changes"`
+	Reason         string             `json:"reason"`
+	ComplianceData ComplianceMetadata `json:"complianceData"`
+	CreatedAt      time.Time          `json:"createdAt"`
+}
+
+func calculateAuditLogDataHash(payload auditLogHashPayload) (string, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal audit log hash payload: %w", err)
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// FieldChange tracks individual field modifications
+type FieldChange struct {
+	FieldName string `json:"fieldName"` // Name of field changed
+	OldValue  string `json:"oldValue"`  // Previous value (sanitized if sensitive)
+	NewValue  string `json:"newValue"`  // New value (sanitized if sensitive)
+	DataType  string `json:"dataType"`  // string, number, boolean, etc.
+}
+
+// ComplianceMetadata tracks regulatory compliance information
+type ComplianceMetadata struct {
+	ECTACompliance bool   `json:"ectaCompliance"` // ECTA regulations met
+	NBECompliance  bool   `json:"nbeCompliance"`  // NBE forex regulations met
+	UCP600Check    bool   `json:"ucp600Check"`    // UCP 600 documentary credit rules
+	EUDRCompliance bool   `json:"eudrCompliance"` // EU Deforestation Regulation
+	ICOCompliance  bool   `json:"icoCompliance"`  // International Coffee Organization standards
+	ComplianceNote string `json:"complianceNote"` // Additional compliance notes
+}
+
+// ==================== SIGNATURE CAPTURE FUNCTIONS ====================
+
+// CaptureIdentity extracts cryptographic identity from transaction context
+func (c *CoffeeContract) CaptureIdentity(ctx contractapi.TransactionContextInterface) (*Identity, error) {
+	clientIdentity := ctx.GetClientIdentity()
+
+	// Get MSP ID (organization)
+	mspID, err := clientIdentity.GetMSPID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	// Get certificate (X.509)
+	cert, err := clientIdentity.GetX509Certificate()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get X.509 certificate: %v", err)
+	}
+
+	// Get user ID (from certificate attributes)
+	userID, found, err := clientIdentity.GetAttributeValue("userID")
+	if err != nil || !found {
+		userID = "" // Optional attribute
+	}
+
+	// Get email (from certificate attributes)
+	email, found, err := clientIdentity.GetAttributeValue("email")
+	if err != nil || !found {
+		email = "" // Optional attribute
+	}
+
+	// Get role (from certificate attributes)
+	role, found, err := clientIdentity.GetAttributeValue("role")
+	if err != nil || !found {
+		role = "unknown" // Default if not set
+	}
+
+	// Extract certificate details
+	commonName := cert.Subject.CommonName
+	organizationUnit := ""
+	if len(cert.Subject.OrganizationalUnit) > 0 {
+		organizationUnit = cert.Subject.OrganizationalUnit[0]
+	}
+	certificateIssuer := cert.Issuer.CommonName
+
+	// Get certificate in PEM format
+	certPEM, err := clientIdentity.GetID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get certificate PEM: %v", err)
+	}
+
+	// Calculate certificate hash (SHA-256)
+	certHash := sha256.Sum256([]byte(certPEM))
+	certHashHex := hex.EncodeToString(certHash[:])
+
+	identity := &Identity{
+		MSPID:             mspID,
+		CertificateIssuer: certificateIssuer,
+		CommonName:        commonName,
+		OrganizationUnit:  organizationUnit,
+		Certificate:       certPEM,
+		CertificateHash:   certHashHex,
+		UserID:            userID,
+		Email:             email,
+		Role:              role,
+	}
+
+	return identity, nil
+}
+
+// CreateTransactionSignature creates a complete signature for the current transaction
+func (c *CoffeeContract) CreateTransactionSignature(
+	ctx contractapi.TransactionContextInterface,
+	functionName string,
+	args []string,
+	dataHash string,
+	previousStateHash string,
+	newStateHash string,
+) (*TransactionSignature, error) {
+
+	// Get transaction ID
+	txID := ctx.GetStub().GetTxID()
+
+	// Get channel ID
+	channelID := ctx.GetStub().GetChannelID()
+
+	// Get timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// Capture caller identity
+	identity, err := c.CaptureIdentity(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture identity: %v", err)
+	}
+
+	// Chaincode execution cannot inspect the endorsement policy selected for this
+	// commit. Keep that limitation explicit; the committed channel definition is
+	// the source of truth and the transaction proof records the actual endorsers.
+	endorsementPolicy := "NOT_CAPTURED: resolve from committed channel chaincode definition"
+
+	// Get endorsing peers (from transaction proposal response)
+	// Extract organizations that ACTUALLY endorsed this transaction
+	// The active channel and chaincode definition determines which peers endorse.
+	// We should NOT hardcode all 6 - instead, capture the REAL endorsers
+
+	// In Fabric chaincode, we cannot directly access the endorsement info
+	// The endorsement happens AFTER chaincode execution
+	// So we mark that endorsement is required, but actual endorsers are captured
+	// by the API when querying the blockchain transaction
+	endorsingPeers := []string{
+		// This will be populated by the API from actual transaction endorsements
+		// Placeholder: endorsement required per channel policy
+	}
+
+	signature := &TransactionSignature{
+		TransactionID:     txID,
+		ChannelID:         channelID,
+		Timestamp:         timestamp,
+		FunctionName:      functionName,
+		Arguments:         sanitizeArgs(args), // Remove sensitive data
+		Caller:            *identity,
+		DataHash:          dataHash,
+		PreviousStateHash: previousStateHash,
+		NewStateHash:      newStateHash,
+		EndorsementPolicy: endorsementPolicy,
+		EndorsingPeers:    endorsingPeers, // Real endorsers captured by API
+		CreatedAt:         timestamp,
+	}
+
+	return signature, nil
+}
+
+// CreateAuditLog creates an immutable audit log entry
+func (c *CoffeeContract) CreateAuditLog(
+	ctx contractapi.TransactionContextInterface,
+	actionType string,
+	entityType string,
+	entityID string,
+	statusBefore string,
+	statusAfter string,
+	changes []FieldChange,
+	reason string,
+	complianceData ComplianceMetadata,
+) error {
+	if changes == nil {
+		changes = []FieldChange{}
+	}
+
+	// Generate log ID
+	txID := ctx.GetStub().GetTxID()
+	logID := "AUDIT_" + entityType + "_" + entityID + "_" + txID
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %v", err)
+	}
+	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// Bind the hash to the complete audit payload, including the changed fields,
+	// reason, compliance details, and ledger timestamp.
+	dataHash, err := calculateAuditLogDataHash(auditLogHashPayload{
+		HashVersion:    2,
+		LogID:          logID,
+		ActionType:     actionType,
+		EntityType:     entityType,
+		EntityID:       entityID,
+		StatusBefore:   statusBefore,
+		StatusAfter:    statusAfter,
+		Changes:        changes,
+		Reason:         reason,
+		ComplianceData: complianceData,
+		CreatedAt:      timestamp,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Get previous state hash (from existing log if it exists)
+	previousStateHash := ""
+	previousLogKey := "AUDIT_LATEST_" + entityType + "_" + entityID
+	previousLogJSON, err := ctx.GetStub().GetState(previousLogKey)
+	if err == nil && previousLogJSON != nil {
+		var previousLog AuditLog
+		if json.Unmarshal(previousLogJSON, &previousLog) == nil {
+			previousStateHash = previousLog.Signature.NewStateHash
+		}
+	}
+
+	// Create transaction signature
+	args := []string{actionType, entityType, entityID}
+	signature, err := c.CreateTransactionSignature(
+		ctx,
+		"AuditLog",
+		args,
+		dataHash,
+		previousStateHash,
+		dataHash, // New state hash
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create signature: %v", err)
+	}
+
+	// Create audit log
+	auditLog := AuditLog{
+		LogID:          logID,
+		ActionType:     actionType,
+		EntityType:     entityType,
+		EntityID:       entityID,
+		Signature:      *signature,
+		StatusBefore:   statusBefore,
+		StatusAfter:    statusAfter,
+		Changes:        changes,
+		Reason:         reason,
+		ComplianceData: complianceData,
+		CreatedAt:      timestamp,
+		HashVersion:    2,
+	}
+
+	// Save audit log (immutable)
+	auditLogJSON, err := json.Marshal(auditLog)
+	if err != nil {
+		return fmt.Errorf("failed to marshal audit log: %v", err)
+	}
+
+	err = ctx.GetStub().PutState(logID, auditLogJSON)
+	if err != nil {
+		return fmt.Errorf("failed to save audit log: %v", err)
+	}
+
+	// Update latest log pointer for chain verification
+	err = ctx.GetStub().PutState(previousLogKey, auditLogJSON)
+	if err != nil {
+		return fmt.Errorf("failed to update latest log pointer: %v", err)
+	}
+
+	// Emit audit event
+	eventPayload := map[string]interface{}{
+		"logId":      logID,
+		"actionType": actionType,
+		"entityType": entityType,
+		"entityId":   entityID,
+		"actor":      signature.Caller.CommonName,
+		"mspId":      signature.Caller.MSPID,
+		"timestamp":  timestamp.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("AuditLogCreated", eventJSON)
+
+	return nil
+}
+
+// ==================== AUDIT QUERY FUNCTIONS ====================
+
+// GetAuditLog retrieves a specific audit log entry
+func (c *CoffeeContract) GetAuditLog(ctx contractapi.TransactionContextInterface, logID string) (*AuditLog, error) {
+	auditLogJSON, err := ctx.GetStub().GetState(logID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read audit log: %v", err)
+	}
+	if auditLogJSON == nil {
+		return nil, fmt.Errorf("audit log %s does not exist", logID)
+	}
+
+	var auditLog AuditLog
+	err = json.Unmarshal(auditLogJSON, &auditLog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal audit log: %v", err)
+	}
+
+	return normalizeAuditLogResponse(&auditLog), nil
+}
+
+// QueryAuditLogsByEntity retrieves all audit logs for a specific entity
+func (c *CoffeeContract) QueryAuditLogsByEntity(
+	ctx contractapi.TransactionContextInterface,
+	entityType string,
+	entityID string,
+) ([]*AuditLog, error) {
+	auditLogs, err := c.queryAuditLogsByEntity(ctx, entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+	for i, auditLog := range auditLogs {
+		auditLogs[i] = normalizeAuditLogResponse(auditLog)
+	}
+	return auditLogs, nil
+}
+
+// queryAuditLogsByEntity returns stored values without response normalization
+// so integrity verification hashes the exact historical payload.
+func (c *CoffeeContract) queryAuditLogsByEntity(
+	ctx contractapi.TransactionContextInterface,
+	entityType string,
+	entityID string,
+) ([]*AuditLog, error) {
+	// Build key range for entity-specific logs
+	startKey := "AUDIT_" + entityType + "_" + entityID + "_"
+	endKey := "AUDIT_" + entityType + "_" + entityID + "_~"
+
+	resultsIterator, err := ctx.GetStub().GetStateByRange(startKey, endKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query audit logs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var auditLogs []*AuditLog
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var auditLog AuditLog
+		err = json.Unmarshal(queryResponse.Value, &auditLog)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal audit log: %v", err)
+		}
+		auditLogs = append(auditLogs, &auditLog)
+	}
+	sort.SliceStable(auditLogs, func(i, j int) bool {
+		return auditLogs[i].CreatedAt.Before(auditLogs[j].CreatedAt)
+	})
+
+	return auditLogs, nil
+}
+
+// QueryAuditLogsByActor retrieves all actions performed by a specific identity
+func (c *CoffeeContract) QueryAuditLogsByActor(
+	ctx contractapi.TransactionContextInterface,
+	certHash string,
+) ([]*AuditLog, error) {
+
+	// Query all audit logs
+	resultsIterator, err := ctx.GetStub().GetStateByRange("AUDIT_", "AUDIT_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query audit logs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var auditLogs []*AuditLog
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var auditLog AuditLog
+		err = json.Unmarshal(queryResponse.Value, &auditLog)
+		if err != nil {
+			continue // Skip invalid logs
+		}
+
+		// Filter by certificate hash
+		if auditLog.Signature.Caller.CertificateHash == certHash {
+			auditLogs = append(auditLogs, normalizeAuditLogResponse(&auditLog))
+		}
+	}
+
+	return auditLogs, nil
+}
+
+// QueryAllAuditLogs retrieves all audit logs from the blockchain
+// Used for system statistics and metrics
+func (c *CoffeeContract) QueryAllAuditLogs(
+	ctx contractapi.TransactionContextInterface,
+) ([]*AuditLog, error) {
+
+	// Query all audit logs using range query
+	resultsIterator, err := ctx.GetStub().GetStateByRange("AUDIT_", "AUDIT_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all audit logs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var auditLogs []*AuditLog
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var auditLog AuditLog
+		err = json.Unmarshal(queryResponse.Value, &auditLog)
+		if err != nil {
+			// Skip invalid logs
+			continue
+		}
+
+		auditLogs = append(auditLogs, normalizeAuditLogResponse(&auditLog))
+	}
+
+	return auditLogs, nil
+}
+
+// QueryAuditLogsByTimeRange retrieves logs within a time range
+func (c *CoffeeContract) QueryAuditLogsByTimeRange(
+	ctx contractapi.TransactionContextInterface,
+	startTime string,
+	endTime string,
+) ([]*AuditLog, error) {
+
+	start, err := time.Parse(time.RFC3339, startTime)
+	if err != nil {
+		return nil, fmt.Errorf("invalid start time: %v", err)
+	}
+
+	end, err := time.Parse(time.RFC3339, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end time: %v", err)
+	}
+
+	// Query all audit logs
+	resultsIterator, err := ctx.GetStub().GetStateByRange("AUDIT_", "AUDIT_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query audit logs: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var auditLogs []*AuditLog
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var auditLog AuditLog
+		err = json.Unmarshal(queryResponse.Value, &auditLog)
+		if err != nil {
+			continue // Skip invalid logs
+		}
+
+		// Filter by time range
+		if auditLog.CreatedAt.After(start) && auditLog.CreatedAt.Before(end) {
+			auditLogs = append(auditLogs, normalizeAuditLogResponse(&auditLog))
+		}
+	}
+
+	return auditLogs, nil
+}
+
+// VerificationResult represents the result of audit trail verification
+type VerificationResult struct {
+	IsValid bool   `json:"isValid"`
+	Message string `json:"message"`
+}
+
+// VerifyAuditTrail verifies the integrity of the audit trail chain
+func (c *CoffeeContract) VerifyAuditTrail(
+	ctx contractapi.TransactionContextInterface,
+	entityType string,
+	entityID string,
+) (*VerificationResult, error) {
+
+	logs, err := c.queryAuditLogsByEntity(ctx, entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(logs) == 0 {
+		return &VerificationResult{
+			IsValid: false,
+			Message: "No audit logs found",
+		}, nil
+	}
+
+	// Verify each stored hash against the payload version that was committed,
+	// then validate the hash links as a single, unbranched chain.
+	byNewHash := make(map[string]*AuditLog, len(logs))
+	childrenByPrevious := make(map[string]*AuditLog, len(logs))
+	var root *AuditLog
+	for _, current := range logs {
+		var expectedHash string
+		var err error
+		if current.HashVersion >= 2 {
+			expectedHash, err = calculateAuditLogDataHash(auditLogHashPayload{
+				HashVersion:    current.HashVersion,
+				LogID:          current.LogID,
+				ActionType:     current.ActionType,
+				EntityType:     current.EntityType,
+				EntityID:       current.EntityID,
+				StatusBefore:   current.StatusBefore,
+				StatusAfter:    current.StatusAfter,
+				Changes:        current.Changes,
+				Reason:         current.Reason,
+				ComplianceData: current.ComplianceData,
+				CreatedAt:      current.CreatedAt,
+			})
+		} else {
+			legacyData := fmt.Sprintf("%s:%s:%s:%s:%s", current.ActionType, current.EntityType, current.EntityID, current.StatusBefore, current.StatusAfter)
+			legacyHash := sha256.Sum256([]byte(legacyData))
+			expectedHash = hex.EncodeToString(legacyHash[:])
+		}
+		if err != nil || current.Signature.DataHash != expectedHash || current.Signature.NewStateHash != expectedHash {
+			return &VerificationResult{
+				IsValid: false,
+				Message: fmt.Sprintf("Audit payload hash mismatch at log %s", current.LogID),
+			}, nil
+		}
+		if _, exists := byNewHash[expectedHash]; exists {
+			return &VerificationResult{IsValid: false, Message: "Duplicate audit state hash makes the chain ambiguous"}, nil
+		}
+		byNewHash[expectedHash] = current
+		if current.Signature.PreviousStateHash == "" {
+			if root != nil {
+				return &VerificationResult{IsValid: false, Message: "Audit chain has more than one start record"}, nil
+			}
+			root = current
+		} else {
+			if _, exists := childrenByPrevious[current.Signature.PreviousStateHash]; exists {
+				return &VerificationResult{IsValid: false, Message: "Audit chain branches from a prior hash"}, nil
+			}
+			childrenByPrevious[current.Signature.PreviousStateHash] = current
+		}
+	}
+	if root == nil {
+		return &VerificationResult{IsValid: false, Message: "Audit chain has no start record"}, nil
+	}
+	visited := make(map[string]bool, len(logs))
+	current := root
+	for current != nil {
+		if visited[current.LogID] {
+			return &VerificationResult{IsValid: false, Message: "Audit chain contains a cycle"}, nil
+		}
+		visited[current.LogID] = true
+		next := childrenByPrevious[current.Signature.NewStateHash]
+		current = next
+	}
+	if len(visited) != len(logs) {
+		return &VerificationResult{IsValid: false, Message: "Some audit entries are disconnected from the chain start"}, nil
+	}
+	for _, log := range logs {
+		if log.Signature.PreviousStateHash != "" {
+			if _, exists := byNewHash[log.Signature.PreviousStateHash]; !exists {
+				return &VerificationResult{
+					IsValid: false,
+					Message: fmt.Sprintf("Previous audit hash missing for log %s", log.LogID),
+				}, nil
+			}
+		}
+	}
+
+	return &VerificationResult{
+		IsValid: true,
+		Message: "Audit trail verified successfully",
+	}, nil
+}
+
+// ==================== HELPER FUNCTIONS ====================
+
+// sanitizeArgs removes sensitive data from function arguments before logging
+func sanitizeArgs(args []string) []string {
+	sanitized := make([]string, len(args))
+	for i, arg := range args {
+		// Mask sensitive data (passwords, keys, etc.)
+		if len(arg) > 100 {
+			sanitized[i] = arg[:50] + "...[truncated]..." + arg[len(arg)-20:]
+		} else {
+			sanitized[i] = arg
+		}
+	}
+	return sanitized
+}
+
+// CalculateDataHash creates SHA-256 hash of data for integrity verification
+func CalculateDataHash(data interface{}) (string, error) {
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	hash := sha256.Sum256(dataJSON)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// ==================== DOCUMENT SIGNATURE FUNCTIONS ====================
+
+// DocumentSignature records a document hash, signer identity, and a deterministic
+// record digest. The Fabric transaction envelope contains the actual signatures.
+type DocumentSignature struct {
+	SignatureID        string    `json:"signatureId"`
+	DocumentID         string    `json:"documentId"`
+	DocumentHash       string    `json:"documentHash"`
+	SignerMSPID        string    `json:"signerMspId"`
+	SignerCertHash     string    `json:"signerCertHash"`
+	SignerCommonName   string    `json:"signerCommonName"`
+	SignerRole         string    `json:"signerRole"`
+	SignerEmail        string    `json:"signerEmail"`
+	SignatureType      string    `json:"signatureType"` // UPLOAD, VERIFY, APPROVE, REJECT
+	SignatureData      string    `json:"signatureData"` // Deterministic record digest; not a private-key signature
+	SignatureAlgorithm string    `json:"signatureAlgorithm"`
+	SignedAt           time.Time `json:"signedAt"`
+	Reason             string    `json:"reason"`
+	IPFSHash           string    `json:"ipfsHash"`
+	BlockNumber        uint64    `json:"blockNumber"`
+	TransactionID      string    `json:"transactionId"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
+
+// DocumentWithSignatures aggregates all signatures for a document
+type DocumentWithSignatures struct {
+	DocumentID      string              `json:"documentId"`
+	DocumentType    string              `json:"documentType"`
+	FileName        string              `json:"fileName"`
+	FileHash        string              `json:"fileHash"`
+	EntityType      string              `json:"entityType"`
+	EntityID        string              `json:"entityId"`
+	UploadedBy      string              `json:"uploadedBy"`
+	UploadedAt      time.Time           `json:"uploadedAt"`
+	Signatures      []DocumentSignature `json:"signatures"`
+	SignatureStatus string              `json:"signatureStatus"` // UNSIGNED, PARTIAL, FULLY_SIGNED
+	RequiredSigners []string            `json:"requiredSigners"`
+	CurrentSigners  []string            `json:"currentSigners"`
+	FinalizedAt     time.Time           `json:"finalizedAt"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
+}
+
+// ==================== MULTI-PARTY APPROVAL STRUCTURES ====================
+
+// ApprovalRequirement defines multi-party approval rules for document types
+type ApprovalRequirement struct {
+	RequirementID string    `json:"requirementId"` // Unique ID: DOCTYPE_ENTITYTYPE
+	DocumentType  string    `json:"documentType"`  // COMMERCIAL_INVOICE, BILL_OF_LADING, etc.
+	EntityType    string    `json:"entityType"`    // LC, CONTRACT, SHIPMENT, CUSTOMS_DECLARATION
+	MinApprovers  int       `json:"minApprovers"`  // Minimum number of approvers required
+	RequiredRoles []string  `json:"requiredRoles"` // Roles that must approve (in order for sequential)
+	ApprovalOrder string    `json:"approvalOrder"` // "sequential" or "parallel"
+	Description   string    `json:"description"`   // Human-readable description
+	Active        bool      `json:"active"`        // Is this requirement active?
+	CreatedBy     string    `json:"createdBy"`     // Who created this requirement
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// DocumentApprovalState tracks approval progress on blockchain
+type DocumentApprovalState struct {
+	DocumentID        string    `json:"documentId"`
+	DocumentType      string    `json:"documentType"`
+	EntityType        string    `json:"entityType"`
+	RequiredApprovals int       `json:"requiredApprovals"`
+	CurrentApprovals  int       `json:"currentApprovals"`
+	ApprovedBy        []string  `json:"approvedBy"`      // Certificate hashes of approvers
+	ApprovedByRoles   []string  `json:"approvedByRoles"` // Corresponding roles
+	ApprovalOrder     string    `json:"approvalOrder"`   // sequential or parallel
+	ApprovalStatus    string    `json:"approvalStatus"`  // pending, in_progress, approved, rejected
+	WorkflowComplete  bool      `json:"workflowComplete"`
+	RejectedBy        string    `json:"rejectedBy"`
+	RejectionReason   string    `json:"rejectionReason"`
+	LastApprovalAt    time.Time `json:"lastApprovalAt"`
+	CompletedAt       time.Time `json:"completedAt"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// ==================== END MULTI-PARTY APPROVAL STRUCTURES ====================
+
+// ==================== MULTI-PARTY APPROVAL FUNCTIONS ====================
+
+// SetApprovalRequirement - Admin function to set approval requirements for document types
+func (c *CoffeeContract) SetApprovalRequirement(
+	ctx contractapi.TransactionContextInterface,
+	documentType string,
+	entityType string,
+	minApprovers int,
+	requiredRoles string, // Comma-separated roles
+	approvalOrder string, // "sequential" or "parallel"
+	description string,
+) error {
+	// Get caller identity
+	callerMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get caller MSP ID: %w", err)
+	}
+
+	// Only admin MSPs can set approval requirements
+	if callerMSPID != "NBEMSP" && callerMSPID != "AdminMSP" {
+		return fmt.Errorf("unauthorized: only NBE/Admin can set approval requirements (caller: %s)", callerMSPID)
+	}
+
+	requirementID := fmt.Sprintf("APPREQ_%s_%s", documentType, entityType)
+
+	// Parse roles
+	roles := []string{}
+	if requiredRoles != "" {
+		roles = parseCommaSeparated(requiredRoles)
+	}
+
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	requirement := ApprovalRequirement{
+		RequirementID: requirementID,
+		DocumentType:  documentType,
+		EntityType:    entityType,
+		MinApprovers:  minApprovers,
+		RequiredRoles: roles,
+		ApprovalOrder: approvalOrder,
+		Description:   description,
+		Active:        true,
+		CreatedBy:     callerMSPID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	reqJSON, err := json.Marshal(requirement)
+	if err != nil {
+		return fmt.Errorf("failed to marshal requirement: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(requirementID, reqJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store requirement: %w", err)
+	}
+
+	fmt.Printf("✅ Approval requirement set: %s/%s requires %d approvers\n", documentType, entityType, minApprovers)
+	return nil
+}
+
+// GetApprovalRequirement - Get approval requirement for a document type
+func (c *CoffeeContract) GetApprovalRequirement(
+	ctx contractapi.TransactionContextInterface,
+	documentType string,
+	entityType string,
+) (*ApprovalRequirement, error) {
+	requirementID := fmt.Sprintf("APPREQ_%s_%s", documentType, entityType)
+
+	reqJSON, err := ctx.GetStub().GetState(requirementID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read requirement: %w", err)
+	}
+
+	if reqJSON == nil {
+		return nil, nil // No requirement set
+	}
+
+	var requirement ApprovalRequirement
+	err = json.Unmarshal(reqJSON, &requirement)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal requirement: %w", err)
+	}
+
+	if !requirement.Active {
+		return nil, nil // Requirement is inactive
+	}
+
+	return &requirement, nil
+}
+
+// validateApproval - Internal function to validate if a signature can be approved
+func (c *CoffeeContract) validateApproval(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	documentType string,
+	entityType string,
+	signerRole string,
+	signerCertHash string,
+) (bool, string, int, error) {
+	// Get approval requirement
+	requirement, err := c.GetApprovalRequirement(ctx, documentType, entityType)
+	if err != nil {
+		return false, "", 0, fmt.Errorf("failed to get requirement: %w", err)
+	}
+
+	// If no requirement, single approval is sufficient
+	if requirement == nil || requirement.MinApprovers <= 1 {
+		return true, "No multi-party requirement", 1, nil
+	}
+
+	// Get or create approval state
+	stateKey := "APPSTATE_" + documentID
+	stateJSON, _ := ctx.GetStub().GetState(stateKey)
+
+	var state DocumentApprovalState
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	if stateJSON == nil {
+		// Create new state
+		state = DocumentApprovalState{
+			DocumentID:        documentID,
+			DocumentType:      documentType,
+			EntityType:        entityType,
+			RequiredApprovals: requirement.MinApprovers,
+			CurrentApprovals:  0,
+			ApprovedBy:        []string{},
+			ApprovedByRoles:   []string{},
+			ApprovalOrder:     requirement.ApprovalOrder,
+			ApprovalStatus:    "pending",
+			WorkflowComplete:  false,
+			CreatedAt:         now,
+		}
+	} else {
+		json.Unmarshal(stateJSON, &state)
+	}
+
+	// Check if already approved by this signer
+	for _, certHash := range state.ApprovedBy {
+		if certHash == signerCertHash {
+			return false, "You have already approved this document", 0, nil
+		}
+	}
+
+	// Check if workflow is already complete
+	if state.WorkflowComplete {
+		return false, "Document approval workflow is already complete", 0, nil
+	}
+
+	// Check if rejected
+	if state.ApprovalStatus == "rejected" {
+		return false, "Document was rejected", 0, nil
+	}
+
+	// Validate role
+	roleValid := false
+	for _, role := range requirement.RequiredRoles {
+		if role == signerRole {
+			roleValid = true
+			break
+		}
+	}
+	if !roleValid {
+		return false, fmt.Sprintf("Your role (%s) is not authorized. Required roles: %v", signerRole, requirement.RequiredRoles), 0, nil
+	}
+
+	// For sequential approval, check order
+	if requirement.ApprovalOrder == "sequential" {
+		expectedRoleIndex := state.CurrentApprovals
+		if expectedRoleIndex >= len(requirement.RequiredRoles) {
+			return false, "All required approvals already received", 0, nil
+		}
+		expectedRole := requirement.RequiredRoles[expectedRoleIndex]
+		if expectedRole != signerRole {
+			return false, fmt.Sprintf("Sequential approval required. Waiting for %s approval first", expectedRole), 0, nil
+		}
+	}
+
+	// Calculate new approval level
+	newApprovalLevel := state.CurrentApprovals + 1
+
+	// Validation passed
+	return true, "Approval validated", newApprovalLevel, nil
+}
+
+// recordApproval - Internal function to record an approval
+func (c *CoffeeContract) recordApproval(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	signerCertHash string,
+	signerRole string,
+	approvalLevel int,
+) error {
+	stateKey := "APPSTATE_" + documentID
+	stateJSON, _ := ctx.GetStub().GetState(stateKey)
+
+	var state DocumentApprovalState
+	json.Unmarshal(stateJSON, &state)
+
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	now := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// Update state
+	state.ApprovedBy = append(state.ApprovedBy, signerCertHash)
+	state.ApprovedByRoles = append(state.ApprovedByRoles, signerRole)
+	state.CurrentApprovals = approvalLevel
+	state.LastApprovalAt = now
+
+	// Check if complete
+	if state.CurrentApprovals >= state.RequiredApprovals {
+		state.ApprovalStatus = "approved"
+		state.WorkflowComplete = true
+		state.CompletedAt = now
+		fmt.Printf("✅ Approval workflow COMPLETE for %s (%d/%d)\n", documentID, state.CurrentApprovals, state.RequiredApprovals)
+	} else {
+		state.ApprovalStatus = "in_progress"
+		fmt.Printf("⏳ Approval progress for %s: %d/%d\n", documentID, state.CurrentApprovals, state.RequiredApprovals)
+	}
+
+	// Save state
+	updatedStateJSON, _ := json.Marshal(state)
+	return ctx.GetStub().PutState(stateKey, updatedStateJSON)
+}
+
+// Helper function to parse comma-separated string
+func parseCommaSeparated(input string) []string {
+	result := []string{}
+	if input == "" {
+		return result
+	}
+	parts := []rune(input)
+	current := ""
+	for _, char := range parts {
+		if char == ',' {
+			if current != "" {
+				result = append(result, current)
+				current = ""
+			}
+		} else if char != ' ' {
+			current += string(char)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// ==================== END MULTI-PARTY APPROVAL FUNCTIONS ====================
+
+// SignDocument - Sign a document with X.509 certificate (blockchain-backed)
+func (c *CoffeeContract) SignDocument(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+	documentHash string,
+	signatureType string,
+	reason string,
+) error {
+	if len(documentHash) != 64 {
+		return fmt.Errorf("document hash must be a 32-byte SHA-256 hex digest")
+	}
+	if _, err := hex.DecodeString(documentHash); err != nil {
+		return fmt.Errorf("document hash must be hexadecimal: %w", err)
+	}
+
+	registeredDocument, err := c.ReadDocumentHash(ctx, documentID)
+	if err != nil {
+		return fmt.Errorf("document must be registered on the ledger before signing: %w", err)
+	}
+	expectedHash := registeredDocument.Hash
+	priorSignaturesJSON, err := ctx.GetStub().GetState("DOCSIGS_" + documentID)
+	if err != nil {
+		return fmt.Errorf("failed to read prior document signatures: %w", err)
+	}
+	if len(priorSignaturesJSON) > 0 {
+		var priorSignatures DocumentWithSignatures
+		if err := json.Unmarshal(priorSignaturesJSON, &priorSignatures); err != nil {
+			return fmt.Errorf("failed to decode prior document signatures: %w", err)
+		}
+		if count := len(priorSignatures.Signatures); count > 0 && priorSignatures.Signatures[count-1].DocumentHash != "" {
+			expectedHash = priorSignatures.Signatures[count-1].DocumentHash
+		}
+	}
+	if !strings.EqualFold(expectedHash, documentHash) {
+		return fmt.Errorf("document hash mismatch: signing request does not match the latest ledger-anchored file hash")
+	}
+
+	// ✅ STEP 1: Capture signer's identity (X.509 certificate)
+	signerMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get signer MSP ID: %w", err)
+	}
+
+	signerCert, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("failed to get signer certificate: %w", err)
+	}
+
+	// Calculate certificate hash
+	certHash := sha256.Sum256([]byte(signerCert))
+	signerCertHash := hex.EncodeToString(certHash[:])
+
+	// Get common name from certificate
+	cert, err := ctx.GetClientIdentity().GetX509Certificate()
+	if err != nil {
+		return fmt.Errorf("failed to get X.509 certificate: %w", err)
+	}
+	signerCommonName := cert.Subject.CommonName
+
+	// Get optional attributes
+	signerRole, _, _ := ctx.GetClientIdentity().GetAttributeValue("role")
+	signerEmail, _, _ := ctx.GetClientIdentity().GetAttributeValue("email")
+
+	// ✅ MULTI-PARTY APPROVAL VALIDATION (for APPROVE signature type)
+	var approvalLevel int = 1
+	var workflowComplete bool = false
+
+	if signatureType == "APPROVE" {
+		// Get document metadata from DOCSIGS to know document type and entity type
+		docKey := "DOCSIGS_" + documentID
+		docSigJSON, _ := ctx.GetStub().GetState(docKey)
+
+		var docType string = "UNKNOWN"
+		var entityType string = "UNKNOWN"
+
+		if docSigJSON != nil {
+			var docWithSigs DocumentWithSignatures
+			json.Unmarshal(docSigJSON, &docWithSigs)
+			docType = docWithSigs.DocumentType
+			entityType = docWithSigs.EntityType
+		}
+
+		// Validate approval
+		canApprove, reason, level, err := c.validateApproval(
+			ctx,
+			documentID,
+			docType,
+			entityType,
+			signerRole,
+			signerCertHash,
+		)
+
+		if err != nil {
+			return fmt.Errorf("approval validation error: %w", err)
+		}
+
+		if !canApprove {
+			return fmt.Errorf("approval denied: %s", reason)
+		}
+
+		approvalLevel = level
+
+		// Record approval on blockchain
+		err = c.recordApproval(ctx, documentID, signerCertHash, signerRole, approvalLevel)
+		if err != nil {
+			return fmt.Errorf("failed to record approval: %w", err)
+		}
+
+		// Check if workflow is complete
+		stateKey := "APPSTATE_" + documentID
+		stateJSON, _ := ctx.GetStub().GetState(stateKey)
+		if stateJSON != nil {
+			var state DocumentApprovalState
+			json.Unmarshal(stateJSON, &state)
+			workflowComplete = state.WorkflowComplete
+		}
+
+		fmt.Printf("✅ Multi-party approval validation passed: %s (Level %d, Complete: %v)\n", documentID, approvalLevel, workflowComplete)
+	}
+
+	// ✅ STEP 2: Get blockchain transaction details
+	txID := ctx.GetStub().GetTxID()
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %w", err)
+	}
+	signedAt := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// Generate signature ID
+	signatureID := fmt.Sprintf("SIG_%s_%s_%d", documentID, signerMSPID, signedAt.Unix())
+
+	// Create a deterministic record digest; Fabric signs the transaction envelope.
+	signatureData := fmt.Sprintf("%s:%s:%s:%s:%s:%s", documentID, documentHash, signerCertHash, signatureType, signedAt.Format(time.RFC3339), txID)
+	sigHash := sha256.Sum256([]byte(signatureData))
+	cryptoSignature := hex.EncodeToString(sigHash[:])
+
+	// ✅ STEP 4: Create signature record
+	signature := DocumentSignature{
+		SignatureID:        signatureID,
+		DocumentID:         documentID,
+		DocumentHash:       documentHash,
+		SignerMSPID:        signerMSPID,
+		SignerCertHash:     signerCertHash,
+		SignerCommonName:   signerCommonName,
+		SignerRole:         signerRole,
+		SignerEmail:        signerEmail,
+		SignatureType:      signatureType,
+		SignatureData:      cryptoSignature,
+		SignatureAlgorithm: "SHA256_RECORD_DIGEST",
+		SignedAt:           signedAt,
+		Reason:             reason,
+		TransactionID:      txID,
+		CreatedAt:          signedAt,
+	}
+
+	// ✅ STEP 5: Store signature on blockchain
+	signatureJSON, err := json.Marshal(signature)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signature: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(signatureID, signatureJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store signature: %w", err)
+	}
+
+	// ✅ STEP 6: Update document's signature list
+	docKey := "DOCSIGS_" + documentID
+	docSigJSON, _ := ctx.GetStub().GetState(docKey)
+
+	var docWithSigs DocumentWithSignatures
+	if docSigJSON != nil {
+		json.Unmarshal(docSigJSON, &docWithSigs)
+	} else {
+		docWithSigs = DocumentWithSignatures{
+			DocumentID:      documentID,
+			FileHash:        documentHash,
+			Signatures:      []DocumentSignature{},
+			CurrentSigners:  []string{},
+			RequiredSigners: []string{},
+			CreatedAt:       signedAt,
+		}
+	}
+
+	// Add signature
+	docWithSigs.Signatures = append(docWithSigs.Signatures, signature)
+
+	// Add to current signers if not already present
+	alreadySigned := false
+	for _, signer := range docWithSigs.CurrentSigners {
+		if signer == signerMSPID {
+			alreadySigned = true
+			break
+		}
+	}
+	if !alreadySigned {
+		docWithSigs.CurrentSigners = append(docWithSigs.CurrentSigners, signerMSPID)
+	}
+
+	// Check if fully signed
+	if len(docWithSigs.RequiredSigners) > 0 && len(docWithSigs.CurrentSigners) >= len(docWithSigs.RequiredSigners) {
+		docWithSigs.SignatureStatus = "FULLY_SIGNED"
+		docWithSigs.FinalizedAt = signedAt
+	} else if len(docWithSigs.Signatures) > 0 {
+		docWithSigs.SignatureStatus = "PARTIAL"
+	} else {
+		docWithSigs.SignatureStatus = "UNSIGNED"
+	}
+
+	docWithSigs.UpdatedAt = signedAt
+
+	// Save updated document
+	updatedJSON, err := json.Marshal(docWithSigs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal document signatures: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(docKey, updatedJSON)
+	if err != nil {
+		return fmt.Errorf("failed to store document signatures: %w", err)
+	}
+
+	// ✅ STEP 7: Emit signature event
+	eventPayload := map[string]interface{}{
+		"signatureId":   signatureID,
+		"documentId":    documentID,
+		"signer":        signerCommonName,
+		"signerOrg":     signerMSPID,
+		"signatureType": signatureType,
+		"timestamp":     signedAt.Format(time.RFC3339),
+		"txId":          txID,
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("DocumentSigned", eventJSON)
+
+	changes := []FieldChange{
+		{FieldName: "documentHash", OldValue: "", NewValue: documentHash, DataType: "sha256"},
+		{FieldName: "signatureType", OldValue: "", NewValue: signatureType, DataType: "string"},
+		{FieldName: "signatureId", OldValue: "", NewValue: signatureID, DataType: "string"},
+	}
+	compliance := ComplianceMetadata{ECTACompliance: true, EUDRCompliance: true, ComplianceNote: fmt.Sprintf("Document signature recorded by %s", signerMSPID)}
+	if err := c.CreateAuditLog(ctx, "SIGNATURE_"+signatureType, "DOCUMENT", documentID, "", "SIGNED", changes, reason, compliance); err != nil {
+		return fmt.Errorf("failed to write document signature audit record: %w", err)
+	}
+
+	return nil
+}
+
+// GetDocumentSignatures - Get all signatures for a document
+func (c *CoffeeContract) GetDocumentSignatures(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+) (*DocumentWithSignatures, error) {
+
+	docKey := "DOCSIGS_" + documentID
+	docSigJSON, err := ctx.GetStub().GetState(docKey)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read signatures: %w", err)
+	}
+
+	if docSigJSON == nil {
+		// Return empty signature list
+		return &DocumentWithSignatures{
+			DocumentID:      documentID,
+			Signatures:      []DocumentSignature{},
+			SignatureStatus: "UNSIGNED",
+			CurrentSigners:  []string{},
+			RequiredSigners: []string{},
+		}, nil
+	}
+
+	var docWithSigs DocumentWithSignatures
+	err = json.Unmarshal(docSigJSON, &docWithSigs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal signatures: %w", err)
+	}
+
+	return &docWithSigs, nil
+}
+
+// VerifyDocumentSignature - Verify a signature is valid
+func (c *CoffeeContract) VerifyDocumentSignature(
+	ctx contractapi.TransactionContextInterface,
+	signatureID string,
+) (bool, error) {
+
+	sigJSON, err := ctx.GetStub().GetState(signatureID)
+	if err != nil || sigJSON == nil {
+		return false, fmt.Errorf("signature not found")
+	}
+
+	var signature DocumentSignature
+	err = json.Unmarshal(sigJSON, &signature)
+	if err != nil {
+		return false, fmt.Errorf("failed to unmarshal signature: %w", err)
+	}
+
+	// Recalculate the deterministic ledger-record digest. This is not a
+	// stand-alone private-key signature; Fabric transaction signatures are
+	// verified from the committed envelope by the API.
+	signatureData := fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+		signature.DocumentID, signature.DocumentHash, signature.SignerCertHash,
+		signature.SignatureType, signature.SignedAt.Format(time.RFC3339), signature.TransactionID)
+	if signature.SignatureAlgorithm == "" {
+		// Keep previously recorded signature entries verifiable during migration.
+		signatureData = fmt.Sprintf("%s:%s:%s:%s",
+			signature.DocumentID, signature.DocumentHash, signature.SignerCertHash,
+			signature.SignedAt.Format(time.RFC3339))
+	}
+	sigHash := sha256.Sum256([]byte(signatureData))
+	expectedSignature := hex.EncodeToString(sigHash[:])
+
+	// Compare
+	if signature.SignatureData == expectedSignature {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("signature verification failed: hash mismatch")
+}
+
+// QuerySignaturesByDocument - Get all signatures for a specific document
+func (c *CoffeeContract) QuerySignaturesByDocument(
+	ctx contractapi.TransactionContextInterface,
+	documentID string,
+) ([]*DocumentSignature, error) {
+
+	// Query by key prefix
+	startKey := "SIG_" + documentID + "_"
+	endKey := "SIG_" + documentID + "_~"
+
+	resultsIterator, err := ctx.GetStub().GetStateByRange(startKey, endKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query signatures: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var signatures []*DocumentSignature
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var signature DocumentSignature
+		err = json.Unmarshal(queryResponse.Value, &signature)
+		if err != nil {
+			continue // Skip invalid signatures
+		}
+		signatures = append(signatures, &signature)
+	}
+
+	return signatures, nil
+}
+
+// QuerySignaturesBySigner - Get all signatures by a specific signer
+func (c *CoffeeContract) QuerySignaturesBySigner(
+	ctx contractapi.TransactionContextInterface,
+	certHash string,
+) ([]*DocumentSignature, error) {
+
+	// Query all signatures
+	resultsIterator, err := ctx.GetStub().GetStateByRange("SIG_", "SIG_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query signatures: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	var signatures []*DocumentSignature
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		var signature DocumentSignature
+		err = json.Unmarshal(queryResponse.Value, &signature)
+		if err != nil {
+			continue // Skip invalid signatures
+		}
+
+		// Filter by certificate hash
+		if signature.SignerCertHash == certHash {
+			signatures = append(signatures, &signature)
+		}
+	}
+
+	return signatures, nil
+}
+
+// Updated Wed, Aug 12, 2026 11:23:30 AM
+
+// GetTransactionByID cannot query historical blocks from chaincode. Applications
+// must use QSCC to read committed transactions, creator identity, endorsements,
+// validation codes, and block numbers.
+func (c *CoffeeContract) GetTransactionByID(ctx contractapi.TransactionContextInterface, txID string) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("historical transaction %s must be queried with QSCC GetTransactionByID on channel %s", txID, ctx.GetStub().GetChannelID())
+}

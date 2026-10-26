@@ -1,0 +1,165 @@
+[1m
+████████████████████████████████████████████████████████████[0m
+[1mEthiopian Coffee Export Complete Workflow Test[0m
+[36mApplication → Registration → Approval → Forex → LC → Shipment → Payment[0m
+[1m████████████████████████████████████████████████████████████[0m
+[36m
+============================================================[0m
+[1mAUTHENTICATION: Getting tokens for all roles[0m
+[36m============================================================[0m
+[32m✓ Logged in as exporter (EXP4342570)[0m
+[32m✓ Logged in as ecta (ecta_admin)[0m
+[32m✓ Logged in as nbe (nbe_admin)[0m
+[32m✓ Logged in as bank (bank_admin)[0m
+[32m✓ Logged in as customs (customs_admin)[0m
+[0m[0m
+[36m
+============================================================[0m
+[1mSTEP 1: Register Exporter on Blockchain[0m
+[36m============================================================[0m
+[32m✓ Exporter Registration: Exporter already exists: EXP4342570[0m
+[34m  Company: Ethiopian Coffee Masters Ltd[0m
+[34m  Status: Active[0m
+[36m
+============================================================[0m
+[1mSTEP 2: Contract Registration with Payment Method[0m
+[36m============================================================[0m
+[32m✓ Contract Registration: Contract ID: CONTRACT1784374631339[0m
+[34m  Buyer: BUYER001 (USA)[0m
+[34m  Value: $170,000 USD[0m
+[34m  Coffee: 20000kg Arabica Yirgacheffe[0m
+[34m  Payment Method: LC (default)[0m
+[36m
+============================================================[0m
+[1mSTEP 3: ECTA Compliance Review[0m
+[36m============================================================[0m
+[32m✓ ECTA Compliance Review: Contract meets ECTA export standards[0m
+[34m  ✓ EUDR Compliance verified[0m
+[34m  ✓ Coffee quality standards met[0m
+[34m  ✓ Export license valid[0m
+[36m
+============================================================[0m
+[1mSTEP 4: ECTA Contract Approval (for Export Compliance)[0m
+[36m============================================================[0m
+[32m✓ ECTA Contract Approval: Contract approved for export[0m
+[34m  Status: Export compliance verified[0m
+[36m
+NBE Forex Eligibility Approval...[0m
+[31m✗ NBE Forex Approval: Invalid input data[0m
+[36m
+============================================================[0m
+[1mSTEP 5: Forex Request[0m
+[36m============================================================[0m
+[32m✓ Forex Request: Forex ID: FX1784374631339[0m
+[34m  Amount: $170000 USD[0m
+[36m
+============================================================[0m
+[1mSTEP 6: Bank Forex Allocation (with NBE approval)[0m
+[36m============================================================[0m
+[32m✓ Forex Allocation: Allocated by Bank: $170000[0m
+[34m  Exchange Rate: 115.50 ETB/USD[0m
+[34m  Retention: 40%[0m
+[34m  NBE Approval Ref: NBE-FX-1784374656411[0m
+[34m  Expiry: 2027-01-14[0m
+[36m
+============================================================[0m
+[1mSTEP 7: Letter of Credit Request[0m
+[36m============================================================[0m
+[32m✓ LC Request: LC ID: LC1784374631339[0m
+[34m  Amount: $170000 USD[0m
+[34m  Bank: Commercial Bank of Ethiopia[0m
+[32m✓ LC Approval: LC approved by bank[0m
+[32m✓ LC Issuance: LC issued successfully[0m
+[36m
+============================================================[0m
+[1mSTEP 8: Shipment Creation & Quality Inspection[0m
+[36m============================================================[0m
+[32m✓ Shipment Creation: Shipment ID: SHIP1784374631339[0m
+[34m  Quantity: 20000kg[0m
+[34m  Grade: Grade 1[0m
+[34m  ICO Number: ICO1784374678289[0m
+[32m✓ Quality Inspection: Grade A - Premium Arabica[0m
+[34m  Moisture: 11.2%[0m
+[34m  Screen Size: 15+[0m
+[34m  Cup Score: 87/100[0m
+[36m
+============================================================[0m
+[1mSTEP 9: Customs Declaration & Clearance[0m
+[36m============================================================[0m
+[32m✓ Customs Declaration: Declaration ID: DECL1784374631339[0m
+[34m  HS Code: 0901.11[0m
+[34m  Destination: USA[0m
+[32m✓ Customs Review: Inspection scheduled[0m
+[32m✓ Customs Inspection: Inspection completed[0m
+[32m✓ Customs Clearance: Export permit issued[0m
+[34m  Clearance Number: CLR-1784374717845[0m
+[34m  Officer: Marta Tesfaye[0m
+[36m
+============================================================[0m
+[1mSTEP 10: SWIFT Payment Processing (Multiple Message Types)[0m
+[36m============================================================[0m
+[32m✓ MT700 Created: LC Issuance message created[0m
+[34m  Message ID: MT700_1784374744016[0m
+[34m  LC Number: LC-4374631339[0m
+[34m  Status: DRAFT[0m
+[32m✓ MT710 Created: LC Advice message created[0m
+[34m  Message ID: MT710_1784374794823[0m
+[32m  Status: SENT[0m
+[32m✓ MT103 Created: Payment message created[0m
+[34m  Message ID: SWIFT1784374631339[0m
+[34m  From: CHASUS33 (Buyer's Bank)[0m
+[34m  To: CBETETAA (Exporter's Bank)[0m
+[34m  Amount: $170,000 USD[0m
+[34m  Beneficiary Account: ET76CBEE00000123456789012345[0m
+[34m  Linked LC: LC1784374631339[0m
+[32m  Status: APPROVED[0m
+[32m  Status: SENT[0m
+[32m  Status: RECEIVED[0m
+[32m  Status: PROCESSING[0m
+[32m✓ MT730 Created: Acknowledgement message created[0m
+[34m  Message ID: MT730_1784374861588[0m
+[32m  Status: APPROVED[0m
+[32m✓ MT750 Created: Discrepancy notice created[0m
+[34m  Message ID: MT750_1784374890355[0m
+[33m  Discrepancies: 4[0m
+[32m  Status: RECEIVED[0m
+[32m✓ MT910 Created: Credit confirmation created[0m
+[34m  Message ID: MT910_1784374899201[0m
+[32m  Status: SETTLED[0m
+[36m
+------------------------------------------------------------[0m
+[1mTotal SWIFT Messages Created: 6[0m
+[34m  ✓ MT700 - MT700_1784374744016[0m
+[34m  ✓ MT710 - MT710_1784374794823[0m
+[34m  ✓ MT103 - SWIFT1784374631339[0m
+[34m  ✓ MT730 - MT730_1784374861588[0m
+[34m  ✓ MT750 - MT750_1784374890355[0m
+[34m  ✓ MT910 - MT910_1784374899201[0m
+[36m------------------------------------------------------------[0m
+[36m
+============================================================[0m
+[1mSTEP 11: Payment Settlement & Forex Retention[0m
+[36m============================================================[0m
+[32m✓ Payment Settlement: Payment settled via SWIFT[0m
+[34m  Amount Received: $170,000 USD[0m
+[34m  Total in ETB: 19,635,000 ETB[0m
+[34m  Retained (40%): 7,854,000 ETB[0m
+[34m  Converted to ETB: 11,781,000 ETB[0m
+[32m✓ Forex Utilization: Forex marked as utilized by Bank[0m
+[34m  Forex compliance: 100% retention per NBE directive[0m
+[35m
+============================================================[0m
+[1mWORKFLOW TEST SUMMARY[0m
+[35m============================================================[0m
+[36m
+Total Steps: 24[0m
+[32mPassed: 23[0m
+[31mFailed: 1[0m
+[33mSuccess Rate: 95.8%[0m
+[31m
+❌ Failed Steps:[0m
+[31m  • NBE Forex Approval: Invalid input data[0m
+[33m
+⚠️  Some tests failed. Review errors above.[0m
+[35m
+============================================================[0m

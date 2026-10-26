@@ -1,0 +1,8 @@
+{
+  "index": {
+    "fields": ["exporterId", "status"]
+  },
+  "ddoc": "indexExporterStatus",
+  "name": "indexExporterStatus",
+  "type": "json"
+}

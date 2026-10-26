@@ -1,0 +1,144 @@
+{
+  "channel": "coffeechannel",
+  "chaincode": "coffee",
+  "version": "2.0",
+  "sequence": 19,
+  "packageId": "coffee_2.0:f99a77c5a2874a79ec95bff8300a914a7cead3df005830dcf00199161315c45b",
+  "packageArchive": "coffee_2.0.tgz",
+  "sourceManifest": "coffee_2.0-source.sha256",
+  "validationPolicy": {
+    "type": "AND",
+    "organizations": [
+      "ECTAMSP",
+      "ECXMSP",
+      "BanksMSP",
+      "NBEMSP",
+      "CustomsMSP",
+      "ShippingMSP"
+    ],
+    "principal": "peer"
+  },
+  "lifecycle": {
+    "approvals": {
+      "ECTAMSP": true,
+      "ECXMSP": true,
+      "BanksMSP": true,
+      "NBEMSP": true,
+      "CustomsMSP": true,
+      "ShippingMSP": true
+    },
+    "commitTransactionId": "d8a5063ad0681ba7a2ada2c08198af32aa9a764f66342df7a54fd00293213455",
+    "commitStatus": "VALID"
+  },
+  "chaincodeAsAService": {
+    "image": "coffee-chaincode:2.0",
+    "imageId": "sha256:4f789ed58414cd27e6b36284082b9b691d6e65ddb8187b36ce12854e9f10caa3",
+    "tls": true,
+    "clientAuthentication": false,
+    "privateKeySource": "read-only runtime mount; excluded from source package and build context",
+    "hostPortPublished": false
+  },
+  "applicationIdentity": {
+    "fabricGatewayIdentity": "user-{MSP_ID}-{databaseUserId} for authenticated portal transactions; the startup readiness connection uses admin-ECTAMSP",
+    "portalUserIdentityOnFabricEnvelope": "true only when the authenticated user's matching active CA-issued Fabric identity is provisioned; production fails closed when it is missing",
+    "portalCredentialEnrollment": "CryptoUserService enrolls through the user's organization Fabric CA, verifies the issued certificate against that MSP's configured trust roots, and stores the X.509 identity in the protected Fabric wallet",
+    "note": "Detached document signatures remain separate from the Fabric transaction creator identity. CA endpoints, authorized registrar identities, trust roots, and user enrollments must be supplied by consortium operators."
+  },
+  "backendSourceChanges": {
+    "documentHashArgumentOrder": "corrected to the chaincode RegisterDocumentHash signature",
+    "documentMutationAfterHashCommit": "removed from upload, verification, view, signing, and certificate-copy flows",
+    "documentSignatures": "detached X.509 proofs preserve file bytes; signing checks the current Fabric-anchored hash",
+    "environmentLogging": "database URL and secret values are no longer logged",
+    "transactionFinality": "writes return their transaction ID, report ledger validation status, and only retry explicit pre-ordering endorsement failures; ambiguous commit outcomes are returned as UNKNOWN to prevent duplicate submissions",
+    "organizationIsolation": "authenticated role-to-MSP request context; connect, invoke, query, QSCC, network-info, and event-listener Gateway access is serialized with a reentrant lock; legacy evaluateTransaction delegates to the scoped query path",
+    "ledgerTransactionDetails": "write responses include QSCC-derived creator, endorsements, validation, block, and chaincode invocation details when available",
+    "productionReadiness": "production requires Fabric, reachable non-local peer/orderer endpoints, valid TLS and MSP CA bundles, a pre-provisioned startup identity, and a matching CA-issued identity for each authenticated user; local cryptogen identity import is development-only",
+    "apiTypeScriptCompile": "passed",
+    "localApiProcessDetected": true,
+    "health": {
+      "status": "healthy",
+      "database": true,
+      "fabric": true,
+      "checkedAt": "2026-10-19T11:53:53Z"
+    },
+    "activationNote": "All migrations were already applied; API started in the host network context.",
+    "uiTypeScriptCompile": "passed",
+    "startupSafety": "project startup reconciles only configured Compose services, reuses matching CCAAS, verifies a read-only chaincode query, checks API /ready, and does not auto-commit chaincode upgrades or create default-password admin accounts"
+  },
+  "latestRuntimeCheck": {
+    "checkedAt": "2026-10-19T14:55:52Z",
+    "apiHealth": "ready",
+    "apiServices": {
+      "database": true,
+      "blockchain": true
+    },
+    "fabricContainersRunning": true,
+    "channel": "coffeechannel",
+    "peerLedgerSync": {
+      "peerCount": 6,
+      "allPeersAtSameHeight": true,
+      "height": 220,
+      "currentBlockHashBase64": "ads01SJSKnCZDL/3gOf0hfsoWp5ojZ22o3Twf8J4EN4="
+    },
+    "committedChaincodeDefinition": {
+      "name": "coffee",
+      "version": "2.0",
+      "sequence": 19,
+      "approvalCount": 6,
+      "validationPolicy": "AND('ECTAMSP.peer','ECXMSP.peer','BanksMSP.peer','NBEMSP.peer','CustomsMSP.peer','ShippingMSP.peer')"
+    },
+    "note": "Read-only checks: all six peers reported height 220 and the same current block hash; the committed coffee definition is version 2.0, sequence 19, with all six MSP approvals and a decoded AND policy requiring each peer MSP. The API /ready endpoint and an ECTA chaincode read probe succeeded. Updated API/UI start helpers reused the existing ready processes. No business transaction or chaincode lifecycle update was submitted.",
+    "chaincodeReadProbe": {
+      "function": "ExporterExists",
+      "key": "__CECBS_READINESS_PROBE__",
+      "result": false,
+      "readOnly": true
+    },
+    "gatewayApiCompile": "passed",
+    "readinessRecheck": "HTTP 200, database and blockchain ready",
+    "startupScriptSyntax": "passed",
+    "composeConfig": "valid",
+    "apiStartHelper": "recognized the existing HTTP 200 readiness endpoint and left the API process running",
+    "uiStartHelper": "recognized the existing Next.js server and left it running"
+  },
+  "channelSnapshot": {
+    "height": 220,
+    "currentBlockHashBase64": "ads01SJSKnCZDL/3gOf0hfsoWp5ojZ22o3Twf8J4EN4=",
+    "orderingType": "etcdraft",
+    "consenterCount": 1
+  },
+  "productionReadinessGaps": [
+    "The channel has one Raft consenter, so ordering has no node-level fault tolerance.",
+    "All consortium peers and the orderer are containers on this Docker host, so the current deployment has no host-level fault isolation.",
+    "All peers use one shared CCAAS endpoint, and client TLS authentication is disabled; independent organization-controlled chaincode services with mutual TLS are needed to remove that shared trust and availability point.",
+    "Per-user Fabric identity selection is now implemented and production fails closed without it; each organization must still provision its own CA, authorized registrar wallet identity, and user enrollments before production transactions can use those identities.",
+    "Production enrollment and revocation depend on each organization's real Fabric CA endpoint, TLS root, and registrar permissions; checked-in CA settings are examples, not live services.",
+    "The production profile must be populated with real organization-supplied peer, CA, and orderer endpoints plus TLS/MSP CA bundles; the checked-in example values are placeholders and are not deployable.",
+    "The channel's committed Raft configuration must be governed and updated to include at least three orderers operated by distinct consortium organizations; configured endpoints alone do not create consenters.",
+    "Each consortium organization must provision and govern its own Fabric CA, authorized registrar wallet identity, and user enrollments before per-user production transactions can run.",
+    "Revoked certificates are rejected by peers only after the owning organization updates the channel MSP CRL through an approved channel configuration change."
+  ],
+  "localAvailabilityCheck": {
+    "checkedAt": "2026-10-19T15:58:20Z",
+    "apiReadiness": {
+      "status": "ready",
+      "database": true,
+      "blockchain": true,
+      "ordererType": "etcdraft",
+      "configuredConsenters": 1,
+      "reachableOrderers": 1
+    },
+    "portalUiLoginHttpStatus": 200,
+    "portalUiStartupRepair": "stopped the identified Next.js dev process, removed the stale generated .next cache, restarted it, and confirmed /login returns HTTP 200",
+    "peerLedgers": {
+      "peerCount": 6,
+      "allAtSameHeight": true,
+      "height": 220,
+      "currentBlockHashBase64": "ads01SJSKnCZDL/3gOf0hfsoWp5ojZ22o3Twf8J4EN4="
+    },
+    "businessTransactionsSubmitted": false,
+    "channelOrChaincodeConfigurationChanged": false,
+    "environment": "single-host development network; not production consortium topology"
+  },
+  "verifiedAt": "2026-10-19T11:29:35Z"
+}

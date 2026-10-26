@@ -1,0 +1,40 @@
+[
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792653053506354894",
+      "signatureTimestamp": "2026-10-22T11:43:27.002Z",
+      "signerName": "ectaAdmin",
+      "signerEmail": "ectaAdmin@cecbs.et",
+      "organization": "ECTAMSP",
+      "reason": "APPROVE",
+      "documentHash": "d53772b5de33823ea2e5dc15a947789651c8add88961a5c883afcf652af67372",
+      "certificateFingerprint": "0ac5f301f0fa994c0c8c79c38030161ff9b5652b211f7175f35883891dbbacab",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": ""
+    },
+    "signature": "TbP5KPNsDQSLJJeP7ypOhMeRPLowG6HkX824LKtVqSRaoIH7o0crr8z8W0or48rkWN0GlnyAflc/4F6o99op5ihlMjnWiAIMX1Vo+GOoF3QvNuaUqp/PISp1/x65lJLkLLE/j9yNLX4C/mZZGtXSL6mD72qzmpSEGGRyaqVHcUAUo8Qb9gYA9g0XHk3GB0MNaiym1kjxZZ6gR9bzYrR5/So+0KBIKYC/mv4oKJ1hPMy8fIELqx/mLL7yiKLz3liMg8fb/7GVp+t6HewrUS0qZ92uoOWn7WNnb0RF9YdMqOO3PxmE8BrK16rOy6pVJYZ8BBqiLo30CMFZh48w3FlKlw==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMTCCAhmgAwIBAgIHAXkmaUBpRjANBgkqhkiG9w0BAQsFADBZMRIwEAYDVQQD\r\nEwllY3RhQWRtaW4xEDAOBgNVBAoTB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYD\r\nVQQIEwtBZGRpcyBBYmFiYTEOMAwGA1UECxMFQ0VDQlMwHhcNMjYxMDIyMTE0MzI2\r\nWhcNMzExMDIyMTE0MzI2WjBZMRIwEAYDVQQDEwllY3RhQWRtaW4xEDAOBgNVBAoT\r\nB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYDVQQIEwtBZGRpcyBBYmFiYTEOMAwG\r\nA1UECxMFQ0VDQlMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCIoDb3\r\nkvbLsOzoN+jnWklIv8pg4f+HhWirW8fgPnYJ8ZjyCXkxJTepdB3am5R+ioMQoL8S\r\nTmlF9BGiPyWaYka0NIFniIRCH1RGgXsI2btjggN0dCGIMYGmwkfBvh3n/TVPkYQE\r\nJG8CWjlEsyKgWvZFPj7fvrAJSUVtWnWdua1au9r7Dj/V+SKfS8DgIrjFqcMI7wj/\r\nK0NY4zyNNdNdbFR8OcMgg8UNEjxgeulGBA7zOhXCOQL6d9ZEYbt4ssvSe7nEcEqm\r\nLmRWDrOd4A0baSUOdw7/nlQ25Ath2MwymFy9u3p2SIMrpfvSqOBx7kWKvURb+IXv\r\nn4G9wjZy/FswRSKDAgMBAAEwDQYJKoZIhvcNAQELBQADggEBADbN4NegttcxgwPp\r\n6Xy3Zy8R+0v4W8SfIwNyLkeULBWwg7Ci6DioNcCU0t/4HVv2s1XFNJdbYBcZn1mn\r\nsbQVA1XIAyvP+jCZ/zc1imn9RkYOt0X7mAzctZFc8gomLGovwVGIUnjT8q2m26Bl\r\nWO2GfEzyML4GlgmyNSRE7h6xWTaJmKgSOAdKhn+Bo54rfpoj2hDOB8vHWR1EGANg\r\nj5r+x6yZpb1nkCNo1yKkj5BbJaK4FYN76TkCzE8TJpJxJst0GapBQdNeDamjWLS4\r\nw/2Ad5XqYeqTzBUix0lfKgb75lG5YgfMnYilLNDnDHwIQBSttok2R+GDiexJPotN\r\nkTCXGRw=\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "24c85a7e13bc49dd4d44b9a3439b2b794839c2ad71e656bf3270a92db5640478"
+  },
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792653053506354894",
+      "signatureTimestamp": "2026-10-22T11:44:46.529Z",
+      "signerName": "ecta_inspector",
+      "signerEmail": "ecta_inspector@cecbs.et",
+      "organization": "ECTAMSP",
+      "reason": "APPROVE",
+      "documentHash": "d53772b5de33823ea2e5dc15a947789651c8add88961a5c883afcf652af67372",
+      "certificateFingerprint": "149cdfd537ff3ee5b428e5bf7ac9a32576d776a77ac43fd63277477dc36faf85",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": "24c85a7e13bc49dd4d44b9a3439b2b794839c2ad71e656bf3270a92db5640478"
+    },
+    "signature": "B181GWHxvXWtkDiMEmteTK2mUBZ5jrtVYPx21wKMliI4taYvGDnvnjg6V5/zB2oei6rhxojwg3stvtz0+icv/hbVdrVWdptH6eGlqvWTMGKD6wO3DxhPT2PKHvRDx0DvFTI3JBSeYypkfft/ssbi+/qapDAq27Coif/lLQB+RtUaTqSR+CXfdtRWkssmblixt9NRY5Ibp/oTj8HS2MKXtJJBM320/LunL5Aqcg5XkDUaeGgB98zH0bse0Sd+yoq0eVxxMGGYEphXL7I9/SdDe/OXOg2SiFtLf38IlNNJfjIOdbW0V6hV+XjellFh/yBl7iPglSxJrUZPETd5IAFl7A==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDOzCCAiOgAwIBAgIHAXkmaUhkgjANBgkqhkiG9w0BAQsFADBeMRcwFQYDVQQD\r\nEw5lY3RhX2luc3BlY3RvcjEQMA4GA1UEChMHRUNUQU1TUDELMAkGA1UEBhMCRVQx\r\nFDASBgNVBAgTC0FkZGlzIEFiYWJhMQ4wDAYDVQQLEwVDRUNCUzAeFw0yNjEwMjIx\r\nMTQ0NDZaFw0zMTEwMjIxMTQ0NDZaMF4xFzAVBgNVBAMTDmVjdGFfaW5zcGVjdG9y\r\nMRAwDgYDVQQKEwdFQ1RBTVNQMQswCQYDVQQGEwJFVDEUMBIGA1UECBMLQWRkaXMg\r\nQWJhYmExDjAMBgNVBAsTBUNFQ0JTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\r\nCgKCAQEAqr9f68b5LFyGu26Z/lA1LsE4Z6sxVp25e5ukELiIo3+yAlNeymeTJvNC\r\nIAcfmRUSwfnaLBaj6xp+QwJizIV0pyoB4aYleeCs+ImrYQ0hCdUqg+tpdfyNlnyQ\r\ny5C3xTVCsoDpcdONOlYJlVdWyD23lX4rFfzuXTf8OrRMsrAYNWZQLfe3tpKHAOcK\r\nDQ0I0p9ZbUaqw+w0WNc9DMze2tfw+Prp5j6GFC7QbmkjecPL4TUA0hdezj471Uiz\r\n2an0lymJasDr4xjlNxmvUwW2SxED8CC4c8FfhyoUGpAAfk+vX7FaZBIs9jsm5y20\r\nXYxlPsU6Knjq/KuBCj87yHkwIcvivQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQAo\r\n+ahTTUv1N9JH1i0wVFLwuPEI9SWO1yF0gNFfijYEf7UvENyCLs7YriqNGVYqV61P\r\npMOVjt/67W8KjsurfAHnMyyq1+Kt1HfDTyMZcKzzkWEpoZ1kU0VM4nQ7OnlITGW7\r\noqlx8CUihi7KpaekXVrLFpXG7zyPCrWl6sH+/rHslUmJw7JPNGgx+dbJPnq0Zsq+\r\nqb/FGxJzNOGx67o7bVKOw5nb4lBHQt7WgVKKdK8Rxgn8sy2IQqU+YP+G76uJUjEn\r\nbisvJmFz7xnJmVV/Yumo9/qaBxYd/2z/316+NfsznAjxfY0OH2bQgXAu9eGbctTl\r\nm8ch81NNaSh/JSXHqzI8\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "cbbefc686ce533128c8f66e766fdb94917e813a64e77002c715fe0f71b5802e1"
+  }
+]

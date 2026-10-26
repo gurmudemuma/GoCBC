@@ -1,0 +1,78 @@
+[
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792595236213050927",
+      "signatureTimestamp": "2026-10-22T11:58:48.162Z",
+      "signerName": "ectaAdmin",
+      "signerEmail": "",
+      "organization": "ECTAMSP",
+      "reason": "Contract CONTRACT-1792584204 approved by ECTA for export compliance",
+      "documentHash": "dde9d43bfb6af97e566b59de6fe2f80915e9811d29156133a7268803c027304b",
+      "certificateFingerprint": "9c8932429dfe2f039cbf10ee3c58e93a8739858fee87a0b00404bffc8e97b34d",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": ""
+    },
+    "signature": "Lo/tkgN73Ub8+zmMcIZ59NYsv+4zKhfzJq1P/36zLek6KrsagbaEKZHSjNurm2M06mI6LKGkz3JWhH2Vie7rxHlG9WefXCNwsiBbamufmJ7ugxDtyvzYSKWaZ1Vh3UotYQqTrbI6l1twQ+uOs3mD/XNbAXt0DzFxd8aBvFC59h6UAKa6vwDWcZ6rgV0My+CbujFWscFnANmh8YScmdRul2u/ghC8arUu5nc30uyeuWzavruUmB0aI5P9BtrLj9Q6QitKT0DvFr9QaOo4d6vF/mgGIWhLs6FNmSzaOJBERDiY/5PD8Fub3AItBFu/LwK8HO3m4D10CTSBV4MZNXRFfw==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMTCCAhmgAwIBAgIHAXkmcDJ5YzANBgkqhkiG9w0BAQsFADBZMRIwEAYDVQQD\r\nEwllY3RhQWRtaW4xEDAOBgNVBAoTB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYD\r\nVQQIEwtBZGRpcyBBYmFiYTEOMAwGA1UECxMFQ0VDQlMwHhcNMjYxMDIyMTE1ODQ3\r\nWhcNMzExMDIyMTE1ODQ3WjBZMRIwEAYDVQQDEwllY3RhQWRtaW4xEDAOBgNVBAoT\r\nB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYDVQQIEwtBZGRpcyBBYmFiYTEOMAwG\r\nA1UECxMFQ0VDQlMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCOiAJJ\r\ntpQ7cvZGAgJ0GxLmZsDDnRqmPJkyNT0d6G17c/YoFRvhW17mA84gMJcuRSsRqCec\r\np+BNI/UkxiCf/xiy2LqzMU9t9zvDvx3c7N8lYwgj97sjP52pJOywiLQrAmy4Ikka\r\nDUhI1GiG+BtlAE+zH6fPGKvXyIuooYGL+8UHwSmCYF/SdVm8gF9jnXccmbPYsTda\r\n6FviDixD1kNbkCtPS9k6rKOL/mQp6zr+wKgbUNSS+sWXeMRGvACo1/NFIqI8Dfe4\r\nxSro9fnjTPkvEWMDKnAamH4oma01+oeAosgr16Ngo1xszxMVyWCq1VqbqlKHpngO\r\nRJa7fGspCEMrao0bAgMBAAEwDQYJKoZIhvcNAQELBQADggEBABQbeiTxnx5bjOkO\r\nDqvmI1HLc3M2IeXA+jfYaPea1/0cqqhgLQJO/Ggtj8fS6MkFOFroL4PZ4+9wnJwg\r\nWiGbTC8kiNmMXXx82FjLQSV/7lw3jIO4BL41aAmOcGWliM365mQxl8RNbKSL6bzk\r\n8lOrGfjj9NrJcdIyHKHzhaQIIqb0/5rGfN9OPSDBpXRHaU3KkghQ3au52BihD8dy\r\nj0gWFkwFgpff8Lyl9SNliunGc1U8fLe7HBTnCoZPu5SMbN5Hr0xmxMosLZNoyUuo\r\nIfzTu/pa7ShET5DmkGFKQJ/KL6WuNyVGB3sBb444BWPu4noHzXJz7OVS18lD+YXf\r\nCcI8bTE=\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "161fea264842e78580ab5ac1a6054c7359c40561ae485986a186048b87afb4b0"
+  },
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792595236213050927",
+      "signatureTimestamp": "2026-10-22T11:58:48.207Z",
+      "signerName": "ectaAdmin",
+      "signerEmail": "",
+      "organization": "ECTAMSP",
+      "reason": "Contract CONTRACT-1792584204 approved by ECTA for export compliance",
+      "documentHash": "dde9d43bfb6af97e566b59de6fe2f80915e9811d29156133a7268803c027304b",
+      "certificateFingerprint": "0439891b67c17878fd94e9e12ab4e03288b552e66aac2bc6b433780f5b9de51e",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": "161fea264842e78580ab5ac1a6054c7359c40561ae485986a186048b87afb4b0"
+    },
+    "signature": "WkBc8/MZIwB8gX8snd8ju7AJiuEPEU2ZCxI78B5bP4O6+8chG/IMqZ54z9NETyNHHY9UZHjAwq2a4sXxiZJ5/kaKhEU6MbjM26Yu3DxqzPLTrHwKPIIrcB50aOSKd2gdD6KjWWJI32Z+1Ivtnf8dXlAMJGxjHGXU8TGQUqIxE9Kljbm2LgMVCgZgmyHkuMtKDHcp3iZk9AV8pQWI4DCxJv/gF8+3lcM2It7SQaq9Q92pojErVfn1lr5w9Y+qkNqkY+gbLeaBfQtE6rRVeEbCitUn7QA3Dm6Z7Nk6F4DmG6irPqVpbctGiokjTM10OA3lO3RgNgojRg0ev/YXB8rVrg==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMTCCAhmgAwIBAgIHAXkmcDKAWDANBgkqhkiG9w0BAQsFADBZMRIwEAYDVQQD\r\nEwllY3RhQWRtaW4xEDAOBgNVBAoTB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYD\r\nVQQIEwtBZGRpcyBBYmFiYTEOMAwGA1UECxMFQ0VDQlMwHhcNMjYxMDIyMTE1ODQ4\r\nWhcNMzExMDIyMTE1ODQ4WjBZMRIwEAYDVQQDEwllY3RhQWRtaW4xEDAOBgNVBAoT\r\nB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYDVQQIEwtBZGRpcyBBYmFiYTEOMAwG\r\nA1UECxMFQ0VDQlMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCvDxTj\r\n/Lz9Kt02LfyOuaaFj5qCqkCMjjSPKLdsyEDKipQa+wMFSnQyzEYPg6ZjG38TGMdj\r\n/bocdbthVkJSLIwVedI/jr+ZCjJ/aWJCl4VbBzQ/jMZIP0lvQxdhDp/ppWSJvRGD\r\n0MlCm6DxJUldtuWohGfqicfZGav8NuCQzzx1aR9Fnz+AcT/eQtNF5TxQBDxpe2ww\r\nqgmI+tAo0p/8zP9qBfYNz75Y+3sPtafextKaaLJzN7lRtKzIXvsYF8w64w5/E1YA\r\nSicxEk6v4wequ7WLbuJfKN8QjkmQ6L1Gc6yiMxUqs5Vx2Awz0+Vmplv5dqJBhJB1\r\nKJ4mS2LB+XcWbvIdAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAApPgUgUVjDDzbfT\r\nWJDoooTYsfJrqpZjxpS++gmRfHVj9a2yJxLKmGxoG3JIQ75wqGxgFdMHibu5Etlq\r\n9Y+iid06kcjzjUr8jrU4xsfraPBu7PXe1XUI7J4qq6+Hdy4jGVTxWRK7u3CyecZD\r\nnvldXXDaLxblId0vpY2gtceniJflYbkSb7U+m1VZMhU0esZaM69Rl/KTjX7KTXv8\r\nxXfcWYnOMShF8jo2bw+Gp9H5nqSyL0W1WlXYLRRAU/pOOXY7v/ShkdoIwKG+3CJc\r\niHoE4D5vrkC2sEgG3/DMUau4RY/f1edBHqnTeR/kZM6PCvwIircl20HZmSzqEZXp\r\nPjIDy+U=\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "7f9770d34041c1598cfef030b9831635c4e58cb7e7fccd9c171ce64d9d87ba34"
+  },
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792595236213050927",
+      "signatureTimestamp": "2026-10-22T11:58:48.328Z",
+      "signerName": "ectaAdmin",
+      "signerEmail": "",
+      "organization": "ECTAMSP",
+      "reason": "Contract CONTRACT-1792584204 approved by ECTA for export compliance",
+      "documentHash": "dde9d43bfb6af97e566b59de6fe2f80915e9811d29156133a7268803c027304b",
+      "certificateFingerprint": "eae699221ed85291fc2c7269553b4bc29d4fff5d8853f104f8b23d5e91e89cec",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": "7f9770d34041c1598cfef030b9831635c4e58cb7e7fccd9c171ce64d9d87ba34"
+    },
+    "signature": "KxvyOvv+4uFkEBkRZeEBs6ZZKZogvSvGHnB85vWJVUYJQ0U1Y9Yvahb+tg8IsW98ZmpUw+GE0yHfRhw05wYZc6MfFw2rZGVm0E79r3cCnJf/HjURPbkBEnQCN7liCjOuGmlUxIZ31xqV+4dY7J9p+mqOarz6VIB9FKsbAT8kz25mSiOeIKf+n4bSXbbI9jkOuvjrS0omh9/tGv92xe/QEtY4d9FaDWWoRnGkrwfLrV0ohB/THJH9NZ0///7D/5ma2b2a2+bntkVardeNMPhZNbPPF/WLybJkWhJwRsSM1BKkrFgoZC7TE8/PEgbgPKF6fkAeHZ2+0KMby+9U7C3dZw==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMTCCAhmgAwIBAgIHAXkmcDKBJDANBgkqhkiG9w0BAQsFADBZMRIwEAYDVQQD\r\nEwllY3RhQWRtaW4xEDAOBgNVBAoTB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYD\r\nVQQIEwtBZGRpcyBBYmFiYTEOMAwGA1UECxMFQ0VDQlMwHhcNMjYxMDIyMTE1ODQ4\r\nWhcNMzExMDIyMTE1ODQ4WjBZMRIwEAYDVQQDEwllY3RhQWRtaW4xEDAOBgNVBAoT\r\nB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYDVQQIEwtBZGRpcyBBYmFiYTEOMAwG\r\nA1UECxMFQ0VDQlMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDTNZ3g\r\n+kcS21PrZReU317l5m/6XkNiL+FBUbOMIDzlAkSl70/yo4elzGBwNbDdjcCX+7Fv\r\nXEywF8PzsEi4KsP6I83aBYrGAA3zHNbma+pVgGMxiQJmwtGz9szWDJlXOM7QdShv\r\nI88gHFywwmqKAZlYFP6i/vJpsEtvtr+LY23G865YYrCcosOMv3c3yw/Y0glTEOoQ\r\nlFiRdx/SvUbVdh2z1uRU2EgIHqfhqCx2DJqwttJsRs1z3aunZAb3PjK6cyDVf9KA\r\noVa40VJ828OzWWQJW7TRwOM4CtDVyn9gjPNQGUMnIyHHUC41bdswTx3OqDKBFk0i\r\nTxNTt5Jolnk5dpdDAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAIJlpYobOhEWQ/dr\r\ng9Evem9ojo0EoQ/956OMQp855gPpeC1yaC6ze8dV1RIAifNkwC1HqvkjIUvsQwsI\r\nSlo3l7Eu2TgkMxVsQx2bSubdYsx4mRvXJ6+N1Cc7Aj3nwgGr7yBUfs07nIGdjw+u\r\n31zWxkBOp+N5aqjNgPAgezA0s46mcqz2JnD28xiHztsh5A0TNknoc7/NiVu5tRsY\r\nYu9Xqxys42f529QaZ7ZRMvwEyNbkEIXTgVOqX4h5OBFuA5TqWlh5/mIL/CDsbE2U\r\ng15GdlKJycXbkEGO8GQoLtaWlUYMKMuVWMCngHt9kycxX4jXrTuTL75LSpmzJy8i\r\nxHBpY6E=\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "f875454ffe891ca573e9273102737b1c80e16667584988a20d08a963f4080ff6"
+  },
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1792595236213050927",
+      "signatureTimestamp": "2026-10-22T11:58:52.540Z",
+      "signerName": "ectaAdmin",
+      "signerEmail": "",
+      "organization": "ECTAMSP",
+      "reason": "Contract CONTRACT-1792584204 approved by ECTA for export compliance",
+      "documentHash": "dde9d43bfb6af97e566b59de6fe2f80915e9811d29156133a7268803c027304b",
+      "certificateFingerprint": "51a8dc0fb41b14943d8344410103afc6a8c0eba9e5eb0c236e64e5cfc2ef926f",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": "f875454ffe891ca573e9273102737b1c80e16667584988a20d08a963f4080ff6"
+    },
+    "signature": "J4+rxSlORJimATdtr55a1BEIJmjQbY30JAinSU/X1NqOhT2AskQ09VZw+WAvvdPypO9WWfQoIz1V0EilfKe79YaD8XLh4Jsk6lqhQmciDwXK4abmTdVkU9cWp3EEbCLOMnS/wUluG6Z7qLLTq6NgBYPt5BlEY7jBJzCTKRwZGwyQXhIkF5acMGoVjKRi91/n2Enm6QpHF2jhmASRc8AiQZCcR10Ts0tzfAZS4t52Y3E8OdmYz6Zt51+7gILXh//O6TXut016B3aGQNonT8DmCKnP4TP6p7esBH3ZZ1hrK5JH65XBlED6ulCI8/Kw3NPZtHwlipy296lvK2bEUpv8BA==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMTCCAhmgAwIBAgIHAXkmcDKCiDANBgkqhkiG9w0BAQsFADBZMRIwEAYDVQQD\r\nEwllY3RhQWRtaW4xEDAOBgNVBAoTB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYD\r\nVQQIEwtBZGRpcyBBYmFiYTEOMAwGA1UECxMFQ0VDQlMwHhcNMjYxMDIyMTE1ODQ4\r\nWhcNMzExMDIyMTE1ODQ4WjBZMRIwEAYDVQQDEwllY3RhQWRtaW4xEDAOBgNVBAoT\r\nB0VDVEFNU1AxCzAJBgNVBAYTAkVUMRQwEgYDVQQIEwtBZGRpcyBBYmFiYTEOMAwG\r\nA1UECxMFQ0VDQlMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDQVBpL\r\nzyxh2j0hrYSmS7oSSLXIsISkz6i5i+/BC+8FznBq9HOh9Hrei//pQ317EA2zkePs\r\nYs9pfNflbHRu1SMt07XBAOZMeGV5Bwc9tvJm6arbDGxmRZuXFMxFJ7Ltiw5dy1MR\r\nMJMZg+lgCPYiF4aQUrv2G4FrqwhENQv2VcJcDiJ4Q4OrHlxIWamW6K2jvl+t+XJY\r\nQAarmbQ7zdGzaYPauDshaaH/GSfkFIjeWV0KEehNeNckWnfgblqtb0YbqqR+zRj+\r\n5qEpOBpisaM4z0TzDJcQX1zG0hHLHwUk6PsYrFvaHMrq58YUMKYbuntOeDKJ597O\r\nmDGgLzIwPHyFpaCDAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAB5XS4aiv11wTnfy\r\nrLOGiwzlpXruryFw54Y6BR4VrhIB+X0EByGVIYAsY025WOT2F8h/hNtVT5/gcddT\r\nYXARABB6Pe0gIFrJ5vw0IrbbmPQgVbBOfnJXjF9jLdi6JXPP5If44cq/7gTZJicJ\r\nChiSgPMl0rtCcNAQS99p2RZTrZVd/UHkI64yEudc9ySdZADWgeG1uKNmNKqywFzM\r\nFekykBMezpmYd+SufsSyyAQyETIOBNfj8GlrBTZggm1TFMMA8Rv8d6wFYZqLLvmI\r\ntdGbjnFzWEMvtnrh0U1MCIOAVrGmVspQgoP4THUhAws84D8cajzeHZrKNs9PFQpE\r\n7bYksxc=\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "9dcc40821f25a7c4497240fe9e1e22bdeeb66fa8fce05231e37b857649169c83"
+  }
+]

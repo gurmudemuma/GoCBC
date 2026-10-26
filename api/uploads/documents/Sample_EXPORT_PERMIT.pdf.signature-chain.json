@@ -1,0 +1,18 @@
+[
+  {
+    "documentId": "DOC_EXPORT_PERMIT_1792162422504",
+    "signatureTimestamp": "2026-10-18T07:43:11.089Z",
+    "signerName": "admin",
+    "organization": "ECTAMSP",
+    "documentHash": "77748a46fdfaee0a8388201aeebe3bbb4c5324556bd07d0141e2b5cfef04fca4",
+    "blockchainTxId": "SIG-DOC_EXPORT_PERMIT_1792162422504-ECTAMSP-1792309391020"
+  },
+  {
+    "documentId": "DOC_EXPORT_PERMIT_1792162422504",
+    "signatureTimestamp": "2026-10-18T08:33:01.068Z",
+    "signerName": "ectaAdmin",
+    "organization": "ECTAMSP",
+    "documentHash": "3eb6a33e8662f00f34544a442465392a6013d2faa62a53de1952524b2ed29989",
+    "blockchainTxId": "SIG-DOC_EXPORT_PERMIT_1792162422504-ECTAMSP-1792312380931"
+  }
+]

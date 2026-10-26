@@ -1,0 +1,76 @@
+
+🔍 MANUAL WORKFLOW VERIFICATION
+
+================================================================================
+
+Manually verifying EVERY status transition step-by-step
+
+================================================================================
+
+WORKFLOW STEP 1: CONTRACT REGISTRATION → APPROVAL
+
+✅ 1.1: Contract created with REGISTERED status
+✅ 1.2: Contract can be approved (REGISTERED → APPROVED)
+✅ 1.3: Contract approval triggers LC creation
+✅ 1.4: Contract can be rejected (REGISTERED → REJECTED)
+
+WORKFLOW STEP 2: LC ISSUANCE
+
+✅ 2.1: LC can be requested/created
+✅ 2.2: LC issued with ISSUED status
+✅ 2.3: LC issuance triggers Forex request
+
+WORKFLOW STEP 3: FOREX ALLOCATION
+
+✅ 3.1: Forex requested with REQUESTED status
+✅ 3.2: Forex allocated with ALLOCATED status
+✅ 3.3: Forex allocation calculates 40% retention
+✅ 3.4: Forex can be utilized (ALLOCATED → UTILIZED)
+
+WORKFLOW STEP 4: SHIPMENT REGISTRATION
+
+✅ 4.1: Shipment created with REGISTERED status
+✅ 4.2: Shipment triggers quality inspection creation
+❌ 4.3: Shipment status updated to QUALITY_PENDING
+
+WORKFLOW STEP 5: QUALITY INSPECTION
+
+✅ 5.1: Quality inspection created with PENDING status
+✅ 5.2: Inspection scheduled (PENDING → SCHEDULED)
+✅ 5.3: Inspection performed (SCHEDULED → COMPLETED)
+✅ 5.4: Inspection approved (COMPLETED → APPROVED)
+✅ 5.5: Inspection can be rejected (COMPLETED → REJECTED)
+
+WORKFLOW STEP 6: CUSTOMS CLEARANCE
+
+✅ 6.1: Customs declaration submitted with SUBMITTED status
+✅ 6.2: Declaration cleared (SUBMITTED → CLEARED)
+✅ 6.3: Customs clearance updates shipment to CUSTOMS_CLEARED
+✅ 6.4: Declaration can be rejected (SUBMITTED → REJECTED)
+
+WORKFLOW STEP 7: PAYMENT PROCESSING
+
+✅ 7.1: Payment recorded with RECEIVED status
+❌ 7.2: Payment immediately updated to SPLIT
+✅ 7.3: Payment calculates 40% NBE retention
+✅ 7.4: Payment can be completed
+
+================================================================================
+
+📊 VERIFICATION SUMMARY
+
+Total Steps Verified: 27
+✅ Passed: 25
+❌ Failed: 2
+
+📈 Success Rate: 92.6%
+
+❌ FAILED VERIFICATIONS:
+
+  4.3: Shipment status updated to QUALITY_PENDING
+  7.2: Payment immediately updated to SPLIT
+
+================================================================================
+
+⚠️  MOST STEPS VERIFIED (review failures)
+
