@@ -411,7 +411,7 @@ class CECBSServer {
       this.server = createServer(this.app);
       this.setupWebSocket();
 
-      this.server.listen(port, () => {
+      this.server.listen(port, '0.0.0.0', () => {
         logger.info(`🚀 CECBS API Gateway started on port ${port}`);
         logger.info(`📚 API Documentation: http://localhost:${port}/api-docs`);
         logger.info(`🏥 Health Check: http://localhost:${port}/health`);
