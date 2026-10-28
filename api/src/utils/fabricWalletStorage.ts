@@ -13,7 +13,12 @@ class SecureFabricWalletStore implements WalletStore {
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
       throw new Error('Fabric wallet path must be a real directory, not a symbolic link');
     }
-    fs.chmodSync(this.directory, 0o700);
+    try {
+      fs.chmodSync(this.directory, 0o700);
+    } catch (error: any) {
+      // Ignore EPERM errors - permissions may already be correct
+      if (error.code !== 'EPERM') throw error;
+    }
   }
 
   async get(label: string): Promise<Buffer | undefined> {
@@ -23,7 +28,12 @@ class SecureFabricWalletStore implements WalletStore {
       if (stat.isSymbolicLink() || !stat.isFile()) {
         throw new Error(`Refusing to read a non-regular Fabric wallet entry: ${label}`);
       }
-      await fs.promises.chmod(filePath, 0o600);
+      try {
+        await fs.promises.chmod(filePath, 0o600);
+      } catch (error: any) {
+        // Ignore EPERM errors - permissions may already be correct
+        if (error.code !== 'EPERM') throw error;
+      }
       return await fs.promises.readFile(filePath);
     } catch (error: any) {
       if (error?.code === 'ENOENT') return undefined;
@@ -48,7 +58,12 @@ class SecureFabricWalletStore implements WalletStore {
       throw new Error(`Refusing to write a non-regular Fabric wallet entry: ${label}`);
     }
     await fs.promises.writeFile(filePath, data, { mode: 0o600 });
-    await fs.promises.chmod(filePath, 0o600);
+    try {
+      await fs.promises.chmod(filePath, 0o600);
+    } catch (error: any) {
+      // Ignore EPERM errors - permissions may already be correct
+      if (error.code !== 'EPERM') throw error;
+    }
   }
 
   async remove(label: string): Promise<void> {
