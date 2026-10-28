@@ -605,7 +605,74 @@ BUILDER_EOF
 }
 
 ################################################################################
-# PHASE 4: Initialize and Verify Chaincode
+# PHASE 4: Create and Join Channel
+################################################################################
+
+create_channel() {
+    if [ "$SKIP_BLOCKCHAIN" = true ]; then
+        return 0
+    fi
+    
+    write_header "Phase 4: Creating and Joining Blockchain Channel"
+    
+    # Check if channel already exists
+    write_step "Checking if channel already exists..."
+    CHANNEL_CHECK=$(docker exec peer0.ecta.cecbs.et peer channel list 2>/dev/null | grep "coffeechannel" || echo "NOT_FOUND")
+    
+    if echo "$CHANNEL_CHECK" | grep -q "coffeechannel"; then
+        write_success "Channel 'coffeechannel' already exists"
+        
+        # Verify all peers have joined
+        write_step "Verifying peer channel membership..."
+        local peers_joined=0
+        for peer in peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et; do
+            if docker exec $peer peer channel list 2>/dev/null | grep -q "coffeechannel"; then
+                peers_joined=$((peers_joined + 1))
+            fi
+        done
+        
+        write_info "Peers joined to channel: $peers_joined/6"
+        
+        if [ $peers_joined -ge 6 ]; then
+            write_success "All peers are members of the channel"
+            return 0
+        else
+            write_warning "Not all peers have joined the channel, re-running channel creation..."
+        fi
+    else
+        write_info "Channel not found, creating it..."
+    fi
+    
+    # Run the channel creation script
+    if [ -f "$SCRIPTS_DIR/create-channel-docker.sh" ]; then
+        write_step "Running channel creation script..."
+        bash "$SCRIPTS_DIR/create-channel-docker.sh"
+        
+        if [ $? -eq 0 ]; then
+            write_success "Channel created and peers joined successfully"
+            
+            # Verify channel is active
+            sleep 5
+            VERIFY_CHECK=$(docker exec peer0.ecta.cecbs.et peer channel list 2>/dev/null | grep "coffeechannel" || echo "")
+            if [ -n "$VERIFY_CHECK" ]; then
+                write_success "Channel verification passed"
+            else
+                write_error "Channel creation verification failed"
+                return 1
+            fi
+        else
+            write_error "Channel creation failed"
+            write_info "Check: docker logs orderer.cecbs.et"
+            return 1
+        fi
+    else
+        write_error "Channel creation script not found: $SCRIPTS_DIR/create-channel-docker.sh"
+        return 1
+    fi
+}
+
+################################################################################
+# PHASE 5: Initialize and Verify Chaincode
 ################################################################################
 
 initialize_chaincode() {
@@ -613,7 +680,7 @@ initialize_chaincode() {
         return 0
     fi
     
-    write_header "Phase 4: Initializing Chaincode"
+    write_header "Phase 5: Initializing Chaincode"
     
     # Check if chaincode is already deployed
     write_step "Checking chaincode status..."
@@ -639,6 +706,47 @@ initialize_chaincode() {
     
     # Deploy chaincode
     write_step "Deploying chaincode..."
+    
+    # First, ensure chaincode package exists
+    CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee_1.0.tar.gz"
+    if [ ! -f "$CHAINCODE_PACKAGE" ]; then
+        write_info "Chaincode package not found, creating it..."
+        
+        # Package the chaincode
+        write_step "Packaging chaincode..."
+        cd "$CHAINCODE_DIR"
+        
+        if command -v peer &> /dev/null; then
+            # Use local peer CLI
+            peer lifecycle chaincode package coffee_1.0.tar.gz \
+                --path . \
+                --lang golang \
+                --label coffee_1.0
+        else
+            # Use Docker with fabric-tools
+            docker run --rm \
+                -v "$CHAINCODE_DIR":/chaincode \
+                -w /chaincode \
+                hyperledger/fabric-tools:2.5 \
+                peer lifecycle chaincode package coffee_1.0.tar.gz \
+                --path . \
+                --lang golang \
+                --label coffee_1.0
+        fi
+        
+        if [ $? -eq 0 ] && [ -f "$CHAINCODE_PACKAGE" ]; then
+            write_success "Chaincode package created"
+        else
+            write_error "Failed to create chaincode package"
+            return 1
+        fi
+        
+        cd "$PROJECT_ROOT"
+    else
+        write_info "Using existing chaincode package"
+    fi
+    
+    # Now deploy
     if [ -f "$PROJECT_ROOT/deploy-chaincode.sh" ]; then
         bash "$PROJECT_ROOT/deploy-chaincode.sh"
         if [ $? -eq 0 ]; then
@@ -679,11 +787,11 @@ test_chaincode_basic() {
 }
 
 ################################################################################
-# PHASE 5: Initialize Database
+# PHASE 6: Initialize Database
 ################################################################################
 
 initialize_database() {
-    write_header "Phase 5: Initializing Database"
+    write_header "Phase 6: Initializing Database"
     
     # Check if database is accessible
     write_step "Checking database connection..."
@@ -733,14 +841,39 @@ initialize_database() {
 }
 
 ################################################################################
-# PHASE 6: Start API Server
+# PHASE 7: Start API Server
 ################################################################################
 
 start_api_server() {
-    write_header "Phase 6: Starting API Server"
+    write_header "Phase 7: Starting API Server"
     
-    # Check if already running
-    write_step "Checking if API server is already running..."
+    # Check if API container exists and use it
+    if docker ps -a --format '{{.Names}}' | grep -q '^cecbs-api$'; then
+        write_step "Using API from Docker container..."
+        
+        # Check if container is running
+        if docker ps --format '{{.Names}}' | grep -q '^cecbs-api$'; then
+            write_info "API container is already running"
+        else
+            write_step "Starting API container..."
+            docker start cecbs-api >/dev/null 2>&1
+        fi
+        
+        # Wait for API to be ready
+        wait_for_http "http://localhost:$API_PORT/health" "API Server (Docker)" 60
+        
+        if [ $? -eq 0 ]; then
+            write_success "API server is running on http://localhost:$API_PORT (Docker)"
+        else
+            write_error "API container failed to start properly"
+            write_info "Check logs: docker logs cecbs-api"
+            return 1
+        fi
+        return 0
+    fi
+    
+    # Otherwise, start API on host
+    write_step "Checking if API server is already running on host..."
     if curl -s --max-time 2 "http://localhost:$API_PORT/health" 2>/dev/null | grep -q '"status"'; then
         write_success "API server is already running on port $API_PORT"
         return 0
@@ -751,7 +884,7 @@ start_api_server() {
     lsof -ti:$API_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
     
     # Start API
-    write_step "Starting API server..."
+    write_step "Starting API server on host..."
     cd "$API_DIR"
     
     # Create logs directory
@@ -787,11 +920,11 @@ start_api_server() {
 }
 
 ################################################################################
-# PHASE 7: Start UI Server
+# PHASE 8: Start UI Server
 ################################################################################
 
 start_ui_server() {
-    write_header "Phase 7: Starting UI Server"
+    write_header "Phase 8: Starting UI Server"
     
     # Check if already running
     write_step "Checking if UI server is already running..."
@@ -841,7 +974,7 @@ start_ui_server() {
 }
 
 ################################################################################
-# PHASE 8: System Health Checks
+# PHASE 9: System Health Checks
 ################################################################################
 
 run_health_checks() {
@@ -850,7 +983,7 @@ run_health_checks() {
         return 0
     fi
     
-    write_header "Phase 8: Running Health Checks"
+    write_header "Phase 9: Running Health Checks"
     
     local all_healthy=true
     
@@ -1000,6 +1133,7 @@ main() {
     check_prerequisites
     install_dependencies
     start_blockchain_network
+    create_channel
     initialize_chaincode
     initialize_database
     start_api_server
