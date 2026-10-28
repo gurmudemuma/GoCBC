@@ -97,12 +97,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/ecta.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.ecta.cecbs.et:/var/hyperledger/production
     ports:
       - 7051:7051
@@ -157,12 +157,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/ecx.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.ecx.cecbs.et:/var/hyperledger/production
     ports:
       - 8051:8051
@@ -217,12 +217,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/banks.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.banks.cecbs.et:/var/hyperledger/production
     ports:
       - 9051:9051
@@ -277,12 +277,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/nbe.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.nbe.cecbs.et:/var/hyperledger/production
     ports:
       - 10051:10051
@@ -336,12 +336,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/customs.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.customs.cecbs.et:/var/hyperledger/production
     ports:
       - 11051:11051
@@ -396,12 +396,12 @@ services:
     command: peer node start
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
-      - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et:/etc/hyperledger/fabric
+      - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/msp:/etc/hyperledger/fabric/msp
+      - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/tls:/etc/hyperledger/fabric/tls
       - ./blockchain/organizations/peerOrganizations/shipping.cecbs.et/users:/etc/hyperledger/fabric/users
       - ./blockchain/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./builders:/builders
-      - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - peer0.shipping.cecbs.et:/var/hyperledger/production
     ports:
       - 12051:12051
@@ -434,13 +434,9 @@ services:
     image: coffee-chaincode:2.2
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_2.2:c748a1d9ec2c13d63bfd18c08479442c8241bdffd2bff9296537a3d142232c39
-      - CHAINCODE_TLS_CERT_FILE=/run/secrets/chaincode-server-cert.pem
-      - CHAINCODE_TLS_KEY_FILE=/run/secrets/chaincode-server-key.pem
+      - CORE_CHAINCODE_ID_NAME=coffee_1.73:1a98e2ff3a0091d86552052d62684f2f861f9bef69a6ce218e79540245c5438b
+      - CHAINCODE_TLS_DISABLED=true
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
-    volumes:
-      - ./chaincodes/coffee/tls/server-cert.pem:/run/secrets/chaincode-server-cert.pem:ro
-      - ./chaincodes/coffee/tls/server-key.pem:/run/secrets/chaincode-server-key.pem:ro
     expose:
       - "9999"
     networks:
@@ -504,3 +500,40 @@ services:
       - 9092:9092
     networks:
       - cecbs
+
+  # CECBS API Gateway
+  cecbs-api:
+    container_name: cecbs-api
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    volumes:
+      - ./api:/app
+      - ./blockchain:/blockchain
+    ports:
+      - "3001:3001"
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - FABRIC_ENABLED=true
+      - FABRIC_REQUIRED=false
+      - FABRIC_AS_LOCALHOST=false
+      - FABRIC_WALLET_PATH=./wallet
+      - FABRIC_CHANNEL_NAME=coffeechannel
+      - FABRIC_CHAINCODE_NAME=coffee
+      - DATABASE_URL=postgresql://cecbs:cecbs123@postgres:5432/cecbs
+    env_file:
+      - ./api/.env.blockchain.fixed
+    depends_on:
+      - postgres
+      - peer0.ecta.cecbs.et
+      - peer0.ecx.cecbs.et
+      - peer0.banks.cecbs.et
+      - peer0.nbe.cecbs.et
+      - peer0.customs.cecbs.et
+      - peer0.shipping.cecbs.et
+      - orderer.cecbs.et
+    networks:
+      - cecbs
+    restart: unless-stopped
