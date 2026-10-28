@@ -522,7 +522,7 @@ services:
       - FABRIC_WALLET_PATH=./wallet
       - FABRIC_CHANNEL_NAME=coffeechannel
       - FABRIC_CHAINCODE_NAME=coffee
-      - DATABASE_URL=postgresql://cecbs:cecbs123@postgres:5432/cecbs
+      - DATABASE_URL=postgresql://cecbs:cecbs123@cecbs-postgres:5432/cecbs
     env_file:
       - ./api/.env.blockchain.fixed
     depends_on:
