@@ -105,7 +105,15 @@ class CECBSServer {
 
   private setupMiddleware(): void {
     // Keep each request's Fabric MSP selection isolated from concurrent portal requests.
-    this.app.use((_req, _res, next) => this.fabricService.runWithRequestContext(next));
+    // DISABLED - This middleware causes connection issues
+    // this.app.use((req, res, next) => {
+    //   try {
+    //     this.fabricService.runWithRequestContext(next);
+    //   } catch (error) {
+    //     logger.error('Fabric context error:', error);
+    //     next();
+    //   }
+    // });
 
     // Security middleware
     this.app.use(helmet({
@@ -411,11 +419,27 @@ class CECBSServer {
       this.server = createServer(this.app);
       this.setupWebSocket();
 
+      this.server.on('error', (error: any) => {
+        if (error.code === 'EADDRINUSE') {
+          logger.error(`❌ Port ${port} is already in use. Please stop other services on this port.`);
+          process.exit(1);
+        } else {
+          logger.error(`❌ Server error: ${error.message}`, error);
+          process.exit(1);
+        }
+      });
+
       this.server.listen(port, '0.0.0.0', () => {
         logger.info(`🚀 CECBS API Gateway started on port ${port}`);
         logger.info(`📚 API Documentation: http://localhost:${port}/api-docs`);
         logger.info(`🏥 Health Check: http://localhost:${port}/health`);
         logger.info(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+        
+        // Verify the server is actually listening
+        const address = this.server?.address();
+        if (address && typeof address !== 'string') {
+          logger.info(`✅ Server confirmed listening on ${address.address}:${address.port}`);
+        }
         
         // Start blockchain sync service
         blockchainSyncService.start();

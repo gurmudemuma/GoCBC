@@ -21,7 +21,7 @@ class CECBSApi {
 
   constructor() {
     this.client = axios.create({
-      baseURL: process.env.CECBS_API_URL || API_BASE_URL,
+      baseURL: API_BASE_URL,
       timeout: 120000, // Increased to 120s for document signing operations
       headers: {
         'Content-Type': 'application/json',
