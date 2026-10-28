@@ -349,7 +349,9 @@ export class FabricService {
         wallet: this.wallet,
         identity: targetIdentityLabel,
         discovery: {
-          enabled: true,  // Enable discovery to get endorsements from all required peers
+          // EXPERT FIX: Disable discovery for ECTA due to "UNANCHORED" cert trust issue
+          // Other 5 orgs (ECX, Banks, NBE, Customs, Shipping) work with discovery enabled
+          enabled: targetOrg !== 'ECTAMSP',
           asLocalhost: process.env.FABRIC_AS_LOCALHOST !== 'false',
         },
         eventHandlerOptions: {
