@@ -56,7 +56,9 @@ echo ""
 
 # ── Step 1: Distribute Orderer TLS CA ──────────────────────────────
 info "[1/5] Distributing orderer TLS CA certificate..."
-ORDERER_CA_HOST="C:/goCBC/blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ORDERER_CA_HOST="$PROJECT_ROOT/blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
 for org in "${ORGS[@]}"; do
   docker exec "peer0.${org}.cecbs.et" mkdir -p /var/hyperledger/orderer-tls 2>/dev/null || true
   docker cp "$ORDERER_CA_HOST" "peer0.${org}.cecbs.et:/var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem" 2>/dev/null || true
@@ -65,11 +67,11 @@ ok "TLS CA distributed to all peers"
 
 # ── Step 2: Build Chaincode Package ───────────────────────────────
 info "[2/5] Building chaincode package..."
-PKG_DIR="C:/goCBC/blockchain/channel-artifacts"
+PKG_DIR="$PROJECT_ROOT/blockchain/channel-artifacts"
 mkdir -p "$PKG_DIR"
-printf '{"type":"ccaas","label":"%s"}' "$CC_LABEL" > "/c/goCBC/blockchain/channel-artifacts/metadata.json"
-printf '{"address":"coffee-chaincode:9999","dial_timeout":"10s","tls_required":false}' > "/c/goCBC/blockchain/channel-artifacts/connection.json"
-(cd "/c/goCBC/blockchain/channel-artifacts" \
+printf '{"type":"ccaas","label":"%s"}' "$CC_LABEL" > "$PKG_DIR/metadata.json"
+printf '{"address":"coffee-chaincode:9999","dial_timeout":"10s","tls_required":false}' > "$PKG_DIR/connection.json"
+(cd "$PKG_DIR" \
   && tar czf code.tar.gz connection.json \
   && tar czf "${CC_LABEL}.tar.gz" metadata.json code.tar.gz \
   && rm -f metadata.json connection.json code.tar.gz)

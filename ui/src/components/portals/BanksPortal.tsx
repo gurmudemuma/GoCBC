@@ -98,6 +98,11 @@ import {
 import { PaymentDocuments } from './PaymentDocuments';
 import { PaymentMethodForms } from './PaymentMethodForms';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
+
+// Blockchain Components
+import BlockchainBadge from '@/components/blockchain/BlockchainBadge';
+import { BlockchainStatusIcon, BlockchainTxChip } from '@/components/blockchain';
+
 import { useNotification } from '@/hooks/useNotification';
 import { UnifiedPaymentWorkflow } from './UnifiedPaymentWorkflow';
 import { PaymentMethodTab } from './PaymentMethodTab';
@@ -105,7 +110,6 @@ import UserManagement from '@/components/admin/UserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 import { DocumentManagementPanel } from '@/components/documents';
-import { BlockchainStatusIcon, BlockchainTxChip } from '@/components/blockchain';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 import BusinessActivityTimeline from '@/components/documents/BusinessActivityTimeline';
 import ExporterHistoricalTrend from '@/components/shared/ExporterHistoricalTrend';
@@ -132,6 +136,8 @@ interface SalesContract {
   status: string;
   registrationDate: string;
   approvalDate?: string;
+  txId?: string;  // Blockchain transaction ID
+  blockchainVerified?: boolean;  // Blockchain verification status
 }
 
 interface LetterOfCredit {
@@ -148,6 +154,8 @@ interface LetterOfCredit {
   lcNumber?: string;
   applicant?: string;
   beneficiary?: string;
+  txId?: string;  // Blockchain transaction ID
+  blockchainVerified?: boolean;  // Blockchain verification status
   amount: number;
   currency: string;
   transportMode?: 'SEA' | 'AIR';
@@ -765,6 +773,9 @@ const BanksPortal: React.FC = () => {
                 customsClearanceStatus: lc.customsClearanceStatus,
                 customsCleared: lc.customsCleared,
                 customsClearanceDate: lc.customsClearanceDate,
+                // ✅ BLOCKCHAIN: Capture transaction ID from API
+                txId: lc.txId || lc.TxId,
+                blockchainVerified: !!(lc.txId || lc.TxId),
               }));
               setLetterOfCredits(lcs);
               devLog(`[BANKS] ⚡ LCs loaded: ${lcs.length}`);
@@ -3914,7 +3925,18 @@ const BanksPortal: React.FC = () => {
                           <TableCell>{lc.buyerName || '—'}</TableCell>
                           <TableCell><strong>${lc.amount?.toLocaleString()} {lc.currency}</strong></TableCell>
                           <TableCell>
-                            <StatusChip label={lc.status} status={lc.status === 'ISSUED' ? 'APPROVED' : 'PENDING'} />
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <StatusChip label={lc.status} status={lc.status === 'ISSUED' ? 'APPROVED' : 'PENDING'} />
+                              {lc.blockchainVerified && lc.txId && (
+                                <BlockchainBadge 
+                                  txId={lc.txId}
+                                  entityType="LC"
+                                  entityId={lc.lcId}
+                                  verified={true}
+                                  compact={true}
+                                />
+                              )}
+                            </Box>
                           </TableCell>
                           <TableCell>
                             {lc.expiryDate ? new Date(lc.expiryDate).toLocaleDateString() : 'N/A'}

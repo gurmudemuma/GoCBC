@@ -1,0 +1,168 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║           HYPERLEDGER FABRIC 2.5 - QUICK REFERENCE CARD             ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+📍 LOCATION: /home/guda/GoCBC
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 GOAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Get this working (currently fails):
+
+docker exec peer0.ecta.cecbs.et \
+  peer chaincode query \
+  -C coffeechannel \
+  -n coffee \
+  -c '{"function":"queryAllCoffee","Args":[]}'
+
+Expected output: []
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 BLOCKING ERRORS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. "channel creation request not allowed because the orderer system 
+    channel is not defined"
+
+2. "The identity does not contain OU [ADMIN], MSP: [ECTAMSP]"
+
+3. "failed to connect to orderer.cecbs.et:7050: context deadline exceeded"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔑 CRITICAL INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PACKAGE ID:
+coffee_1.73:1a98e2ff3a0091d86552052d62684f2f861f9bef69a6ce218e79540245c5438b
+
+CHANNEL: coffeechannel
+
+ORGANIZATIONS (3 joined, 3 not joined):
+  ✓ ECTA    peer0.ecta.cecbs.et:7051
+  ✓ NBE     peer0.nbe.cecbs.et:10051
+  ✓ Banks   peer0.banks.cecbs.et:9051
+  ✗ ECX     peer0.ecx.cecbs.et:8051
+  ✗ Customs peer0.customs.cecbs.et:11051
+  ✗ Shipping peer0.shipping.cecbs.et:12051
+
+ORDERER: orderer.cecbs.et:7050
+
+CHAINCODE: coffee v1.73 (Go language)
+  Location: blockchain/channel-artifacts/coffee_1.73.tgz
+  Source: chaincodes/coffee/
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 START HERE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Generate diagnostic:
+   ./DIAGNOSTIC-REPORT.sh
+
+2. Read quick start:
+   cat SPECIALIST-QUICK-START.md
+
+3. Review full brief:
+   cat HYPERLEDGER-FABRIC-SPECIALIST-BRIEF.md
+
+4. Fix issues (see below)
+
+5. Run verification:
+   ./VERIFICATION-TEST.sh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 LIKELY ROOT CAUSES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Issue 1: ORDERER SYSTEM CHANNEL ERROR
+├─ Symptom: "orderer system channel is not defined"
+├─ Cause: Fabric 2.5 removed system channels, orderer misconfigured
+├─ Fix: Reconfigure orderer for application-channel-only mode
+└─ Files: docker-compose-fabric.yml, orderer genesis block
+
+Issue 2: MSP ADMIN IDENTITY NOT RECOGNIZED
+├─ Symptom: "identity does not contain OU [ADMIN]"
+├─ Cause: config.yaml not mounted properly or not persisting
+├─ Fix: Add MSP config.yaml files to docker volume mounts
+└─ Files: docker-compose-fabric.yml
+
+Issue 3: ORDERER CONNECTION TIMEOUT
+├─ Symptom: "context deadline exceeded"
+├─ Cause: Orderer not properly joined to application channel
+├─ Fix: Use osnadmin to join orderer to coffeechannel
+└─ Tools: osnadmin channel join
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚀 QUICK DIAGNOSTIC COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Check containers:
+  docker ps --format "table {{.Names}}\t{{.Status}}"
+
+Check orderer logs:
+  docker logs orderer.cecbs.et 2>&1 | tail -50
+
+Test orderer connection:
+  docker exec peer0.ecta.cecbs.et \
+    peer channel fetch config /tmp/test.block \
+    -o orderer.cecbs.et:7050 -c coffeechannel
+
+Check chaincode installed:
+  docker exec peer0.ecta.cecbs.et \
+    peer lifecycle chaincode queryinstalled
+
+Check MSP config exists:
+  docker exec peer0.ecta.cecbs.et \
+    cat /etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp/config.yaml
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📁 KEY FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+docker-compose-fabric.yml              Container definitions
+blockchain/configtx.yaml               Channel configuration
+blockchain/crypto-config.yaml          Crypto generation config
+blockchain/organizations/              All MSP and crypto material
+blockchain/channel-artifacts/          Chaincode package
+chaincodes/coffee/                     Chaincode source
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  IMPORTANT NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ DO NOT regenerate crypto - current crypto is fine
+✓ DO focus on orderer configuration - that's the bottleneck  
+✓ DO use osnadmin for Fabric 2.5 orderer operations
+✓ DO ensure config.yaml files are mounted in docker volumes
+
+✗ DON'T waste time on peer configuration - peers work fine
+✗ DON'T try to create system channel - Fabric 2.5 removed it
+✗ DON'T use configtxgen for channel creation - use correct method
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ SUCCESS VERIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Run ./VERIFICATION-TEST.sh
+
+All 10 tests should pass:
+  ✓ Containers running
+  ✓ Peers in channel
+  ✓ Chaincode installed
+  ✓ MSP admin works
+  ✓ Orderer connection
+  ✓ Chaincode approved
+  ✓ Chaincode committed
+  ✓ Query works
+  ✓ MSP persists after restart
+  ✓ Invoke works
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 COMPENSATION: $500-1000 (4-6 hours estimated)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Payment upon successful verification (all tests pass)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For full details: cat README-FOR-SPECIALIST.md

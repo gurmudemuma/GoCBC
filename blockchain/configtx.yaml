@@ -52,7 +52,7 @@ Organizations:
           Rule: "OR('ECTAMSP.admin', 'ECTAMSP.peer', 'ECTAMSP.client')"
         Writers:
           Type: Signature
-          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.client')"
+          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.peer', 'ECTAMSP.client')"
         Admins:
           Type: Signature
           Rule: "OR('ECTAMSP.admin')"
@@ -75,7 +75,7 @@ Organizations:
           Rule: "OR('ECTAMSP.admin', 'ECTAMSP.peer', 'ECTAMSP.client')"
         Writers:
           Type: Signature
-          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.client')"
+          Rule: "OR('ECTAMSP.admin', 'ECTAMSP.peer', 'ECTAMSP.client')"
         Admins:
           Type: Signature
           Rule: "OR('ECTAMSP.admin')"
