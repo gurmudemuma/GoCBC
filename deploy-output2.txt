@@ -1,0 +1,32 @@
+=== Finishing Blockchain Deployment ===
+
+Copying channel artifacts to peer containers...
+  → peer0.ecta.cecbs.et
+  → peer0.nbe.cecbs.et
+  → peer0.banks.cecbs.et
+
+Joining peers to channel...
+  → peer0.ecta.cecbs.et
+[34m2026-10-27 08:18:22.918 UTC 0001 INFO[0m [channelCmd] [34;1mInitCmdFactory[0m -> Endorser and orderer connections initialized
+Error: proposal failed (err: bad proposal response 500: access denied for [JoinChain][coffeechannel]: [Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [ECTAMSP]: The identity does not contain OU [ADMIN], MSP: [ECTAMSP]]])
+    (already joined or error)
+  → peer0.nbe.cecbs.et
+[34m2026-10-27 08:18:23.001 UTC 0001 INFO[0m [channelCmd] [34;1mInitCmdFactory[0m -> Endorser and orderer connections initialized
+Error: proposal failed (err: bad proposal response 500: access denied for [JoinChain][coffeechannel]: [Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [NBEMSP]: The identity does not contain OU [ADMIN], MSP: [NBEMSP]]])
+    (already joined or error)
+  → peer0.banks.cecbs.et
+[34m2026-10-27 08:18:23.092 UTC 0001 INFO[0m [channelCmd] [34;1mInitCmdFactory[0m -> Endorser and orderer connections initialized
+Error: proposal failed (err: bad proposal response 500: access denied for [JoinChain][coffeechannel]: [Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [BanksMSP]: The identity does not contain OU [ADMIN], MSP: [BanksMSP]]])
+    (already joined or error)
+
+Installing chaincode on all peers...
+  → peer0.ecta.cecbs.et
+Error: chaincode install failed with status: 500 - Failed to authorize invocation due to failed ACL check: Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [ECTAMSP]: The identity does not contain OU [ADMIN], MSP: [ECTAMSP]]
+  → peer0.nbe.cecbs.et
+Error: chaincode install failed with status: 500 - Failed to authorize invocation due to failed ACL check: Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [NBEMSP]: The identity does not contain OU [ADMIN], MSP: [NBEMSP]]
+  → peer0.banks.cecbs.et
+Error: chaincode install failed with status: 500 - Failed to authorize invocation due to failed ACL check: Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [BanksMSP]: The identity does not contain OU [ADMIN], MSP: [BanksMSP]]
+
+Getting chaincode package ID...
+❌ Failed to get package ID
+Error: query failed with status: 500 - Failed to authorize invocation due to failed ACL check: Failed verifying that proposal's creator satisfies local MSP principal during channelless check policy with policy [Admins]: [The identity is not an admin under this MSP [ECTAMSP]: The identity does not contain OU [ADMIN], MSP: [ECTAMSP]]

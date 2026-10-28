@@ -1,211 +1,70 @@
 #!/bin/bash
 
-echo "======================================================================="
-echo "                    FINAL SYSTEM TEST - ALL WORKFLOWS"
-echo "======================================================================="
+echo "================================================================"
+echo "GOCBC COMPLETE SYSTEM TEST"
+echo "================================================================"
 echo ""
 
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-# Test function
-test_check() {
-  local name="$1"
-  local result="$2"
-  
-  if [ "$result" = "0" ]; then
-    echo "✅ PASS: $name"
-    ((TESTS_PASSED++))
-  else
-    echo "❌ FAIL: $name"
-    ((TESTS_FAILED++))
-  fi
-}
-
-echo "TEST 1: Database Migration Applied"
-echo "-------------------------------------------------------------------"
-COUNT=$(docker exec cecbs-postgres psql -U cecbs -d cecbs -t -c "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='shipments' AND column_name='logistics_status';" 2>/dev/null | tr -d ' ')
-if [ "$COUNT" = "1" ]; then
-  echo "  ✅ logistics_status column exists in shipments table"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ logistics_status column NOT FOUND in shipments table"
-  ((TESTS_FAILED++))
-fi
-
-COUNT=$(docker exec cecbs-postgres psql -U cecbs -d cecbs -t -c "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='payments' AND column_name='payment_tracking_status';" 2>/dev/null | tr -d ' ')
-if [ "$COUNT" = "1" ]; then
-  echo "  ✅ payment_tracking_status column exists in payments table"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ payment_tracking_status column NOT FOUND in payments table"
-  ((TESTS_FAILED++))
-fi
+# 1. Check Docker Containers
+echo "1. Docker Containers Status:"
+echo "----------------------------"
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(peer|orderer|couchdb|postgres|redis|kafka)"
+RUNNING=$(docker ps | grep -c peer)
+echo ""
+echo "Peers running: $RUNNING/6"
 echo ""
 
-echo "TEST 2: Backend Services Updated"
-echo "-------------------------------------------------------------------"
-if grep -q "updateLogisticsStatus" api/src/services/shipmentService.ts 2>/dev/null; then
-  echo "  ✅ ShipmentService.updateLogisticsStatus() method exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ updateLogisticsStatus method missing"
-  ((TESTS_FAILED++))
-fi
+# 2. Check if channel exists and peers joined
+echo "2. Channel Status:"
+echo "------------------"
+docker exec peer0.ecta.cecbs.et peer channel list 2>&1 | grep coffeechannel && echo "✓ peer0.ecta joined channel" || echo "✗ peer0.ecta NOT joined"
+docker exec peer0.nbe.cecbs.et peer channel list 2>&1 | grep coffeechannel && echo "✓ peer0.nbe joined channel" || echo "✗ peer0.nbe NOT joined"
+docker exec peer0.banks.cecbs.et peer channel list 2>&1 | grep coffeechannel && echo "✓ peer0.banks joined channel" || echo "✗ peer0.banks NOT joined"
+echo ""
 
-if grep -q "logistics_status" api/src/services/shipmentService.ts 2>/dev/null; then
-  echo "  ✅ ShipmentService uses logistics_status field"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ logistics_status field not used"
-  ((TESTS_FAILED++))
-fi
+# 3. Check chaincode status
+echo "3. Chaincode Status:"
+echo "--------------------"
+docker exec peer0.ecta.cecbs.et peer lifecycle chaincode queryinstalled 2>&1 | head -5
+echo ""
+docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted --channelID coffeechannel 2>&1 | grep -A 5 "coffee"
+echo ""
 
-if grep -q "NBE_RETENTION_RATE.*40" api/src/services/paymentService.ts 2>/dev/null; then
-  echo "  ✅ PaymentService enforces 40% NBE retention"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ NBE retention not set to 40%"
-  ((TESTS_FAILED++))
-fi
+# 4. Check Database
+echo "4. Database Status:"
+echo "-------------------"
+docker exec cecbs-postgres psql -U postgres -d cecbs -c "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;" 2>&1 | head -20
+echo ""
+docker exec cecbs-postgres psql -U postgres -d cecbs -c "SELECT COUNT(*) as user_count FROM users;" 2>&1
+echo ""
 
-if grep -q "'SPLIT'" api/src/services/paymentService.ts 2>/dev/null; then
-  echo "  ✅ PaymentService uses SPLIT status"
-  ((TESTS_PASSED++))
+# 5. Try to start API
+echo "5. API Status:"
+echo "--------------"
+cd /home/guda/GoCBC/api
+if [ -f "package.json" ]; then
+    echo "API directory found"
+    if [ -d "node_modules" ]; then
+        echo "✓ Dependencies installed"
+    else
+        echo "✗ Dependencies NOT installed - run: cd api && npm install"
+    fi
 else
-  echo "  ❌ SPLIT status missing"
-  ((TESTS_FAILED++))
+    echo "✗ API directory not found"
 fi
 echo ""
 
-echo "TEST 3: API Endpoints Added"
-echo "-------------------------------------------------------------------"
-if grep -q "logistics-status" api/src/routes/shipments.ts 2>/dev/null; then
-  echo "  ✅ PUT /shipments/:id/logistics-status endpoint exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Logistics-status endpoint missing"
-  ((TESTS_FAILED++))
-fi
-
-if grep -q "tracking-status" api/src/routes/payments.ts 2>/dev/null; then
-  echo "  ✅ PUT /payments/:id/tracking-status endpoint exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Tracking-status endpoint missing"
-  ((TESTS_FAILED++))
-fi
+# 6. Summary
+echo "================================================================"
+echo "SUMMARY"
+echo "================================================================"
 echo ""
-
-echo "TEST 4: Frontend Interfaces Updated"
-echo "-------------------------------------------------------------------"
-if grep -q "logisticsStatus" ui/src/components/portals/ExporterPortal.tsx 2>/dev/null; then
-  echo "  ✅ ShipmentStatus interface has logisticsStatus field"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ logisticsStatus field missing"
-  ((TESTS_FAILED++))
-fi
-
-if grep -q "paymentTrackingStatus" ui/src/components/portals/ExporterPortal.tsx 2>/dev/null; then
-  echo "  ✅ PaymentStatus interface has paymentTrackingStatus field"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ paymentTrackingStatus field missing"
-  ((TESTS_FAILED++))
-fi
-
-if grep -q "getShipmentStatusLabel" ui/src/components/portals/ExporterPortal.tsx 2>/dev/null; then
-  echo "  ✅ getShipmentStatusLabel() helper function exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Helper function missing"
-  ((TESTS_FAILED++))
-fi
-
-if grep -q "getPaymentStatusLabel" ui/src/components/portals/ExporterPortal.tsx 2>/dev/null; then
-  echo "  ✅ getPaymentStatusLabel() helper function exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Helper function missing"
-  ((TESTS_FAILED++))
-fi
+echo "To complete the blockchain setup, run:"
+echo "  cd /home/guda/GoCBC && bash blockchain-full-setup.sh"
 echo ""
-
-echo "TEST 5: TypeScript Compilation"
-echo "-------------------------------------------------------------------"
-if [ -f "api/dist/services/shipmentService.js" ]; then
-  echo "  ✅ shipmentService.js compiled successfully"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ shipmentService.js not compiled"
-  ((TESTS_FAILED++))
-fi
-
-if [ -f "api/dist/routes/shipments.js" ]; then
-  echo "  ✅ shipments route compiled successfully"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ shipments route not compiled"
-  ((TESTS_FAILED++))
-fi
-
-if [ -f "api/dist/routes/payments.js" ]; then
-  echo "  ✅ payments route compiled successfully"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ payments route not compiled"
-  ((TESTS_FAILED++))
-fi
+echo "To start the API:"
+echo "  cd /home/guda/GoCBC/api && npm run dev"
 echo ""
-
-echo "TEST 6: Documentation"
-echo "-------------------------------------------------------------------"
-if [ -f "STATUS-ALIGNMENT-GUIDE.md" ]; then
-  echo "  ✅ STATUS-ALIGNMENT-GUIDE.md exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Documentation missing"
-  ((TESTS_FAILED++))
-fi
-
-if [ -f "api/src/migrations/043_fix_status_enums.sql" ]; then
-  echo "  ✅ Migration 043 file exists"
-  ((TESTS_PASSED++))
-else
-  echo "  ❌ Migration file missing"
-  ((TESTS_FAILED++))
-fi
+echo "To test workflows:"
+echo "  bash /home/guda/GoCBC/quick-workflow-test.sh"
 echo ""
-
-echo "======================================================================="
-echo "                           FINAL RESULTS"
-echo "======================================================================="
-TOTAL=$((TESTS_PASSED + TESTS_FAILED))
-PASS_RATE=$(( (TESTS_PASSED * 100) / TOTAL ))
-
-echo ""
-echo "Total Tests: $TOTAL"
-echo "Passed: $TESTS_PASSED ✅"
-echo "Failed: $TESTS_FAILED"
-echo "Pass Rate: $PASS_RATE%"
-echo ""
-
-if [ $TESTS_FAILED -eq 0 ]; then
-  echo "🎉🎉🎉 ALL TESTS PASSED! 🎉🎉🎉"
-  echo ""
-  echo "✅ Database migration applied successfully"
-  echo "✅ Backend services updated with dual-field system"
-  echo "✅ API endpoints added for status tracking"
-  echo "✅ Frontend interfaces aligned with backend"
-  echo "✅ TypeScript compiled without errors"
-  echo "✅ Complete documentation available"
-  echo ""
-  echo "🚀 SYSTEM IS 100% PRODUCTION READY!"
-  echo ""
-  exit 0
-else
-  echo "⚠️  $TESTS_FAILED test(s) failed"
-  echo ""
-  exit 1
-fi

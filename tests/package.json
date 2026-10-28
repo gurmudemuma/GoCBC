@@ -1,0 +1,23 @@
+{
+  "name": "gocbc-workflow-tests",
+  "version": "1.0.0",
+  "description": "Automated workflow tests for all GoCBC portals",
+  "main": "run-all-workflows.ts",
+  "scripts": {
+    "test": "ts-node run-all-workflows.ts",
+    "test:exporter": "ts-node workflows/01-exporter-workflow.test.ts",
+    "test:ecta": "ts-node workflows/02-ecta-workflow.test.ts",
+    "test:banks": "ts-node workflows/03-banks-workflow.test.ts",
+    "test:nbe": "ts-node workflows/04-nbe-workflow.test.ts",
+    "test:customs": "ts-node workflows/05-all-portals.test.ts",
+    "test:all": "npm run test"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}

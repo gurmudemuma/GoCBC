@@ -1,14 +1,14 @@
 NodeOUs:
   Enable: true
   ClientOUIdentifier:
-    Certificate: cacerts/channel-root-5336d4e5d2b12236.pem
+    Certificate: cacerts/ca.banks.cecbs.et-cert.pem
     OrganizationalUnitIdentifier: client
   PeerOUIdentifier:
-    Certificate: cacerts/channel-root-5336d4e5d2b12236.pem
+    Certificate: cacerts/ca.banks.cecbs.et-cert.pem
     OrganizationalUnitIdentifier: peer
   AdminOUIdentifier:
-    Certificate: cacerts/channel-root-5336d4e5d2b12236.pem
+    Certificate: cacerts/ca.banks.cecbs.et-cert.pem
     OrganizationalUnitIdentifier: admin
   OrdererOUIdentifier:
-    Certificate: cacerts/channel-root-5336d4e5d2b12236.pem
+    Certificate: cacerts/ca.banks.cecbs.et-cert.pem
     OrganizationalUnitIdentifier: orderer
