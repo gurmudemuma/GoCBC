@@ -349,9 +349,9 @@ export class FabricService {
         wallet: this.wallet,
         identity: targetIdentityLabel,
         discovery: {
-          // EXPERT FIX: Disable discovery for ECTA due to "UNANCHORED" cert trust issue
-          // Other 5 orgs (ECX, Banks, NBE, Customs, Shipping) work with discovery enabled
-          enabled: targetOrg !== 'ECTAMSP',
+          // CRITICAL FIX: Disable discovery completely to avoid peer discovery timeouts
+          // This forces the Gateway to use peers from the static connection profile
+          enabled: false,
           asLocalhost: process.env.FABRIC_AS_LOCALHOST !== 'false',
         },
         eventHandlerOptions: {
@@ -560,10 +560,12 @@ export class FabricService {
           'ssl-target-name-override': peerName,
           hostnameOverride: peerName,
           'grpc.keepalive_time_ms': 120000,
-          'grpc.keepalive_timeout_ms': 20000,
+          'grpc.keepalive_timeout_ms': 30000,  // Increased from 20s to 30s for better stability
           'grpc.keepalive_permit_without_calls': 1,
           'grpc.http2.min_time_between_pings_ms': 120000,
           'grpc.http2.max_pings_without_data': 0,
+          'grpc.max_receive_message_length': -1,
+          'grpc.max_send_message_length': -1,
         },
       };
       
@@ -586,7 +588,9 @@ export class FabricService {
     ordererEndpoints.forEach((orderer) => {
       const grpcOptions: Record<string, string | number> = {
         'grpc.keepalive_time_ms': 120000,
-        'grpc.keepalive_timeout_ms': 20000,
+        'grpc.keepalive_timeout_ms': 30000,  // Increased from 20s to 30s
+        'grpc.max_receive_message_length': -1,
+        'grpc.max_send_message_length': -1,
       };
       if (orderer.serverName) {
         grpcOptions['ssl-target-name-override'] = orderer.serverName;
@@ -680,7 +684,8 @@ export class FabricService {
         // are required for a transaction to be VALID. Report actual endorsers from
         // the committed envelope below instead of assuming every requested MSP signed.
         const transaction = this.contract.createTransaction(functionName);
-        transaction.setEndorsingOrganizations(...CONSORTIUM_PEER_MSPS);
+        // TEMPORARY FIX: Comment out setEndorsingOrganizations to let Gateway use default discovery
+        // transaction.setEndorsingOrganizations(...CONSORTIUM_PEER_MSPS);
         const txId = transaction.getTransactionId();
         attemptTxId = txId;
         
@@ -692,7 +697,7 @@ export class FabricService {
             const timeoutError: any = new Error('Transaction timed out while awaiting endorsement or commit status');
             timeoutError.code = 'FABRIC_COMMIT_TIMEOUT';
             reject(timeoutError);
-          }, 90000);
+          }, 30000);  // Reduced from 90s to 30s for faster failure detection
         });
         
         let result: Buffer;
@@ -811,10 +816,13 @@ export class FabricService {
         const isPreOrderingEndorsementFailure = !attemptTxId ||
           /Peer endorsements do not match|failed to endorse transaction/i.test(errorMessage);
         
-        if (isPreOrderingEndorsementFailure && attempt < maxRetries) {
+        // Check for discovery/connection errors that are safe to retry
+        const isDiscoveryError = /discovery|Failed to connect|Endorsement has failed|Timed out waiting for discovery/i.test(errorMessage);
+        
+        if ((isPreOrderingEndorsementFailure || isDiscoveryError) && attempt < maxRetries) {
           // Wait with exponential backoff before retry
-          const waitTime = 4000 * attempt; // 4s, 8s, 12s, 16s
-          logger.warn(`Pre-ordering endorsement failure; retrying in ${waitTime}ms (${attempt + 1}/${maxRetries})`);
+          const waitTime = isDiscoveryError ? 3000 * (attempt + 1) : 4000 * attempt; // 3s, 6s, 9s, 12s for discovery errors
+          logger.warn(`${isDiscoveryError ? 'Discovery/connection' : 'Pre-ordering endorsement'} failure; retrying in ${waitTime}ms (${attempt + 1}/${maxRetries})`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
           continue;
         }

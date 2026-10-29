@@ -7,11 +7,19 @@
 # This script:
 # 1. Checks all system prerequisites
 # 2. Validates environment configuration
-# 3. Starts Hyperledger Fabric blockchain network
-# 4. Deploys and verifies chaincode
-# 5. Initializes database with seed data
-# 6. Starts API and UI servers
-# 7. Runs system health checks
+# 3. **AUTOMATICALLY DETECTS AND KILLS PROCESSES ON REQUIRED PORTS**
+# 4. Starts Hyperledger Fabric blockchain network
+# 5. Deploys and verifies chaincode
+# 6. Initializes database with seed data
+# 7. Starts API and UI servers
+# 8. Runs system health checks
+#
+# Port Cleanup Feature:
+# - Automatically scans all required ports (3000, 3001, 5432, 7050-7062, etc.)
+# - Identifies processes using these ports
+# - Terminates conflicting processes without prompting
+# - Cleans up orphaned PID files
+# - Ensures clean startup every time
 ################################################################################
 
 set -e  # Exit on error
@@ -436,6 +444,107 @@ check_prerequisites() {
 }
 
 ################################################################################
+# PHASE 1.5: Clean Up Ports (Kill processes using required ports)
+################################################################################
+
+cleanup_ports() {
+    write_header "Phase 1.5: Cleaning Up Ports"
+    
+    # All ports used by the system
+    local REQUIRED_PORTS=(
+        $API_PORT          # 3001 - API Server
+        $UI_PORT           # 3000 - UI Server
+        $POSTGRES_PORT     # 5432 - PostgreSQL
+        $ORDERER_PORT      # 7050 - Orderer
+        $PEER_ECTA_PORT    # 7051 - ECTA Peer
+        7052               # ECTA Peer CouchDB
+        7053               # ECX Peer
+        7054               # ECX Peer CouchDB
+        7055               # Banks Peer
+        7056               # Banks Peer CouchDB
+        7057               # NBE Peer
+        7058               # NBE Peer CouchDB
+        7059               # Customs Peer
+        7060               # Customs Peer CouchDB
+        7061               # Shipping Peer
+        7062               # Shipping Peer CouchDB
+        8080               # API (alternative)
+        9092               # Kafka
+        2181               # Zookeeper
+        6379               # Redis
+        5984               # CouchDB (main)
+        9443               # Peer Operations
+        $CHAINCODE_PORT    # 9999 - Chaincode
+    )
+    
+    local ports_cleaned=0
+    local ports_already_free=0
+    
+    write_step "Scanning for processes using required ports..."
+    
+    for port in "${REQUIRED_PORTS[@]}"; do
+        # Find PIDs using this port
+        local pids=$(lsof -ti:$port 2>/dev/null || true)
+        
+        if [ -n "$pids" ]; then
+            write_step "Port $port is in use by PID(s): $pids"
+            
+            # Get process names for information
+            for pid in $pids; do
+                local process_name=$(ps -p $pid -o comm= 2>/dev/null || echo "unknown")
+                write_info "  └─ PID $pid: $process_name"
+            done
+            
+            # Kill the processes
+            write_step "  └─ Terminating processes on port $port..."
+            echo "$pids" | xargs kill -9 2>/dev/null || true
+            
+            # Verify port is now free
+            sleep 0.5
+            if ! lsof -ti:$port &>/dev/null; then
+                write_success "  └─ Port $port is now free"
+                ports_cleaned=$((ports_cleaned + 1))
+            else
+                write_warning "  └─ Port $port may still be in use"
+            fi
+        else
+            log_verbose "Port $port is free"
+            ports_already_free=$((ports_already_free + 1))
+        fi
+    done
+    
+    echo ""
+    if [ $ports_cleaned -gt 0 ]; then
+        write_success "Cleaned up $ports_cleaned port(s)"
+    fi
+    
+    if [ $ports_already_free -eq ${#REQUIRED_PORTS[@]} ]; then
+        write_success "All required ports were already free"
+    else
+        write_info "Ports cleaned: $ports_cleaned, Already free: $ports_already_free"
+    fi
+    
+    # Also clean up any orphaned PID files
+    write_step "Cleaning up orphaned PID files..."
+    local pid_files=("$PROJECT_ROOT/.api.pid" "$PROJECT_ROOT/.ui.pid")
+    for pid_file in "${pid_files[@]}"; do
+        if [ -f "$pid_file" ]; then
+            local old_pid=$(cat "$pid_file" 2>/dev/null)
+            if [ -n "$old_pid" ]; then
+                # Check if process is still running
+                if ps -p "$old_pid" &>/dev/null; then
+                    write_step "Killing orphaned process (PID: $old_pid)..."
+                    kill -9 "$old_pid" 2>/dev/null || true
+                fi
+            fi
+            rm -f "$pid_file"
+        fi
+    done
+    
+    write_success "Port cleanup complete"
+}
+
+################################################################################
 # PHASE 2: Install Dependencies
 ################################################################################
 
@@ -854,25 +963,56 @@ start_api_server() {
         # Check if container is running
         if docker ps --format '{{.Names}}' | grep -q '^cecbs-api$'; then
             write_info "API container is already running"
+            
+            # Check if it's healthy
+            if curl -s --max-time 2 "http://localhost:$API_PORT/health" 2>/dev/null | grep -q '"status"'; then
+                write_success "API server is already healthy on http://localhost:$API_PORT"
+                return 0
+            else
+                write_warning "API container is running but not healthy, restarting..."
+                docker restart cecbs-api >/dev/null 2>&1
+                sleep 5
+            fi
         else
             write_step "Starting API container..."
             docker start cecbs-api >/dev/null 2>&1
+            sleep 3
         fi
         
-        # Wait for API to be ready
-        wait_for_http "http://localhost:$API_PORT/health" "API Server (Docker)" 60
+        # Wait for API to be ready with extended timeout
+        write_step "Waiting for API to initialize (this may take a minute)..."
         
-        if [ $? -eq 0 ]; then
-            write_success "API server is running on http://localhost:$API_PORT (Docker)"
-        else
-            write_error "API container failed to start properly"
-            write_info "Check logs: docker logs cecbs-api"
-            return 1
-        fi
-        return 0
+        # Give it more time for npm install and startup
+        local attempt=0
+        local max_attempts=40  # 80 seconds total
+        local interval=2
+        
+        while [ $attempt -lt $max_attempts ]; do
+            if curl -s --max-time 2 "http://localhost:$API_PORT/health" >/dev/null 2>&1; then
+                write_success "API server is running on http://localhost:$API_PORT (Docker)"
+                return 0
+            fi
+            sleep $interval
+            attempt=$((attempt + 1))
+            printf "."
+        done
+        
+        echo ""
+        write_error "API container failed to start properly after $((max_attempts * interval)) seconds"
+        write_info "Checking container logs..."
+        docker logs cecbs-api --tail 30 2>&1 | tail -10
+        echo ""
+        write_info "Full logs: docker logs cecbs-api"
+        write_info "Diagnostic tool: ./fix-api-container.sh"
+        write_warning "Falling back to host-based API startup..."
+        
+        # Stop the problematic container
+        docker stop cecbs-api 2>/dev/null || true
+        
+        # Fall through to host-based startup
     fi
     
-    # Otherwise, start API on host
+    # Host-based API startup (if container doesn't exist or failed)
     write_step "Checking if API server is already running on host..."
     if curl -s --max-time 2 "http://localhost:$API_PORT/health" 2>/dev/null | grep -q '"status"'; then
         write_success "API server is already running on port $API_PORT"
@@ -1131,6 +1271,7 @@ main() {
     
     # Execute phases
     check_prerequisites
+    cleanup_ports
     install_dependencies
     start_blockchain_network
     create_channel

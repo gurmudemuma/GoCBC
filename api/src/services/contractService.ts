@@ -51,21 +51,34 @@ export class ContractService {
     try {
       logger.info(`[ContractService] Registering contract: ${contractData.contractID}`);
 
-      // 1. Register on blockchain
+      // 1. Register on blockchain - FINAL correct order based on chaincode error analysis
+      // The chaincode reads paymentMethod from position 13 (index 12), not position 10!
+      const chaincodeParams = [
+        contractData.contractID,           // 1
+        contractData.exporterID,           // 2
+        contractData.buyerID,              // 3
+        contractData.buyerName || contractData.buyerID,  // 4
+        contractData.buyerCountry,         // 5
+        contractData.coffeeType,           // 6
+        contractData.quantity.toString(),  // 7
+        contractData.pricePerKg.toString(), // 8
+        contractData.currency,             // 9
+        contractData.eudrRequired.toString(), // 10
+        contractData.buyerBank || '',      // 11
+        contractData.exporterBank || '',   // 12
+        contractData.paymentMethod,        // 13 - CORRECT POSITION!
+        (contractData.documents || []).join(','), // 14
+      ];
+      
+      logger.info(`🔍 DEBUG: Chaincode parameters for ${contractData.contractID}:`, {
+        param13_paymentMethod: chaincodeParams[12],
+        param10_eudrRequired: chaincodeParams[9],
+        allParams: chaincodeParams
+      });
+      
       const result = await this.fabricService.invokeChaincode(
         'RegisterSalesContractWithPaymentMethod',
-        [
-          contractData.contractID,
-          contractData.exporterID,
-          contractData.buyerID,
-          contractData.buyerCountry,
-          contractData.coffeeType,
-          contractData.quantity.toString(),
-          contractData.pricePerKg.toString(),
-          contractData.currency,
-          contractData.paymentMethod,
-          contractData.eudrRequired.toString(),
-        ]
+        chaincodeParams
       );
 
       if (!result.success) {
