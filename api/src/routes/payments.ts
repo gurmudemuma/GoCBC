@@ -10,6 +10,7 @@ import { validateRequest } from '../middleware/validation';
 import { body, param } from 'express-validator';
 import { statusManager } from '../utils/statusManager';
 import { authMiddleware } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -1533,6 +1534,28 @@ router.post('/',
       const { paymentID, lcNumber, contractID, exporterID, amount, currency, paymentMethod, paymentDate } = req.body;
       const user = (req as any).user;
 
+      // Fetch bank details from LC or use defaults
+      let receivingBank = 'Commercial Bank of Ethiopia';
+      let receivingBankBIC = 'CBETETAA';  // Commercial Bank of Ethiopia BIC code (8 chars)
+      let beneficiaryName = exporterID;  // Will be mapped from exporter record
+      let beneficiaryAccount = 'TO_BE_MAPPED';  // Will be auto-mapped from LC/exporter
+
+      // Try to fetch LC details for auto-mapping
+      if (lcNumber) {
+        try {
+          const lcResult = await fabricService.queryChaincode('ReadLC', [lcNumber]);
+          if (lcResult.success && lcResult.data) {
+            const lc = lcResult.data;
+            receivingBank = lc.advisingBank || lc.issuingBank || receivingBank;
+            beneficiaryName = lc.beneficiaryName || lc.exporterID || beneficiaryName;
+            beneficiaryAccount = lc.beneficiaryAccount || beneficiaryAccount;
+            // Keep default BIC if not provided
+          }
+        } catch (err) {
+          logger.warn('[PAYMENT] Could not fetch LC for auto-mapping, using defaults');
+        }
+      }
+
       // ✅ BLOCKCHAIN-FIRST: Call InitiatePayment chaincode BEFORE DB write
       const blockchainResult = await fabricService.invokeChaincode(
         'InitiatePayment',
@@ -1543,10 +1566,10 @@ router.post('/',
           lcNumber || '',
           String(amount),
           currency || 'USD',
-          'AUTO', // receivingBank - auto-mapped from LC
-          'AUTO', // receivingBankBIC - auto-mapped from LC
-          'AUTO', // beneficiaryName - auto-mapped from LC
-          'AUTO', // beneficiaryAccount - auto-mapped
+          receivingBank,
+          receivingBankBIC,  // Now uses valid 8-character BIC code
+          beneficiaryName,
+          beneficiaryAccount,
           paymentMethod || 'LC'
         ]
       );
@@ -1579,6 +1602,123 @@ router.post('/',
 );
 
 // Duplicate route removed - consolidated into single GET / above that queries BOTH databases
+
+/**
+ * @swagger
+ * /api/v1/payments/{paymentID}/release:
+ *   post:
+ *     summary: Release payment to exporter (NBE approval)
+ *     description: NBE releases payment to exporter after all compliance checks
+ *     tags: [Payments]
+ *     parameters:
+ *       - in: path
+ *         name: paymentID
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - exporterID
+ *               - amount
+ *             properties:
+ *               exporterID:
+ *                 type: string
+ *               amount:
+ *                 type: number
+ *               releaseDate:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Payment released successfully
+ *       404:
+ *         description: Payment not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:paymentID/release',
+  authMiddleware,
+  requireRole(['NBE', 'NBE_ADMIN', 'ADMIN']),
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('exporterID').notEmpty().withMessage('Exporter ID is required'),
+    body('amount').isNumeric().withMessage('Amount must be numeric'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const { exporterID, amount, releaseDate } = req.body;
+      const userId = (req as any).user?.userId || 'system';
+      const userOrg = (req as any).user?.organization || 'NBE';
+
+      logger.info(`[PAYMENTS] NBE releasing payment ${paymentID} to exporter ${exporterID}`);
+
+      // Get payment details
+      const payment = await postgresDb.get(
+        'SELECT * FROM payments WHERE payment_id = $1',
+        [paymentID]
+      );
+
+      if (!payment) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: `Payment not found: ${paymentID}`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Update payment status to RELEASED
+      await postgresDb.run(
+        `UPDATE payments 
+         SET status = 'RELEASED',
+             release_date = $1,
+             released_by = $2,
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE payment_id = $3`,
+        [releaseDate || new Date().toISOString(), userId, paymentID]
+      );
+
+      // Record on blockchain
+      const blockchainResult = await fabricService.invokeChaincode(
+        'ReleasePayment',
+        [paymentID, exporterID, String(amount), releaseDate || new Date().toISOString()]
+      );
+
+      logger.info(`✅ Payment ${paymentID} released to exporter ${exporterID}, TX: ${blockchainResult?.txId}`);
+
+      res.json({
+        success: true,
+        message: 'Payment released successfully',
+        data: {
+          paymentID,
+          exporterID,
+          amount,
+          releaseDate: releaseDate || new Date().toISOString(),
+          blockchain_tx_id: blockchainResult?.txId,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[PAYMENTS] Error releasing payment:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SERVER_ERROR',
+          message: error.message || 'Internal server error',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
 
 export default router;
 
@@ -1710,3 +1850,4 @@ router.put('/:paymentID/tracking-status',
     }
   }
 );
+

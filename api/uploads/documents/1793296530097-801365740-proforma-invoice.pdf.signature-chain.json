@@ -1,0 +1,21 @@
+[
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1793296530097852513",
+      "signatureTimestamp": "2026-10-29T17:55:42.874Z",
+      "signerName": "ecta_admin",
+      "signerEmail": "",
+      "organization": "ECTAMSP",
+      "reason": "Contract CONT-1793296520 approved by ECTA for export compliance",
+      "documentHash": "94160f5e5e57bdf5bb8e0185ab2d3098925e8e5cc408be23f6f2d1d30a2c1842",
+      "certificateFingerprint": "46bcab04a831276a0e6fbd8c554773cba693653d7e6e38ffb2ece8982e4f003c",
+      "mspId": "ECTAMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": ""
+    },
+    "signature": "LLZLWoH8O6LwBPryQi6+yyHIvZoP2CgbgVYTICnLHI1fDevPQOfRFVEz0jU2wziU8omN3pyASfjXv0mgsqmhilNj6ADiI9vd5pfCGYrAXf5ui5mMX5zC8muXAIfEUB8T+5SJi5M7uV/6tdAgo7MFWUGs5+CNHq3ziqk3Dg2TGDawFa6FXVdHJGmhsxnbuGWecQ7hTspD7XR9lj2t4haD27f+stY0m1J4fT152ndzq4tr2WdEdKTdq0hrR54domeTWin2ysoGRiJBLkF9mgQmtB76oSzH/a+mq2gakjOnXXIVFRQcurwfhmRMWo+NF9mDa2NKXg3b59UgSwMwNFvQ2w==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDMzCCAhugAwIBAgIHAXkyllQoQjANBgkqhkiG9w0BAQsFADBaMRMwEQYDVQQD\r\nEwplY3RhX2FkbWluMRAwDgYDVQQKEwdFQ1RBTVNQMQswCQYDVQQGEwJFVDEUMBIG\r\nA1UECBMLQWRkaXMgQWJhYmExDjAMBgNVBAsTBUNFQ0JTMB4XDTI2MTAyOTE3NTU0\r\nMloXDTMxMTAyOTE3NTU0MlowWjETMBEGA1UEAxMKZWN0YV9hZG1pbjEQMA4GA1UE\r\nChMHRUNUQU1TUDELMAkGA1UEBhMCRVQxFDASBgNVBAgTC0FkZGlzIEFiYWJhMQ4w\r\nDAYDVQQLEwVDRUNCUzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAOTS\r\nSiJOHGrK/HUaN+3oxViFMxo8casqDVTevqZJ6J0VG3kQ0eAQlQ3pO6OrobQmLhlD\r\n3gwqNbexXc4xyI0rHomClEGC2QKHNyKUrUiLvqj6Q8apSyP2DbBbv/s0Q+2kjk/M\r\nMy/eGc3vio0M7ANCEKr2cRBmpJOoiD4SPWE/Cjqr2Sb/pp9/7I79f6+HPVYx10wo\r\nF6d6w2vlP1seiGVGRBBpOj6bQEVvna1ziMWUnaaKfKvOTSSXw7W76urY0qneU9wf\r\nSeMUoohmnk+8T66U87WXcb1X2onBFGJjZgn6hn0oinyFj0nH2J84NopLQlJP4tCs\r\n5JY3493Lr73MAxfc6GkCAwEAATANBgkqhkiG9w0BAQsFAAOCAQEAP8T0lfMfNn4X\r\nhHd/VupUics5l7fZOktdyLNsMc2HYGNYqxFEyAx2lem0QxFertUZRpQHkZ1Z9KqM\r\nODCVULlOl21CFPqcuo5qsdhGDP6pMD+Qd4NpCJafTZeZX4lLZou9ND74fiEb4Wix\r\ntzCpj1nqsR1VD0sDaFpZ2eesDvl9u0lm5QKn0Pam+tkwk7WJouCQZldy80JivHSo\r\n4XEnVmItCL9HpiivFPq9Hs2SdTLDGnUHKRkxJNwYTec9EubIx6wxB/KwgMAQbtT7\r\nlxFNQR6etuOOh/qyj62BTLDw+BMo5pfklSyyLHUpO0iMEnAiXw3soWIlQNiJTK9H\r\ntriovcsnuw==\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "e94e71b4cd46fc75f692824f25b096280cff55d730cc05e7f224a90e8ba90d1f"
+  }
+]

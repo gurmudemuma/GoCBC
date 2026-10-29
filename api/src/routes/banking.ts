@@ -217,7 +217,13 @@ router.post('/lc/request',
         
         res.status(201).json({
           success: true,
-          data: result.data,
+          data: {
+            lcID: lcID,
+            contractID: contractID,
+            exporterID: finalExporterID,
+            status: 'REQUESTED',
+            ...result.data,
+          },
           autoMapped: {
             exporterID: finalExporterID,
             amount: finalAmount,
@@ -289,12 +295,26 @@ router.post('/lc/:lcID/approve',
       await fabricService.connectAsOrg('BanksMSP');
       logger.info(`[LC APPROVE] Connected as BanksMSP for user ${user.username}`);
 
+      logger.info(`[LC APPROVE] Calling approveLC with params:`, {
+        lcID,
+        issuingBank,
+        advisingBank,
+        beneficiary
+      });
+
       const result = await fabricService.approveLC(
         lcID,
         issuingBank,
         advisingBank,
         beneficiary
       );
+
+      logger.info(`[LC APPROVE] Result received:`, {
+        success: result.success,
+        txId: result.txId,
+        error: result.error,
+        consensus: result.consensus
+      });
 
       if (result.success) {
         logger.info(`LC approved successfully: ${lcID} by ${issuingBank}`);
@@ -983,10 +1003,52 @@ router.post('/lc/:lcID/allocate-forex',
 
       // Connect as NBEMSP or BanksMSP
       const msp = user?.org === 'NBE' || user?.org === 'NBE_ADMIN' ? 'NBEMSP' : 'BanksMSP';
+      logger.info(`[FOREX] Connecting as ${msp} to read LC ${lcID}`);
       await fabricService.connectAsOrg(msp);
 
-      // Read the LC
-      const lcResult = await fabricService.getLC(lcID);
+      // Read the LC with retry logic and CouchDB fallback
+      let lcResult: any = null;
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (attempts < maxAttempts && (!lcResult || !lcResult.success)) {
+        attempts++;
+        logger.info(`[FOREX] Attempting to read LC (attempt ${attempts}/${maxAttempts})...`);
+        lcResult = await fabricService.getLC(lcID);
+        
+        if (!lcResult.success) {
+          logger.warn(`[FOREX] Failed to read LC on attempt ${attempts}:`, lcResult.error);
+          if (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+          }
+        }
+      }
+      
+      // Fallback: Try reading directly from CouchDB
+      if (!lcResult.success || !lcResult.data) {
+        logger.warn(`[FOREX] Chaincode ReadLC failed, trying CouchDB fallback...`);
+        try {
+          const couchDbUrl = new URL(process.env.COUCHDB_URL || 'http://127.0.0.1:5984');
+          if (!couchDbUrl.username) {
+            couchDbUrl.username = process.env.COUCHDB_USERNAME || 'admin';
+          }
+          if (!couchDbUrl.password) {
+            couchDbUrl.password = process.env.COUCHDB_PASSWORD || 'adminpw';
+          }
+          const CouchDB = require('nano')(couchDbUrl.toString());
+          const db = CouchDB.use('coffeechannel_coffee');
+          const docKey = `LC_${lcID}`;
+          const lcDoc = await db.get(docKey);
+          
+          if (lcDoc) {
+            logger.info(`[FOREX] Successfully read LC from CouchDB`);
+            lcResult = { success: true, data: lcDoc };
+          }
+        } catch (couchErr: any) {
+          logger.error(`[FOREX] CouchDB fallback also failed:`, couchErr.message);
+        }
+      }
+      
       if (!lcResult.success || !lcResult.data) {
         return res.status(404).json({
           success: false,
