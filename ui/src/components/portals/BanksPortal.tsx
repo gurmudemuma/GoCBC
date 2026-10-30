@@ -43,7 +43,11 @@ import {
   Badge,
   TablePagination,
 } from '@mui/material';
-import { ExpandMore } from '@mui/icons-material';
+import { 
+  ExpandMore,
+  Visibility as VisibilityIcon,
+  Download as DownloadIcon,
+} from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
 import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
 import api from '@/utils/api';
@@ -932,10 +936,10 @@ const BanksPortal: React.FC = () => {
           // Must have documents uploaded
           if (!lc.documents || lc.documents.length === 0) return false;
           
-          // ✅ KEEP IN TAB 2: Show LCs in examination stages (including UTILIZED which means examined)
-          // This allows banks to see both pending and completed document examinations
-          // Valid statuses from chaincode: FOREX_ALLOCATED → UTILIZED (after examination)
-          if (!['FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)) return false;
+          // ✅ Show LCs that have documents for examination
+          // Show APPROVED and higher statuses (APPROVED, FOREX_ALLOCATED, UTILIZED)
+          // This allows banks to examine documents at any stage after LC approval
+          if (!['APPROVED', 'FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)) return false;
           
           // ✅ Show ALL LCs in these statuses, regardless of document verification status
           // Banks can see which documents are pending vs verified in the dialog
@@ -4766,37 +4770,91 @@ const BanksPortal: React.FC = () => {
                 {/* LC Documents Management */}
                 <Grid item xs={12}>
                   <Divider sx={{ my: 2 }} />
-                  <DocumentManagementPanel
-                    entityType="LC"
-                    entityId={selectedLC.lcId}
-                    title="Payment Release Documents (UCP 600 Critical)"
-                    allowUpload={selectedLC.status === 'ISSUED'}
-                    allowSign={true}
-                    allowedSignatureTypes={['APPROVE']}
-                    defaultSignatureType="APPROVE"
-                    showSignatureTracker={true}
-                    requiredDocuments={[
-                      'COMMERCIAL_INVOICE',
-                      'BILL_OF_LADING',
-                      'PACKING_LIST'
-                    ]}
-                    onDocumentSigned={(docId, data) => {
-                      console.log('LC payment document signed:', docId, data);
-                      loadBankingData();
-                    }}
-                    onDocumentUploaded={(doc) => {
-                      console.log('LC payment document uploaded:', doc);
-                      loadBankingData();
-                    }}
-                  />
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    📄 Available Documents for Review
+                  </Typography>
                   
-                  {/* Supporting Documents Section - Already signed by other parties */}
+                  {selectedLC.documents && selectedLC.documents.length > 0 ? (
+                    <TableContainer component={Paper} sx={{ mt: 2 }}>
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell><strong>Document Type</strong></TableCell>
+                            <TableCell><strong>File Name</strong></TableCell>
+                            <TableCell><strong>Uploaded</strong></TableCell>
+                            <TableCell><strong>Status</strong></TableCell>
+                            <TableCell align="right"><strong>Actions</strong></TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {selectedLC.documents.map((doc: any) => (
+                            <TableRow key={doc.documentId}>
+                              <TableCell>
+                                <Chip 
+                                  label={doc.documentType.replace(/_/g, ' ')} 
+                                  size="small" 
+                                  color="primary" 
+                                  variant="outlined"
+                                />
+                              </TableCell>
+                              <TableCell>{doc.fileName}</TableCell>
+                              <TableCell>
+                                {new Date(doc.uploadedAt).toLocaleDateString()}
+                              </TableCell>
+                              <TableCell>
+                                <Chip 
+                                  label={doc.status || 'Active'} 
+                                  size="small" 
+                                  color={doc.status === 'verified' ? 'success' : 'default'}
+                                />
+                              </TableCell>
+                              <TableCell align="right">
+                                <Tooltip title="View Document">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      window.open(
+                                        `http://localhost:3001/api/v1/documents/${doc.documentId}/view?token=${localStorage.getItem('authToken')}`,
+                                        '_blank'
+                                      );
+                                    }}
+                                  >
+                                    <VisibilityIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title="Download">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      window.open(
+                                        `http://localhost:3001/api/v1/documents/${doc.documentId}/download?token=${localStorage.getItem('authToken')}`,
+                                        '_blank'
+                                      );
+                                    }}
+                                  >
+                                    <DownloadIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  ) : (
+                    <Alert severity="info" sx={{ mt: 2 }}>
+                      No documents available for this LC yet.
+                    </Alert>
+                  )}
+                  
+                  {/* Supporting Documents Section */}
                   <Box sx={{ mt: 2 }}>
                     <Alert severity="info" sx={{ mb: 2 }}>
                       <Typography variant="body2">
-                        <strong>Note:</strong> Supporting documents (Certificate of Origin, Quality Certificate, Insurance Certificate, Export Permit, etc.) 
-                        must be signed by ECTA, Customs, and Shipping authorities at their respective portals before LC document examination.
-                        Only the 3 critical payment documents above require bank officer approval for payment release per UCP 600 standards.
+                        <strong>Note:</strong> For final payment release, UCP 600 requires these critical documents: 
+                        Commercial Invoice, Bill of Lading, and Packing List. Supporting documents (Certificate of Origin, 
+                        Quality Certificate, Insurance Certificate, Export Permit, etc.) must be signed by ECTA, Customs, 
+                        and Shipping authorities at their respective portals before LC document examination.
                       </Typography>
                     </Alert>
                   </Box>

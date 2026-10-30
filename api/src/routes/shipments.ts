@@ -479,6 +479,41 @@ router.get('/', async (req, res) => {
       logger.info(`[SHIPMENTS] 🔗 Fetching shipments from blockchain (CouchDB direct)...`);
       shipments = await couchDBService.queryAllShipments();
       logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from blockchain (CouchDB direct)`);
+      
+      // ✅ FALLBACK: If CouchDB returns 0 results, try PostgreSQL
+      if (shipments.length === 0) {
+        logger.info(`[SHIPMENTS] CouchDB returned 0 results, falling back to PostgreSQL...`);
+        source = 'database';
+        
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        
+        const dbShipments = await db.all(
+          `SELECT * FROM shipments ORDER BY created_at DESC`
+        );
+        
+        shipments = dbShipments.map((s: any) => ({
+          shipmentId: s.shipment_id,
+          contractId: s.contract_id,
+          exporterId: s.exporter_id,
+          buyerId: s.buyer_id,
+          origin: s.origin,
+          destination: s.destination,
+          quantity: parseFloat(s.quantity) || 0,
+          grade: s.grade,
+          icoNumber: s.ico_number,
+          ecxLotNumber: s.ecx_lot_number,
+          channel: s.channel,
+          status: s.status,
+          createdAt: s.created_at,
+          updatedAt: s.updated_at,
+          eudrCompliant: s.eudr_compliant,
+          ecxLots: [],
+          documents: []
+        }));
+        
+        logger.info(`[SHIPMENTS] ✅ Loaded ${shipments.length} shipments from PostgreSQL (fallback)`);
+      }
     } catch (couchError: any) {
       // ✅ FALLBACK: Use PostgreSQL if CouchDB fails
       logger.warn(`[SHIPMENTS] CouchDB query failed, falling back to PostgreSQL: ${couchError.message}`);
@@ -498,7 +533,7 @@ router.get('/', async (req, res) => {
         buyerId: s.buyer_id,
         origin: s.origin,
         destination: s.destination,
-        quantity: s.quantity,
+        quantity: parseFloat(s.quantity) || 0,
         grade: s.grade,
         icoNumber: s.ico_number,
         ecxLotNumber: s.ecx_lot_number,

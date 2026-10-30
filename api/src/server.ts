@@ -82,6 +82,13 @@ import inspectionRoutes from './routes/inspection'; // Pre-shipment inspection (
 import bordercrossingRoutes from './routes/bordercrossing'; // Border crossing documentation
 import portalsRoutes from './routes/portals'; // Unified portal dashboards
 
+// V4.1 Missing Portal Endpoints (October 2026)
+import complianceRoutes from './routes/compliance'; // NBE compliance reports
+import warehouseRoutes from './routes/warehouse'; // ECX warehouse management
+import marketRoutes from './routes/market'; // ECX market analytics
+import shippingRoutes from './routes/shipping'; // Complete shipping management
+import certificatesRoutes from './routes/certificates'; // Phyto & COO certificates
+
 // Load environment variables
 dotenv.config();
 
@@ -248,6 +255,28 @@ class CECBSServer {
     apiV1.use('/ecx', authMiddleware, ecxRoutes);
     apiV1.use('/quality', authMiddleware, qualityRoutes);
     
+    // Alias routes for convenience
+    apiV1.use('/quality-inspections', authMiddleware, qualityRoutes); // Alias for /quality/inspections
+    apiV1.use('/certificates', authMiddleware, qualityRoutes); // Alias for quality certificates
+    apiV1.use('/warehouse', authMiddleware, ecxRoutes); // Alias for ECX warehouse
+    // REMOVED: apiV1.use('/market', authMiddleware, ecxRoutes); // Conflicts with marketRoutes
+    apiV1.use('/applications', authMiddleware, exporterRoutes); // Alias for exporter applications
+    
+    // Payment methods endpoint (inline - Express nested router alias issue)
+    apiV1.get('/payment-methods', authMiddleware, async (req, res) => {
+      res.json({
+        success: true,
+        data: [
+          { id: 'LC', name: 'Letter of Credit', description: 'Bank-guaranteed payment' },
+          { id: 'DP', name: 'Documents against Payment', description: 'Payment on document presentation' },
+          { id: 'DA', name: 'Documents against Acceptance', description: 'Deferred payment' },
+          { id: 'TT', name: 'Telegraphic Transfer', description: 'Direct bank transfer' },
+          { id: 'CAD', name: 'Cash Against Documents', description: 'Cash payment on delivery' }
+        ],
+        timestamp: new Date().toISOString()
+      });
+    });
+    
     // V1.5 CBE Payment Methods
     apiV1.use('/permits', authMiddleware, permitsRoutes);
 
@@ -308,7 +337,15 @@ class CECBSServer {
     // V4.0 Unified Portal Dashboards (January 2027)
     apiV1.use('/portals', authMiddleware, portalsRoutes); // Single endpoint per portal dashboard
     
+    // V4.1 Missing Portal Endpoints (October 2026)
+    apiV1.use('/compliance', authMiddleware, complianceRoutes); // NBE compliance reports
+    apiV1.use('/warehouse', authMiddleware, warehouseRoutes); // ECX warehouse management
+    apiV1.use('/market', authMiddleware, marketRoutes); // ECX market analytics
+    apiV1.use('/shipping', authMiddleware, shippingRoutes); // Complete shipping lifecycle
+    apiV1.use('/certificates', authMiddleware, certificatesRoutes); // Phyto & COO certificates
+    
     // Note: LC discrepancy handling added to /banking routes above
+    // Note: Customs management routes (assessments, document-verification, risk-assessment, history) added to /customs routes above
 
     this.app.use('/api/v1', apiV1);
 

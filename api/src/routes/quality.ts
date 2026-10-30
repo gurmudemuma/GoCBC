@@ -12,6 +12,113 @@ const postgresDb = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
 const shipmentService = ShipmentService.getInstance();
 
+/**
+ * @route GET /api/v1/quality/inspections
+ * @route GET /api/v1/quality-inspections
+ * @desc Get all quality inspections (with optional filters)
+ * @access Authenticated
+ */
+router.get('/inspections',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status, exporterId, shipmentId, limit = '50' } = req.query;
+      
+      let query = 'SELECT * FROM quality_inspections WHERE 1=1';
+      const params: any[] = [];
+      let paramIndex = 1;
+      
+      if (status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
+      
+      if (exporterId) {
+        query += ` AND exporter_id = $${paramIndex}`;
+        params.push(exporterId);
+        paramIndex++;
+      }
+      
+      if (shipmentId) {
+        query += ` AND shipment_id = $${paramIndex}`;
+        params.push(shipmentId);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+      params.push(parseInt(limit as string) || 50);
+      
+      const inspections = await postgresDb.all(query, params);
+      
+      res.json({
+        success: true,
+        data: inspections,
+        count: inspections.length,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Quality inspections list error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// Also respond to root /quality GET request
+router.get('/',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status, exporterId, shipmentId, limit = '50' } = req.query;
+      
+      let query = 'SELECT * FROM quality_inspections WHERE 1=1';
+      const params: any[] = [];
+      let paramIndex = 1;
+      
+      if (status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
+      
+      if (exporterId) {
+        query += ` AND exporter_id = $${paramIndex}`;
+        params.push(exporterId);
+        paramIndex++;
+      }
+      
+      if (shipmentId) {
+        query += ` AND shipment_id = $${paramIndex}`;
+        params.push(shipmentId);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+      params.push(parseInt(limit as string) || 50);
+      
+      const inspections = await postgresDb.all(query, params);
+      
+      res.json({
+        success: true,
+        data: inspections,
+        count: inspections.length,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Quality inspections list error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 // Helper function for validation
 const validateRequest = (req: Request, res: Response, next: any) => {
   const errors = validationResult(req);
