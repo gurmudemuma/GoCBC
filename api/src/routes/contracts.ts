@@ -638,7 +638,7 @@ router.get('/', async (req, res) => {
         c.buyer_id as buyer_name, c.rejection_reason, c.rejection_date, c.rejected_by,
         c.supersedes_contract_id
       FROM contracts c
-      WHERE LOWER(c.status) IN ('approved', 'registered', 'pending', 'rejected')
+      WHERE LOWER(c.status) IN ('approved', 'registered', 'pending', 'rejected', 'draft')
       ORDER BY c.created_at DESC
     `).catch(err => {
       logger.error('PostgreSQL query error:', err);
@@ -698,9 +698,9 @@ router.get('/', async (req, res) => {
         currency: c.currency,
         Currency: c.currency,
         paymentMethod: c.payment_method || 'LC',
-        status: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
-        contractStatus: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
-        ContractStatus: c.contract_status === 'pending' ? 'REGISTERED' : c.contract_status.toUpperCase(),
+        status: c.contract_status.toUpperCase(),
+        contractStatus: c.contract_status.toUpperCase(),
+        ContractStatus: c.contract_status.toUpperCase(),
         rejectionReason: c.rejection_reason || '',
         rejectionDate: c.rejection_date || null,
         rejectedBy: c.rejected_by || '',

@@ -191,42 +191,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/v1/forex/:forexId — single forex allocation by ID
-router.get('/:forexId', authMiddleware, async (req, res) => {
-  try {
-    const { forexId } = req.params;
-    
-    // Query from PostgreSQL
-    const forex = await postgresDb.get(
-      'SELECT * FROM forex_allocations WHERE forex_id = $1',
-      [forexId]
-    );
-    
-    if (forex) {
-      return res.json({
-        success: true,
-        data: forex,
-        source: 'postgresql',
-        timestamp: new Date().toISOString()
-      });
-    }
-    
-    return res.status(404).json({
-      success: false,
-      error: { code: 'NOT_FOUND', message: 'Forex allocation not found' },
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    logger.error('[FOREX] Error fetching forex allocation:', error);
-    return res.status(500).json({
-      success: false,
-      error: { code: 'INTERNAL_ERROR', message: error.message },
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// ==================== EXCHANGE RATES ROUTES (MUST BE BEFORE :forexId) ====================
+// ==================== SPECIFIC ROUTES (MUST BE BEFORE :forexId) ====================
 
 // GET /api/v1/forex/rates — get all exchange rates
 router.get('/rates', authMiddleware, async (req, res) => {
@@ -285,6 +250,58 @@ router.get('/retention-policy/:commodityType', authMiddleware, async (req, res) 
   }
 });
 
+// GET /api/v1/forex/exporter/:exporterId
+router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
+  try {
+    const result = await fabricService.getForexByExporter(req.params.exporterId);
+    if (result.success) {
+      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
+    } else {
+      res.status(500).json({ success: false, error: result.error, timestamp: new Date().toISOString() });
+    }
+  } catch (error: any) {
+    logger.error('Error fetching forex by exporter:', error);
+    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
+  }
+});
+
+// ==================== GENERIC ROUTES (MUST BE LAST) ====================
+
+// GET /api/v1/forex/:forexId — single forex allocation by ID
+router.get('/:forexId', authMiddleware, async (req, res) => {
+  try {
+    const { forexId } = req.params;
+    
+    // Query from PostgreSQL
+    const forex = await postgresDb.get(
+      'SELECT * FROM forex_allocations WHERE forex_id = $1',
+      [forexId]
+    );
+    
+    if (forex) {
+      return res.json({
+        success: true,
+        data: forex,
+        source: 'postgresql',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Forex allocation not found' },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[FOREX] Error fetching forex allocation:', error);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // POST /api/v1/forex/rates — create/update exchange rate (NBE only)
 router.post('/rates', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
   try {
@@ -339,19 +356,6 @@ router.post('/rates', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFI
 });
 
 // GET /api/v1/forex/exporter/:exporterId
-router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
-  try {
-    const result = await fabricService.getForexByExporter(req.params.exporterId);
-    if (result.success) {
-      res.json({ success: true, data: result.data || [], timestamp: new Date().toISOString() });
-    } else {
-      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: result.error }, timestamp: new Date().toISOString() });
-    }
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
-  }
-});
-
 // POST /api/v1/forex/request — create forex request
 // NOTE: LC ID removed from parameters to prevent SDK-level state queries
 // LC will be linked during NBE allocation phase
@@ -712,17 +716,4 @@ router.post('/utilize', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
 // ==================== SINGLE FOREX RECORD (MUST BE LAST) ====================
 
 // GET /api/v1/forex/:forexId — single forex record
-router.get('/:forexId', authMiddleware, async (req, res) => {
-  try {
-    const result = await fabricService.getForex(req.params.forexId);
-    if (result.success) {
-      res.json({ success: true, data: result.data, timestamp: new Date().toISOString() });
-    } else {
-      res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: result.error }, timestamp: new Date().toISOString() });
-    }
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: error.message }, timestamp: new Date().toISOString() });
-  }
-});
-
 export default router;

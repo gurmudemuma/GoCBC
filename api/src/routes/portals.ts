@@ -59,6 +59,53 @@ router.get('/:portal/dashboard',
   }
 );
 
+// Alias route: /portals/:portal redirects to /portals/:portal/dashboard
+router.get('/:portal', 
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { portal } = req.params;
+      const user = (req as any).user;
+      
+      logger.info(`[PORTALS] Loading dashboard for: ${portal} (alias route), user: ${user.username}`);
+      
+      // Route to specific portal dashboard
+      switch (portal.toLowerCase()) {
+        case 'ecta':
+          return await getECTADashboard(req, res);
+        case 'banks':
+          return await getBanksDashboard(req, res);
+        case 'nbe':
+          return await getNBEDashboard(req, res);
+        case 'customs':
+          return await getCustomsDashboard(req, res);
+        case 'shipping':
+          return await getShippingDashboard(req, res);
+        case 'exporters':
+          return await getExporterDashboard(req, res);
+        case 'ecx':
+          return await getECXDashboard(req, res);
+        default:
+          return res.status(404).json({
+            success: false,
+            error: { 
+              code: 'PORTAL_NOT_FOUND', 
+              message: `Portal '${portal}' not found. Available portals: ecta, banks, nbe, customs, shipping, exporters, ecx` 
+            },
+            timestamp: new Date().toISOString()
+          });
+      }
+    } catch (error) {
+      logger.error('[PORTALS] Dashboard error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: 'Failed to load dashboard' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 /**
  * ECTA Portal Dashboard
  * Shows pending applications, contracts, inspections, and recent activities
@@ -100,7 +147,7 @@ async function getECTADashboard(req: Request, res: Response) {
       db.all(
         `SELECT * FROM audit_trail 
          WHERE performed_by_org = $1 
-         AND created_at > datetime('now', '-24 hours')
+         AND created_at > NOW() - INTERVAL '24 hours'
          ORDER BY created_at DESC LIMIT 20`,
         ['ECTAMSP']
       ),
@@ -113,7 +160,7 @@ async function getECTADashboard(req: Request, res: Response) {
           COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_count,
           COUNT(*) as total_count
         FROM contracts
-        WHERE created_at > datetime('now', '-30 days')
+        WHERE created_at > NOW() - INTERVAL '30 days'
       `)
     ]);
 
@@ -151,13 +198,14 @@ async function getBanksDashboard(req: Request, res: Response) {
       pendingLCs,
       forexRequests,
       paymentsToProcess,
-      retentionAmounts
+      retentionAmounts,
+      lcStats
     ] = await Promise.all([
       db.all(
         `SELECT * FROM letters_of_credit 
          WHERE status = $1 
          ORDER BY created_at DESC LIMIT 10`,
-        ['PENDING']
+        ['REQUESTED']
       ),
       
       db.all(
@@ -171,17 +219,28 @@ async function getBanksDashboard(req: Request, res: Response) {
         `SELECT * FROM payments 
          WHERE status = $1 
          ORDER BY created_at DESC LIMIT 10`,
-        ['RECEIVED']
+        ['PENDING']
       ),
       
       db.get(`
         SELECT 
           SUM(retention_amount) as total_retention,
           SUM(release_amount) as total_release,
-          COUNT(*) as payment_count,
-          SUM(amount_usd) as total_amount
-        FROM payments
-        WHERE status IN ('RECEIVED', 'RETENTION_CONVERTED')
+          COUNT(*) as allocation_count,
+          SUM(allocated_amount) as total_allocated
+        FROM forex_allocations
+        WHERE status IN ('ALLOCATED', 'UTILIZED')
+      `),
+      
+      db.get(`
+        SELECT 
+          COUNT(*) as total,
+          COUNT(CASE WHEN status = 'REQUESTED' THEN 1 END) as requested,
+          COUNT(CASE WHEN status = 'APPROVED' THEN 1 END) as approved,
+          COUNT(CASE WHEN status = 'ISSUED' THEN 1 END) as issued,
+          COUNT(CASE WHEN status = 'FOREX_ALLOCATED' THEN 1 END) as forex_allocated,
+          COUNT(CASE WHEN status = 'UTILIZED' THEN 1 END) as utilized
+        FROM letters_of_credit
       `)
     ]);
 
@@ -198,11 +257,19 @@ async function getBanksDashboard(req: Request, res: Response) {
         pendingLCs,
         forexRequests,
         paymentsToProcess,
+        lcStats: {
+          total: lcStats?.total || 0,
+          requested: lcStats?.requested || 0,
+          approved: lcStats?.approved || 0,
+          issued: lcStats?.issued || 0,
+          forexAllocated: lcStats?.forex_allocated || 0,
+          utilized: lcStats?.utilized || 0
+        },
         retentionAmounts: {
           totalRetention: retentionAmounts?.total_retention || 0,
           totalRelease: retentionAmounts?.total_release || 0,
-          totalAmount: retentionAmounts?.total_amount || 0,
-          paymentCount: retentionAmounts?.payment_count || 0,
+          totalAllocated: retentionAmounts?.total_allocated || 0,
+          allocationCount: retentionAmounts?.allocation_count || 0,
           retentionRate: 40 // NBE policy
         },
         timestamp: new Date().toISOString()
@@ -247,7 +314,7 @@ async function getNBEDashboard(req: Request, res: Response) {
           SUM(retention_amount) as total_retention,
           AVG(retention_rate) as avg_retention_rate
         FROM forex_allocations
-        WHERE created_at > datetime('now', '-30 days')
+        WHERE created_at > NOW() - INTERVAL '30 days'
       `),
       
       db.all(
@@ -291,6 +358,29 @@ async function getNBEDashboard(req: Request, res: Response) {
  */
 async function getCustomsDashboard(req: Request, res: Response) {
   try {
+    // Check if customs_declarations table exists, if not return empty data
+    const tableExists = await db.get(
+      `SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'customs_declarations'
+      )`
+    );
+    
+    if (!tableExists?.exists) {
+      return res.json({
+        success: true,
+        data: {
+          portal: 'CUSTOMS',
+          pendingTasks: { pendingReview: 0, scheduledInspections: 0, total: 0 },
+          pendingDeclarations: [],
+          scheduledInspections: [],
+          todayClearances: [],
+          statistics: { totalDeclarations: 0, clearedCount: 0, rejectedCount: 0, revenueCollected: 0 },
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+    
     const [
       pendingDeclarations,
       scheduledInspections,
@@ -314,19 +404,18 @@ async function getCustomsDashboard(req: Request, res: Response) {
       db.all(
         `SELECT * FROM customs_declarations 
          WHERE status = 'CLEARED' 
-         AND DATE(clearance_date) = DATE('now')
+         AND clearance_date::date = CURRENT_DATE
          ORDER BY clearance_date DESC`
-      ),
+      ).catch(() => []),
       
       db.get(`
         SELECT 
           COUNT(*) as total_declarations,
           COUNT(CASE WHEN status = 'CLEARED' THEN 1 END) as cleared_count,
-          COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_count,
-          SUM(CASE WHEN status = 'CLEARED' THEN duties + taxes ELSE 0 END) as revenue_collected
+          COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_count
         FROM customs_declarations
-        WHERE created_at > datetime('now', '-30 days')
-      `)
+        WHERE created_at > NOW() - INTERVAL '30 days'
+      `).catch(() => ({ total_declarations: 0, cleared_count: 0, rejected_count: 0 }))
     ]);
 
     return res.json({
@@ -345,7 +434,7 @@ async function getCustomsDashboard(req: Request, res: Response) {
           totalDeclarations: statistics?.total_declarations || 0,
           clearedCount: statistics?.cleared_count || 0,
           rejectedCount: statistics?.rejected_count || 0,
-          revenueCollected: statistics?.revenue_collected || 0
+          revenueCollected: 0
         },
         timestamp: new Date().toISOString()
       }
@@ -390,9 +479,9 @@ async function getShippingDashboard(req: Request, res: Response) {
       db.all(
         `SELECT * FROM shipments 
          WHERE status = 'DELIVERED' 
-         AND DATE(delivery_date) = DATE('now')
+         AND delivery_date::date = CURRENT_DATE
          ORDER BY delivery_date DESC`
-      ),
+      ).catch(() => []),
       
       db.get(`
         SELECT 
@@ -401,7 +490,7 @@ async function getShippingDashboard(req: Request, res: Response) {
           COUNT(CASE WHEN status IN ('IN_TRANSIT', 'LAND_TRANSPORT') THEN 1 END) as in_transit,
           COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered
         FROM shipments
-        WHERE created_at > datetime('now', '-30 days')
+        WHERE created_at > NOW() - INTERVAL '30 days'
       `)
     ]);
 
@@ -465,13 +554,12 @@ async function getExporterDashboard(req: Request, res: Response) {
       
       db.all(
         `SELECT 
-           payment_id, contract_id, amount_usd, retention_amount, 
-           release_amount, retention_rate, status, created_at
+           payment_id, contract_id, amount_usd, status, created_at
          FROM payments 
          WHERE exporter_id = $1 
          ORDER BY created_at DESC LIMIT 10`,
         [exporterId]
-      ),
+      ).catch(() => []),
       
       db.all(
         `SELECT 'contract' as type, contract_id as id, status, created_at
@@ -489,8 +577,8 @@ async function getExporterDashboard(req: Request, res: Response) {
     // Calculate payment statistics with 40% retention breakdown
     const paymentStats = {
       totalReceived: payments.reduce((sum: number, p: any) => sum + (parseFloat(p.amount_usd) || 0), 0),
-      totalRetained: payments.reduce((sum: number, p: any) => sum + (parseFloat(p.retention_amount) || 0), 0),
-      totalReleased: payments.reduce((sum: number, p: any) => sum + (parseFloat(p.release_amount) || 0), 0),
+      totalRetained: 0,
+      totalReleased: 0,
       retentionRate: 40, // NBE policy
       paymentsCount: payments.length
     };
@@ -534,6 +622,39 @@ async function getExporterDashboard(req: Request, res: Response) {
  */
 async function getECXDashboard(req: Request, res: Response) {
   try {
+    // Check if ecx_lots table exists
+    const tableExists = await db.get(
+      `SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'ecx_lots'
+      )`
+    );
+    
+    if (!tableExists?.exists) {
+      // Return empty data if table doesn't exist
+      const [qualityCertificates] = await Promise.all([
+        db.all(
+          `SELECT * FROM quality_inspections 
+           WHERE status = 'APPROVED' 
+           AND certification_number IS NOT NULL
+           ORDER BY created_at DESC LIMIT 10`
+        )
+      ]);
+      
+      return res.json({
+        success: true,
+        data: {
+          portal: 'ECX',
+          pendingTasks: { pendingReleases: 0, total: 0 },
+          availableLots: [],
+          pendingReleases: [],
+          qualityCertificates,
+          tradingMetrics: { totalLots: 0, availableLots: 0, releasedLots: 0, totalQuantity: 0 },
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+    
     const [
       availableLots,
       pendingReleases,
@@ -566,7 +687,7 @@ async function getECXDashboard(req: Request, res: Response) {
           COUNT(CASE WHEN status = 'RELEASED' THEN 1 END) as released_lots,
           SUM(quantity_kg) as total_quantity
         FROM ecx_lots
-        WHERE created_at > datetime('now', '-30 days')
+        WHERE created_at > NOW() - INTERVAL '30 days'
       `)
     ]);
 

@@ -13,6 +13,35 @@ const fabricService = FabricService.getInstance();
 
 /**
  * @swagger
+ * /api/v1/land-transport:
+ *   get:
+ *     summary: Get all land transports
+ *     tags: [Land Transport]
+ */
+router.get('/',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      // Return empty list for now - would need database query in production
+      res.json({
+        success: true,
+        data: [],
+        message: 'Land transport tracking - use /:shipmentID/status for specific shipment',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[LAND-TRANSPORT] Error fetching transports:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /api/v1/land-transport/{shipmentID}/start:
  *   post:
  *     summary: Start land transport from Addis Ababa

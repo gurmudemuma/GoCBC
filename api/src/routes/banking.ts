@@ -20,6 +20,29 @@ const lcService = LCService.getInstance();
 const signatureService = BlockchainSignatureService.getInstance();
 const dbService = DatabaseService.getInstance();
 
+// GET /api/v1/banking/payment-methods
+router.get('/payment-methods', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      data: [
+        { id: 'LC', name: 'Letter of Credit', description: 'Bank-guaranteed payment' },
+        { id: 'DP', name: 'Documents against Payment', description: 'Payment on document presentation' },
+        { id: 'DA', name: 'Documents against Acceptance', description: 'Deferred payment' },
+        { id: 'TT', name: 'Telegraphic Transfer', description: 'Direct bank transfer' },
+        { id: 'CAD', name: 'Cash Against Documents', description: 'Cash payment on delivery' }
+      ],
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 /**
  * @swagger
  * /api/v1/banking/lc/request:

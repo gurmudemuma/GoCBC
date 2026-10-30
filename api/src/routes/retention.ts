@@ -11,6 +11,177 @@ import { validateRequest } from '../middleware/validation';
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 
+// POST /api/v1/retention/policy - Set NBE retention policy (NBE only)
+router.post('/policy',
+  authMiddleware,
+  requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']),
+  [
+    body('commodityType').notEmpty().isString(),
+    body('retentionRate').isFloat({ min: 0, max: 100 }),
+    body('setBy').notEmpty().isString(),
+    body('justification').notEmpty().isString(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { commodityType, retentionRate, setBy, justification } = req.body;
+      
+      // Generate policy ID
+      const policyId = `POLICY-${commodityType}-${Date.now()}`;
+      
+      logger.info(`[NBE] Setting retention policy: ${commodityType} = ${retentionRate}% by ${setBy}`);
+      
+      // Connect as NBE
+      await fabricService.connectAsOrg('NBEMSP');
+      
+      // Call SetRetentionPolicy chaincode
+      const result = await fabricService.invokeChaincode('SetRetentionPolicy', [
+        policyId,
+        commodityType.toUpperCase(),
+        retentionRate.toString(),
+        setBy,
+        justification,
+      ]);
+      
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'POLICY_SET_FAILED', 
+            message: result.error || 'Failed to set retention policy on blockchain' 
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      logger.info(`✅ [NBE] Retention policy set: ${commodityType} = ${retentionRate}%`);
+      
+      res.status(201).json({
+        success: true,
+        message: 'Retention policy set successfully',
+        data: {
+          policyId,
+          commodityType: commodityType.toUpperCase(),
+          retentionRate,
+          surrenderRate: 100 - retentionRate,
+          setBy,
+          effectiveDate: new Date().toISOString(),
+        },
+        txId: result.txId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[NBE] Error setting retention policy:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// GET /api/v1/retention/policy/:commodityType - Get active retention policy
+router.get('/policy/:commodityType',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const commodityType = req.params.commodityType.toUpperCase();
+      
+      logger.info(`[NBE] Querying retention policy for ${commodityType}`);
+      
+      // Try blockchain first
+      const result = await fabricService.queryChaincode('GetCurrentRetentionPolicy', [commodityType]);
+      
+      if (result.success && result.data) {
+        // Parse blockchain response
+        const policyData = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+        
+        // Normalize field names (blockchain might use different casing)
+        const normalizedData = {
+          policyId: policyData.PolicyID || policyData.policyId || policyData.policyID,
+          commodityType: policyData.CommodityType || policyData.commodityType || commodityType,
+          retentionPercentage: parseFloat(policyData.RetentionRate || policyData.retentionRate || policyData.retentionPercentage || 0),
+          surrenderRate: 100 - parseFloat(policyData.RetentionRate || policyData.retentionRate || policyData.retentionPercentage || 0),
+          setBy: policyData.SetBy || policyData.setBy || 'NBE',
+          effectiveDate: policyData.EffectiveDate || policyData.effectiveDate || policyData.setDate,
+          justification: policyData.Justification || policyData.justification || 'NBE Policy'
+        };
+        
+        logger.info(`[NBE] ✅ Found retention policy: ${commodityType} = ${normalizedData.retentionPercentage}%`);
+        
+        return res.json({
+          success: true,
+          data: normalizedData,
+          source: 'blockchain',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      // Fallback: Return default 40% for COFFEE (NBE standard policy)
+      logger.warn(`[NBE] Blockchain query failed, using default policy for ${commodityType}`);
+      
+      if (commodityType === 'COFFEE') {
+        return res.json({
+          success: true,
+          data: {
+            policyId: 'DEFAULT-COFFEE-POLICY',
+            commodityType: 'COFFEE',
+            retentionPercentage: 40,
+            surrenderRate: 60,
+            setBy: 'NBE',
+            effectiveDate: new Date().toISOString(),
+            justification: 'NBE Coffee Export Retention Policy - 40% mandatory retention',
+            source: 'default'
+          },
+          source: 'default',
+          message: 'Using default NBE policy (blockchain query unavailable)',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      // No policy found
+      return res.status(404).json({
+        success: false,
+        error: { 
+          code: 'POLICY_NOT_FOUND', 
+          message: `No active retention policy found for ${commodityType}` 
+        },
+        timestamp: new Date().toISOString(),
+      });
+      
+    } catch (error: any) {
+      logger.error('[NBE] Error getting retention policy:', error);
+      
+      // Fallback on error for COFFEE
+      if (req.params.commodityType.toUpperCase() === 'COFFEE') {
+        return res.json({
+          success: true,
+          data: {
+            policyId: 'DEFAULT-COFFEE-POLICY',
+            commodityType: 'COFFEE',
+            retentionPercentage: 40,
+            surrenderRate: 60,
+            setBy: 'NBE',
+            effectiveDate: new Date().toISOString(),
+            justification: 'NBE Coffee Export Retention Policy - 40% mandatory retention',
+            source: 'default'
+          },
+          source: 'default',
+          message: 'Using default NBE policy (error in blockchain query)',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
 // Calculate and enforce retention
 router.post('/:forexId/retention',
   authMiddleware,

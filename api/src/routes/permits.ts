@@ -1,5 +1,7 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
+import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
@@ -246,18 +248,71 @@ router.get('/outstanding/all', async (req, res) => {
 });
 
 // Query all permits
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req, res) => {
   try {
-    const result = await fabricService.queryChaincode('QueryAllPermits', []);
-    
-    if (result.success) {
-      res.json(result.data || []);
-    } else {
-      res.status(500).json({ error: result.error });
+    const { status } = req.query;
+    logger.info(`[PERMITS] Fetching permits${status ? ` with status: ${status}` : ''}...`);
+
+    // Try PostgreSQL first (faster)
+    let query = `
+      SELECT 
+        p.*,
+        c.exporter_id,
+        c.buyer_id,
+        c.quantity,
+        c.coffee_type
+      FROM export_permits p
+      LEFT JOIN contracts c ON p.contract_id = c.contract_id
+      WHERE 1=1
+    `;
+
+    const params: any[] = [];
+
+    if (status) {
+      query += ` AND p.status = $1`;
+      params.push(status);
     }
+
+    query += ` ORDER BY p.created_at DESC`;
+
+    const dbService = DatabaseService.getInstance();
+    const permits = await dbService.all(query, params);
+
+    const normalized = permits.map((permit: any) => ({
+      permitId: permit.permit_id,
+      contractId: permit.contract_id,
+      exporterId: permit.exporter_id,
+      buyerId: permit.buyer_id,
+      permitType: permit.permit_type || 'EXPORT',
+      status: permit.status,
+      issueDate: permit.issue_date,
+      expiryDate: permit.expiry_date,
+      quantity: permit.quantity || 0,
+      coffeeType: permit.coffee_type,
+      approvedBy: permit.approved_by,
+      createdAt: permit.created_at
+    }));
+
+    logger.info(`[PERMITS] ✅ Retrieved ${normalized.length} permits from PostgreSQL`);
+
+    res.json({
+      success: true,
+      data: normalized,
+      count: normalized.length,
+      source: 'postgresql',
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error: any) {
-    logger.error('Query all permits error:', error);
-    res.status(500).json({ error: error.message });
+    logger.error('[PERMITS] Query all permits error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 });
 

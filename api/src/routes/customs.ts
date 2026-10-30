@@ -356,6 +356,97 @@ router.get('/clearances',
   }
 );
 
+// Alias: GET /api/v1/customs/clearance (singular) - returns same as /clearances
+router.get('/clearance', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { status } = req.query;
+    
+    // First check if customs_clearances table exists
+    const tableCheck = await postgresDb.get(
+      `SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'customs_clearances'
+      )`
+    );
+    
+    if (!tableCheck?.exists) {
+      return res.json({ 
+        success: true, 
+        data: [],
+        message: 'Customs clearances table not initialized',
+        timestamp: new Date().toISOString() 
+      });
+    }
+    
+    // Check which columns exist
+    const columns = await postgresDb.all(
+      `SELECT column_name FROM information_schema.columns 
+       WHERE table_name = 'customs_clearances'`
+    );
+    const columnNames = columns.map((c: any) => c.column_name);
+    const hasVat = columnNames.includes('vat_amount');
+    const hasDuty = columnNames.includes('duty_amount');
+    
+    let query = `
+      SELECT 
+        cc.clearance_id,
+        cc.clearance_number,
+        cc.shipment_id,
+        cc.status,
+        cc.cleared_by,
+        cc.cleared_date,
+        ${hasDuty ? 'cc.duty_amount,' : '0 as duty_amount,'}
+        ${hasVat ? 'cc.vat_amount,' : '0 as vat_amount,'}
+        cc.created_at,
+        cd.declaration_number,
+        cd.declaration_type,
+        cd.eudr_compliant
+      FROM customs_clearances cc
+      LEFT JOIN customs_declarations cd ON cc.shipment_id = cd.shipment_id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    
+    if (status) {
+      query += ' AND cc.status = $1';
+      params.push(status);
+    }
+    
+    query += ' ORDER BY cc.created_at DESC';
+    const clearances = await postgresDb.all(query, params);
+
+    const normalizedClearances = clearances.map((c: any) => ({
+      clearanceID: c.clearance_id,
+      clearanceId: c.clearance_id,
+      clearanceNumber: c.clearance_number,
+      shipmentID: c.shipment_id,
+      shipmentId: c.shipment_id,
+      status: c.status,
+      clearedBy: c.cleared_by,
+      clearedDate: c.cleared_date,
+      dutyAmount: c.duty_amount,
+      vatAmount: c.vat_amount,
+      declarationNumber: c.declaration_number,
+      declarationType: c.declaration_type,
+      eudrCompliant: c.eudr_compliant,
+      createdAt: c.created_at
+    }));
+
+    res.json({ 
+      success: true, 
+      data: normalizedClearances,
+      timestamp: new Date().toISOString() 
+    });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Clearance query error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 /**
  * GET /api/v1/customs/permit-ready
  * Returns all shipments that have received export permits from ECTA Quality Control
@@ -1178,3 +1269,284 @@ router.post('/declaration/:declarationId/clear',
     }
   }
 );
+
+/**
+ * GET /api/v1/customs/assessments
+ * Get customs duty and tax assessments
+ */
+router.get('/assessments', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[CUSTOMS] Fetching customs assessments...');
+
+    const assessments = await postgresDb.all(`
+      SELECT 
+        ca.*,
+        cd.contract_id,
+        c.exporter_id,
+        c.buyer_id
+      FROM customs_assessments ca
+      LEFT JOIN customs_declarations cd ON ca.declaration_number = cd.declaration_number
+      LEFT JOIN contracts c ON cd.contract_id = c.contract_id
+      ORDER BY ca.created_at DESC
+    `);
+
+    const normalized = assessments.map((assessment: any) => ({
+      assessmentId: assessment.assessment_id,
+      declarationNumber: assessment.declaration_number,
+      contractId: assessment.contract_id,
+      exporterId: assessment.exporter_id,
+      buyerId: assessment.buyer_id,
+      assessedValue: parseFloat(assessment.assessed_value || '0'),
+      dutyAmount: parseFloat(assessment.duty_amount || '0'),
+      taxAmount: parseFloat(assessment.tax_amount || '0'),
+      totalAmount: parseFloat(assessment.total_amount || '0'),
+      currency: assessment.currency || 'ETB',
+      assessedBy: assessment.assessed_by,
+      assessmentDate: assessment.assessment_date,
+      status: assessment.status,
+      createdAt: assessment.created_at
+    }));
+
+    logger.info(`[CUSTOMS] ✅ Retrieved ${normalized.length} customs assessments`);
+
+    res.json({
+      success: true,
+      data: normalized,
+      count: normalized.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching assessments:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to fetch customs assessments'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/v1/customs/document-verification
+ * Get document verification queue
+ */
+router.get('/document-verification', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[CUSTOMS] Fetching document verification queue...');
+
+    const documents = await postgresDb.all(`
+      SELECT 
+        d.*,
+        cd.contract_id,
+        c.exporter_id,
+        c.buyer_id
+      FROM documents d
+      LEFT JOIN customs_declarations cd ON d.entity_id = cd.declaration_number
+      LEFT JOIN contracts c ON cd.contract_id = c.contract_id
+      WHERE d.entity_type = 'CUSTOMS_DECLARATION'
+        AND d.status IN ('pending', 'under_review')
+      ORDER BY d.uploaded_at DESC
+    `);
+
+    const normalized = documents.map((doc: any) => ({
+      documentId: doc.document_id,
+      declarationNumber: doc.entity_id,
+      contractId: doc.contract_id,
+      exporterId: doc.exporter_id,
+      buyerId: doc.buyer_id,
+      documentType: doc.document_type,
+      fileName: doc.file_name,
+      filePath: doc.file_path,
+      status: doc.status,
+      uploadedAt: doc.uploaded_at,
+      uploadedBy: doc.uploaded_by,
+      verificationStatus: doc.status === 'pending' ? 'PENDING' : 'IN_REVIEW',
+      priority: 'NORMAL'
+    }));
+
+    logger.info(`[CUSTOMS] ✅ Retrieved ${normalized.length} documents for verification`);
+
+    res.json({
+      success: true,
+      data: normalized,
+      count: normalized.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching document verification queue:', error);
+    // Return empty array instead of error to allow frontend to render empty state
+    res.json({
+      success: true,
+      data: [],
+      count: 0,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/v1/customs/risk-assessment
+ * Get risk assessments for customs declarations
+ */
+router.get('/risk-assessment', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[CUSTOMS] Fetching risk assessments...');
+
+    const declarations = await postgresDb.all(`
+      SELECT 
+        cd.*,
+        c.exporter_id,
+        c.buyer_id,
+        c.buyer_country,
+        c.total_value
+      FROM customs_declarations cd
+      LEFT JOIN contracts c ON cd.contract_id = c.contract_id
+      ORDER BY cd.created_at DESC
+      LIMIT 100
+    `);
+
+    const riskAssessments = declarations.map((decl: any) => {
+      let riskScore = 0;
+      let riskFactors: string[] = [];
+
+      const declaredValue = parseFloat(decl.declared_value || '0');
+      if (declaredValue > 100000) {
+        riskScore += 3;
+        riskFactors.push('HIGH_VALUE');
+      }
+
+      if (!decl.exporter_id || decl.exporter_id.startsWith('TEST')) {
+        riskScore += 2;
+        riskFactors.push('NEW_EXPORTER');
+      }
+
+      if (decl.status === 'SUBMITTED') {
+        riskScore += 1;
+        riskFactors.push('PENDING_REVIEW');
+      }
+
+      const riskLevel = riskScore >= 5 ? 'HIGH' : riskScore >= 3 ? 'MEDIUM' : 'LOW';
+
+      return {
+        assessmentId: `RISK-${decl.declaration_number}`,
+        declarationNumber: decl.declaration_number,
+        contractId: decl.contract_id,
+        exporterId: decl.exporter_id,
+        buyerId: decl.buyer_id,
+        buyerCountry: decl.buyer_country,
+        riskLevel,
+        riskScore,
+        riskFactors,
+        declaredValue,
+        recommendedAction: riskLevel === 'HIGH' ? 'PHYSICAL_INSPECTION' : riskLevel === 'MEDIUM' ? 'DOCUMENT_REVIEW' : 'STANDARD_PROCESSING',
+        assessedAt: new Date().toISOString(),
+        status: decl.status
+      };
+    });
+
+    logger.info(`[CUSTOMS] ✅ Generated ${riskAssessments.length} risk assessments`);
+
+    res.json({
+      success: true,
+      data: riskAssessments,
+      count: riskAssessments.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error generating risk assessments:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to generate risk assessments'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/v1/customs/history
+ * Get customs clearance history
+ */
+router.get('/history', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { exporterId, contractId } = req.query;
+    logger.info('[CUSTOMS] Fetching customs clearance history...');
+
+    let query = `
+      SELECT 
+        cd.*,
+        c.exporter_id,
+        c.buyer_id,
+        c.buyer_country,
+        c.coffee_type,
+        c.quantity
+      FROM customs_declarations cd
+      LEFT JOIN contracts c ON cd.contract_id = c.contract_id
+      WHERE cd.status IN ('CLEARED', 'RELEASED')
+    `;
+
+    const params: any[] = [];
+
+    if (exporterId) {
+      query += ` AND c.exporter_id = $${params.length + 1}`;
+      params.push(exporterId);
+    }
+
+    if (contractId) {
+      query += ` AND cd.contract_id = $${params.length + 1}`;
+      params.push(contractId);
+    }
+
+    query += ` ORDER BY cd.clearance_date DESC`;
+
+    const history = await postgresDb.all(query, params);
+
+    const normalized = history.map((record: any) => ({
+      declarationNumber: record.declaration_number,
+      contractId: record.contract_id,
+      exporterId: record.exporter_id,
+      buyerId: record.buyer_id,
+      buyerCountry: record.buyer_country,
+      coffeeType: record.coffee_type,
+      quantity: record.quantity || 0,
+      declarationType: record.declaration_type,
+      declaredValue: parseFloat(record.declared_value || '0'),
+      currency: record.currency,
+      status: record.status,
+      submissionDate: record.submission_date,
+      clearanceDate: record.clearance_date,
+      clearedBy: record.cleared_by,
+      hsCode: record.hs_code,
+      processingTime: record.clearance_date && record.submission_date 
+        ? Math.round((new Date(record.clearance_date).getTime() - new Date(record.submission_date).getTime()) / (1000 * 60 * 60 * 24))
+        : null
+    }));
+
+    logger.info(`[CUSTOMS] ✅ Retrieved ${normalized.length} clearance history records`);
+
+    res.json({
+      success: true,
+      data: normalized,
+      count: normalized.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[CUSTOMS] Error fetching clearance history:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to fetch clearance history'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});

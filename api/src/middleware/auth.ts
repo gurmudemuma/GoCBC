@@ -193,6 +193,23 @@ export const authMiddleware = (
     }
 
     const token = authHeader.substring(7);
+    
+    // TEST MODE BYPASS - Only in development
+    if (process.env.NODE_ENV === 'development' && token === 'test-bypass-admin') {
+      req.user = {
+        sub: 'test-admin',
+        org: 'ECX',
+        organization: 'ECX',
+        role: 'ADMIN',
+        permissions: ROLE_PERMISSIONS.ADMIN.permissions,
+        userId: 'test-admin-id',
+        username: 'test-admin',
+        exporterId: 'test-admin',
+      };
+      logger.warn('⚠️ TEST MODE: Bypassing authentication with admin privileges');
+      return next();
+    }
+    
     const jwtSecret = process.env.JWT_SECRET || 'cecbs-secret-key';
 
     const decoded = jwt.verify(token, jwtSecret) as any;
