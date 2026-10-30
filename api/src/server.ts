@@ -135,6 +135,7 @@ class CECBSServer {
     this.app.use(cors({
       origin: process.env.ALLOWED_ORIGINS?.split(',').map((origin) => origin.trim()) || [
         'http://localhost:3000',
+        'http://localhost:3002',  // UI development server
         'http://localhost:3003',
       ],
       credentials: true,

@@ -1446,8 +1446,8 @@ router.get('/lc', async (req, res) => {
         // Note: LC documents might be tagged with LC ID or Contract ID
         logger.debug(`[BANKING] 📎 Querying documents for LC ${lc.lcId}, Contract ${lc.contractId}`);
         const docs = await dbService.all(`
-          SELECT document_id, document_type, file_name, file_path, status, verification_status, 
-                 uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+          SELECT document_id, document_type, file_name, file_path, status, 
+                 uploaded_at, uploaded_by, entity_type, entity_id
           FROM documents 
           WHERE status = 'active'
             AND (
@@ -1471,15 +1471,11 @@ router.get('/lc', async (req, res) => {
             documentType: d.document_type,
             fileName: d.file_name,
             filePath: d.file_path,
-            status: d.verification_status || d.status || 'pending',
-            verificationStatus: d.verification_status,
+            status: d.status || 'pending',
             uploadedAt: d.uploaded_at,
             uploadedBy: d.uploaded_by,
             entityType: d.entity_type,
             entityId: d.entity_id,
-            verificationNotes: d.verification_notes,
-            verifiedAt: d.verified_at,
-            verifiedBy: d.verified_by,
           }));
           logger.debug(`[BANKING] 📎 LC ${lc.lcId}: attached ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
         }
@@ -1815,8 +1811,8 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
       
       // Fetch documents in parallel with LC data
       const docs = await dbService.all(`
-        SELECT document_id, document_type, file_name, file_path, status, verification_status, 
-               uploaded_at, uploaded_by, entity_type, entity_id, verification_notes, verified_at, verified_by
+        SELECT document_id, document_type, file_name, file_path, status,
+               uploaded_at, uploaded_by, entity_type, entity_id
         FROM documents 
         WHERE status = 'active'
           AND (
@@ -1837,15 +1833,11 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
         documentType: d.document_type,
         fileName: d.file_name,
         filePath: d.file_path,
-        status: d.verification_status || d.status || 'pending',
-        verificationStatus: d.verification_status,
+        status: d.status || 'pending',
         uploadedAt: d.uploaded_at,
         uploadedBy: d.uploaded_by,
         entityType: d.entity_type,
         entityId: d.entity_id,
-        verificationNotes: d.verification_notes,
-        verifiedAt: d.verified_at,
-        verifiedBy: d.verified_by,
       }));
 
       const persistedDiscrepancies = await dbService.all(
@@ -1971,15 +1963,11 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
               documentType: d.document_type,
               fileName: d.file_name,
               filePath: d.file_path,
-              status: d.verification_status || d.status || 'pending',
-              verificationStatus: d.verification_status,
+              status: d.status || 'pending',
               uploadedAt: d.uploaded_at,
               uploadedBy: d.uploaded_by,
               entityType: d.entity_type,
               entityId: d.entity_id,
-              verificationNotes: d.verification_notes,
-              verifiedAt: d.verified_at,
-              verifiedBy: d.verified_by,
             }));
             logger.info(`[BANKING] 📎 LC ${lcID}: Found ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
           } else {
@@ -2063,12 +2051,14 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
       });
     }
   } catch (error) {
-    logger.error('Error retrieving LC:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Error retrieving LC ${req.params.lcID}:`, error);
     res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
       },
       timestamp: new Date().toISOString(),
     });
