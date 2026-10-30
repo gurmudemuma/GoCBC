@@ -41,6 +41,7 @@ import {
   AccordionDetails,
   CircularProgress,
   Badge,
+  TablePagination,
 } from '@mui/material';
 import { ExpandMore } from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
@@ -466,6 +467,13 @@ const BanksPortal: React.FC = () => {
         roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer', 'Payment Officer', 'Document Officer'],
         children: [
           { 
+            id: 'lc-management', 
+            label: `All LCs (${letterOfCredits.length})`, 
+            icon: React.createElement(AccountBalance),
+            roles: ['BANKS', 'ADMIN', 'BANKS Portal Administrator', 'Bank Officer', 'LC Officer'],
+            tabIndex: 10  // New tab index
+          },
+          { 
             id: 'payment-methods', 
             label: 'Payment Methods', 
             icon: React.createElement(Payment),
@@ -724,7 +732,7 @@ const BanksPortal: React.FC = () => {
       
       const [contractsPromise, lcPromise, swiftPromise, forexPromise, shipmentsPromise, collectionsPromise, advancesPromise, consignmentsPromise] = [
         // 0. Contracts (for LC issuance) - NEWLY ADDED!
-        apiFetch('/contracts', { headers: { 'Authorization': `Bearer ${token}` }})
+        apiFetch('/api/v1/contracts', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
           .then(result => {
             if (result.success) {
@@ -748,7 +756,7 @@ const BanksPortal: React.FC = () => {
           }),
         
         // 1. LCs
-        apiFetch('/banking/lc', { headers: { 'Authorization': `Bearer ${token}` }})
+        apiFetch('/api/v1/banking/lc', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
           .then(result => {
             if (result.success) {
@@ -786,7 +794,7 @@ const BanksPortal: React.FC = () => {
           .catch(err => { console.warn('[BANKS] LCs failed:', err); return []; }),
 
         // 2. SWIFT Messages - PRIORITY!
-        apiFetch('/swift/messages', { headers: { 'Authorization': `Bearer ${token}` }})
+        apiFetch('/api/v1/swift/messages', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
           .then(result => {
             if (result.success) {
@@ -799,7 +807,7 @@ const BanksPortal: React.FC = () => {
           .catch(err => { console.warn('[BANKS] SWIFT failed:', err); return []; }),
 
         // 3. Forex
-        apiFetch('/forex', { headers: { 'Authorization': `Bearer ${token}` }})
+        apiFetch('/api/v1/forex', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
           .then(result => {
             if (result.success) {
@@ -827,13 +835,13 @@ const BanksPortal: React.FC = () => {
           .catch(err => { console.warn('[BANKS] Shipments failed:', err); return []; }),
 
         // 5. Documentary collections directly from the ledger
-        loadLedgerList('/stats/documentary-collections', 'Documentary collections', setDocumentaryCollections),
+        loadLedgerList('/api/v1/stats/documentary-collections', 'Documentary collections', setDocumentaryCollections),
 
         // 6. Advance payments directly from the ledger
-        loadLedgerList('/stats/advance-payments', 'Advance payments', setAdvancePayments),
+        loadLedgerList('/api/v1/stats/advance-payments', 'Advance payments', setAdvancePayments),
 
         // 7. Consignment payments directly from the ledger
-        loadLedgerList('/stats/consignments', 'Consignments', setConsignments),
+        loadLedgerList('/api/v1/stats/consignments', 'Consignments', setConsignments),
       ];
 
       // Wait for all to complete and process forex with LC data
@@ -5741,6 +5749,123 @@ const BanksPortal: React.FC = () => {
               )}
             </Box>
           )}
+        </ModernCard>
+      )}
+
+      {/* Tab 10: All LCs Management - Show ALL LCs regardless of status */}
+      {activeTab === 10 && (
+        <ModernCard title="LC Management - All Letter of Credits">
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              View and manage all Letter of Credits in the system regardless of status.
+              This includes REQUESTED, APPROVED, ISSUED, FOREX_ALLOCATED, UTILIZED, PAYMENT_RELEASED, and SETTLED LCs.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              All LCs ({letterOfCredits.length})
+            </Typography>
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                    <TableCell><strong>LC ID</strong></TableCell>
+                    <TableCell><strong>Contract ID</strong></TableCell>
+                    <TableCell><strong>Exporter</strong></TableCell>
+                    <TableCell><strong>Buyer</strong></TableCell>
+                    <TableCell><strong>Amount</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                    <TableCell><strong>Request Date</strong></TableCell>
+                    <TableCell><strong>Actions</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {letterOfCredits.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} align="center">
+                        <Typography variant="body2" color="textSecondary">
+                          No LCs found
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    letterOfCredits.slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage).map((lc) => (
+                      <TableRow key={lc.lcId} hover>
+                        <TableCell>{lc.lcId}</TableCell>
+                        <TableCell>{lc.contractId}</TableCell>
+                        <TableCell>{lc.exporterId}</TableCell>
+                        <TableCell>
+                          {lc.buyerName}<br/>
+                          <Typography variant="caption" color="textSecondary">
+                            {lc.buyerCountry}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          {lc.amount.toLocaleString()} {lc.currency}
+                        </TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={lc.status} 
+                            size="small"
+                            color={
+                              lc.status === 'REQUESTED' ? 'warning' :
+                              lc.status === 'APPROVED' ? 'info' :
+                              lc.status === 'ISSUED' ? 'primary' :
+                              lc.status === 'FOREX_ALLOCATED' ? 'secondary' :
+                              lc.status === 'UTILIZED' ? 'default' :
+                              lc.status === 'PAYMENT_RELEASED' ? 'success' :
+                              'default'
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title="View Details">
+                            <IconButton 
+                              size="small"
+                              onClick={() => {
+                                setSelectedLC(lc);
+                                setDialogType('lcDetails');
+                                setDialogOpen(true);
+                              }}
+                            >
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
+                          {lc.status === 'REQUESTED' && (
+                            <Tooltip title="Approve LC">
+                              <IconButton 
+                                size="small"
+                                color="primary"
+                                onClick={() => handleApproveBulkLCs([lc.lcId])}
+                              >
+                                <CheckCircle />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            
+            <TablePagination
+              component="div"
+              count={letterOfCredits.length}
+              page={currentPage}
+              onPageChange={(_, newPage) => setCurrentPage(newPage)}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(e) => {
+                setRowsPerPage(parseInt(e.target.value, 10));
+                setCurrentPage(0);
+              }}
+            />
+          </Box>
         </ModernCard>
       )}
 

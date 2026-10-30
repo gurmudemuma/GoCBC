@@ -230,6 +230,59 @@ router.get('/documentary-collections', authMiddleware, async (req: Request, res:
 
 /**
  * @swagger
+ * /api/v1/stats/consignment-payments:
+ *   get:
+ *     summary: Get consignment payment statistics
+ *     tags: [Statistics]
+ */
+router.get('/consignment-payments', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    // Query consignment payments from database
+    const { DatabaseService } = await import('../services/databaseService');
+    const db = DatabaseService.getInstance();
+    
+    const consignments = await db.all(`
+      SELECT 
+        p.payment_id,
+        p.contract_id,
+        p.exporter_id,
+        p.amount,
+        p.currency,
+        p.payment_method,
+        p.status,
+        p.payment_date,
+        p.created_at,
+        c.exporter_bank,
+        c.buyer_bank,
+        c.buyer_id,
+        c.buyer_country
+      FROM payments p
+      LEFT JOIN contracts c ON p.contract_id = c.contract_id
+      WHERE p.payment_method = 'CONSIGNMENT'
+      ORDER BY p.created_at DESC
+    `);
+
+    res.json({
+      success: true,
+      data: consignments || [],
+      meta: {
+        totalCount: consignments?.length || 0,
+        source: 'postgres'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('[STATS] Error fetching consignment payments:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch consignment payments',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * @swagger
  * /api/v1/stats/exporter-portal:
  *   get:
  *     summary: Get Exporter Portal statistics
