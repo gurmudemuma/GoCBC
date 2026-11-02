@@ -623,7 +623,8 @@ const ECTAPortal: React.FC = () => {
     // 6️⃣ Quality Inspections - Load independently
     api.get('/quality/inspections?limit=500')
       .then(inspectionsRes => {
-        const inspectionData = inspectionsRes.data?.data?.inspections;
+        // API returns { success: true, data: inspections[], count: number }
+        const inspectionData = inspectionsRes.data?.data;
         if (inspectionData && Array.isArray(inspectionData)) {
           console.log(`[ECTA] ✅ Inspections loaded: ${inspectionData.length} items (${performance.now().toFixed(0)}ms)`);
           setInspectionRecords(inspectionData);
@@ -1283,7 +1284,8 @@ The exporter can reapply once all requirements are met.`,
   // STAGE 2: Perform Inspection (REQUESTED → INSPECTED)
   const handlePerformInspection = async (inspection: any) => {
     try {
-      const response = await api.post(`/quality/inspections/${inspection.inspectionID || inspection.InspectionID}/perform`, {
+      const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
+      const response = await api.post(`/quality/inspections/${inspectionId}/perform`, {
         inspectorID: 'ECTA-01',
         inspectorName: 'ECTA Quality Lab',
         sampleSize: 100,
@@ -1312,7 +1314,7 @@ The exporter can reapply once all requirements are met.`,
       if (response.data.success) {
         showSuccess(
           'Inspection Completed',
-          `Inspection ${inspection.inspectionID || inspection.InspectionID} has been performed`,
+          `Inspection ${inspectionId} has been performed`,
           'Quality Lab results recorded. Awaiting ECTA approval for export permit'
         );
         loadData();
@@ -1327,8 +1329,9 @@ The exporter can reapply once all requirements are met.`,
   // STAGE 3: Approve Inspection (INSPECTED → APPROVED)
   const handleApproveInspection = async (inspection: any) => {
     try {
+      const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
       const certificateNo = `CERT${Date.now()}`;
-      const response = await api.post(`/quality/inspections/${inspection.inspectionID || inspection.InspectionID}/approve`, {
+      const response = await api.post(`/quality/inspections/${inspectionId}/approve`, {
         approvedBy: 'ECTA Quality Director',
         certificateNo,
       });
@@ -1351,8 +1354,10 @@ The exporter can reapply once all requirements are met.`,
   // STAGE 4: Issue Export Permit (APPROVED → PERMIT_ISSUED)
   const handleIssueExportPermit = async (inspection: any) => {
     try {
+      const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
+      const shipmentId = inspection.shipment_id || inspection.shipmentID || inspection.ShipmentID;
       const exportPermitNo = `PERMIT${Date.now()}`;
-      const response = await api.post(`/quality/inspections/${inspection.inspectionID || inspection.InspectionID}/issue-permit`, {
+      const response = await api.post(`/quality/inspections/${inspectionId}/issue-permit`, {
         exportPermitNo,
         issuedBy: 'ECTA Export Permit Office',
         autoCreateCustomsDeclaration: true, // Auto-trigger customs workflow
@@ -1361,7 +1366,7 @@ The exporter can reapply once all requirements are met.`,
       if (response.data.success) {
         showSuccess(
           'Export Permit Issued',
-          `Export Permit ${exportPermitNo} issued for ${inspection.shipmentID || inspection.ShipmentID}`,
+          `Export Permit ${exportPermitNo} issued for ${shipmentId}`,
           'Customs declaration workflow has been automatically initiated'
         );
         loadData();
@@ -1381,7 +1386,8 @@ The exporter can reapply once all requirements are met.`,
     }
     
     try {
-      const response = await api.post(`/quality/inspections/${inspection.inspectionID || inspection.InspectionID}/reject`, {
+      const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
+      const response = await api.post(`/quality/inspections/${inspectionId}/reject`, {
         rejectedBy: 'ECTA Quality Director',
         rejectionReason,
       });
@@ -1389,7 +1395,7 @@ The exporter can reapply once all requirements are met.`,
       if (response.data.success) {
         showSuccess(
           'Inspection Rejected',
-          `Inspection ${inspection.inspectionID || inspection.InspectionID} has been rejected`,
+          `Inspection ${inspectionId} has been rejected`,
           `Reason: ${rejectionReason}. Exporter must address quality issues before re-submitting`
         );
         loadData();
@@ -2733,11 +2739,11 @@ The exporter can reapply once all requirements are met.`,
             const getPendingShipments = () => allShipments.filter(s => {
               const status = (s.status || (s as any).Status || '').toUpperCase();
               return (status === 'CREATED' || status === 'REGISTERED') && 
-                     !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                     !allInspectionRecords.some(i => (i.shipment_id || i.shipmentID || i.ShipmentID) === s.shipmentId);
             });
 
             const dataToShow = [...getPendingShipments(), ...allInspectionRecords];
-            const isPendingShipment = (item: any) => item.shipmentId && !item.inspectionID && !item.InspectionID;
+            const isPendingShipment = (item: any) => item.shipmentId && !item.inspection_id && !item.inspectionID && !item.InspectionID;
 
             return dataToShow.length === 0 ? (
               <Alert severity="info">No inspection records to display</Alert>
@@ -2766,9 +2772,9 @@ The exporter can reapply once all requirements are met.`,
                   <TableBody>
                     {getPaginatedData(dataToShow).map((item: any, index) => {
                       const isShipment = isPendingShipment(item);
-                      const itemId = isShipment ? item.shipmentId : (item.inspectionID || item.InspectionID);
-                      const shipmentId = isShipment ? item.shipmentId : (item.shipmentID || item.ShipmentID);
-                      const exporterId = isShipment ? item.exporterId : (item.exporterID || item.ExporterID);
+                      const itemId = isShipment ? item.shipmentId : (item.inspection_id || item.inspectionID || item.InspectionID);
+                      const shipmentId = isShipment ? item.shipmentId : (item.shipment_id || item.shipmentID || item.ShipmentID);
+                      const exporterId = isShipment ? item.exporterId : (item.exporter_id || item.exporterID || item.ExporterID);
                       
                       // Map database status to workflow status
                       const rawStatus = isShipment ? 'PENDING' : (item.status || item.Status || 'UNKNOWN');
@@ -2789,7 +2795,7 @@ The exporter can reapply once all requirements are met.`,
                       const date = (() => {
                         if (isShipment) {
                           // For pending shipments, show when created
-                          return item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'N/A';
+                          return item.createdAt || item.created_at ? new Date(item.createdAt || item.created_at).toLocaleDateString() : 'N/A';
                         }
                         
                         // For inspections, show appropriate date based on status
@@ -2797,25 +2803,53 @@ The exporter can reapply once all requirements are met.`,
                         
                         if (currentStatus === 'PENDING' || currentStatus === 'REQUESTED') {
                           // Show scheduled/requested date for pending inspections
-                          const schedDate = item.requestedDate || item.scheduledDate || item.createdAt;
+                          const schedDate = item.requested_date || item.requestedDate || item.scheduled_date || item.scheduledDate || item.created_at || item.createdAt;
                           return schedDate ? new Date(schedDate).toLocaleDateString() : 'Not Scheduled';
                         } else if (currentStatus === 'INSPECTED') {
                           // Show inspection date for inspected (awaiting approval)
-                          const inspDate = item.inspectionDate || item.createdAt;
+                          const inspDate = item.inspection_date || item.inspectionDate || item.created_at || item.createdAt;
                           return inspDate ? new Date(inspDate).toLocaleDateString() : 'N/A';
                         } else if (currentStatus === 'APPROVED' || currentStatus === 'REJECTED' || currentStatus === 'COMPLETED') {
                           // Show inspection date, fall back to requested date or created date
-                          const compDate = item.inspectionDate || item.approvalDate || item.requestedDate || item.createdAt;
+                          const compDate = item.inspection_date || item.inspectionDate || item.approval_date || item.approvalDate || item.requested_date || item.requestedDate || item.created_at || item.createdAt;
                           return compDate ? new Date(compDate).toLocaleDateString() : 'N/A';
                         }
                         
                         // Fallback
-                        const anyDate = item.inspectionDate || item.requestedDate || item.createdAt;
+                        const anyDate = item.inspection_date || item.inspectionDate || item.requested_date || item.requestedDate || item.created_at || item.createdAt;
                         return anyDate ? new Date(anyDate).toLocaleDateString() : 'N/A';
                       })();
                       
-                      const qualityScore = isShipment ? 'N/A' : (item.overall || item.overallScore || 'N/A');
-                      const certificate = isShipment ? '-' : (item.certificateNo || '-');
+                      // Extract overall score from cup_quality JSON or direct field
+                      const qualityScore = (() => {
+                        if (isShipment) return 'Pending';
+                        
+                        // Try direct field first
+                        if (item.overall || item.overallScore || item.overall_score) {
+                          return item.overall || item.overallScore || item.overall_score;
+                        }
+                        
+                        // Try extracting from cup_quality JSON
+                        if (item.cup_quality) {
+                          try {
+                            const cupQuality = typeof item.cup_quality === 'string' 
+                              ? JSON.parse(item.cup_quality) 
+                              : item.cup_quality;
+                            if (cupQuality.overall) return cupQuality.overall;
+                          } catch (e) {
+                            // JSON parse failed, ignore
+                          }
+                        }
+                        
+                        // If inspection is completed but no score, show grade instead
+                        if (item.status === 'inspected' || item.status === 'approved' || item.status === 'permit_issued') {
+                          return item.grade || 'N/A';
+                        }
+                        
+                        return 'Pending';
+                      })();
+                      
+                      const certificate = isShipment ? 'Pending' : (item.certification_number || item.certificateNo || item.certificate_no || 'Pending');
 
                       return (
                         <TableRow key={`${itemId}-${index}`}>
@@ -2854,7 +2888,7 @@ The exporter can reapply once all requirements are met.`,
                               >
                                 Schedule
                               </Button>
-                            ) : status === 'REQUESTED' ? (
+                            ) : status === 'PENDING' || status === 'REQUESTED' ? (
                               <Button
                                 variant="contained"
                                 size="small"
@@ -2900,6 +2934,8 @@ The exporter can reapply once all requirements are met.`,
                               </Button>
                             ) : status === 'REJECTED' ? (
                               <Chip label="Rejected" size="small" color="error" />
+                            ) : status === 'PERMIT_ISSUED' ? (
+                              <Chip label="Permit Issued" size="small" color="success" />
                             ) : (
                               <Chip label={status} size="small" />
                             )}

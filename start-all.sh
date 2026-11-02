@@ -450,10 +450,14 @@ check_prerequisites() {
 cleanup_ports() {
     write_header "Phase 1.5: Cleaning Up Ports"
     
-    # All ports used by the system
-    local REQUIRED_PORTS=(
+    # Focus on API and UI ports for manual startup
+    local CRITICAL_PORTS=(
         $API_PORT          # 3001 - API Server
         $UI_PORT           # 3000 - UI Server
+    )
+    
+    # Additional blockchain ports
+    local BLOCKCHAIN_PORTS=(
         $POSTGRES_PORT     # 5432 - PostgreSQL
         $ORDERER_PORT      # 7050 - Orderer
         $PEER_ECTA_PORT    # 7051 - ECTA Peer
@@ -480,10 +484,10 @@ cleanup_ports() {
     local ports_cleaned=0
     local ports_already_free=0
     
-    write_step "Scanning for processes using required ports..."
+    write_step "Cleaning critical ports (API & UI) for manual startup..."
     
-    for port in "${REQUIRED_PORTS[@]}"; do
-        # Find PIDs using this port
+    # Clean critical ports first (API and UI)
+    for port in "${CRITICAL_PORTS[@]}"; do
         local pids=$(lsof -ti:$port 2>/dev/null || true)
         
         if [ -n "$pids" ]; then
@@ -495,43 +499,44 @@ cleanup_ports() {
                 write_info "  └─ PID $pid: $process_name"
             done
             
-            # Kill the processes
+            # Kill the processes (including ts-node-dev and npm)
             write_step "  └─ Terminating processes on port $port..."
             echo "$pids" | xargs kill -9 2>/dev/null || true
             
+            # Also kill any ts-node or npm processes related to API/UI
+            pkill -9 -f "ts-node.*server.ts" 2>/dev/null || true
+            pkill -9 -f "node.*api" 2>/dev/null || true
+            
             # Verify port is now free
-            sleep 0.5
+            sleep 1
             if ! lsof -ti:$port &>/dev/null; then
-                write_success "  └─ Port $port is now free"
+                write_success "  └─ Port $port is now FREE and ready for manual startup"
                 ports_cleaned=$((ports_cleaned + 1))
             else
-                write_warning "  └─ Port $port may still be in use"
+                write_warning "  └─ Port $port may still be in use - trying force kill..."
+                sudo fuser -k ${port}/tcp 2>/dev/null || true
+                sleep 1
+                if ! lsof -ti:$port &>/dev/null; then
+                    write_success "  └─ Port $port is now FREE"
+                    ports_cleaned=$((ports_cleaned + 1))
+                fi
             fi
         else
-            log_verbose "Port $port is free"
+            write_success "Port $port is already free"
             ports_already_free=$((ports_already_free + 1))
         fi
     done
     
     echo ""
-    if [ $ports_cleaned -gt 0 ]; then
-        write_success "Cleaned up $ports_cleaned port(s)"
-    fi
+    write_success "Critical ports (API: $API_PORT, UI: $UI_PORT) are ready"
     
-    if [ $ports_already_free -eq ${#REQUIRED_PORTS[@]} ]; then
-        write_success "All required ports were already free"
-    else
-        write_info "Ports cleaned: $ports_cleaned, Already free: $ports_already_free"
-    fi
-    
-    # Also clean up any orphaned PID files
+    # Clean up any orphaned PID files
     write_step "Cleaning up orphaned PID files..."
     local pid_files=("$PROJECT_ROOT/.api.pid" "$PROJECT_ROOT/.ui.pid")
     for pid_file in "${pid_files[@]}"; do
         if [ -f "$pid_file" ]; then
             local old_pid=$(cat "$pid_file" 2>/dev/null)
             if [ -n "$old_pid" ]; then
-                # Check if process is still running
                 if ps -p "$old_pid" &>/dev/null; then
                     write_step "Killing orphaned process (PID: $old_pid)..."
                     kill -9 "$old_pid" 2>/dev/null || true
@@ -541,7 +546,7 @@ cleanup_ports() {
         fi
     done
     
-    write_success "Port cleanup complete"
+    write_success "Port cleanup complete - ready for manual API and UI startup"
 }
 
 ################################################################################
@@ -1277,16 +1282,70 @@ main() {
     create_channel
     initialize_chaincode
     initialize_database
-    start_api_server
-    start_ui_server
-    run_health_checks
-    show_final_status
+    
+    # SKIP AUTOMATIC API AND UI STARTUP - Let user start manually
+    # start_api_server    # COMMENTED OUT - Manual startup
+    # start_ui_server     # COMMENTED OUT - Manual startup
+    # run_health_checks   # COMMENTED OUT - Run after manual startup
+    
+    show_manual_startup_instructions
     
     # Calculate duration
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     
-    echo -e "${COLOR_GREEN}✅ System startup completed in ${DURATION} seconds${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}✅ System preparation completed in ${DURATION} seconds${COLOR_RESET}"
+    echo ""
+}
+
+################################################################################
+# Display Manual Startup Instructions
+################################################################################
+
+show_manual_startup_instructions() {
+    write_header "Manual Startup Instructions"
+    
+    echo ""
+    write_success "✅ Blockchain network is running"
+    write_success "✅ Database is initialized"
+    write_success "✅ Ports ${API_PORT} and ${UI_PORT} are FREE and ready"
+    echo ""
+    
+    write_step "Next steps - Start API and UI manually:"
+    echo ""
+    
+    echo -e "${COLOR_CYAN}${COLOR_BOLD}Terminal 1 - Start API Server:${COLOR_RESET}"
+    echo -e "  ${COLOR_YELLOW}cd $API_DIR${COLOR_RESET}"
+    echo -e "  ${COLOR_YELLOW}npm run dev${COLOR_RESET}"
+    echo ""
+    echo -e "  ${COLOR_MAGENTA}Expected output:${COLOR_RESET}"
+    echo -e "  ${COLOR_GREEN}✅ Successfully connected to Hyperledger Fabric network${COLOR_RESET}"
+    echo -e "  ${COLOR_GREEN}🚀 CECBS API Gateway started on port ${API_PORT}${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_CYAN}${COLOR_BOLD}Terminal 2 - Start UI Server:${COLOR_RESET}"
+    echo -e "  ${COLOR_YELLOW}cd $UI_DIR${COLOR_RESET}"
+    echo -e "  ${COLOR_YELLOW}npm run dev${COLOR_RESET}"
+    echo ""
+    echo -e "  ${COLOR_MAGENTA}Expected output:${COLOR_RESET}"
+    echo -e "  ${COLOR_GREEN}▲ Next.js 14.x.x${COLOR_RESET}"
+    echo -e "  ${COLOR_GREEN}- Local:        http://localhost:${UI_PORT}${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_CYAN}${COLOR_BOLD}Access Points:${COLOR_RESET}"
+    echo -e "  ${COLOR_BLUE}UI:${COLOR_RESET}              http://localhost:${UI_PORT}"
+    echo -e "  ${COLOR_BLUE}API:${COLOR_RESET}             http://localhost:${API_PORT}"
+    echo -e "  ${COLOR_BLUE}API Health:${COLOR_RESET}      http://localhost:${API_PORT}/health"
+    echo -e "  ${COLOR_BLUE}API Docs:${COLOR_RESET}        http://localhost:${API_PORT}/api-docs"
+    echo ""
+    
+    echo -e "${COLOR_CYAN}${COLOR_BOLD}Default Login Credentials:${COLOR_RESET}"
+    echo -e "  ${COLOR_BLUE}Username:${COLOR_RESET} admin"
+    echo -e "  ${COLOR_BLUE}Password:${COLOR_RESET} admin123"
+    echo ""
+    
+    write_info "Tip: Keep both terminals open to monitor logs"
+    write_info "Tip: Press Ctrl+C in each terminal to stop the servers"
     echo ""
 }
 

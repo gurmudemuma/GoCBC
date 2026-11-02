@@ -77,7 +77,7 @@ import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
 import blockchainSignaturesRoutes from './routes/blockchain-signatures';
 import statsRoutes from './routes/stats'; // Dual-source statistics (CouchDB + PostgreSQL)
 import repatriationRoutes from './routes/repatriation'; // Export proceeds repatriation (NBE compliance)
-import exchangeRatesRoutes from './routes/exchange-rates'; // Dynamic exchange rates management
+import exchangeRatesRoutes from './routes/exchangeRates'; // Dynamic exchange rates management
 import inspectionRoutes from './routes/inspection'; // Pre-shipment inspection (SGS/Intertek)
 import bordercrossingRoutes from './routes/bordercrossing'; // Border crossing documentation
 import portalsRoutes from './routes/portals'; // Unified portal dashboards

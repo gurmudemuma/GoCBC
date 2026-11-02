@@ -1663,7 +1663,22 @@ router.get('/lcs', async (req, res) => {
     const result = await fabricService.queryAllLCs();
     
     if (result.success) {
-      const lcs = dedupeById(result.data || [], (lc: any) => lc.LCID || lc.lcId);
+      // Add default values for optional rejection fields to pass validation
+      const normalizedLCs = (result.data || []).map((lc: any) => ({
+        ...lc,
+        // Document rejection fields (optional, default to empty)
+        documentRejectedBy: lc.documentRejectedBy || '',
+        documentRejectedByMsp: lc.documentRejectedByMsp || '',
+        documentRejectionDate: lc.documentRejectionDate || '',
+        documentRejectionReason: lc.documentRejectionReason || '',
+        // LC rejection fields (optional, default to empty)
+        rejectedBy: lc.rejectedBy || '',
+        rejectedByMsp: lc.rejectedByMsp || '',
+        rejectionDate: lc.rejectionDate || '',
+        rejectionReason: lc.rejectionReason || ''
+      }));
+      
+      const lcs = dedupeById(normalizedLCs, (lc: any) => lc.LCID || lc.lcId);
       res.json({
         success: true,
         data: lcs.filter(isValidLC),
@@ -1671,19 +1686,78 @@ router.get('/lcs', async (req, res) => {
         timestamp: new Date().toISOString()
       });
     } else {
-      res.status(500).json({
-        success: false,
-        error: result.error,
-        timestamp: new Date().toISOString()
-      });
+      // If blockchain query fails, try CouchDB direct query as fallback
+      logger.warn('[BANKING] Blockchain LC query failed, trying CouchDB fallback');
+      try {
+        const { CouchDBDirectService } = require('../services/couchDBDirectService');
+        const couchDBService = new CouchDBDirectService();
+        const couchLCs = await couchDBService.queryAllLCs();
+        
+        // Normalize CouchDB response
+        const normalizedLCs = couchLCs.map((lc: any) => ({
+          ...lc,
+          documentRejectedBy: lc.documentRejectedBy || '',
+          documentRejectedByMsp: lc.documentRejectedByMsp || '',
+          documentRejectionDate: lc.documentRejectionDate || '',
+          documentRejectionReason: lc.documentRejectionReason || '',
+          rejectedBy: lc.rejectedBy || '',
+          rejectedByMsp: lc.rejectedByMsp || '',
+          rejectionDate: lc.rejectionDate || '',
+          rejectionReason: lc.rejectionReason || ''
+        }));
+        
+        const lcs = dedupeById(normalizedLCs, (lc: any) => lc.LCID || lc.lcId);
+        res.json({
+          success: true,
+          data: lcs.filter(isValidLC),
+          count: lcs.length,
+          timestamp: new Date().toISOString()
+        });
+      } catch (couchError: any) {
+        logger.error('[BANKING] CouchDB fallback also failed:', couchError);
+        res.status(500).json({
+          success: false,
+          error: result.error,
+          timestamp: new Date().toISOString()
+        });
+      }
     }
   } catch (error: any) {
     logger.error('Error querying all LCs:', error);
-    res.status(500).json({
-      success: false,
-      error: { code: 'LC_QUERY_ERROR', message: error.message },
-      timestamp: new Date().toISOString()
-    });
+    
+    // Last resort fallback: try CouchDB
+    try {
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      const couchLCs = await couchDBService.queryAllLCs();
+      
+      const normalizedLCs = couchLCs.map((lc: any) => ({
+        ...lc,
+        documentRejectedBy: lc.documentRejectedBy || '',
+        documentRejectedByMsp: lc.documentRejectedByMsp || '',
+        documentRejectionDate: lc.documentRejectionDate || '',
+        documentRejectionReason: lc.documentRejectionReason || '',
+        rejectedBy: lc.rejectedBy || '',
+        rejectedByMsp: lc.rejectedByMsp || '',
+        rejectionDate: lc.rejectionDate || '',
+        rejectionReason: lc.rejectionReason || ''
+      }));
+      
+      const lcs = dedupeById(normalizedLCs, (lc: any) => lc.LCID || lc.lcId);
+      res.json({
+        success: true,
+        data: lcs.filter(isValidLC),
+        count: lcs.length,
+        timestamp: new Date().toISOString()
+      });
+    } catch (couchError: any) {
+      logger.error('[BANKING] All LC query methods failed:', couchError);
+      res.status(500).json({
+        success: false,
+        error: { code: 'LC_QUERY_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 
