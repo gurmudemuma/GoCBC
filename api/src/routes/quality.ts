@@ -443,9 +443,18 @@ ${remarks || 'No additional remarks'}
       });
     } catch (error: any) {
       logger.error('Quality inspection perform error:', error);
+      logger.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        inspectionID: req.params.inspectionID
+      });
       res.status(500).json({
         success: false,
-        error: { code: 'SERVER_ERROR', message: error.message },
+        error: { 
+          code: 'SERVER_ERROR', 
+          message: error.message,
+          details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        },
         timestamp: new Date().toISOString()
       });
     }

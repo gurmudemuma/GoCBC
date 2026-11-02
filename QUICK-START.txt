@@ -1,0 +1,104 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                    GoCBC QUICK START REFERENCE CARD                       ║
+║              Ethiopian Coffee Export Consortium System                    ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+📋 FULL STARTUP SEQUENCE
+────────────────────────────────────────────────────────────────────────────
+
+ 1️⃣  PREPARE SYSTEM (Run once)
+    
+    cd /home/guda/GoCBC
+    ./start-all.sh
+    
+    ✓ Cleans ports 3000 & 3001
+    ✓ Starts blockchain network
+    ✓ Initializes database
+    ✓ Waits for manual server startup
+
+────────────────────────────────────────────────────────────────────────────
+
+ 2️⃣  START API SERVER (Terminal 1)
+    
+    cd /home/guda/GoCBC/api
+    npm run dev
+    
+    ⏳ Wait for: "🚀 CECBS API Gateway started on port 3001"
+
+────────────────────────────────────────────────────────────────────────────
+
+ 3️⃣  START UI SERVER (Terminal 2)
+    
+    cd /home/guda/GoCBC/ui
+    npm run dev
+    
+    ⏳ Wait for: "▲ Next.js - Local: http://localhost:3000"
+
+────────────────────────────────────────────────────────────────────────────
+
+ 4️⃣  ACCESS APPLICATION
+    
+    🌐 http://localhost:3000
+    👤 Username: admin
+    🔑 Password: admin123
+
+════════════════════════════════════════════════════════════════════════════
+
+🔄 QUICK RESTART (If servers crash, blockchain still running)
+────────────────────────────────────────────────────────────────────────────
+
+    ./restart-servers.sh
+    
+    Then repeat steps 2️⃣  and 3️⃣  above
+
+════════════════════════════════════════════════════════════════════════════
+
+🚨 EMERGENCY PORT CLEANUP
+────────────────────────────────────────────────────────────────────────────
+
+    lsof -ti:3001 | xargs kill -9     # Kill API port
+    lsof -ti:3000 | xargs kill -9     # Kill UI port
+    pkill -9 -f "ts-node.*server"     # Kill all ts-node processes
+
+════════════════════════════════════════════════════════════════════════════
+
+📊 MONITORING
+────────────────────────────────────────────────────────────────────────────
+
+    API Health:      curl http://localhost:3001/health
+    Blockchain:      docker ps | grep peer0
+    API Logs:        (visible in Terminal 1)
+    UI Logs:         (visible in Terminal 2)
+    Blockchain Logs: docker-compose -f docker-compose-fabric.yml logs -f
+
+════════════════════════════════════════════════════════════════════════════
+
+🛑 SHUTDOWN
+────────────────────────────────────────────────────────────────────────────
+
+    Ctrl+C in Terminal 1 (API)
+    Ctrl+C in Terminal 2 (UI)
+    
+    Blockchain:
+    docker-compose -f docker-compose-fabric.yml down
+
+════════════════════════════════════════════════════════════════════════════
+
+📚 FULL DOCUMENTATION
+────────────────────────────────────────────────────────────────────────────
+
+    cat STARTUP-GUIDE.md     # Complete guide with troubleshooting
+    ./start-all.sh --help    # Script options and flags
+
+════════════════════════════════════════════════════════════════════════════
+
+✅ KEY IMPROVEMENTS
+────────────────────────────────────────────────────────────────────────────
+
+    ✓ No more port conflicts (aggressive cleanup)
+    ✓ Manual server control (better debugging)
+    ✓ Real-time logs visible (separate terminals)
+    ✓ Independent restarts (don't restart blockchain)
+    ✓ Clean, predictable startup
+
+════════════════════════════════════════════════════════════════════════════

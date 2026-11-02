@@ -107,7 +107,8 @@ router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFIC
 });
 
       // GET /api/v1/forex — all forex allocations (BLOCKCHAIN ONLY - NO CACHE)
-router.get('/', authMiddleware, async (req, res) => {
+// GET /api/v1/forex/allocations — alias for /forex
+router.get(['/', '/allocations'], authMiddleware, async (req, res) => {
   try {
     logger.info('[FOREX] Fetching forex allocations with parallel blockchain + PostgreSQL...');
     

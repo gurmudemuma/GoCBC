@@ -1,0 +1,19 @@
+API Status Check - Sat Oct 31 12:36:37 PM EAT 2026
+========================================
+
+1. Process Check:
+   ✗ Node server process NOT running
+
+2. Port Check:
+   ✗ Port 3000 is NOT listening
+
+3. Health Endpoint Test:
+
+HTTP_CODE:000
+
+4. Banks LC Endpoint Test:
+
+HTTP_CODE:000
+
+========================================
+Report saved to: /home/guda/GoCBC/api-status-report.txt
