@@ -157,8 +157,8 @@ export class AuditService {
           entry.performedBy,
           entry.organization,
           entry.performedByOrg,
-          entry.oldValue || 'N/A',
-          entry.newValue || 'N/A',
+          entry.oldValue ? JSON.stringify(entry.oldValue) : null,
+          entry.newValue ? JSON.stringify(entry.newValue) : null,
           entry.reason || '',
           JSON.stringify(enhancedMetadata),
           entry.ipAddress || 'unknown'

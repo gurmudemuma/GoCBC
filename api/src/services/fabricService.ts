@@ -684,8 +684,9 @@ export class FabricService {
         // are required for a transaction to be VALID. Report actual endorsers from
         // the committed envelope below instead of assuming every requested MSP signed.
         const transaction = this.contract.createTransaction(functionName);
-        // TEMPORARY FIX: Comment out setEndorsingOrganizations to let Gateway use default discovery
-        // transaction.setEndorsingOrganizations(...CONSORTIUM_PEER_MSPS);
+        // ✅ CRITICAL FIX: Re-enable setEndorsingOrganizations to ensure all 6 peers endorse
+        // Without this, only 1-2 peers get the state update, causing "does not exist" errors
+        transaction.setEndorsingOrganizations(...CONSORTIUM_PEER_MSPS);
         const txId = transaction.getTransactionId();
         attemptTxId = txId;
         
