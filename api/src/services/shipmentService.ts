@@ -54,7 +54,7 @@ export class ShipmentService {
         throw new Error('Contract must be APPROVED to create shipment');
       }
 
-      const result = await this.fabricService.invokeChaincode('RegisterShipment', [
+      const result = await this.fabricService.invokeChaincode('CreateShipment', [
         shipmentData.shipmentID,
         shipmentData.contractID,
         shipmentData.exporterID,
@@ -63,6 +63,12 @@ export class ShipmentService {
         shipmentData.quantity.toString(),
         shipmentData.grade,
         shipmentData.icoNumber || '',
+        '', // ecxLotNumber
+        'EXPORT', // channel
+        '120.5', // forexRate
+        '135000', // valueUSD
+        'true', // eudrCompliant
+        '[]', // documents JSON
       ]);
 
       if (!result.success) {

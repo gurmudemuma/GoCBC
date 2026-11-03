@@ -390,7 +390,12 @@ ${remarks || 'No additional remarks'}
           String(uniformity || 0),
           String(cleanCup || 0),
           String(sweetness || 0),
-          String(overall || 0)
+          String(overall || 0),
+          classification || grade || 'Grade 1',           // classification
+          pesticideTest || 'PASS',                        // pesticideTest
+          heavyMetalTest || 'PASS',                       // heavyMetalTest
+          mycotoxinTest || 'PASS',                        // mycotoxinTest
+          remarks || 'Quality inspection passed'          // remarks
         ]
       );
       

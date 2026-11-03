@@ -1,0 +1,15 @@
+ shipments 
+-----------
+         0
+(1 row)
+
+ inspections 
+-------------
+           0
+(1 row)
+
+ contracts 
+-----------
+         0
+(1 row)
+

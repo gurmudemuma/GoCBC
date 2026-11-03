@@ -1,0 +1,38 @@
+==================================
+COFFEE EXPORT WORKFLOW VALIDATION
+==================================
+
+📊 Check 1: Verifying all required tables exist...
+8
+
+🔗 Check 2: Verifying exporter-contract integrity...
+0
+
+📦 Check 3: Checking contract-shipment quantities...
+0
+
+✅ Check 4: Verifying inspection-shipment links...
+0
+
+🎫 Check 5: Checking export permit issuance...
+0
+
+🛃 Check 6: Validating customs declarations...
+0
+
+
+==================================
+WORKFLOW STAGE SUMMARY
+==================================
+    stage    | total | active 
+-------------+-------+--------
+ Exporters   |     0 |       
+ Contracts   |     0 |       
+ Shipments   |     0 |       
+ Inspections |     0 |       
+ Customs     |     0 |       
+ Payments    |     0 |       
+(6 rows)
+
+
+✅ Validation complete!

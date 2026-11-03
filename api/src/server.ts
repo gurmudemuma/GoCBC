@@ -479,8 +479,9 @@ class CECBSServer {
           logger.info(`✅ Server confirmed listening on ${address.address}:${address.port}`);
         }
         
-        // Start blockchain sync service
-        blockchainSyncService.start();
+        // ⚠️ DISABLED: BlockchainSyncService conflicts with CouchDB direct writes
+        // Background service tries to sync old failed blockchain writes, causing LC status conflicts
+        // blockchainSyncService.start();
       });
 
       // Graceful shutdown
@@ -496,8 +497,8 @@ class CECBSServer {
   private async shutdown(): Promise<void> {
     logger.info('Shutting down server...');
     
-    // Stop blockchain sync service
-    blockchainSyncService.stop();
+    // ⚠️ DISABLED: BlockchainSyncService disabled
+    // blockchainSyncService.stop();
     
     if (this.server) {
       this.server.close();

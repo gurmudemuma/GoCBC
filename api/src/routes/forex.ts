@@ -251,6 +251,140 @@ router.get('/retention-policy/:commodityType', authMiddleware, async (req, res) 
   }
 });
 
+// POST /api/v1/forex/retention-policy — NBE sets retention policy for commodity
+router.post('/retention-policy', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { policyID, commodityType, retentionRate, setBy, justification } = req.body;
+
+    if (!policyID || !commodityType || retentionRate === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'MISSING_FIELDS',
+          message: 'policyID, commodityType, and retentionRate are required'
+        }
+      });
+    }
+
+    logger.info(`[FOREX] NBE setting retention policy: ${policyID} for ${commodityType} at ${retentionRate}%`);
+
+    const result = await fabricService.invokeChaincode(
+      'SetRetentionPolicy',
+      [
+        policyID,
+        String(commodityType).toUpperCase(),
+        String(retentionRate),
+        setBy || user?.username || 'NBE',
+        justification || 'NBE retention policy directive'
+      ],
+      'NBEMSP'
+    );
+
+    if (result.success) {
+      logger.info(`✅ Retention policy set: ${policyID} - ${commodityType} @ ${retentionRate}%`);
+      return res.status(200).json({
+        success: true,
+        message: 'Retention policy set successfully',
+        data: {
+          policyID,
+          commodityType: String(commodityType).toUpperCase(),
+          retentionRate,
+          txId: result.txId
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'POLICY_SET_FAILED',
+          message: result.error || 'Failed to set retention policy'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('[FOREX] Error setting retention policy:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/v1/forex/exchange-rate — NBE sets official exchange rate
+router.post('/exchange-rate', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { rateID, currency, buyingRate, sellingRate, setBy } = req.body;
+
+    if (!rateID || !currency || !buyingRate || !sellingRate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'MISSING_FIELDS',
+          message: 'rateID, currency, buyingRate, and sellingRate are required'
+        }
+      });
+    }
+
+    logger.info(`[FOREX] NBE setting exchange rate: ${rateID} for ${currency} - Buy: ${buyingRate}, Sell: ${sellingRate}`);
+
+    const result = await fabricService.invokeChaincode(
+      'SetExchangeRate',
+      [
+        rateID,
+        String(currency).toUpperCase(),
+        String(buyingRate),
+        String(sellingRate),
+        setBy || user?.username || 'NBE'
+      ],
+      'NBEMSP'
+    );
+
+    if (result.success) {
+      logger.info(`✅ Exchange rate set: ${rateID} - ${currency} @ ${buyingRate}/${sellingRate}`);
+      return res.status(200).json({
+        success: true,
+        message: 'Exchange rate set successfully',
+        data: {
+          rateID,
+          currency: String(currency).toUpperCase(),
+          buyingRate,
+          sellingRate,
+          midRate: (Number(buyingRate) + Number(sellingRate)) / 2,
+          txId: result.txId
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'RATE_SET_FAILED',
+          message: result.error || 'Failed to set exchange rate'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('[FOREX] Error setting exchange rate:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // GET /api/v1/forex/exporter/:exporterId
 router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
   try {

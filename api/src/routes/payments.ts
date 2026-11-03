@@ -1658,7 +1658,7 @@ router.post('/:paymentID/release',
 
       logger.info(`[PAYMENTS] NBE releasing payment ${paymentID} to exporter ${exporterID}`);
 
-      // Get payment details
+      // Get payment details to validate
       const payment = await postgresDb.get(
         'SELECT * FROM payments WHERE payment_id = $1',
         [paymentID]
@@ -1675,34 +1675,42 @@ router.post('/:paymentID/release',
         });
       }
 
-      // Update payment status to RELEASED
-      await postgresDb.run(
-        `UPDATE payments 
-         SET status = 'RELEASED',
-             release_date = $1,
-             released_by = $2,
-             updated_at = CURRENT_TIMESTAMP 
-         WHERE payment_id = $3`,
-        [releaseDate || new Date().toISOString(), userId, paymentID]
-      );
+      // Check if payment is in correct status
+      if (payment.status === 'RELEASED') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'ALREADY_RELEASED',
+            message: `Payment ${paymentID} has already been released`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-      // Record on blockchain
-      const blockchainResult = await fabricService.invokeChaincode(
-        'ReleasePayment',
-        [paymentID, exporterID, String(amount), releaseDate || new Date().toISOString()]
-      );
+      // Use PaymentService to handle the 60% release properly
+      const result = await paymentService.releasePayment({
+        paymentID,
+        exporterAccount: `${exporterID}-001`, // Default account format
+        releasedBy: (req as any).user?.username || 'NBE',
+        releaseRef: `REL-${paymentID}-${Date.now()}`,
+        releaseDate: releaseDate || new Date().toISOString(),
+        userId: String(userId),
+        userOrg
+      });
 
-      logger.info(`✅ Payment ${paymentID} released to exporter ${exporterID}, TX: ${blockchainResult?.txId}`);
+      logger.info(`✅ Payment ${paymentID} released: ${result.releaseAmount} USD to exporter ${exporterID}`);
 
       res.json({
         success: true,
-        message: 'Payment released successfully',
+        message: 'Payment released successfully (60% of total)',
         data: {
-          paymentID,
+          paymentID: result.paymentID,
           exporterID,
-          amount,
+          status: result.status,
+          totalAmount: result.totalAmount,
+          releaseAmount: result.releaseAmount,
+          retentionAmount: result.retentionAmount,
           releaseDate: releaseDate || new Date().toISOString(),
-          blockchain_tx_id: blockchainResult?.txId,
         },
         timestamp: new Date().toISOString(),
       });

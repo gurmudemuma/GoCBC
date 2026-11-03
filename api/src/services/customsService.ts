@@ -73,16 +73,15 @@ export class CustomsService {
       // Update database
       await this.dbService.run(
         `INSERT INTO customs_declarations (
-          declaration_id, shipment_id, exporter_id, exporter_name,
-          hs_code, quantity, value, currency, destination,
+          declaration_id, shipment_id, exporter_id,
+          hs_code, quantity, customs_value_usd, currency, destination,
           invoice_number, packing_list_number, certificate_of_origin,
           status, submitted_date, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)`,
         [
           declarationData.declarationID,
           declarationData.shipmentID,
           declarationData.exporterID,
-          declarationData.exporterName,
           declarationData.hsCode,
           declarationData.quantity,
           declarationData.value,

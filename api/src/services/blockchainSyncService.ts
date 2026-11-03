@@ -255,34 +255,91 @@ class BlockchainSyncService {
 
       logger.info(`🔄 Syncing shipment ${shipment.shipment_id} to blockchain...`);
 
-      // Write to blockchain with timeout
-      const result = await Promise.race([
-        fabricService.createShipment(
-          shipment.shipment_id,
-          shipment.contract_id || '',
-          shipment.exporter_id || '',
-          shipment.buyer_id || '',
-          shipment.origin || '',
-          shipment.quantity?.toString() || '0',
-          shipment.grade || '',
-          '', // icoNumber (not in simple schema)
-          '', // ecxLotNumber
-          '', // channel
-          '0', // forexRate
-          '0', // valueUsd
-          'false', // eudrCompliant
-          '[]' // documentsJSON
-        ),
-        this.timeout(this.BLOCKCHAIN_TIMEOUT_MS, `Shipment ${shipment.shipment_id} blockchain timeout`),
-      ]);
-
-      const txId = result.txId || 'unknown';
-
-      // Update database to mark as synced
-      await this.markShipmentSynced(shipment.id, txId);
+      // ✅ EXPERT FIX: Retry logic for LC status propagation issues
+      // Hyperledger Fabric eventual consistency requires retry with backoff
+      const maxRetries = 3;
+      let lastError: string | null = null;
       
-      logger.info(`✅ Shipment ${shipment.shipment_id} synced successfully (tx: ${txId})`);
-      return 'synced';
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // Write to blockchain with timeout
+          const result = await Promise.race([
+            fabricService.createShipment(
+              shipment.shipment_id,
+              shipment.contract_id || '',
+              shipment.exporter_id || '',
+              shipment.buyer_id || '',
+              shipment.origin || '',
+              shipment.quantity?.toString() || '0',
+              shipment.grade || '',
+              shipment.ico_number || '',
+              shipment.ecx_lot_number || '',
+              shipment.channel || 'EXPORT',
+              shipment.forex_rate?.toString() || '0',
+              shipment.value_usd?.toString() || '0',
+              shipment.eudr_compliant?.toString() || 'false',
+              '[]' // documentsJSON
+            ),
+            this.timeout(this.BLOCKCHAIN_TIMEOUT_MS, `Shipment ${shipment.shipment_id} blockchain timeout`),
+          ]);
+
+          // ✅ CRITICAL: Check if blockchain write actually succeeded
+          if (!result.success) {
+            lastError = result.error || 'Unknown blockchain error';
+            
+            // Check if it's an LC status propagation issue
+            if (lastError && lastError.includes('must have forex allocated')) {
+              logger.warn(`⏳ Attempt ${attempt}/${maxRetries}: LC status not yet propagated for shipment ${shipment.shipment_id}`);
+              
+              if (attempt < maxRetries) {
+                // Exponential backoff: 5s, 10s, 20s
+                const delay = 5000 * Math.pow(2, attempt - 1);
+                logger.info(`⏸️  Waiting ${delay/1000}s before retry...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+              } else {
+                logger.error(`❌ Shipment ${shipment.shipment_id} failed after ${maxRetries} attempts: ${lastError}`);
+                return 'skipped'; // Will retry on next sync cycle
+              }
+            } else {
+              // Different error - don't retry
+              logger.error(`❌ Shipment ${shipment.shipment_id} failed with non-retryable error: ${lastError}`);
+              return 'skipped';
+            }
+          }
+
+          // Success! Extract transaction ID
+          const txId = result.txId || 'unknown';
+
+          // Update database to mark as synced
+          await this.markShipmentSynced(shipment.id, txId);
+          
+          logger.info(`✅ Shipment ${shipment.shipment_id} synced successfully on attempt ${attempt} (tx: ${txId})`);
+          return 'synced';
+          
+        } catch (attemptError: any) {
+          lastError = attemptError.message || 'Unknown error';
+          
+          // Check if it's an LC status issue
+          if (lastError && lastError.includes('must have forex allocated')) {
+            logger.warn(`⏳ Attempt ${attempt}/${maxRetries}: ${lastError}`);
+            
+            if (attempt < maxRetries) {
+              const delay = 5000 * Math.pow(2, attempt - 1);
+              logger.info(`⏸️  Waiting ${delay/1000}s before retry...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          } else {
+            // Non-retryable error
+            throw attemptError;
+          }
+        }
+      }
+
+      // All retries exhausted
+      logger.error(`❌ Shipment ${shipment.shipment_id} failed after ${maxRetries} attempts: ${lastError || 'Unknown error'}`);
+      return 'skipped';
 
     } catch (error: any) {
       logger.error(`❌ Failed to sync shipment ${shipment.shipment_id}: ${error.message}`);

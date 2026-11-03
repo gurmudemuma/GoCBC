@@ -62,9 +62,9 @@ export class LCService {
         lcData.lcID,
         lcData.contractID,
         lcData.exporterID,
-        lcData.amount.toString(),
-        lcData.currency,
-        lcData.bankName,
+        lcData.bankName,          // bankName comes before amount
+        lcData.amount.toString(), // amount as string
+        lcData.currency,          // currency after amount
         lcData.expiryDate,
       ]);
 
