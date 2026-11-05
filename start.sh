@@ -1,1 +1,0 @@
-scripts/operations/start-all.sh

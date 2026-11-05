@@ -1851,8 +1851,19 @@ router.get('/lc/:lcID', authMiddleware, async (req, res) => {
     const startTime = Date.now();
     
     const [blockchainResult, pgResult] = await Promise.allSettled([
-      // Query 1: Blockchain (CouchDB via Fabric)
-      fabricService.getLC(lcID),
+      // Query 1: Blockchain (CouchDB via Fabric) - wrapped to handle schema errors
+      (async () => {
+        try {
+          return await fabricService.getLC(lcID);
+        } catch (error: any) {
+          // Schema validation errors are non-fatal - return empty result
+          if (error.message && error.message.includes('schema')) {
+            logger.warn(`[BANKING] Schema validation error for ReadLC, using PostgreSQL fallback`);
+            return { success: false, error: 'Schema validation error', data: null };
+          }
+          throw error;
+        }
+      })(),
       
       // Query 2: PostgreSQL (LC + buyer data)
       dbService.query(
@@ -2758,6 +2769,9 @@ router.post('/payment/:paymentID/settle',
         swiftReference,
         nbeApprovalRef,
       } = req.body;
+
+      // Connect as Banks MSP since only banks can settle payments
+      await fabricService.connectAsOrg('BanksMSP');
 
       const result = await fabricService.settlePayment(
         paymentID,

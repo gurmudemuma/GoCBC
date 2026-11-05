@@ -56,10 +56,11 @@ export class ForexService {
 
       await this.dbService.run(
         `INSERT INTO forex_allocations (
-          forex_id, contract_id, lc_id, exporter_id, amount, currency,
+          allocation_id, forex_id, contract_id, lc_id, exporter_id, amount, currency,
           status, blockchain_synced, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
         [
+          forexData.forexId, // allocation_id same as forex_id
           forexData.forexId,
           forexData.contractId,
           forexData.lcId || null,
@@ -121,13 +122,30 @@ export class ForexService {
     try {
       logger.info(`[ForexService] Allocating forex: ${forexId}`);
 
-      const forex = await this.dbService.get(
+      // Try to get forex from PostgreSQL, but if not found, query blockchain
+      let forex = await this.dbService.get(
         'SELECT * FROM forex_allocations WHERE forex_id = $1',
         [forexId]
       );
 
+      let contractId = forex?.contract_id;
+      
+      // If not in PostgreSQL, try to get from blockchain
       if (!forex) {
-        throw new Error('Forex request not found');
+        logger.warn(`[ForexService] Forex ${forexId} not in PostgreSQL, checking blockchain...`);
+        try {
+          const blockchainResult = await this.fabricService.queryChaincode('ReadForex', [forexId]);
+          if (blockchainResult.success && blockchainResult.data) {
+            const forexData = blockchainResult.data;
+            contractId = forexData.ContractID || forexData.contractId;
+            logger.info(`[ForexService] Found forex on blockchain: contract=${contractId}`);
+          } else {
+            throw new Error('Forex request not found in PostgreSQL or blockchain');
+          }
+        } catch (bcErr: any) {
+          logger.error(`[ForexService] Failed to query blockchain: ${bcErr.message}`);
+          throw new Error('Forex request not found');
+        }
       }
 
       // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
@@ -170,21 +188,21 @@ export class ForexService {
         _id: forexDocId,
         ForexID: forexId,
         LCID: lcId,
-        ContractID: forex.contract_id,
+        ContractID: contractId,
         RequestedAmount: allocatedAmount,
         AllocatedAmount: allocatedAmount,
-        Currency: forex.currency || 'USD',
+        Currency: forex?.currency || 'USD',
         ExchangeRate: allocationData.exchangeRate,
         RetentionRate: allocationData.retentionRate,
         RetentionAmountUSD: retentionAmount,
         ReleaseAmountUSD: releaseAmount,
         Status: 'ALLOCATED',
-        RequestedBy: forex.requested_by,
+        RequestedBy: forex?.requested_by || allocationData.userId,
         NBEOfficer: allocationData.officer,
         NBEApprovalRef: allocationData.approvalRef,
-        RequestedAt: forex.requested_at || new Date().toISOString(),
+        RequestedAt: forex?.requested_at || new Date().toISOString(),
         AllocatedAt: new Date().toISOString(),
-        ExpiryDate: allocationData.expiryDate
+        ExpiryDate: allocationData.expiryDate || null
       };
       
       try {

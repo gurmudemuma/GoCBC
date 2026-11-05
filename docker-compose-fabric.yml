@@ -523,6 +523,9 @@ services:
       - FABRIC_CHANNEL_NAME=coffeechannel
       - FABRIC_CHAINCODE_NAME=coffee
       - DATABASE_URL=postgresql://cecbs:cecbs123@cecbs-postgres:5432/cecbs
+      - COUCHDB_URL=http://couchdb.ecta:5984
+      - COUCHDB_USERNAME=admin
+      - COUCHDB_PASSWORD=adminpw
     env_file:
       - ./api/.env.blockchain.fixed
     depends_on:

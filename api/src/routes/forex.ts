@@ -68,27 +68,36 @@ router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFIC
     const finalAmount = amount || autoMappedData.calculatedAmount || '0';
     const finalCurrency = currency || autoMappedData.currency || 'USD';
 
-    await fabricService.connectAsOrg('BanksMSP');
-    const result = await fabricService.invokeChaincode('RequestForex', [
-      forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency,
-    ]);
+    const user = (req as any).user;
+    
+    // Use ForexService which handles both blockchain AND PostgreSQL
+    const result = await forexService.requestForex({
+      forexId,
+      contractId,
+      exporterId: finalExporterId,
+      lcId: lcNumber || '',
+      amount: parseFloat(finalAmount.toString()),
+      currency: finalCurrency,
+      userId: user?.username || user?.sub || '',
+      userOrg: user?.org || 'BanksMSP'
+    });
     
     if (result.success) {
       logger.info(`✅ [FOREX] Forex request created successfully: ${forexId}`);
       res.status(201).json({
         success: true,
         message: 'Forex request created successfully',
-        data: { forexID: forexId, forexId, status: 'pending' },
+        data: { forexID: forexId, forexId, status: 'REQUESTED' },
         txId: result.txId,
         timestamp: new Date().toISOString(),
       });
     } else {
-      logger.error(`❌ [FOREX] Failed to create forex request: ${result.error}`);
+      logger.error(`❌ [FOREX] Failed to create forex request`);
       res.status(400).json({
         success: false,
         error: {
           code: 'REQUEST_FAILED',
-          message: result.error || 'Failed to create forex request',
+          message: 'Failed to create forex request',
         },
         timestamp: new Date().toISOString(),
       });
@@ -763,7 +772,7 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
       retentionRate: retentionRate ? Number(retentionRate) : 0.4, // Defaults to 40%
       officer: officer || user?.username || user?.sub || '',
       approvalRef: approvalRef || '',
-      expiryDate: expiryDate || '',
+      expiryDate: expiryDate || null, // Pass null instead of empty string
       userId: user?.username || user?.sub,
       userOrg: user?.org || 'BanksMSP'
     });

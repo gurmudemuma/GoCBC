@@ -71,3 +71,31 @@ wallet/
 # Hyperledger Fabric binaries
 bin/
 config/
+
+# Logs
+logs/**/*.log
+*.log
+
+# Test outputs
+tests/**/*.log
+test-output*.txt
+
+# Backups
+*-backup-*/
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+

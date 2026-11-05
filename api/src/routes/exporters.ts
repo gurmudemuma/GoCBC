@@ -607,7 +607,7 @@ router.post('/exporter-applications/:applicationId/reject',
       const exporterUser = await postgresDb.get('SELECT username, password_hash FROM users WHERE email = $1 AND role = $2', [application.email, 'EXPORTER']);
       
       // Generate a new temporary password for resubmission
-      const bcrypt = require('bcrypt');
+      const bcrypt = require('bcryptjs');
       const tempPassword = `Rejected${Math.random().toString(36).slice(-6)}!`;
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
       

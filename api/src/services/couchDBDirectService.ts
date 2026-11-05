@@ -1,12 +1,13 @@
 /**
  * Direct CouchDB Query Service
  * Queries blockchain state database directly without Fabric SDK timeout issues
+ * Uses environment variables for connection configuration
  */
 
 import axios from 'axios';
 import logger from '../utils/logger';
 
-const COUCHDB_URL = process.env.COUCHDB_URL || 'http://127.0.0.1:5985';
+const COUCHDB_URL = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
 const COUCHDB_USERNAME = process.env.COUCHDB_USERNAME || 'admin';
 const COUCHDB_PASSWORD = process.env.COUCHDB_PASSWORD || 'adminpw';
 const CHANNEL_NAME = process.env.FABRIC_CHANNEL || 'coffeechannel';
