@@ -28,7 +28,7 @@ export class CouchDBSignatureService {
 
   private constructor() {
     // CouchDB connection details - adjust based on your setup
-    this.couchdbUrl = process.env.COUCHDB_URL || 'http://127.0.0.1:5985';
+    this.couchdbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
     this.channelName = process.env.CHANNEL_NAME || 'coffeechannel';
     this.username = process.env.COUCHDB_USERNAME || 'admin';
     this.password = process.env.COUCHDB_PASSWORD || 'adminpw';

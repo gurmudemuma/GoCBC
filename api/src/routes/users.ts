@@ -2,7 +2,7 @@
 // User Management Routes
 
 import { Router, Request, Response } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import { authMiddleware } from '../middleware/auth';

@@ -1,0 +1,21 @@
+[
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1793858663468415384",
+      "signatureTimestamp": "2026-11-05T06:04:27.905Z",
+      "signerName": "bank_admin",
+      "signerEmail": "bank_admin@cecbs.et",
+      "organization": "BanksMSP",
+      "reason": "Signature missing - please re-upload",
+      "documentHash": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+      "certificateFingerprint": "ff69e15744ac12bb38d25f438e568b81aa23e04b4919dfb4c6ff36b1ebe573e5",
+      "mspId": "BanksMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": ""
+    },
+    "signature": "LsMHZw28KIqVPMnrIbJPGQdgG2assjMcNVblYIbWcFd2AcLLb2YyTb/yM2A7SAl9S9Fvr8Sys3StA1J6xOWekPhYA1+7ClY9xbBHf0rKIXfYTUNhDQ73mjQGwJMTvgHi6YteXghCw5yRnM2DXZab5+j8mVlwx4bWdkW/qcRRdqWPeCCLmusBXO1U3v/bdkb28nniN8d4lSQbD3T+W1F4saAfm5oPRC1jHmYdnoRHez/K2koREB5cLS8T1SBXoh8AROxfjhIkeE84Xvx5c3pwyE7VSF3tOJUhF7Om/ck62oq8AgiNR8QsFCHCfy96IgEoWggWbhqhfp5LMjH6vqD7qw==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDNTCCAh2gAwIBAgIHAXk4WGZ4gTANBgkqhkiG9w0BAQsFADBbMRMwEQYDVQQD\r\nEwpiYW5rX2FkbWluMREwDwYDVQQKEwhCYW5rc01TUDELMAkGA1UEBhMCRVQxFDAS\r\nBgNVBAgTC0FkZGlzIEFiYWJhMQ4wDAYDVQQLEwVDRUNCUzAeFw0yNjExMDUwNjA0\r\nMjdaFw0zMTExMDUwNjA0MjdaMFsxEzARBgNVBAMTCmJhbmtfYWRtaW4xETAPBgNV\r\nBAoTCEJhbmtzTVNQMQswCQYDVQQGEwJFVDEUMBIGA1UECBMLQWRkaXMgQWJhYmEx\r\nDjAMBgNVBAsTBUNFQ0JTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\r\nooRg+emZZ68ZNI/mwVlL+JRHYSZ1x1iM9+QI679AMK60gFvLmyDhI7NN4vlhrAXS\r\nDdNn/rUtEFR7C8PUm6rbSGPlKwJxmM4WWkrauMQ6BDM3NbteRLLl0xKcyEbzRC2s\r\n1KQQUjVUfGUyT8cL3wMxYB9WV4cs++F4oM/IvLn7lnsaIO/3O+IfublLoqigfyll\r\nxa/k+B7Lt3zi4momKVgs5TDhdpQM9TRAcZNZ6tYAmMN4jX7t2qjNqPm2Uji8/Owo\r\nu06qia/iHz7yB58DxQlacMikBui7GEZPFqQJwwfc4l7o8Cb9geOX2mJgNpu25rFr\r\nPWbeSANq2Bwa7osO7J1rbQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBe6X0T9TTY\r\n8AqC8ijI0/X+zv2Tc0RodfGgJWKIrXrGOpppkM2tnYqzImlYsqXhZh6UDYJAXphP\r\nK15IbTMSij2bGNQhuG6UMQSjWEbLbZu5O71LFPon3VHRRTNmCCieMwZ8/xehi4G6\r\nt33ZCS6nGa7jyOwUA+zMA30xBIHVS9C2laFh+U6QhFcVa17wU/7l6NGPyeN8bPHt\r\nN+EddATFmltfAbwdMdfurcSjTrTkZ3pDO/t5MQLlqQu7jzXuTTEC5ZPEMnoir2fe\r\ndbDs8SxYU6yyhHSuJLj0yz4u8lzt3YWiv6tcyV7s8o2LGsPNSzuXjJGtHsfw1fOz\r\nRs5S8f8l9863\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "289041a8c275a95c9aebe3cd410cdb1bbcaed0c0ec17c7bd18bf62f1c37dc683"
+  }
+]

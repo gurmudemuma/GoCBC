@@ -1,0 +1,21 @@
+[
+  {
+    "signedPayload": {
+      "version": "2.0",
+      "documentId": "DOC-1793859117140256200",
+      "signatureTimestamp": "2026-11-05T06:12:01.575Z",
+      "signerName": "bank_admin",
+      "signerEmail": "bank_admin@cecbs.et",
+      "organization": "BanksMSP",
+      "reason": "Signature missing - please re-upload",
+      "documentHash": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+      "certificateFingerprint": "39941ecf415676abb7883ac7a2d8e33427598c9d1f789d3c5436bb9a61937cf1",
+      "mspId": "BanksMSP",
+      "certificateTrustStatus": "UNANCHORED",
+      "previousEntryHash": ""
+    },
+    "signature": "TzJssP0mtNGlk+rVuqnD1Lk6cDTO9HMCYZFqSFMOkE8xg3/I6S32JNnje8YPjfTXQarTVnSNY3S2prNmaPvOvQUqW5Ww96CPhWOjpvSXLHyL0+sIhz7mXzE7xWDFKB8lxqaqpq5dukqnu6iO8d54txPNWyxuDC2YENRKHTN+D+lUgdBwYe/nPMhPei97vJyOmsNQBQvHbSrcLd4YNDYcBcduTuG6b9Zouaj+uDGOSI2yehwyYzqQZ+UNqol297L1m7fOO8UN0c7DB+HzpASHLqFlsNZLKgFJyBFZP5hQ3efkfxPzpzJh5+vc2/t51rfhmrOZThpouGnYWmveGP0ing==",
+    "certificatePem": "-----BEGIN CERTIFICATE-----\r\nMIIDNTCCAh2gAwIBAgIHAXk4WRIVSTANBgkqhkiG9w0BAQsFADBbMRMwEQYDVQQD\r\nEwpiYW5rX2FkbWluMREwDwYDVQQKEwhCYW5rc01TUDELMAkGA1UEBhMCRVQxFDAS\r\nBgNVBAgTC0FkZGlzIEFiYWJhMQ4wDAYDVQQLEwVDRUNCUzAeFw0yNjExMDUwNjEy\r\nMDFaFw0zMTExMDUwNjEyMDFaMFsxEzARBgNVBAMTCmJhbmtfYWRtaW4xETAPBgNV\r\nBAoTCEJhbmtzTVNQMQswCQYDVQQGEwJFVDEUMBIGA1UECBMLQWRkaXMgQWJhYmEx\r\nDjAMBgNVBAsTBUNFQ0JTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\r\nmrhTI/g5D5/pJx7LB+4JiLD1wZ4XVsIP673VEl1Dz+d0tYpX6P4psHBzT9jVTi2V\r\nBNqrpQGrdBjD7XiBVVWWjlRZt8ZFi2M+ioR9+e1L7b/ikjfx7j4FNEVMqQnSopYc\r\nAN/jIoTJP/pJ2gNVxS3IDRF1VELbFT6k0z3WzyfylxT0MfsNnJNHR9/+s8pxaKep\r\noLHdn4W9De9MnCO8wFGFfUej8XwLJhrLM0zKdWKG7FXE2HrZjxysYn3ogZbYahee\r\nXWf+It3c2SSVH87k9xsQ8LvriD+3wCjAF/jbqkNE2l8VPo1MC2cgTaEFAe3pxeO1\r\n3KgZPVwvDvOuXEn2GAVAgQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBPtRwjLosF\r\nRsznrUI0tUAux04Q8MfvYZgY5TaE/d1IhDMbVi8HSw2StXm44mWul+ptgnkeVyxg\r\ndpp4feOsulvjB2JRuVMbBdTjE6QsCChk7XdbEvGbPB7ySR+6G2cMSynu12m43FgA\r\nMDMEeKV3Atd/3iTw9u571OiaYa6jOR2s1Q7pWcRJ1/cQrSKehTHYUrL04QSOpzAI\r\nZ4Nz57fTGVt4MvKixb4TYLz/WI7AOm5dfaIJhJmZCHgFXP7HPZozsJjPm/OA1AbH\r\ngS0spIlbfRmeeZJ4E2F3cPBti/eEYn3eAbtdAxAnUNFJUX3vl+OFBJJjsbOvHp5s\r\nnuZgOs9x/s5Y\r\n-----END CERTIFICATE-----\r\n",
+    "entryHash": "53e859ecbb081ec744384ba0fec379d7998df97288ad6e90e0a09d9459787dc3"
+  }
+]

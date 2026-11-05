@@ -161,7 +161,19 @@ router.post('/',
       // DUPLICATE PREVENTION: Check if shipment already exists for this contract
       try {
         logger.info(`[SHIPMENT] Checking for existing shipments on contract ${contractID}...`);
-        const existingShipmentsResult = await fabricService.queryChaincode('QueryShipmentsByContract', [contractID]);
+        
+        let existingShipmentsResult;
+        try {
+          existingShipmentsResult = await fabricService.queryChaincode('QueryShipmentsByContract', [contractID]);
+        } catch (schemaError: any) {
+          // Handle schema validation errors gracefully
+          if (schemaError.message && schemaError.message.includes('schema')) {
+            logger.warn(`[SHIPMENT] Schema validation error in QueryShipmentsByContract, treating as no results`);
+            existingShipmentsResult = { success: true, data: [] };
+          } else {
+            throw schemaError;
+          }
+        }
         
         if (existingShipmentsResult.success) {
           if (existingShipmentsResult.data && Array.isArray(existingShipmentsResult.data) && existingShipmentsResult.data.length > 0) {

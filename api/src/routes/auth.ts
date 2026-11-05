@@ -3,7 +3,7 @@
 
 import { Router, Request, Response } from 'express';
 import jwt, { SignOptions } from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { logger } from '../utils/logger';
 import { DatabaseService } from '../services/databaseService';
 

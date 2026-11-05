@@ -216,7 +216,9 @@ export const authMiddleware = (
     const rawOrg = decoded.organization || decoded.org || '';
     const role = decoded.role || 'EXPORTER';
     const fabricService = FabricService.getInstance();
-    fabricService.setRequestMspId(fabricService.getMspFromRole(role));
+    const mspId = fabricService.getMspFromRole(role);
+    logger.info(`🔍 [AUTH] User: ${decoded.username}, Role: ${role}, MSP: ${mspId}`);
+    fabricService.setRequestMspId(mspId);
     const userId = decoded.userId || decoded.sub;
     fabricService.setRequestIdentity(userId);
 
