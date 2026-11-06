@@ -119,3 +119,63 @@ router.post('/:lcId/discrepancies',
 );
 
 export default router;
+
+/**
+ * GET /api/v1/lc/discrepancies/pending
+ * Get all pending LC discrepancies that need resolution
+ */
+router.get('/discrepancies/pending',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      logger.info('[LC] 📋 Fetching pending LC discrepancies...');
+      
+      const db = DatabaseService.getInstance();
+      
+      // Query pending discrepancies (status = OPEN or UNDER_REVIEW)
+      const discrepancies = await db.all(
+        `SELECT 
+          ld.*,
+          lc.lc_number,
+          lc.contract_id,
+          lc.exporter_id,
+          lc.amount,
+          lc.currency
+         FROM lc_discrepancies ld
+         LEFT JOIN letters_of_credit lc ON ld.lc_id = lc.lc_id
+         WHERE ld.status IN ('OPEN', 'UNDER_REVIEW')
+         ORDER BY ld.reported_date DESC`
+      );
+      
+      logger.info(`[LC] ✅ Found ${discrepancies.length} pending discrepancies`);
+      
+      res.json({
+        success: true,
+        data: discrepancies.map((d: any) => ({
+          discrepancyId: d.discrepancy_id,
+          lcId: d.lc_id,
+          lcNumber: d.lc_number,
+          contractId: d.contract_id,
+          exporterId: d.exporter_id,
+          document: d.document,
+          issue: d.issue,
+          status: d.status,
+          reportedDate: d.reported_date,
+          resolvedDate: d.resolved_date,
+          resolutionNotes: d.resolution_notes,
+          amount: d.amount,
+          currency: d.currency,
+        })),
+        count: discrepancies.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[LC] ❌ Error fetching pending discrepancies:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);

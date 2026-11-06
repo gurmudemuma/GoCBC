@@ -126,12 +126,12 @@ export const loadBanksData = async (): Promise<BanksPortalData> => {
       discrepanciesResponse,
       usersResponse,
     ] = await Promise.all([
-      apiFetch('/lcs', { method: 'GET' }),
+      apiFetch('/banking/lc', { method: 'GET' }),
       apiFetch('/forex', { method: 'GET' }),
-      apiFetch('/swift-messages', { method: 'GET' }),
+      apiFetch('/swift/messages', { method: 'GET' }),
       apiFetch('/payments', { method: 'GET' }),
-      apiFetch('/settlements', { method: 'GET' }),
-      apiFetch('/lc-discrepancies', { method: 'GET' }),
+      apiFetch('/payments', { method: 'GET' }), // settlements = payments (same endpoint)
+      apiFetch('/lc/discrepancies/pending', { method: 'GET' }),
       apiFetch('/users?organization=BANKS', { method: 'GET' }),
     ]);
 

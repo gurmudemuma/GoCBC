@@ -1139,6 +1139,71 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// ✅ NEW: Convenience endpoint for pending payment releases
+router.get('/pending-release', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { exporterID, limit = '50' } = req.query;
+
+    logger.info('[PAYMENT] Fetching pending release payments from blockchain');
+
+    // Query all payments from blockchain
+    const result = await fabricService.queryChaincode('QueryAllPayments', []);
+
+    if (!result.success) {
+      logger.error(`[PAYMENT] Blockchain query failed: ${result.error}`);
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'BLOCKCHAIN_QUERY_FAILED',
+          message: result.error || 'Failed to query blockchain'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    let payments = result.data || [];
+    
+    // Filter for pending release status
+    payments = payments.filter((p: any) => 
+      (p.status || p.Status) === 'PENDING_RELEASE' ||
+      (p.status || p.Status) === 'VERIFIED' ||
+      (p.status || p.Status) === 'AWAITING_RELEASE'
+    );
+
+    // Apply exporter filter if provided
+    if (exporterID) {
+      payments = payments.filter((p: any) => 
+        (p.exporterId || p.ExporterID || p.exporter_id) === exporterID
+      );
+    }
+
+    // Apply limit
+    const limitNum = parseInt(limit as string) || 50;
+    payments = payments.slice(0, limitNum);
+
+    logger.info(`[PAYMENT] Found ${payments.length} pending release payments`);
+
+    res.json({
+      success: true,
+      data: payments,
+      count: payments.length,
+      filter: 'pending-release',
+      source: 'blockchain',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[PAYMENT] Error retrieving pending release payments:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 /**
  * @swagger
  * /api/v1/payments/{paymentID}:

@@ -239,4 +239,56 @@ router.get('/shipment/:shipmentID',
   }
 );
 
+/**
+ * GET /api/v1/insurance
+ * Get all insurance certificates/policies
+ * @access Authenticated
+ */
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const { status, exporterId, shipmentId } = req.query;
+    
+    logger.info('[INSURANCE] 📋 Fetching all insurance certificates...');
+    
+    const result = await fabricService.evaluateTransaction('QueryAllInsurancePolicies');
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: result.error },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    let policies = result.data || [];
+    
+    // Apply filters if provided
+    if (status) {
+      policies = policies.filter((policy: any) => policy.status === status);
+    }
+    if (exporterId) {
+      policies = policies.filter((policy: any) => policy.exporterID === exporterId);
+    }
+    if (shipmentId) {
+      policies = policies.filter((policy: any) => policy.shipmentID === shipmentId);
+    }
+    
+    logger.info(`[INSURANCE] ✅ Found ${policies.length} insurance policies`);
+    
+    res.json({
+      success: true,
+      data: policies,
+      count: policies.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[INSURANCE] ❌ Error fetching policies:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'QUERY_FAILED', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 export default router;

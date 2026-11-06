@@ -475,6 +475,202 @@ func (c *CoffeeContract) ReportDelay(ctx contractapi.TransactionContextInterface
 	return nil
 }
 
+// ClearBorderCrossing - Clear shipment for border crossing (customs approval)
+// Called by customs officials to clear shipment at border
+func (c *CoffeeContract) ClearBorderCrossing(ctx contractapi.TransactionContextInterface,
+	crossingID, clearanceOfficer, certificateNumber, clearanceDate string) error {
+	ledgerNow, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	fmt.Printf("=== ClearBorderCrossing called: crossingID=%s ===\n", crossingID)
+
+	// Get existing crossing
+	crossingJSON, err := ctx.GetStub().GetState(crossingID)
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to read crossing: %w", err)
+	}
+	if crossingJSON == nil {
+		return fmt.Errorf("ClearBorderCrossing: crossing %s does not exist", crossingID)
+	}
+
+	var crossing BorderCrossing
+	err = json.Unmarshal(crossingJSON, &crossing)
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to unmarshal: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to get MSP ID: %w", err)
+	}
+
+	// Update clearance details
+	crossing.Status = "CLEARED"
+	crossing.BorderCustomsOfficer = clearanceOfficer
+	crossing.BorderClearanceRef = certificateNumber
+	crossing.BorderClearanceDate = clearanceDate
+	if clearanceDate == "" {
+		crossing.BorderClearanceDate = ledgerNow.Format("2006-01-02T15:04:05Z07:00")
+	}
+	crossing.ComplianceStatus = "COMPLIANT"
+	crossing.LastUpdatedBy = clientID
+	crossing.LastUpdatedByMSP = mspID
+	crossing.UpdatedAt = ledgerNow
+
+	crossingJSON, err = json.Marshal(crossing)
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(crossingID, crossingJSON)
+	if err != nil {
+		return fmt.Errorf("ClearBorderCrossing: failed to update state: %w", err)
+	}
+
+	fmt.Printf("✅ Border crossing cleared: %s by %s (Cert: %s)\n", crossingID, clearanceOfficer, certificateNumber)
+
+	return nil
+}
+
+// DetainBorderCrossing - Detain shipment at border (hold for inspection/issues)
+// Called by customs officials to detain shipment
+func (c *CoffeeContract) DetainBorderCrossing(ctx contractapi.TransactionContextInterface,
+	crossingID, clearanceOfficer, detentionReason, nextSteps, detentionDate string) error {
+	ledgerNow, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	fmt.Printf("=== DetainBorderCrossing called: crossingID=%s ===\n", crossingID)
+
+	// Get existing crossing
+	crossingJSON, err := ctx.GetStub().GetState(crossingID)
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to read crossing: %w", err)
+	}
+	if crossingJSON == nil {
+		return fmt.Errorf("DetainBorderCrossing: crossing %s does not exist", crossingID)
+	}
+
+	var crossing BorderCrossing
+	err = json.Unmarshal(crossingJSON, &crossing)
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to unmarshal: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to get MSP ID: %w", err)
+	}
+
+	// Update detention details
+	crossing.Status = "DETAINED"
+	crossing.BorderCustomsOfficer = clearanceOfficer
+	crossing.ComplianceStatus = "UNDER_REVIEW"
+	crossing.ComplianceNotes = fmt.Sprintf("DETAINED: %s | Next Steps: %s", detentionReason, nextSteps)
+	crossing.DelayReported = true
+	crossing.DelayReason = detentionReason
+	crossing.IssuesEncountered = append(crossing.IssuesEncountered, fmt.Sprintf("DETENTION: %s", detentionReason))
+	crossing.LastUpdatedBy = clientID
+	crossing.LastUpdatedByMSP = mspID
+	crossing.UpdatedAt = ledgerNow
+
+	crossingJSON, err = json.Marshal(crossing)
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(crossingID, crossingJSON)
+	if err != nil {
+		return fmt.Errorf("DetainBorderCrossing: failed to update state: %w", err)
+	}
+
+	fmt.Printf("⚠️  Border crossing detained: %s by %s - Reason: %s\n", crossingID, clearanceOfficer, detentionReason)
+
+	return nil
+}
+
+// RecordBorderInspection - Record physical inspection at border
+func (c *CoffeeContract) RecordBorderInspection(ctx contractapi.TransactionContextInterface,
+	crossingID, inspectorName, inspectionDate, sealIntact, physicalCondition,
+	documentationComplete, findings, passed string) error {
+	ledgerNow, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	fmt.Printf("=== RecordBorderInspection called: crossingID=%s ===\n", crossingID)
+
+	// Get existing crossing
+	crossingJSON, err := ctx.GetStub().GetState(crossingID)
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to read crossing: %w", err)
+	}
+	if crossingJSON == nil {
+		return fmt.Errorf("RecordBorderInspection: crossing %s does not exist", crossingID)
+	}
+
+	var crossing BorderCrossing
+	err = json.Unmarshal(crossingJSON, &crossing)
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to unmarshal: %w", err)
+	}
+
+	// Get caller identity
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to get MSP ID: %w", err)
+	}
+
+	// Record inspection details
+	inspectionNote := fmt.Sprintf("INSPECTION by %s on %s | Seal: %s | Condition: %s | Docs: %s | Findings: %s | Passed: %s",
+		inspectorName, inspectionDate, sealIntact, physicalCondition, documentationComplete, findings, passed)
+	
+	crossing.ComplianceNotes = inspectionNote
+	if passed == "true" {
+		crossing.ComplianceStatus = "COMPLIANT"
+		crossing.Status = "INSPECTED"
+	} else {
+		crossing.ComplianceStatus = "NON_COMPLIANT"
+		crossing.Status = "INSPECTION_FAILED"
+		crossing.IssuesEncountered = append(crossing.IssuesEncountered, findings)
+	}
+	
+	crossing.LastUpdatedBy = clientID
+	crossing.LastUpdatedByMSP = mspID
+	crossing.UpdatedAt = ledgerNow
+
+	crossingJSON, err = json.Marshal(crossing)
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState(crossingID, crossingJSON)
+	if err != nil {
+		return fmt.Errorf("RecordBorderInspection: failed to update state: %w", err)
+	}
+
+	fmt.Printf("🔍 Border inspection recorded: %s - Passed: %s\n", crossingID, passed)
+
+	return nil
+}
+
 // RecordArrival - Record arrival at final destination (port/warehouse)
 func (c *CoffeeContract) RecordArrival(ctx contractapi.TransactionContextInterface,
 	crossingID, arrivalDate, arrivalLocation string) error {

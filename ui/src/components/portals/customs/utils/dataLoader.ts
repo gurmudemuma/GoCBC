@@ -117,9 +117,9 @@ export const loadCustomsData = async (): Promise<CustomsPortalData> => {
       usersResponse,
     ] = await Promise.all([
       apiFetch('/customs/declarations', { method: 'GET' }),
-      apiFetch('/customs/inspections', { method: 'GET' }),
+      apiFetch('/quality/inspections', { method: 'GET' }),
       apiFetch('/customs/clearances', { method: 'GET' }),
-      apiFetch('/customs/border-crossings', { method: 'GET' }),
+      apiFetch('/bordercrossing', { method: 'GET' }),
       apiFetch('/users?organization=CUSTOMS', { method: 'GET' }),
     ]);
 

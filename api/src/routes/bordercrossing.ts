@@ -214,6 +214,87 @@ router.post('/initiate', authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/v1/bordercrossing/:id/clear — Clear shipment for crossing
+router.post('/:id/clear', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { clearanceOfficer, certificateNumber } = req.body;
+
+    logger.info(`[BORDERCROSSING] ✅ Clearing shipment: ${id}`);
+
+    const result = await fabricService.submitTransaction('ClearBorderCrossing',
+      id,
+      clearanceOfficer || '',
+      certificateNumber || '',
+      new Date().toISOString()
+    );
+
+    if (!result.success) {
+      logger.error(`[BORDERCROSSING] ❌ Failed to clear: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BORDERCROSSING] ✅ Shipment cleared: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Shipment cleared successfully',
+      data: { crossingId: id, status: 'CLEARED' },
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BORDERCROSSING] ❌ Error clearing shipment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/v1/bordercrossing/:id/detain — Detain shipment
+router.post('/:id/detain', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { clearanceOfficer, detentionReason, nextSteps } = req.body;
+
+    logger.info(`[BORDERCROSSING] ⚠️ Detaining shipment: ${id}`);
+
+    const result = await fabricService.submitTransaction('DetainBorderCrossing',
+      id,
+      clearanceOfficer || '',
+      detentionReason || 'Inspection required',
+      nextSteps || '',
+      new Date().toISOString()
+    );
+
+    if (!result.success) {
+      logger.error(`[BORDERCROSSING] ❌ Failed to detain: ${result.error}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: result.error 
+      });
+    }
+
+    logger.info(`[BORDERCROSSING] ⚠️ Shipment detained: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Shipment detained successfully',
+      data: { crossingId: id, status: 'DETAINED', reason: detentionReason },
+      txId: result.transactionId
+    });
+  } catch (error: any) {
+    logger.error('[BORDERCROSSING] ❌ Error detaining shipment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 // POST /api/v1/bordercrossing/:id/clear-exit — Clear for exit
 router.post('/:id/clear-exit', authMiddleware, async (req, res) => {
   try {
@@ -448,7 +529,73 @@ router.post('/:id/arrival', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/v1/bordercrossing/:id/verify — Verify compliance
+/**
+ * POST /api/v1/bordercrossing/:id/inspect
+ * Record physical inspection at border
+ */
+router.post('/:id/inspect',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const {
+        inspectorName,
+        inspectionDate,
+        sealIntact,
+        physicalCondition,
+        documentationComplete,
+        findings,
+        passed
+      } = req.body;
+
+      logger.info(`[BORDERCROSSING] 🔍 Recording inspection: ${id}`);
+
+      const result = await fabricService.submitTransaction('RecordBorderInspection',
+        id,
+        inspectorName,
+        inspectionDate || new Date().toISOString(),
+        String(sealIntact === true),
+        physicalCondition || 'GOOD',
+        String(documentationComplete === true),
+        findings || 'No issues found',
+        String(passed === true)
+      );
+
+      if (!result.success) {
+        logger.error(`[BORDERCROSSING] ❌ Failed to record inspection: ${result.error}`);
+        return res.status(500).json({ 
+          success: false, 
+          error: result.error 
+        });
+      }
+
+      logger.info(`[BORDERCROSSING] ✅ Inspection recorded: ${id}`);
+
+      res.json({
+        success: true,
+        message: 'Border inspection recorded successfully',
+        data: {
+          crossingId: id,
+          inspectorName,
+          passed,
+          inspectionDate
+        },
+        txId: result.transactionId
+      });
+    } catch (error: any) {
+      logger.error('[BORDERCROSSING] ❌ Error recording inspection:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/bordercrossing/:id/verify
+ * Verify compliance
+ */
 router.post('/:id/verify', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;

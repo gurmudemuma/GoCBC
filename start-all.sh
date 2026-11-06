@@ -846,6 +846,14 @@ initialize_chaincode() {
                 --path . \
                 --lang golang \
                 --label coffee_1.0
+            
+            # Fix ownership of generated package (try without sudo first, then with sudo)
+            if [ -f "$CHAINCODE_PACKAGE" ]; then
+                chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || \
+                sudo chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || \
+                write_warning "Could not change ownership of chaincode package, may cause issues"
+                chmod 644 "$CHAINCODE_PACKAGE" 2>/dev/null || true
+            fi
         fi
         
         if [ $? -eq 0 ] && [ -f "$CHAINCODE_PACKAGE" ]; then
