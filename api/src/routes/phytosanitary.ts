@@ -287,4 +287,162 @@ router.get('/:certificateID',
   }
 );
 
+/**
+ * GET /api/v1/phytosanitary
+ * Get all phytosanitary certificates
+ * @access Authenticated
+ */
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const { status, exporterId, shipmentId } = req.query;
+    
+    logger.info('[PHYTO] 📋 Fetching all phytosanitary certificates...');
+    
+    const result = await fabricService.evaluateTransaction('QueryAllPhytosanitaryCertificates');
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: result.error },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    let certificates = result.data || [];
+    
+    // Apply filters if provided
+    if (status) {
+      certificates = certificates.filter((cert: any) => cert.status === status);
+    }
+    if (exporterId) {
+      certificates = certificates.filter((cert: any) => cert.exporterID === exporterId);
+    }
+    if (shipmentId) {
+      certificates = certificates.filter((cert: any) => cert.shipmentID === shipmentId);
+    }
+    
+    logger.info(`[PHYTO] ✅ Found ${certificates.length} certificates`);
+    
+    res.json({
+      success: true,
+      data: certificates,
+      count: certificates.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[PHYTO] ❌ Error fetching certificates:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'QUERY_FAILED', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/v1/phytosanitary/shipment/:shipmentId
+ * Get phytosanitary certificates for a specific shipment
+ * @access Authenticated
+ */
+router.get('/shipment/:shipmentId', authMiddleware, async (req, res) => {
+  try {
+    const { shipmentId } = req.params;
+    
+    logger.info(`[PHYTO] 🔍 Fetching certificates for shipment: ${shipmentId}`);
+    
+    const result = await fabricService.evaluateTransaction('QueryPhytosanitaryCertificatesByShipment', shipmentId);
+    
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: result.error },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const certificates = result.data || [];
+    
+    logger.info(`[PHYTO] ✅ Found ${certificates.length} certificates for shipment: ${shipmentId}`);
+    
+    res.json({
+      success: true,
+      data: certificates,
+      count: certificates.length,
+      shipmentId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[PHYTO] ❌ Error fetching certificates for shipment:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'QUERY_FAILED', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/v1/phytosanitary/:certificateId/revoke
+ * Revoke a phytosanitary certificate
+ * @access Authenticated
+ */
+router.post('/:certificateId/revoke',
+  authMiddleware,
+  [
+    param('certificateId').notEmpty(),
+    body('reason').notEmpty().withMessage('Revocation reason is required'),
+    body('revokedBy').notEmpty().withMessage('Revoking authority required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { certificateId } = req.params;
+      const { reason, revokedBy } = req.body;
+      const user = (req as any).user;
+      
+      logger.info(`[PHYTO] ⚠️ Revoking certificate: ${certificateId}`);
+      
+      // Verify user has authority to revoke (ECTA role)
+      if (user?.org !== 'ECTA' && user?.organization !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Only ECTA can revoke phytosanitary certificates' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      const result = await fabricService.invokeChaincode('RevokePhytosanitaryCertificate', [
+        certificateId,
+        reason,
+        revokedBy,
+        new Date().toISOString()
+      ]);
+      
+      if (result.success) {
+        logger.info(`[PHYTO] ✅ Certificate revoked: ${certificateId}`);
+        res.json({
+          success: true,
+          message: 'Phytosanitary certificate revoked successfully',
+          data: { certificateId, status: 'REVOKED', reason, revokedBy },
+          txId: result.txId,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'REVOKE_FAILED', message: result.error },
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (error: any) {
+      logger.error('[PHYTO] ❌ Error revoking certificate:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 export default router;

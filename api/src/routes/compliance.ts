@@ -238,3 +238,182 @@ router.get('/reports/:reportId', authMiddleware, async (req: Request, res: Respo
 });
 
 export default router;
+
+
+// ✅ NEW: NBE Compliance Dashboard
+router.get('/', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    logger.info('[COMPLIANCE] Fetching compliance dashboard data...');
+
+    // Aggregate compliance data from multiple sources
+    const dashboard: any = {
+      summary: {},
+      forex: {},
+      repatriation: {},
+      swift: {},
+      retention: {},
+      timestamp: new Date().toISOString()
+    };
+
+    // 1. Forex Compliance
+    try {
+      const forexStats = await dbService.all(`
+        SELECT 
+          COUNT(*) as total_allocations,
+          SUM(CASE WHEN status = 'ALLOCATED' THEN 1 ELSE 0 END) as active_allocations,
+          SUM(allocated_amount) as total_allocated_usd,
+          SUM(retention_amount_usd) as total_retention_usd,
+          AVG(retention_percentage) as avg_retention_rate
+        FROM forex_allocations
+        WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
+      `);
+      
+      if (forexStats && forexStats.length > 0) {
+        const fx = forexStats[0];
+        dashboard.forex = {
+          totalAllocations: parseInt(fx.total_allocations || '0'),
+          activeAllocations: parseInt(fx.active_allocations || '0'),
+          totalAllocatedUSD: parseFloat(fx.total_allocated_usd || '0'),
+          totalRetentionUSD: parseFloat(fx.total_retention_usd || '0'),
+          avgRetentionRate: parseFloat(fx.avg_retention_rate || '10')
+        };
+      }
+    } catch (forexErr) {
+      logger.warn('[COMPLIANCE] Could not fetch forex stats:', forexErr);
+      dashboard.forex = { error: 'Data unavailable' };
+    }
+
+    // 2. Repatriation Compliance
+    try {
+      const repatStats = await dbService.all(`
+        SELECT 
+          COUNT(*) as total_repatriations,
+          SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
+          SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
+          SUM(CASE WHEN due_date < NOW() AND status != 'COMPLETED' THEN 1 ELSE 0 END) as overdue_count
+        FROM repatriations
+        WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
+      `);
+      
+      if (repatStats && repatStats.length > 0) {
+        const rp = repatStats[0];
+        const total = parseInt(rp.total_repatriations || '0');
+        const completed = parseInt(rp.completed_count || '0');
+        const complianceRate = total > 0 ? ((completed / total) * 100).toFixed(1) : '0';
+        
+        dashboard.repatriation = {
+          totalRepatriations: total,
+          completedCount: completed,
+          pendingCount: parseInt(rp.pending_count || '0'),
+          overdueCount: parseInt(rp.overdue_count || '0'),
+          complianceRate: parseFloat(complianceRate)
+        };
+      }
+    } catch (repatErr) {
+      logger.warn('[COMPLIANCE] Could not fetch repatriation stats:', repatErr);
+      dashboard.repatriation = { error: 'Data unavailable' };
+    }
+
+    // 3. SWIFT Message Compliance
+    try {
+      const swiftStats = await dbService.all(`
+        SELECT 
+          COUNT(*) as total_messages,
+          SUM(CASE WHEN status = 'SENT' THEN 1 ELSE 0 END) as sent_count,
+          SUM(CASE WHEN status = 'FAILED' OR status = 'REJECTED' THEN 1 ELSE 0 END) as failed_count
+        FROM swift_messages
+        WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
+      `);
+      
+      if (swiftStats && swiftStats.length > 0) {
+        const sw = swiftStats[0];
+        const total = parseInt(sw.total_messages || '0');
+        const sent = parseInt(sw.sent_count || '0');
+        const successRate = total > 0 ? ((sent / total) * 100).toFixed(1) : '0';
+        
+        dashboard.swift = {
+          totalMessages: total,
+          sentCount: sent,
+          failedCount: parseInt(sw.failed_count || '0'),
+          successRate: parseFloat(successRate)
+        };
+      }
+    } catch (swiftErr) {
+      logger.warn('[COMPLIANCE] Could not fetch SWIFT stats:', swiftErr);
+      dashboard.swift = { error: 'Data unavailable' };
+    }
+
+    // 4. Retention Policy Compliance (40% retention rule)
+    try {
+      const retentionStats = await dbService.all(`
+        SELECT 
+          COUNT(*) as total_payments,
+          SUM(CASE WHEN retention_percentage >= 40 THEN 1 ELSE 0 END) as compliant_count,
+          AVG(retention_percentage) as avg_retention
+        FROM payments
+        WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
+          AND amount > 0
+      `);
+      
+      if (retentionStats && retentionStats.length > 0) {
+        const rt = retentionStats[0];
+        const total = parseInt(rt.total_payments || '0');
+        const compliant = parseInt(rt.compliant_count || '0');
+        const complianceRate = total > 0 ? ((compliant / total) * 100).toFixed(1) : '0';
+        
+        dashboard.retention = {
+          totalPayments: total,
+          compliantCount: compliant,
+          nonCompliantCount: total - compliant,
+          avgRetentionPercentage: parseFloat(rt.avg_retention || '0'),
+          complianceRate: parseFloat(complianceRate),
+          requiredRetention: 40
+        };
+      }
+    } catch (retentionErr) {
+      logger.warn('[COMPLIANCE] Could not fetch retention stats:', retentionErr);
+      dashboard.retention = { error: 'Data unavailable' };
+    }
+
+    // 5. Overall Compliance Summary
+    const forexCompliance = dashboard.forex.totalAllocations > 0;
+    const repatCompliance = dashboard.repatriation.complianceRate >= 80;
+    const swiftCompliance = dashboard.swift.successRate >= 95;
+    const retentionCompliance = dashboard.retention.complianceRate >= 90;
+    
+    const compliantAreas = [forexCompliance, repatCompliance, swiftCompliance, retentionCompliance].filter(Boolean).length;
+    const overallCompliance = (compliantAreas / 4) * 100;
+    
+    dashboard.summary = {
+      overallComplianceScore: overallCompliance.toFixed(1),
+      compliantAreas,
+      totalAreas: 4,
+      status: overallCompliance >= 80 ? 'COMPLIANT' : overallCompliance >= 60 ? 'WARNING' : 'NON_COMPLIANT',
+      areasNeedingAttention: [
+        !forexCompliance && 'Forex Allocations',
+        !repatCompliance && 'Repatriation',
+        !swiftCompliance && 'SWIFT Messaging',
+        !retentionCompliance && 'Retention Policy'
+      ].filter(Boolean),
+      lastUpdated: new Date().toISOString()
+    };
+
+    logger.info(`[COMPLIANCE] Dashboard generated - Overall compliance: ${dashboard.summary.overallComplianceScore}%`);
+
+    res.json({
+      success: true,
+      data: dashboard,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[COMPLIANCE] Error generating dashboard:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'DASHBOARD_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});

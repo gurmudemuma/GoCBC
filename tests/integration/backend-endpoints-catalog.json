@@ -1,0 +1,2177 @@
+[
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/compliance.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/exchangeRates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/land-transport.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/market.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:certificateID",
+    "file": "routes/phytosanitary.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:certificateID/inspect",
+    "file": "routes/phytosanitary.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:certificateID/issue",
+    "file": "routes/phytosanitary.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:contractID",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:contractID/approve",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:contractID/documents",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:contractID/nbe-approve",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:contractID/reject",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/:contractId",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:currency",
+    "file": "routes/exchangeRates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:documentID/verify",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:documentId/add-certificate-page",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/approval-status",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/download",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:documentId/sign",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/signature-history",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/signature-status",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/signatures",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:documentId/verify-signature",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/verify-signatures",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/verify-signatures",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:documentId/view",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:dueDiligenceID",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:dueDiligenceID/verify",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:entityType/:entityId/timeline",
+    "file": "routes/status.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:entityType/:entityId/validate",
+    "file": "routes/status.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:exporterID",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:exporterID/laboratory",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:exporterID/renew-license",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:exporterID/revoke",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:exporterID/status",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:exporterId/historical-performance",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:filename",
+    "file": "routes/files.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:forexId",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:forexId/confirm",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:forexId/retention",
+    "file": "routes/retention.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:forexId/retention",
+    "file": "routes/retention.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:id",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:id",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:id",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/approve",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/arrival",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/certificate",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/clear-exit",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/crossing",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/delay",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/departure",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/location",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/penalty",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/record",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/reject",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/results",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/schedule",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/verify",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/verify",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/waiver/approve",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:id/waiver/request",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:lcId/amendments",
+    "file": "routes/lc-amendments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:lcId/discrepancies",
+    "file": "routes/lc-amendments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:paymentID",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/advance",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/balance",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:paymentID/confirm",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/documents",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/forex-repatriation",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/release",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/settle",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/status",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/swift/confirm",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/swift/initiate",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:paymentID/tracking-status",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:paymentID/verify",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:permitId",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:policyNumber",
+    "file": "routes/insurance.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:policyNumber/claim",
+    "file": "routes/insurance.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:portal",
+    "file": "routes/portals.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:portal/dashboard",
+    "file": "routes/portals.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/arrive",
+    "file": "routes/land-transport.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/bill-of-lading",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/book-freight",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/border-crossing",
+    "file": "routes/land-transport.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/:shipmentID/buyer",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/container/stuff",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/delivery",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/delivery/complete",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/destination/arrive",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID/documents",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID/history",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/in-transit/update",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/land-transport/start",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/lc-documents",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:shipmentID/logistics-status",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/pickup",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/port/arrive",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/receive",
+    "file": "routes/courier.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/reconcile-status",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/reject-action",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/send",
+    "file": "routes/courier.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/shipping-document",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:shipmentID/shipping-status",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/start",
+    "file": "routes/land-transport.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID/status",
+    "file": "routes/courier.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID/status",
+    "file": "routes/land-transport.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/status",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:shipmentID/status",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentID/traceability",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:shipmentID/update-status",
+    "file": "routes/courier.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/vessel/depart",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentID/vessel/load",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/close-contract",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/container/stuff",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/delivery/complete",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/destination/arrive",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/ecta-audit",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/forex",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/in-transit/update",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/lc-settlement",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/payment",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:shipmentId/status",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/vessel/depart",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:shipmentId/vessel/load",
+    "file": "routes/shipments.ts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/:userId",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:userId",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:userId",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/:userId/identity",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:userId/password",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:userId/permissions",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:userId/renew-certificate",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:userId/reset-password",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/:userId/revoke",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/:userId/status",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/activity",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/activity-log",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/advance-payments",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/alerts",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/alerts",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/alerts",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/alerts/:id/resolve",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/allocate",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/analytics/summary",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/applicant/login",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/applicant/status",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/applications",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/applications/:applicationId",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/applications/:applicationId/approve",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/approve",
+    "file": "routes/contracts.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/assessments",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/bank-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/blockchain-sync",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/blockchain/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/bookings",
+    "file": "routes/shipping.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/bulk-reset-passwords",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/by-exporter/:exporterId",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/cad",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/cad/:collectionID",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/cad/:collectionID/payment",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/cad/:collectionID/status",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/cad/exporter/:exporterID",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/clear",
+    "file": "routes/cache.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/clearance",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/clearance",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/clearances",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/compliance-report/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/compliance/repatriation",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/consignment-payments",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/consignment/:consignmentID",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/consignment/:consignmentID/payment",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/consignment/:consignmentID/status",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/consignment/exporter/:exporterID",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/consignment/outstanding",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/consignment/register",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/consignments",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/contract/:contractId",
+    "file": "routes/traceability.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/contracts",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/contracts",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/contracts",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/current",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/current/:currency",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/customs",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/customs-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard",
+    "file": "routes/analytics.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard",
+    "file": "routes/postDeliveryWorkflow.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/debug/exporter/:exporterId",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declaration/:declarationId/clear",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declaration/:declarationId/complete-inspection",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declaration/:declarationId/reject",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declaration/:declarationId/review",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declaration/submit",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/declarations",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/declarations",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/declarations/:declarationID",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declarations/:id/clear",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/declarations/:id/inspect",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/document-verification",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/documentary-collections",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/due-diligence",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/ecta-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/ecx-lots",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/ecx-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/enroll",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/entity/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/entity/:entityType/:entityId",
+    "file": "routes/blockchain-signatures.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/entity/:entityType/:entityId",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange-rate",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/expiring-certificates",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/export-report",
+    "file": "routes/analytics.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter-applications",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/exporter-applications",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/exporter-applications/:applicationId/approve",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/exporter-applications/:applicationId/reject",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/exporter-applications/:applicationId/resubmit",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter-applications/check/:email",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter/:exporterId",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter/:exporterId",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter/:exporterId",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporter/:exporterId",
+    "file": "routes/traceability.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exporters",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/exports",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/forex",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/forex",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/forex",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/forex/:forexID/reject",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/geolocation",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/grading-standards",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/health",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/history",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/history",
+    "file": "routes/exchangeRates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/history/:currency",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/identities",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/initialize",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/initiate",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/initiate",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/initiate",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/inspections",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/inspections",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/inspections/:inspectionID",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections/:inspectionID/approve",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections/:inspectionID/complete",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections/:inspectionID/issue-permit",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections/:inspectionID/perform",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/inspections/:inspectionID/reject",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/invalidate",
+    "file": "routes/cache.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/inventory",
+    "file": "routes/warehouse.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/issue",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/issue",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc/:lcID",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/allocate-forex",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/amend",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/approve",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/examine-documents",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/issue",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/reject",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcID/release-payment",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc/:lcId/discrepancies",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcId/discrepancy/:discrepancyId/resolve",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcId/discrepancy/:discrepancyId/waive",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcId/discrepancy/report",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/:lcId/documents/reject",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lc/discrepancies/pending",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/issue",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lc/request",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lcs",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/ledger/blocks/:blockNumber",
+    "file": "routes/blockchain.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/ledger/transactions/:txId",
+    "file": "routes/blockchain.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/licenses/:licenseNumber/download",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/licenses/:licenseNumber/verify",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/log",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/login",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/logout",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/lots",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lots",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lots/:lotId/assign",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lots/:lotId/auto-release",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lots/:lotId/grade",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/lots/:lotId/release",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/market",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/contracts",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/forex",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/lcs",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/payments",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/profile",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/me/shipments",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/messages",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/messages/:messageID",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/approve",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/messages/:messageID/ledger-proof",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/process",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/receive",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/reject",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/send",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/settle",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/:messageID/validate",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/mt103",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/mt700",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/mt707",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/mt750",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/messages/mt752",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/nbe-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/network",
+    "file": "routes/blockchain.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/origin",
+    "file": "routes/certificates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/origin",
+    "file": "routes/certificates.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/outstanding/all",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/overdue/all",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/payment-methods",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/receive-advance",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/receive-balance",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/release-documents",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/settle",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/payment/:paymentID/status",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/submit-documents",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/:paymentID/verify-documents",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/payment/by-method/:method",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/payment/initiate",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/payments",
+    "file": "routes/banking.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/payments",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/pending-release",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/permit-ready",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/phyto",
+    "file": "routes/certificates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/phyto",
+    "file": "routes/certificates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/policy",
+    "file": "routes/retention.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/policy/:commodityType",
+    "file": "routes/retention.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/portal/integrity",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/portal/recent",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/portal/search",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/portal/stats",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/portal/summary",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/post-delivery",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/pre-shipment",
+    "file": "routes/quality.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/preferences",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/preferences",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/prices",
+    "file": "routes/market.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/profile",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/rates",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/rates",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/rates/:currency",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/rates/:currency/current",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/receipts",
+    "file": "routes/warehouse.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/record",
+    "file": "routes/payments.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/refresh",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/register",
+    "file": "routes/insurance.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/renewals",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/reports",
+    "file": "routes/compliance.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/reports/:reportId",
+    "file": "routes/compliance.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/request",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/request",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/request",
+    "file": "routes/phytosanitary.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/reset-password-by-identifier",
+    "file": "routes/users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/retention-policy",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/retention-policy/:commodityType",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/risk-assessment",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/risk-assessment",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/send",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/set",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/settle",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipment/:shipmentID",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipment/:shipmentID",
+    "file": "routes/insurance.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipment/:shipmentId",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipment/:shipmentId",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipments",
+    "file": "routes/exporters.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipments",
+    "file": "routes/monitoring.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipments",
+    "file": "routes/shipping.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipments",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipments/:shipmentId",
+    "file": "routes/shipping.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/shipping-portal",
+    "file": "routes/stats.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/sign",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/sms/test",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/statements",
+    "file": "routes/eudr.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/statistics",
+    "file": "routes/swift.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/stats",
+    "file": "routes/blockchain-sync.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/stats",
+    "file": "routes/cache.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/status",
+    "file": "routes/blockchain.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/status/:status",
+    "file": "routes/bordercrossing.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/status/:status",
+    "file": "routes/inspection.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/status/:status",
+    "file": "routes/repatriation.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/system/statistics",
+    "file": "routes/traceability.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/test-shipment-update/:shipmentId",
+    "file": "routes/customs.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/timeseries/:metric",
+    "file": "routes/analytics.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/tracking",
+    "file": "routes/shipping.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/trail/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/transactions/:entityType/:entityId",
+    "file": "routes/blockchain-signatures.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/transitions/:entityType",
+    "file": "routes/status.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/trends",
+    "file": "routes/market.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/trigger",
+    "file": "routes/blockchain-sync.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/update-all",
+    "file": "routes/exchange-rates.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/upload",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/upload",
+    "file": "routes/files.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/upload-registration",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/utilize",
+    "file": "routes/forex.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/utilize",
+    "file": "routes/permits.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/validate",
+    "file": "routes/auth.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/verification",
+    "file": "routes/documents.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/verify",
+    "file": "routes/crypto-users.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/verify-chain/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/verify/:entityType/:entityId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/verify/:logId",
+    "file": "routes/audit.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/warehouse",
+    "file": "routes/ecx.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/webhooks/register",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/webhooks/test",
+    "file": "routes/notifications.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/workflow/:entityId",
+    "file": "routes/status.ts"
+  }
+]

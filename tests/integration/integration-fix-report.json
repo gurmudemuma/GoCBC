@@ -1,0 +1,4040 @@
+{
+  "summary": {
+    "backendEndpoints": 435,
+    "frontendCalls": 187,
+    "matched": 28,
+    "orphaned": 159,
+    "unusedBackend": 399
+  },
+  "orphanedCalls": [
+    {
+      "endpoint": "/analytics/blockchain",
+      "locations": [
+        {
+          "file": "ui/src/components/BlockchainMonitor.tsx",
+          "line": 69,
+          "original": "/analytics/blockchain"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lcs",
+      "locations": [
+        {
+          "file": "ui/src/components/NotificationCenter.tsx",
+          "line": 89,
+          "original": "/banking/lcs"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payments",
+      "locations": [
+        {
+          "file": "ui/src/components/NotificationCenter.tsx",
+          "line": 157,
+          "original": "/banking/payments"
+        },
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 83,
+          "original": "/banking/payments"
+        },
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 84,
+          "original": "/banking/payments"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/identities",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 249,
+          "original": "/crypto-users/identities"
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 294,
+          "original": "/crypto-users/identities"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/expiring-certificates",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 259,
+          "original": "/crypto-users/expiring-certificates"
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 391,
+          "original": "/crypto-users/expiring-certificates"
+        }
+      ]
+    },
+    {
+      "endpoint": "/traceability/system/statistics",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 268,
+          "original": "/traceability/system/statistics"
+        },
+        {
+          "file": "ui/src/components/portals/SystemOverview.tsx",
+          "line": 74,
+          "original": "/traceability/system/statistics"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/portal/recent",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 350,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 424,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/AuditTrailTable.tsx",
+          "line": 123,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1151,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1117,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 649,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 571,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 406,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/components/portals/SystemTraceability.tsx",
+          "line": 149,
+          "original": "/audit/portal/recent"
+        },
+        {
+          "file": "ui/src/pages/profile.tsx",
+          "line": 173,
+          "original": "/audit/portal/recent"
+        }
+      ]
+    },
+    {
+      "endpoint": "/blockchain/network",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 403,
+          "original": "/blockchain/network"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/identity",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 94,
+          "original": "/crypto-users/${userId}/identity"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/enroll",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 112,
+          "original": "/crypto-users/enroll"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/revoke",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 139,
+          "original": "/crypto-users/${userId}/revoke"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/renew-certificate",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 160,
+          "original": "/crypto-users/${userId}/renew-certificate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/risk-rules",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/RiskRulesManager.tsx",
+          "line": 14,
+          "original": "/customs/risk-rules"
+        },
+        {
+          "file": "ui/src/components/admin/RiskRulesManager.tsx",
+          "line": 36,
+          "original": "/customs/risk-rules"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${selectedUser.id}",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 572,
+          "original": "/users/${selectedUser.id}"
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 594,
+          "original": "/users/${selectedUser.id}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${userId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 612,
+          "original": "/users/${userId}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${selectedUser.id}/reset-password",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 700,
+          "original": "/users/${selectedUser.id}/reset-password"
+        }
+      ]
+    },
+    {
+      "endpoint": "/analytics/timeseries/${selectedMetric}",
+      "locations": [
+        {
+          "file": "ui/src/components/analytics/AnalyticsDashboard.tsx",
+          "line": 132,
+          "original": "/analytics/timeseries/${selectedMetric}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages",
+      "locations": [
+        {
+          "file": "ui/src/components/bank/SWIFTDashboard.tsx",
+          "line": 160,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/components/bank/SWIFTNotifications.tsx",
+          "line": 74,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 801,
+          "original": "/api/v1/swift/messages"
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 342,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 55,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 65,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 72,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 95,
+          "original": "/swift/messages"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 229,
+          "original": "/swift/messages"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/statistics",
+      "locations": [
+        {
+          "file": "ui/src/components/bank/SWIFTDashboard.tsx",
+          "line": 221,
+          "original": "/swift/statistics"
+        },
+        {
+          "file": "ui/src/components/bank/SWIFTStatistics.tsx",
+          "line": 67,
+          "original": "/swift/statistics"
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 198,
+          "original": "/swift/statistics"
+        }
+      ]
+    },
+    {
+      "endpoint": "/blockchain-signatures/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}",
+      "locations": [
+        {
+          "file": "ui/src/components/blockchain/EntityBlockchainVerification.tsx",
+          "line": 91,
+          "original": "/blockchain-signatures/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/BorderCrossingInitiationDialog.tsx",
+          "line": 32,
+          "original": "/bordercrossing/initiate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/${crossing.borderCrossingId}/${endpoint}",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/ClearanceDecisionDialog.tsx",
+          "line": 22,
+          "original": "/bordercrossing/${crossing.borderCrossingId}/${endpoint}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/${crossing.borderCrossingId}/inspect",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/PhysicalInspectionDialog.tsx",
+          "line": 20,
+          "original": "/bordercrossing/${crossing.borderCrossingId}/inspect"
+        }
+      ]
+    },
+    {
+      "endpoint": "/inspection/${inspection.inspectionId}/conduct",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionConductDialog.tsx",
+          "line": 71,
+          "original": "/inspection/${inspection.inspectionId}/conduct"
+        }
+      ]
+    },
+    {
+      "endpoint": "/inspection/${inspection.inspectionId}/schedule",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionSchedulingDialog.tsx",
+          "line": 145,
+          "original": "/inspection/${inspection.inspectionId}/schedule"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${encodeURIComponent(form.lcId)}/discrepancy/report",
+      "locations": [
+        {
+          "file": "ui/src/components/lcdiscrepancy/DiscrepancyReportingDialog.tsx",
+          "line": 53,
+          "original": "/banking/lc/${encodeURIComponent(form.lcId)}/discrepancy/report"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc",
+      "locations": [
+        {
+          "file": "ui/src/components/lcdiscrepancy/LCDiscrepancyTab.tsx",
+          "line": 56,
+          "original": "/banking/lc"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 763,
+          "original": "/api/v1/banking/lc"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 901,
+          "original": "/banking/lc"
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 652,
+          "original": "/banking/lc"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 926,
+          "original": "/banking/lc"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/entity/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 122,
+          "original": "/audit/entity/${entityType}/${entityId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/verify/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 146,
+          "original": "/audit/verify/${entityType}/${entityId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/compliance-report/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 198,
+          "original": "/audit/compliance-report/${entityType}/${entityId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${encodeURIComponent(messageId)}/ledger-proof",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 326,
+          "original": "/swift/messages/${encodeURIComponent(messageId)}/ledger-proof"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/CONTRACT/${contract.contractId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1335,
+          "original": "/documents/entity/CONTRACT/${contract.contractId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/request",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1485,
+          "original": "/banking/lc/request"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 2160,
+          "original": "/banking/lc/request"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/approve",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1548,
+          "original": "/banking/lc/${lcId}/approve"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1596,
+          "original": "/banking/lc/${lcId}/approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${selectedLC.lcId}/amend",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1652,
+          "original": "/banking/lc/${selectedLC.lcId}/amend"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/cad",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1687,
+          "original": "/banking/cad"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1722,
+          "original": "/banking/payment/initiate"
+        },
+        {
+          "file": "ui/src/components/portals/PaymentInitiationDialog.tsx",
+          "line": 152,
+          "original": "/banking/payment/initiate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/consignment/register",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1754,
+          "original": "/banking/consignment/register"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/${selectedPayment.paymentID}/verify-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1790,
+          "original": "/banking/payment/${selectedPayment.paymentID}/verify-documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/examine-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1825,
+          "original": "/banking/lc/${lcId}/examine-documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/${documentId}/verify",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1870,
+          "original": "/documents/${documentId}/verify"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${selectedLC.lcId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1889,
+          "original": "/banking/lc/${selectedLC.lcId}"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1905,
+          "original": "/banking/lc/${selectedLC.lcId}"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1919,
+          "original": "/banking/lc/${selectedLC.lcId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/release-payment",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1942,
+          "original": "/banking/lc/${lcId}/release-payment"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/request",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1988,
+          "original": "/forex/request"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/allocate",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 2021,
+          "original": "/forex/allocate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lc.lcId}/issue",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 3145,
+          "original": "/banking/lc/${lc.lcId}/issue"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/rates/${encodeURIComponent(currency)}/current",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 3622,
+          "original": "/forex/rates/${encodeURIComponent(currency)}/current"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/retention-policy/COFFEE",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 3623,
+          "original": "/forex/retention-policy/COFFEE"
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 322,
+          "original": "/forex/retention-policy/COFFEE"
+        },
+        {
+          "file": "ui/src/components/repatriation/RepatriationInitiationDialog.tsx",
+          "line": 109,
+          "original": "/forex/retention-policy/COFFEE"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${encodeURIComponent(validationData.entityId)}/reject",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 5328,
+          "original": "/banking/lc/${encodeURIComponent(validationData.entityId)}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/blockchain/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BlockchainAuditTrail.tsx",
+          "line": 122,
+          "original": "/audit/blockchain/${entityType}/${entityId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declarations",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsClearedShipments.tsx",
+          "line": 66,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsInspection.tsx",
+          "line": 100,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 561,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1017,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 731,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 958,
+          "original": "/customs/declarations"
+        },
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 119,
+          "original": "/customs/declarations"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsInspection.tsx",
+          "line": 86,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 361,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 624,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1258,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 691,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1025,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/InspectionManagement.tsx",
+          "line": 212,
+          "original": "/quality/inspections"
+        },
+        {
+          "file": "ui/src/components/portals/QualityInspectionWorkflow.tsx",
+          "line": 155,
+          "original": "/quality/inspections"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/by-shipment/${shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 351,
+          "original": "/quality/inspections/by-shipment/${shipmentId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/SHIPMENT/${shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 477,
+          "original": "/documents/entity/SHIPMENT/${shipmentId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/contracts/${contractId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 526,
+          "original": "/contracts/${contractId}"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 703,
+          "original": "/contracts/${contractId}"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1436,
+          "original": "/contracts/${contractId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/CUSTOMS_DECLARATION/${declarationNumber}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 686,
+          "original": "/documents/entity/CUSTOMS_DECLARATION/${declarationNumber}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${declaration.exporterId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 777,
+          "original": "/users/${declaration.exporterId}"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 870,
+          "original": "/users/${declaration.exporterId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/permit-ready",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 946,
+          "original": "/customs/permit-ready"
+        }
+      ]
+    },
+    {
+      "endpoint": "/contracts/${contractID}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1075,
+          "original": "/contracts/${contractID}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declaration/${declarationId}/review",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1190,
+          "original": "/customs/declaration/${declarationId}/review"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declaration/${declarationId}/complete-inspection",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1259,
+          "original": "/customs/declaration/${declarationId}/complete-inspection"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declaration/${declarationId}/clear",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1304,
+          "original": "/customs/declaration/${declarationId}/clear"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declaration/${declarationId}/reject",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1420,
+          "original": "/customs/declaration/${declarationId}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declaration/submit",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1544,
+          "original": "/customs/declaration/submit"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1812,
+          "original": "/customs/declaration/submit"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/CONTRACT/${contractId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 328,
+          "original": "/documents/entity/CONTRACT/${contractId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/EXPORTER_APPLICATION/${application.application_id}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 890,
+          "original": "/documents/entity/EXPORTER_APPLICATION/${application.application_id}"
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 2278,
+          "original": "/documents/entity/EXPORTER_APPLICATION/${application.application_id}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${exporter.exporterId}/renew-license",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 3056,
+          "original": "/exporters/${exporter.exporterId}/renew-license"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${selectedExporter.exporterId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 3859,
+          "original": "/exporters/${selectedExporter.exporterId}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/exporter-applications",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 515,
+          "original": "/exporters/exporter-applications"
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 535,
+          "original": "/exporters/exporter-applications"
+        },
+        {
+          "file": "ui/src/pages/register-exporter.tsx",
+          "line": 306,
+          "original": "/exporters/exporter-applications"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${exporterId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 719,
+          "original": "/exporters/${exporterId}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/exporter-applications/${selectedApplication.application_id}/approve",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 746,
+          "original": "/exporters/exporter-applications/${selectedApplication.application_id}/approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/exporter-applications/${selectedApplication.application_id}/reject",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1097,
+          "original": "/exporters/exporter-applications/${selectedApplication.application_id}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${inspectionId}/perform",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1288,
+          "original": "/quality/inspections/${inspectionId}/perform"
+        },
+        {
+          "file": "ui/src/components/portals/QualityInspectionWorkflow.tsx",
+          "line": 164,
+          "original": "/quality/inspections/${inspectionId}/perform"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${inspectionId}/approve",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1334,
+          "original": "/quality/inspections/${inspectionId}/approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${inspectionId}/issue-permit",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1360,
+          "original": "/quality/inspections/${inspectionId}/issue-permit"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${inspectionId}/reject",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 1390,
+          "original": "/quality/inspections/${inspectionId}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/reset-password-by-identifier",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 2365,
+          "original": "/users/reset-password-by-identifier"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${application.exporter_id}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 2405,
+          "original": "/exporters/${application.exporter_id}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${application.exporter_id}/revoke",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 2432,
+          "original": "/exporters/${application.exporter_id}/revoke"
+        }
+      ]
+    },
+    {
+      "endpoint": "/ecx/lots",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 128,
+          "original": "/ecx/lots"
+        },
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 175,
+          "original": "/ecx/lots"
+        },
+        {
+          "file": "ui/src/components/portals/ecx/utils/dataLoader.ts",
+          "line": 50,
+          "original": "/ecx/lots"
+        }
+      ]
+    },
+    {
+      "endpoint": "/ecx/lots/${selectedLot.lotId}/grade",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 201,
+          "original": "/ecx/lots/${selectedLot.lotId}/grade"
+        }
+      ]
+    },
+    {
+      "endpoint": "/ecx/lots/${selectedLot.lotId}/assign",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 220,
+          "original": "/ecx/lots/${selectedLot.lotId}/assign"
+        }
+      ]
+    },
+    {
+      "endpoint": "/ecx/lots/${selectedLot.lotId}/release",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 238,
+          "original": "/ecx/lots/${selectedLot.lotId}/release"
+        }
+      ]
+    },
+    {
+      "endpoint": "/ecx/lots/${lotId}/auto-release",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ECXPortal.tsx",
+          "line": 253,
+          "original": "/ecx/lots/${lotId}/auto-release"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/me/profile",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 780,
+          "original": "/exporters/me/profile"
+        },
+        {
+          "file": "ui/src/pages/profile.tsx",
+          "line": 169,
+          "original": "/exporters/me/profile"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/upload",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1331,
+          "original": "/documents/upload"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1390,
+          "original": "/documents/upload"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${selectedShipmentForShipping.shipmentId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1913,
+          "original": "/shipments/${selectedShipmentForShipping.shipmentId}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/payments/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 2014,
+          "original": "/payments/initiate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/lc-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 2076,
+          "original": "/shipments/${shipmentId}/lc-documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/traceability/exporter/${exporterId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterTraceability.tsx",
+          "line": 99,
+          "original": "/traceability/exporter/${exporterId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${selectedInspection.inspectionId}/perform",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InspectionManagement.tsx",
+          "line": 380,
+          "original": "/quality/inspections/${selectedInspection.inspectionId}/perform"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${selectedInspection.inspectionId}/approve",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InspectionManagement.tsx",
+          "line": 420,
+          "original": "/quality/inspections/${selectedInspection.inspectionId}/approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${selectedInspection.inspectionId}/reject",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InspectionManagement.tsx",
+          "line": 445,
+          "original": "/quality/inspections/${selectedInspection.inspectionId}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${selectedInspection.inspectionId}/issue-permit",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InspectionManagement.tsx",
+          "line": 464,
+          "original": "/quality/inspections/${selectedInspection.inspectionId}/issue-permit"
+        }
+      ]
+    },
+    {
+      "endpoint": "/insurance/${selectedCertificate.insuranceID}/claim",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InsuranceCertificates.tsx",
+          "line": 139,
+          "original": "/api/v1/insurance/${selectedCertificate.insuranceID}/claim"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/${params.row.forexId}/confirm",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 966,
+          "original": "/api/v1/forex/${params.row.forexId}/confirm"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/rates",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 577,
+          "original": "/forex/rates"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/${selectedPayment.paymentId}/submit-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 112,
+          "original": "/banking/payment/${selectedPayment.paymentId}/submit-documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/${selectedPayment.paymentId}/verify-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 155,
+          "original": "/banking/payment/${selectedPayment.paymentId}/verify-documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/${paymentID}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PaymentInitiationDialog.tsx",
+          "line": 201,
+          "original": "/banking/payment/${paymentID}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/phytosanitary/shipment/${searchShipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PhytosanitaryCertificates.tsx",
+          "line": 136,
+          "original": "/api/v1/phytosanitary/shipment/${searchShipmentId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/phytosanitary/${certificateId}/revoke",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PhytosanitaryCertificates.tsx",
+          "line": 160,
+          "original": "/api/v1/phytosanitary/${certificateId}/revoke"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/${shipment.exporterId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/QualityInspectionWorkflow.tsx",
+          "line": 122,
+          "original": "/exporters/${shipment.exporterId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/clearances",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 446,
+          "original": "/customs/clearances"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 719,
+          "original": "/customs/clearances"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1451,
+          "original": "/customs/clearances"
+        },
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 121,
+          "original": "/customs/clearances"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${exporterId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 685,
+          "original": "/users/${exporterId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/history",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 746,
+          "original": "/shipments/${shipmentId}/history"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/entity/SHIPMENT/${shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 767,
+          "original": "/audit/entity/SHIPMENT/${shipmentId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/applications/${applicationId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 799,
+          "original": "/exporters/applications/${applicationId}"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1074,
+          "original": "/exporters/applications/${applicationId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1043,
+          "original": "/shipments/${shipmentId}/documents"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/${docId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1114,
+          "original": "/documents/${docId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/reject-action",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1346,
+          "original": "/shipments/${shipmentId}/reject-action"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/by-exporter/${exporterId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1418,
+          "original": "/users/by-exporter/${exporterId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${bolForm.shipmentId}/shipping-document",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1593,
+          "original": "/shipments/${bolForm.shipmentId}/shipping-document"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/land-transport/start",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1693,
+          "original": "/shipments/${shipmentId}/land-transport/start"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/port/arrive",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1744,
+          "original": "/shipments/${shipmentId}/port/arrive"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/container/stuff",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1802,
+          "original": "/shipments/${shipmentId}/container/stuff"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/vessel/load",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1849,
+          "original": "/shipments/${shipmentId}/vessel/load"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/vessel/depart",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1894,
+          "original": "/shipments/${shipmentId}/vessel/depart"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/in-transit/update",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1941,
+          "original": "/shipments/${shipmentId}/in-transit/update"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/destination/arrive",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1984,
+          "original": "/shipments/${shipmentId}/destination/arrive"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}/delivery/complete",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 2029,
+          "original": "/shipments/${shipmentId}/delivery/complete"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/inspections",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 120,
+          "original": "/customs/inspections"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/border-crossings",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 122,
+          "original": "/customs/border-crossings"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/declarations${exporterFilter}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/exporter/utils/dataLoader.ts",
+          "line": 142,
+          "original": "/customs/declarations${exporterFilter}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/notifications/compliance/repatriation",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationCompliancePanel.tsx",
+          "line": 109,
+          "original": "/notifications/compliance/repatriation"
+        }
+      ]
+    },
+    {
+      "endpoint": "/repatriation/${repatriation.repatriationId}",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationDetailsDialog.tsx",
+          "line": 122,
+          "original": "/repatriation/${repatriation.repatriationId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/rates/${encodeURIComponent(formData.currency)}/current",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationInitiationDialog.tsx",
+          "line": 110,
+          "original": "/forex/rates/${encodeURIComponent(formData.currency)}/current"
+        }
+      ]
+    },
+    {
+      "endpoint": "/repatriation/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationInitiationDialog.tsx",
+          "line": 225,
+          "original": "/repatriation/initiate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/repatriation/${repatriationId}/verify",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationManagementTab.tsx",
+          "line": 236,
+          "original": "/repatriation/${repatriationId}/verify"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/rates/${encodeURIComponent(selected.currency)}/current",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationRecordingDialog.tsx",
+          "line": 84,
+          "original": "/forex/rates/${encodeURIComponent(selected.currency)}/current"
+        }
+      ]
+    },
+    {
+      "endpoint": "/repatriation/${encodeURIComponent(selected.repatriationId)}/record",
+      "locations": [
+        {
+          "file": "ui/src/components/repatriation/RepatriationRecordingDialog.tsx",
+          "line": 124,
+          "original": "/repatriation/${encodeURIComponent(selected.repatriationId)}/record"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 137,
+          "original": "/post-delivery/${shipmentId}/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/payment",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 160,
+          "original": "/post-delivery/${shipmentId}/payment"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/forex",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 186,
+          "original": "/post-delivery/${shipmentId}/forex"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/lc-settlement",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 211,
+          "original": "/post-delivery/${shipmentId}/lc-settlement"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/ecta-audit",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 235,
+          "original": "/post-delivery/${shipmentId}/ecta-audit"
+        }
+      ]
+    },
+    {
+      "endpoint": "/post-delivery/${shipmentId}/close-contract",
+      "locations": [
+        {
+          "file": "ui/src/components/shared/PostDeliveryWorkflowPanel.tsx",
+          "line": 260,
+          "original": "/post-delivery/${shipmentId}/close-contract"
+        }
+      ]
+    },
+    {
+      "endpoint": "/auth/validate",
+      "locations": [
+        {
+          "file": "ui/src/contexts/AuthContext.tsx",
+          "line": 145,
+          "original": "/auth/validate"
+        }
+      ]
+    },
+    {
+      "endpoint": "/auth/refresh",
+      "locations": [
+        {
+          "file": "ui/src/contexts/AuthContext.tsx",
+          "line": 215,
+          "original": "/auth/refresh"
+        }
+      ]
+    },
+    {
+      "endpoint": "/auth/login",
+      "locations": [
+        {
+          "file": "ui/src/contexts/AuthContext.tsx",
+          "line": 235,
+          "original": "/auth/login"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/exporter-applications/check/${user",
+      "locations": [
+        {
+          "file": "ui/src/pages/application-status.tsx",
+          "line": 93,
+          "original": "/exporters/exporter-applications/check/${user"
+        },
+        {
+          "file": "ui/src/pages/resubmit-application.tsx",
+          "line": 84,
+          "original": "/exporters/exporter-applications/check/${user"
+        }
+      ]
+    },
+    {
+      "endpoint": "/exporters/exporter-applications/${application.application_id}/resubmit",
+      "locations": [
+        {
+          "file": "ui/src/pages/resubmit-application.tsx",
+          "line": 127,
+          "original": "/exporters/exporter-applications/${application.application_id}/resubmit"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 60,
+          "original": "/swift/messages/${messageId}"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/sender",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 79,
+          "original": "/swift/messages/sender"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/receiver",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 86,
+          "original": "/swift/messages/receiver"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/mt700",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 114,
+          "original": "/swift/messages/mt700"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/mt103",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 133,
+          "original": "/swift/messages/mt103"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/mt750",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 146,
+          "original": "/swift/messages/mt750"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/mt752",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 159,
+          "original": "/swift/messages/mt752"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/approve",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 166,
+          "original": "/swift/messages/${messageId}/approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/send",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 171,
+          "original": "/swift/messages/${messageId}/send"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/receive",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 176,
+          "original": "/swift/messages/${messageId}/receive"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/process",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 181,
+          "original": "/swift/messages/${messageId}/process"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/settle",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 186,
+          "original": "/swift/messages/${messageId}/settle"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/reject",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 191,
+          "original": "/swift/messages/${messageId}/reject"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/type",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 203,
+          "original": "/swift/messages/type"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/status",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 210,
+          "original": "/swift/messages/status"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${messageId}/nbe-approve",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 224,
+          "original": "/swift/messages/${messageId}/nbe-approve"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/search",
+      "locations": [
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 253,
+          "original": "/swift/messages/search"
+        }
+      ]
+    }
+  ],
+  "unusedBackendEndpoints": [
+    {
+      "method": "GET",
+      "path": "/:contractID/documents",
+      "file": "routes/contracts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/approval-status",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/download",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/signature-history",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/signature-status",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/signatures",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/verify-signatures",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/verify-signatures",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:documentId/view",
+      "file": "routes/documents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:entityType/:entityId/timeline",
+      "file": "routes/status.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:exporterId/historical-performance",
+      "file": "routes/exporters.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:forexId/retention",
+      "file": "routes/retention.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentID/documents",
+      "file": "routes/shipments.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentID/history",
+      "file": "routes/shipments.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentID/status",
+      "file": "routes/courier.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentID/status",
+      "file": "routes/land-transport.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentID/traceability",
+      "file": "routes/shipments.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:shipmentId/status",
+      "file": "routes/postDeliveryWorkflow.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/:userId/identity",
+      "file": "routes/crypto-users.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/activity",
+      "file": "routes/monitoring.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/activity-log",
+      "file": "routes/users.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/advance-payments",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/alerts",
+      "file": "routes/monitoring.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/alerts",
+      "file": "routes/notifications.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/summary",
+      "file": "routes/exporters.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/applicant/status",
+      "file": "routes/auth.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/applications",
+      "file": "routes/monitoring.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/applications/:applicationId",
+      "file": "routes/exporters.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/assessments",
+      "file": "routes/customs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bank-portal",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/blockchain-sync",
+      "file": "routes/monitoring.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/blockchain/:entityType/:entityId",
+      "file": "routes/audit.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bookings",
+      "file": "routes/shipping.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/by-exporter/:exporterId",
+      "file": "routes/users.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/cad/:collectionID",
+      "file": "routes/banking.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/cad/exporter/:exporterID",
+      "file": "routes/banking.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/clearance",
+      "file": "routes/customs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/clearances",
+      "file": "routes/customs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/compliance-report/:entityType/:entityId",
+      "file": "routes/audit.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/consignment-payments",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/consignment/:consignmentID",
+      "file": "routes/banking.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/consignment/exporter/:exporterID",
+      "file": "routes/banking.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/consignment/outstanding",
+      "file": "routes/banking.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/consignments",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/contract/:contractId",
+      "file": "routes/traceability.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/current",
+      "file": "routes/exchange-rates.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/current/:currency",
+      "file": "routes/exchange-rates.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customs",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customs-portal",
+      "file": "routes/stats.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/dashboard",
+      "file": "routes/analytics.ts"
+    }
+  ],
+  "matchedIntegrations": [
+    {
+      "endpoint": "/users",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 235,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 287,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 234,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 523,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1114,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 964,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 135,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 123,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 125,
+          "original": "/users"
+        },
+        {
+          "file": "ui/src/components/portals/shipping/utils/dataLoader.ts",
+          "line": 78,
+          "original": "/users"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/analytics/dashboard",
+      "locations": [
+        {
+          "file": "ui/src/components/analytics/AnalyticsDashboard.tsx",
+          "line": 110,
+          "original": "/analytics/dashboard"
+        },
+        {
+          "file": "ui/src/components/portals/AnalyticsDashboard.tsx",
+          "line": 165,
+          "original": "/analytics/dashboard"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:portal/dashboard",
+          "file": "routes/portals.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/BorderCrossingTab.tsx",
+          "line": 51,
+          "original": "/bordercrossing"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/inspection",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionRequestsTab.tsx",
+          "line": 123,
+          "original": "/inspection"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/contracts",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 739,
+          "original": "/api/v1/contracts"
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 124,
+          "original": "/contracts"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/contracts",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/contracts",
+          "file": "routes/monitoring.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/contracts",
+          "file": "routes/stats.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 814,
+          "original": "/api/v1/forex"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 970,
+          "original": "/forex"
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1136,
+          "original": "/forex"
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 248,
+          "original": "/forex"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 894,
+          "original": "/forex"
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 130,
+          "original": "/forex"
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 119,
+          "original": "/forex"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/forex",
+          "file": "routes/banking.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/forex",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/forex",
+          "file": "routes/stats.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 309,
+          "original": "/shipments/${shipmentId}"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 664,
+          "original": "/shipments/${shipmentId}"
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 1392,
+          "original": "/shipments/${shipmentId}"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/shipments/:shipmentId",
+          "file": "routes/shipping.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${declaration.shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 801,
+          "original": "/shipments/${declaration.shipmentId}"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/shipments/:shipmentId",
+          "file": "routes/shipping.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments/${baseDeclaration.shipmentId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1050,
+          "original": "/shipments/${baseDeclaration.shipmentId}"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/shipments/:shipmentId",
+          "file": "routes/shipping.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/payments",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1182,
+          "original": "/payments"
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 132,
+          "original": "/payments"
+        },
+        {
+          "file": "ui/src/components/repatriation/RepatriationInitiationDialog.tsx",
+          "line": 151,
+          "original": "/payments"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/payments",
+          "file": "routes/banking.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/payments",
+          "file": "routes/exporters.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/shipments",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1684,
+          "original": "/shipments"
+        },
+        {
+          "file": "ui/src/components/portals/shipping/utils/dataLoader.ts",
+          "line": 77,
+          "original": "/shipments"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/shipments",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/shipments",
+          "file": "routes/monitoring.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/shipments",
+          "file": "routes/shipping.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/shipments",
+          "file": "routes/stats.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/insurance",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InsuranceCertificates.tsx",
+          "line": 93,
+          "original": "/api/v1/insurance"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/insurance/issue",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/InsuranceCertificates.tsx",
+          "line": 109,
+          "original": "/api/v1/insurance/issue"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/:certificateID/issue",
+          "file": "routes/phytosanitary.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/phytosanitary",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PhytosanitaryCertificates.tsx",
+          "line": 78,
+          "original": "/api/v1/phytosanitary"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/phytosanitary/issue",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/PhytosanitaryCertificates.tsx",
+          "line": 101,
+          "original": "/api/v1/phytosanitary/issue"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/:certificateID/issue",
+          "file": "routes/phytosanitary.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/lcs",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 129,
+          "original": "/lcs"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/lcs",
+          "file": "routes/banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift-messages",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 131,
+          "original": "/swift-messages"
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 121,
+          "original": "/swift-messages"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/settlements",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 133,
+          "original": "/settlements"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/lc-discrepancies",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 134,
+          "original": "/lc-discrepancies"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/contracts${exporterFilter}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/exporter/utils/dataLoader.ts",
+          "line": 127,
+          "original": "/contracts${exporterFilter}"
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/:certificateID",
+          "file": "routes/phytosanitary.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:contractID",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "PATCH",
+          "path": "/:contractId",
+          "file": "routes/contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:currency",
+          "file": "routes/exchangeRates.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:documentId",
+          "file": "routes/documents.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:dueDiligenceID",
+          "file": "routes/eudr.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:exporterID",
+          "file": "routes/exporters.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:filename",
+          "file": "routes/files.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:forexId",
+          "file": "routes/forex.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/bordercrossing.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:id",
+          "file": "routes/repatriation.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:paymentID",
+          "file": "routes/payments.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:permitId",
+          "file": "routes/permits.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:policyNumber",
+          "file": "routes/insurance.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:portal",
+          "file": "routes/portals.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:shipmentID",
+          "file": "routes/shipments.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/:userId",
+          "file": "routes/users.ts"
+        }
+      ]
+    }
+  ]
+}

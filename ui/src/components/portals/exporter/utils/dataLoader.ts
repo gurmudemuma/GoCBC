@@ -13,6 +13,7 @@ import { apiFetch } from '../../../../config/api.config';
 
 export interface ExportContract {
   contractId: string;
+  exporterId?: string; // Added for filtering
   buyerId: string;
   buyerName: string;
   buyerCountry: string;
@@ -33,6 +34,7 @@ export interface ExportContract {
 export interface ForexStatus {
   forexId: string;
   contractId: string;
+  exporterId?: string; // Added for filtering
   requestedAmount: number;
   allocatedAmount: number;
   currency: string;
@@ -47,6 +49,7 @@ export interface LCStatus {
   lcId: string;
   lcNumber: string;
   contractId: string;
+  exporterId?: string; // Added for filtering
   issuingBank: string;
   amount: number;
   currency: string;
@@ -59,6 +62,7 @@ export interface LCStatus {
 export interface ShipmentStatus {
   shipmentId: string;
   contractId: string;
+  exporterId?: string; // Added for filtering
   status: 'CUSTOMS_CLEARED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED';
   quantity: number;
   weight: number;
@@ -75,6 +79,7 @@ export interface PaymentStatus {
   paymentId: string;
   contractId: string;
   lcId: string;
+  exporterId?: string; // Added for filtering (indirect via contract)
   amount: number;
   currency: string;
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
@@ -87,6 +92,7 @@ export interface CustomsDeclaration {
   declarationId: string;
   shipmentId: string;
   contractId: string;
+  exporterId?: string; // Added for filtering
   status: 'SUBMITTED' | 'INSPECTING' | 'UNDER_REVIEW' | 'CLEARED' | 'REJECTED' | 'BORDER_CROSSING' | 'CROSSED';
   declarationDate: string;
   clearanceDate?: string;
@@ -113,7 +119,9 @@ export const loadExporterData = async (exporterId?: string): Promise<ExporterPor
   console.log('[Exporter DataLoader] 🔄 Loading Exporter Portal data...');
 
   try {
-    const exporterFilter = exporterId ? `?exporterId=${exporterId}` : '';
+    // Note: Backend endpoints don't support exporterId query parameter yet
+    // TODO: Add backend support for filtering by exporterId for performance
+    // For now, fetch all data and filter client-side if needed
     
     // Fetch AND parse all data in parallel
     const [
@@ -124,22 +132,22 @@ export const loadExporterData = async (exporterId?: string): Promise<ExporterPor
       paymentsData,
       customsData,
     ] = await Promise.all([
-      apiFetch(`/contracts${exporterFilter}`, { method: 'GET' })
+      apiFetch('/contracts', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
-      apiFetch(`/forex${exporterFilter}`, { method: 'GET' })
+      apiFetch('/forex', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
-      apiFetch(`/lcs${exporterFilter}`, { method: 'GET' })
+      apiFetch('/banking/lc', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
-      apiFetch(`/shipments${exporterFilter}`, { method: 'GET' })
+      apiFetch('/shipments', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
-      apiFetch(`/payments${exporterFilter}`, { method: 'GET' })
+      apiFetch('/payments', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
-      apiFetch(`/customs/declarations${exporterFilter}`, { method: 'GET' })
+      apiFetch('/customs/declarations', { method: 'GET' })
         .then(res => res.ok ? res.json() : { data: [] })
         .catch(() => ({ data: [] })),
     ]);
@@ -231,6 +239,33 @@ export const loadExporterData = async (exporterId?: string): Promise<ExporterPor
       clearanceDate: customs.clearanceDate || undefined,
       rejectionReason: customs.rejectionReason || undefined,
     }));
+
+    // Filter by exporterId if provided (client-side filtering until backend supports it)
+    if (exporterId) {
+      const filtered = {
+        contracts: contracts.filter(c => c.exporterId === exporterId),
+        forexStatuses: forexStatuses.filter(f => f.exporterId === exporterId),
+        lcStatuses: lcStatuses.filter(l => l.exporterId === exporterId),
+        shipments: shipments.filter(s => s.exporterId === exporterId),
+        payments: payments.filter(p => {
+          // Match payment to contract's exporter
+          const contract = contracts.find(c => c.contractId === p.contractId);
+          return contract?.exporterId === exporterId;
+        }),
+        customsDeclarations: customsDeclarations.filter(cd => cd.exporterId === exporterId),
+      };
+
+      console.log('[Exporter DataLoader] ✅ Data loaded and filtered for exporter:', exporterId, {
+        contracts: filtered.contracts.length,
+        forex: filtered.forexStatuses.length,
+        lcs: filtered.lcStatuses.length,
+        shipments: filtered.shipments.length,
+        payments: filtered.payments.length,
+        customs: filtered.customsDeclarations.length,
+      });
+
+      return filtered;
+    }
 
     console.log('[Exporter DataLoader] ✅ Data loaded:', {
       contracts: contracts.length,

@@ -23,7 +23,7 @@ router.get('/inspections',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      const { status, exporterId, shipmentId, limit = '50' } = req.query;
+      const { status, exporterId, shipmentId, type, limit = '50' } = req.query;
       
       let query = 'SELECT * FROM quality_inspections WHERE 1=1';
       const params: any[] = [];
@@ -44,6 +44,13 @@ router.get('/inspections',
       if (shipmentId) {
         query += ` AND shipment_id = $${paramIndex}`;
         params.push(shipmentId);
+        paramIndex++;
+      }
+      
+      // ✅ NEW: Add inspection type filter
+      if (type) {
+        query += ` AND inspection_type = $${paramIndex}`;
+        params.push(String(type).toUpperCase());
         paramIndex++;
       }
       
@@ -74,7 +81,7 @@ router.get('/',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      const { status, exporterId, shipmentId, limit = '50' } = req.query;
+      const { status, exporterId, shipmentId, type, limit = '50' } = req.query;
       
       let query = 'SELECT * FROM quality_inspections WHERE 1=1';
       const params: any[] = [];
@@ -98,6 +105,13 @@ router.get('/',
         paramIndex++;
       }
       
+      // ✅ NEW: Add inspection type filter
+      if (type) {
+        query += ` AND inspection_type = $${paramIndex}`;
+        params.push(String(type).toUpperCase());
+        paramIndex++;
+      }
+      
       query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
       params.push(parseInt(limit as string) || 50);
       
@@ -111,6 +125,98 @@ router.get('/',
       });
     } catch (error: any) {
       logger.error('Quality inspections list error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// ✅ NEW: Convenience endpoint for pre-shipment inspections
+router.get('/pre-shipment',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status, exporterId, limit = '50' } = req.query;
+      
+      let query = 'SELECT * FROM quality_inspections WHERE inspection_type = $1';
+      const params: any[] = ['PRE_SHIPMENT'];
+      let paramIndex = 2;
+      
+      if (status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
+      
+      if (exporterId) {
+        query += ` AND exporter_id = $${paramIndex}`;
+        params.push(exporterId);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+      params.push(parseInt(limit as string) || 50);
+      
+      const inspections = await postgresDb.all(query, params);
+      
+      res.json({
+        success: true,
+        data: inspections,
+        count: inspections.length,
+        type: 'pre-shipment',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Pre-shipment inspections error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+// ✅ NEW: Convenience endpoint for post-delivery audits
+router.get('/post-delivery',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status, exporterId, limit = '50' } = req.query;
+      
+      let query = 'SELECT * FROM quality_inspections WHERE inspection_type = $1';
+      const params: any[] = ['POST_DELIVERY'];
+      let paramIndex = 2;
+      
+      if (status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
+      
+      if (exporterId) {
+        query += ` AND exporter_id = $${paramIndex}`;
+        params.push(exporterId);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+      params.push(parseInt(limit as string) || 50);
+      
+      const inspections = await postgresDb.all(query, params);
+      
+      res.json({
+        success: true,
+        data: inspections,
+        count: inspections.length,
+        type: 'post-delivery',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Post-delivery audits error:', error);
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },
@@ -1235,6 +1341,78 @@ router.get('/inspections',
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /quality/inspections/by-shipment/:shipmentId
+ * Get all quality inspections for a specific shipment
+ * @access Authenticated
+ */
+router.get('/inspections/by-shipment/:shipmentId',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { shipmentId } = req.params;
+      
+      logger.info(`[QUALITY] Fetching inspections for shipment: ${shipmentId}`);
+      
+      const inspections = await postgresDb.all(
+        'SELECT * FROM quality_inspections WHERE shipment_id = $1 ORDER BY scheduled_date DESC',
+        [shipmentId]
+      );
+      
+      // Normalize field names for all inspections
+      const normalized = inspections.map((inspection: any) => ({
+        inspectionID: inspection.inspection_id,
+        shipmentID: inspection.shipment_id,
+        contractID: inspection.contract_id,
+        exporterID: inspection.exporter_id,
+        coffeeType: inspection.coffee_type,
+        quantity: inspection.quantity,
+        sampleSize: inspection.sample_size,
+        scheduledDate: inspection.scheduled_date,
+        inspectionDate: inspection.inspection_date,
+        inspectorID: inspection.inspector_id,
+        inspectorName: inspection.inspector_name,
+        grade: inspection.grade,
+        passed: inspection.passed,
+        cupQuality: inspection.cup_quality,
+        moistureContent: inspection.moisture_content,
+        defectCount: inspection.defect_count,
+        screenSize: inspection.screen_size,
+        beanSize: inspection.bean_size,
+        color: inspection.color,
+        odor: inspection.odor,
+        overall: inspection.overall_score || inspection.overall,
+        classification: inspection.classification,
+        pesticideTest: inspection.pesticide_test,
+        heavyMetalTest: inspection.heavy_metal_test,
+        mycotoxinTest: inspection.mycotoxin_test,
+        remarks: inspection.remarks,
+        status: inspection.status,
+        certificationNumber: inspection.certification_number,
+        createdAt: inspection.created_at,
+        updatedAt: inspection.updated_at,
+      }));
+      
+      logger.info(`[QUALITY] ✅ Found ${normalized.length} inspections for shipment: ${shipmentId}`);
+      
+      res.json({
+        success: true,
+        data: normalized,
+        count: normalized.length,
+        shipmentId,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error(`[QUALITY] Error fetching inspections for shipment:`, error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_FAILED', message: error.message },
         timestamp: new Date().toISOString()
       });
     }

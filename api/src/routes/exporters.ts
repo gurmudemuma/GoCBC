@@ -1391,6 +1391,99 @@ router.get('/', authMiddleware, async (req, res) => {
  *       500:
  *         description: Internal server error
  */
+
+// ✅ Get exporters with licenses expiring soon (for renewals)
+// IMPORTANT: This route must come BEFORE /:exporterID to avoid route conflicts
+router.get('/renewals', authMiddleware, async (req, res) => {
+  try {
+    const { daysUntilExpiry = '90', status = 'all' } = req.query;
+    const days = parseInt(daysUntilExpiry as string) || 90;
+    
+    logger.info(`[EXPORTERS] Fetching licenses expiring within ${days} days`);
+    
+    // Calculate expiry threshold date
+    const expiryThreshold = new Date();
+    expiryThreshold.setDate(expiryThreshold.getDate() + days);
+    
+    let query = `
+      SELECT 
+        ea.application_id,
+        ea.exporter_id,
+        ea.company_name,
+        ea.ecta_license_number,
+        ea.license_issued_date,
+        ea.license_expiry_date,
+        ea.status,
+        ea.email,
+        ea.phone,
+        ea.contact_person,
+        CASE
+          WHEN ea.license_expiry_date < NOW() THEN 'EXPIRED'
+          WHEN ea.license_expiry_date < NOW() + INTERVAL '30 days' THEN 'CRITICAL'
+          WHEN ea.license_expiry_date < NOW() + INTERVAL '60 days' THEN 'WARNING'
+          ELSE 'UPCOMING'
+        END as renewal_urgency,
+        EXTRACT(DAY FROM (ea.license_expiry_date - NOW())) as days_until_expiry
+      FROM exporter_applications ea
+      WHERE ea.status = 'approved'
+        AND ea.exporter_id IS NOT NULL
+        AND ea.ecta_license_number IS NOT NULL
+        AND ea.license_expiry_date IS NOT NULL
+        AND ea.license_expiry_date <= $1
+      ORDER BY ea.license_expiry_date ASC
+    `;
+    
+    const renewals = await postgresDb.all(query, [expiryThreshold.toISOString()]);
+    
+    // Filter by status if requested
+    let filteredRenewals = renewals;
+    const statusStr = String(status);
+    if (statusStr !== 'all') {
+      filteredRenewals = renewals.filter((r: any) => 
+        r.renewal_urgency.toLowerCase() === statusStr.toLowerCase()
+      );
+    }
+    
+    // Group by urgency
+    const groupedByUrgency = {
+      expired: filteredRenewals.filter((r: any) => r.renewal_urgency === 'EXPIRED'),
+      critical: filteredRenewals.filter((r: any) => r.renewal_urgency === 'CRITICAL'),
+      warning: filteredRenewals.filter((r: any) => r.renewal_urgency === 'WARNING'),
+      upcoming: filteredRenewals.filter((r: any) => r.renewal_urgency === 'UPCOMING')
+    };
+    
+    logger.info(`[EXPORTERS] Found ${filteredRenewals.length} licenses requiring renewal`);
+    
+    res.json({
+      success: true,
+      data: {
+        renewals: filteredRenewals,
+        summary: {
+          total: filteredRenewals.length,
+          expired: groupedByUrgency.expired.length,
+          critical: groupedByUrgency.critical.length,
+          warning: groupedByUrgency.warning.length,
+          upcoming: groupedByUrgency.upcoming.length
+        },
+        groupedByUrgency,
+        filters: {
+          daysUntilExpiry: days,
+          expiryThreshold: expiryThreshold.toISOString(),
+          status
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[EXPORTERS] Error fetching renewals:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'QUERY_FAILED', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 router.get('/:exporterID',
   authMiddleware, // Protected route
   [param('exporterID').notEmpty().withMessage('Exporter ID is required')],
@@ -2285,9 +2378,6 @@ router.get('/licenses/:licenseNumber/verify',
   }
 );
 
-export default router;
-
-
 // GET /:exporterId/historical-performance - Get exporter's historical performance for LC approval
 router.get('/:exporterId/historical-performance', authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -2418,3 +2508,7 @@ router.get('/:exporterId/historical-performance', authMiddleware, async (req: Re
     });
   }
 });
+
+
+// ✅ NEW: Get exporters with licenses expiring soon (for renewals)
+export default router;

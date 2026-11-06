@@ -565,6 +565,88 @@ router.post('/messages/:messageID/approve',
 );
 
 /**
+ * POST /api/v1/swift/messages/:messageID/nbe-approve
+ * NBE (National Bank of Ethiopia) approval for SWIFT messages
+ * Additional regulatory approval layer for high-value transactions
+ */
+router.post('/messages/:messageID/nbe-approve',
+  authMiddleware,
+  [
+    param('messageID').notEmpty(),
+    body('approvedBy').notEmpty().withMessage('NBE approver required'),
+    body('amlCheck').notEmpty().isIn(['PASS', 'FAIL']).withMessage('AML check result required'),
+    body('sanctionScreening').notEmpty().isIn(['PASS', 'FAIL']).withMessage('Sanction screening result required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { messageID } = req.params;
+      const { approvedBy, amlCheck, sanctionScreening, comments } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SWIFT] NBE approving message: ${messageID}`);
+
+      // Verify user has NBE role
+      if (user?.org !== 'NBE' && user?.organization !== 'NBE') {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Only NBE users can approve SWIFT messages' },
+        });
+      }
+
+      // Check compliance requirements
+      if (amlCheck === 'FAIL' || sanctionScreening === 'FAIL') {
+        logger.warn(`[SWIFT] ⚠️ Compliance check failed for message: ${messageID}`);
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'COMPLIANCE_FAILURE', 
+            message: 'Message failed AML or sanctions screening',
+            details: { amlCheck, sanctionScreening }
+          },
+        });
+      }
+
+      // Submit NBE approval to blockchain
+      const result = await fabricService.invokeChaincode('NBEApproveSWIFTMessage', [
+        messageID,
+        approvedBy,
+        amlCheck,
+        sanctionScreening,
+        comments || 'NBE approved after compliance review',
+        new Date().toISOString(),
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ NBE approved SWIFT message: ${messageID}`);
+        res.json({
+          success: true,
+          data: { 
+            messageID, 
+            status: 'NBE_APPROVED',
+            approvedBy,
+            approvalDate: new Date().toISOString(),
+            compliance: { amlCheck, sanctionScreening }
+          },
+          txId: result.txId,
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: { code: 'NBE_APPROVE_FAILED', message: result.error },
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SWIFT] Error in NBE approval:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
+/**
  * POST /api/v1/swift/messages/:messageID/send
  * Send an approved SWIFT message
  */

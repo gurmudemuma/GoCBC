@@ -597,6 +597,105 @@ func (c *CoffeeContract) IssueLC(ctx contractapi.TransactionContextInterface,
 	return nil
 }
 
+// CreateAndIssueLC - Bank creates and issues LC in one step (bypasses request/approve workflow)
+// This is used when the bank receives an LC from an issuing bank and needs to register it directly
+func (c *CoffeeContract) CreateAndIssueLC(ctx contractapi.TransactionContextInterface,
+	lcID, contractID, exporterID, issuingBank, advisingBank, beneficiary, applicant,
+	amountStr, currency, expiryDate, latestShipmentDate, portOfLoading, portOfDischarge,
+	paymentTerms, partialShipmentStr, transhipmentStr string) error {
+
+	// Verify caller is a bank
+	issuerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("CreateAndIssueLC: failed to get issuer MSP ID: %w", err)
+	}
+	if !isBankMSP(issuerMSP) {
+		return fmt.Errorf("CreateAndIssueLC: unauthorized - only bank members can create LCs, got: %s", issuerMSP)
+	}
+
+	issuerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		issuerID = issuerMSP
+	}
+
+	fmt.Printf("CreateAndIssueLC: Creating LC %s by %s (MSP: %s)\n", lcID, issuerID, issuerMSP)
+
+	// Parse amount
+	amount, err := strconv.ParseFloat(amountStr, 64)
+	if err != nil {
+		return fmt.Errorf("CreateAndIssueLC: invalid amount: %w", err)
+	}
+
+	// Get transaction timestamp
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
+	}
+	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// Create LC with ISSUED status directly
+	lc := LetterOfCredit{
+		LCID:                    lcID,
+		ContractID:              contractID,
+		ExporterID:              exporterID,
+		IssuingBank:             issuingBank,
+		AdvisingBank:            advisingBank,
+		Beneficiary:             beneficiary,
+		Amount:                  amount,
+		Currency:                currency,
+		Status:                  "ISSUED",
+		ExpiryDate:              expiryDate,
+		Terms:                   paymentTerms,
+		IssueDate:               txTime.Format(time.RFC3339),
+		IssuedBy:                issuerID,
+		IssuedByMSP:             issuerMSP,
+		Documents:               []string{},
+		Amendments:              []LCAmendment{},
+		AmendmentCount:          0,
+		Discrepancies:           []LCDiscrepancy{},
+		DiscrepancyResolved:     true,
+		NegotiationStatus:       "NOT_STARTED",
+		CreatedAt:               txTime,
+		UpdatedAt:               txTime,
+	}
+
+	lcJSON, err := json.Marshal(lc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LC: %v", err)
+	}
+
+	err = ctx.GetStub().PutState("LC_"+lcID, lcJSON)
+	if err != nil {
+		return err
+	}
+
+	// Create audit trail
+	changes := []FieldChange{
+		{FieldName: "lcId", OldValue: "", NewValue: lcID, DataType: "string"},
+		{FieldName: "contractId", OldValue: "", NewValue: contractID, DataType: "string"},
+		{FieldName: "amount", OldValue: "", NewValue: fmt.Sprintf("%.2f", amount), DataType: "number"},
+		{FieldName: "status", OldValue: "", NewValue: "ISSUED", DataType: "string"},
+	}
+
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    true,
+		EUDRCompliance: true,
+		ICOCompliance:  true,
+		ComplianceNote: "LC created and issued by bank in single operation",
+	}
+
+	err = c.CreateAuditLog(ctx, "CREATE", "LC", lcID, "", "ISSUED", changes,
+		"Letter of Credit created and issued by bank", compliance)
+	if err != nil {
+		return fmt.Errorf("CreateAndIssueLC: failed to create audit log: %w", err)
+	}
+
+	fmt.Printf("=== CreateAndIssueLC completed: LC %s created with status ISSUED ===\n", lcID)
+	return nil
+}
+
 // ReadLC - Get Letter of Credit details
 func (c *CoffeeContract) ReadLC(ctx contractapi.TransactionContextInterface,
 	lcID string) (*LetterOfCredit, error) {

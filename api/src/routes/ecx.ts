@@ -69,6 +69,113 @@ router.get('/market', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/v1/ecx/grading-standards — Ethiopian coffee grading standards reference
+router.get('/grading-standards', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        standards: [
+          {
+            grade: 'Grade 1',
+            category: 'Specialty',
+            defectCount: '0-3',
+            cupscore: '85-100',
+            moistureContent: '10-12%',
+            description: 'Specialty grade coffee with no primary defects and minimal secondary defects',
+            characteristics: 'Clean cup, sweet, complex flavors, bright acidity',
+            primaryDefects: 0,
+            secondaryDefectsMax: 3,
+            minScreenSize: 15
+          },
+          {
+            grade: 'Grade 2',
+            category: 'Premium',
+            defectCount: '4-12',
+            cupscore: '80-84.9',
+            moistureContent: '10-12%',
+            description: 'Premium grade coffee with minimal defects suitable for export',
+            characteristics: 'Good cup quality, balanced flavors, pleasant aroma',
+            primaryDefects: 0,
+            secondaryDefectsMax: 12,
+            minScreenSize: 14
+          },
+          {
+            grade: 'Grade 3',
+            category: 'Exchange',
+            defectCount: '13-25',
+            cupscore: '75-79.9',
+            moistureContent: '10-12%',
+            description: 'Exchange grade coffee meeting international trading standards',
+            characteristics: 'Acceptable cup quality, typical Ethiopian profile',
+            primaryDefects: 0,
+            secondaryDefectsMax: 25,
+            minScreenSize: 14
+          },
+          {
+            grade: 'Grade 4',
+            category: 'Standard',
+            defectCount: '26-45',
+            cupscore: '70-74.9',
+            moistureContent: '10-12%',
+            description: 'Standard commercial grade coffee',
+            characteristics: 'Basic cup quality, suitable for blends',
+            primaryDefects: '0-1',
+            secondaryDefectsMax: 45,
+            minScreenSize: 12
+          },
+          {
+            grade: 'Grade 5',
+            category: 'Off-Grade',
+            defectCount: '46+',
+            cupscore: 'Below 70',
+            moistureContent: '10-12%',
+            description: 'Local consumption grade, below export standards',
+            characteristics: 'Below standard quality, limited commercial value',
+            primaryDefects: 'Multiple',
+            secondaryDefectsMax: 'Unlimited',
+            minScreenSize: 12
+          }
+        ],
+        defectTypes: {
+          primary: [
+            'Full black beans',
+            'Full sour beans',
+            'Dried cherry/pod',
+            'Fungus damaged beans',
+            'Foreign matter',
+            'Severe insect damage'
+          ],
+          secondary: [
+            'Partial black beans',
+            'Partial sour beans',
+            'Parchment',
+            'Floaters',
+            'Immature beans',
+            'Withered beans',
+            'Shells',
+            'Broken/chipped beans',
+            'Hull/husk',
+            'Slight insect damage'
+          ]
+        },
+        methodology: 'Ethiopian Coffee Grading System based on ECX and SCAA standards',
+        sampleSize: '350 grams per lot',
+        reference: 'Ethiopian Commodity Exchange (ECX) Grading Manual 2024',
+        lastUpdated: new Date().toISOString()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    logger.error('[ECX] Error fetching grading standards:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: { code: 'INTERNAL_ERROR', message: err.message }, 
+      timestamp: new Date().toISOString() 
+    });
+  }
+});
+
 // GET /api/v1/ecx/lots — all lots
 router.get('/lots', authMiddleware, async (req: Request, res: Response) => {
   try {

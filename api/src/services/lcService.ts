@@ -207,10 +207,13 @@ export class LCService {
     try {
       logger.info(`[LCService] Issuing LC: ${lcData.lcID}`);
 
-      // Issue LC on blockchain
-      const result = await this.fabricService.invokeChaincode('IssueLC', [
+      // Connect as BanksMSP to issue the LC
+      await this.fabricService.connectAsOrg('BanksMSP');
+
+      // Create and issue LC in one step using CreateAndIssueLC
+      // This is a bank-initiated LC that bypasses the request/approve workflow
+      const result = await this.fabricService.invokeChaincode('CreateAndIssueLC', [
         lcData.lcID,
-        lcData.lcNumber,
         lcData.contractID,
         lcData.exporterID,
         lcData.issuingBank,
@@ -220,16 +223,16 @@ export class LCService {
         lcData.amount.toString(),
         lcData.currency,
         lcData.expiryDate,
-        lcData.latestShipmentDate,
-        lcData.portOfLoading,
-        lcData.portOfDischarge,
-        lcData.paymentTerms,
+        lcData.latestShipmentDate || lcData.expiryDate,
+        lcData.portOfLoading || '',
+        lcData.portOfDischarge || '',
+        lcData.paymentTerms || 'Sight LC',
         lcData.partialShipment ? 'true' : 'false',
         lcData.transhipment ? 'true' : 'false',
       ]);
 
       if (!result.success) {
-        throw new Error(result.error || 'Failed to issue LC on blockchain');
+        throw new Error(result.error || 'Failed to create and issue LC on blockchain');
       }
 
       // Save to database

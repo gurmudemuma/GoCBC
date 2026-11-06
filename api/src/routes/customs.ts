@@ -917,6 +917,100 @@ router.get('/declarations/:declarationID',
   }
 );
 
+/**
+ * GET /api/v1/customs/risk-rules
+ * Get customs risk assessment rules configuration
+ * Used by RiskRulesManager for displaying and managing risk assessment criteria
+ */
+router.get('/risk-rules', authMiddleware, async (req, res) => {
+  try {
+    logger.info('[CUSTOMS] 📋 Fetching risk assessment rules...');
+    
+    // Return risk assessment rules configuration
+    // This can be stored in database or configuration file
+    const riskRules = {
+      highRiskCountries: [
+        'Country with sanctions',
+        'High-risk jurisdictions'
+      ],
+      valueThresholds: {
+        automatic_inspection: 100000, // USD - trigger automatic inspection
+        enhanced_scrutiny: 500000,    // USD - require enhanced due diligence
+        senior_approval: 1000000      // USD - require senior officer approval
+      },
+      redFlags: [
+        {
+          id: 'rf001',
+          category: 'Documentation',
+          description: 'Missing or incomplete export documentation',
+          riskLevel: 'HIGH',
+          action: 'MANDATORY_INSPECTION'
+        },
+        {
+          id: 'rf002',
+          category: 'Compliance',
+          description: 'Exporter history of non-compliance',
+          riskLevel: 'HIGH',
+          action: 'ENHANCED_REVIEW'
+        },
+        {
+          id: 'rf003',
+          category: 'Value',
+          description: 'Declared value significantly differs from market rate',
+          riskLevel: 'MEDIUM',
+          action: 'VALUE_VERIFICATION'
+        },
+        {
+          id: 'rf004',
+          category: 'Origin',
+          description: 'Questionable origin documentation',
+          riskLevel: 'HIGH',
+          action: 'ORIGIN_VERIFICATION'
+        },
+        {
+          id: 'rf005',
+          category: 'Quality',
+          description: 'Quality certification missing or expired',
+          riskLevel: 'MEDIUM',
+          action: 'QUALITY_INSPECTION'
+        }
+      ],
+      inspectionTriggers: {
+        first_time_exporter: true,
+        high_value_shipment: true,
+        high_risk_destination: true,
+        previous_discrepancies: true,
+        random_selection: true, // 10% of all shipments
+        random_selection_rate: 0.1
+      },
+      complianceChecks: [
+        'Export license validation',
+        'Phytosanitary certificate verification',
+        'Quality inspection certificate',
+        'Origin certificate',
+        'Customs declaration completeness',
+        'Payment documentation',
+        'LC documentation (if applicable)'
+      ]
+    };
+    
+    logger.info('[CUSTOMS] ✅ Risk rules fetched successfully');
+    
+    res.json({
+      success: true,
+      data: riskRules,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[CUSTOMS] ❌ Error fetching risk rules:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'QUERY_FAILED', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 export default router;
 
 

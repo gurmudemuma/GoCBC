@@ -1,0 +1,27 @@
+Testing chaincode deployment flow...
+
+1. Checking deploy-chaincode.sh...
+   ✅ File exists
+-rwxr-xr-x 1 guda guda 13K Nov  5 19:40 /home/guda/GoCBC/deploy-chaincode.sh
+
+2. Checking execute permissions...
+   ✅ Executable
+
+3. Testing deployment script (should skip if no changes)...
+
+[0;34m═══════════════════════════════════════════════════════════════[0m
+[0;34m  Coffee Chaincode Deployment[0m
+[0;34m═══════════════════════════════════════════════════════════════[0m
+
+[1;33mChecking if chaincode is already deployed...[0m
+[0;32m✓ Chaincode already deployed: v1.1, sequence 2[0m
+[0;32m✓ No chaincode changes detected - skipping redeployment[0m
+
+[0;32m═══════════════════════════════════════════════════════════════[0m
+[0;32m  Chaincode is up-to-date and ready[0m
+[0;32m═══════════════════════════════════════════════════════════════[0m
+
+4. Verifying chaincode is deployed...
+Version: 1.1, Sequence: 2, Endorsement Plugin: escc, Validation Plugin: vscc, Approvals: [BanksMSP: true, CustomsMSP: true, ECTAMSP: true, ECXMSP: true, NBEMSP: true, ShippingMSP: true]
+
+✅ Chaincode deployment integration verified!

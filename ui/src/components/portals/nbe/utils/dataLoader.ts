@@ -118,8 +118,8 @@ export const loadNBEData = async (): Promise<NBEPortalData> => {
     ] = await Promise.all([
       apiFetch('/forex', { method: 'GET' }),
       apiFetch('/exchange-rates', { method: 'GET' }),
-      apiFetch('/swift-messages', { method: 'GET' }),
-      apiFetch('/compliance-checks', { method: 'GET' }),
+      apiFetch('/swift/messages', { method: 'GET' }),
+      apiFetch('/compliance', { method: 'GET' }), // Fixed from /compliance-checks
       apiFetch('/shipments/delivered', { method: 'GET' }),
       apiFetch('/contracts', { method: 'GET' }),
       apiFetch('/users?organization=NBE', { method: 'GET' }),

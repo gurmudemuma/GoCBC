@@ -1,0 +1,1121 @@
+{
+  "summary": {
+    "backendEndpoints": 444,
+    "frontendCalls": 176,
+    "matched": 174,
+    "trueOrphans": 2
+  },
+  "orphanedCalls": [
+    {
+      "endpoint": "/blockchain-signatures/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}",
+      "locations": [
+        {
+          "file": "ui/src/components/blockchain/EntityBlockchainVerification.tsx",
+          "line": 91
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/${crossing.borderCrossingId}/${endpoint}",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/ClearanceDecisionDialog.tsx",
+          "line": 22
+        }
+      ]
+    }
+  ],
+  "matchedCalls": [
+    {
+      "endpoint": "/analytics/blockchain",
+      "locations": [
+        {
+          "file": "ui/src/components/BlockchainMonitor.tsx",
+          "line": 69
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/analytics/blockchain",
+          "file": "analytics.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lcs",
+      "locations": [
+        {
+          "file": "ui/src/components/NotificationCenter.tsx",
+          "line": 89
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/banking/lcs",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payments",
+      "locations": [
+        {
+          "file": "ui/src/components/NotificationCenter.tsx",
+          "line": 157
+        },
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 83
+        },
+        {
+          "file": "ui/src/components/portals/PaymentDocuments.tsx",
+          "line": 84
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/banking/payments",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 235
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 287
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 234
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 523
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1114
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 964
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 135
+        },
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 123
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 125
+        },
+        {
+          "file": "ui/src/components/portals/shipping/utils/dataLoader.ts",
+          "line": 78
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/users",
+          "file": "users.ts"
+        },
+        {
+          "method": "POST",
+          "path": "/users",
+          "file": "users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/identities",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 249
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 294
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/crypto-users/identities",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/expiring-certificates",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 259
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 391
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/crypto-users/expiring-certificates",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/traceability/system/statistics",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 268
+        },
+        {
+          "file": "ui/src/components/portals/SystemOverview.tsx",
+          "line": 74
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/traceability/system/statistics",
+          "file": "traceability.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/portal/recent",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 350
+        },
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 424
+        },
+        {
+          "file": "ui/src/components/portals/AuditTrailTable.tsx",
+          "line": 123
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1151
+        },
+        {
+          "file": "ui/src/components/portals/CustomsPortal.tsx",
+          "line": 1117
+        },
+        {
+          "file": "ui/src/components/portals/ECTAPortal.tsx",
+          "line": 649
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 571
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 406
+        },
+        {
+          "file": "ui/src/components/portals/SystemTraceability.tsx",
+          "line": 149
+        },
+        {
+          "file": "ui/src/pages/profile.tsx",
+          "line": 173
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/audit/portal/recent",
+          "file": "audit.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/blockchain/network",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/AdminPortal.tsx",
+          "line": 403
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/blockchain/network",
+          "file": "blockchain.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/identity",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 94
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/crypto-users/:userId/identity",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/enroll",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 112
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/crypto-users/enroll",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/revoke",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 139
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/crypto-users/:userId/revoke",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/crypto-users/${userId}/renew-certificate",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/BlockchainIdentityPanel.tsx",
+          "line": 160
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/crypto-users/:userId/renew-certificate",
+          "file": "crypto-users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/customs/risk-rules",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/RiskRulesManager.tsx",
+          "line": 14
+        },
+        {
+          "file": "ui/src/components/admin/RiskRulesManager.tsx",
+          "line": 36
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/customs/risk-rules",
+          "file": "customs.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${selectedUser.id}",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 572
+        },
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 594
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/users/:userId",
+          "file": "users.ts"
+        },
+        {
+          "method": "PUT",
+          "path": "/users/:userId",
+          "file": "users.ts"
+        },
+        {
+          "method": "DELETE",
+          "path": "/users/:userId",
+          "file": "users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${userId}/status",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 612
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "PUT",
+          "path": "/users/:userId/status",
+          "file": "users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/users/${selectedUser.id}/reset-password",
+      "locations": [
+        {
+          "file": "ui/src/components/admin/UserManagement.tsx",
+          "line": 700
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/users/:userId/reset-password",
+          "file": "users.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/analytics/dashboard",
+      "locations": [
+        {
+          "file": "ui/src/components/analytics/AnalyticsDashboard.tsx",
+          "line": 110
+        },
+        {
+          "file": "ui/src/components/portals/AnalyticsDashboard.tsx",
+          "line": 165
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/analytics/dashboard",
+          "file": "analytics.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/analytics/timeseries/${selectedMetric}",
+      "locations": [
+        {
+          "file": "ui/src/components/analytics/AnalyticsDashboard.tsx",
+          "line": 132
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/analytics/timeseries/:metric",
+          "file": "analytics.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages",
+      "locations": [
+        {
+          "file": "ui/src/components/bank/SWIFTDashboard.tsx",
+          "line": 160
+        },
+        {
+          "file": "ui/src/components/bank/SWIFTNotifications.tsx",
+          "line": 74
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 801
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 342
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 131
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 121
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 55
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 65
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 72
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 95
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 229
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/swift/messages",
+          "file": "swift.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/swift/messages",
+          "file": "swift.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/statistics",
+      "locations": [
+        {
+          "file": "ui/src/components/bank/SWIFTDashboard.tsx",
+          "line": 221
+        },
+        {
+          "file": "ui/src/components/bank/SWIFTStatistics.tsx",
+          "line": 67
+        },
+        {
+          "file": "ui/src/services/swiftApi.ts",
+          "line": 198
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/swift/statistics",
+          "file": "swift.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/BorderCrossingInitiationDialog.tsx",
+          "line": 32
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/bordercrossing/:id",
+          "file": "bordercrossing.ts"
+        },
+        {
+          "method": "POST",
+          "path": "/bordercrossing/initiate",
+          "file": "bordercrossing.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/BorderCrossingTab.tsx",
+          "line": 51
+        },
+        {
+          "file": "ui/src/components/portals/customs/utils/dataLoader.ts",
+          "line": 122
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/bordercrossing",
+          "file": "bordercrossing.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/bordercrossing/${crossing.borderCrossingId}/inspect",
+      "locations": [
+        {
+          "file": "ui/src/components/bordercrossing/PhysicalInspectionDialog.tsx",
+          "line": 20
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/bordercrossing/:id/inspect",
+          "file": "bordercrossing.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/quality/inspections/${inspection.inspectionId}/perform",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionConductDialog.tsx",
+          "line": 72
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/quality/inspections/:inspectionID/perform",
+          "file": "quality.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/inspection",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionRequestsTab.tsx",
+          "line": 123
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/inspection",
+          "file": "inspection.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/inspection",
+          "file": "inspection.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/inspection/${inspection.inspectionId}/schedule",
+      "locations": [
+        {
+          "file": "ui/src/components/inspection/InspectionSchedulingDialog.tsx",
+          "line": 145
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/inspection/:id/schedule",
+          "file": "inspection.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${encodeURIComponent(form.lcId)}/discrepancy/report",
+      "locations": [
+        {
+          "file": "ui/src/components/lcdiscrepancy/DiscrepancyReportingDialog.tsx",
+          "line": 53
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcId/discrepancy/report",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc",
+      "locations": [
+        {
+          "file": "ui/src/components/lcdiscrepancy/LCDiscrepancyTab.tsx",
+          "line": 56
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 763
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 901
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 652
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 926
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 129
+        },
+        {
+          "file": "ui/src/components/portals/exporter/utils/dataLoader.ts",
+          "line": 141
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/banking/lc",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/entity/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 122
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/audit/entity/:entityType/:entityId",
+          "file": "audit.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/verify/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 146
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/audit/verify/:entityType/:entityId",
+          "file": "audit.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/audit/compliance-report/${entityType}/${entityId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/AuditTrailViewer.tsx",
+          "line": 198
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/audit/compliance-report/:entityType/:entityId",
+          "file": "audit.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/swift/messages/${encodeURIComponent(messageId)}/ledger-proof",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 326
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/swift/messages/:messageID/ledger-proof",
+          "file": "swift.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/contracts",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 739
+        },
+        {
+          "file": "ui/src/components/portals/exporter/utils/dataLoader.ts",
+          "line": 135
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 124
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/contracts",
+          "file": "contracts.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/contracts",
+          "file": "contracts.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 814
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 970
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 1136
+        },
+        {
+          "file": "ui/src/components/portals/NBEPortal.tsx",
+          "line": 248
+        },
+        {
+          "file": "ui/src/components/portals/ShippingPortal.tsx",
+          "line": 894
+        },
+        {
+          "file": "ui/src/components/portals/banks/utils/dataLoader.ts",
+          "line": 130
+        },
+        {
+          "file": "ui/src/components/portals/exporter/utils/dataLoader.ts",
+          "line": 138
+        },
+        {
+          "file": "ui/src/components/portals/nbe/utils/dataLoader.ts",
+          "line": 119
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/forex",
+          "file": "forex.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/entity/CONTRACT/${contract.contractId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1335
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/documents/entity/:entityType/:entityId",
+          "file": "documents.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/request",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1485
+        },
+        {
+          "file": "ui/src/components/portals/ExporterPortal.tsx",
+          "line": 2160
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/request",
+          "file": "banking.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/banking/lc/:lcID",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/approve",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1548
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1596
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcID/approve",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${selectedLC.lcId}/amend",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1652
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcID/amend",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/cad",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1687
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/cad",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/initiate",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1722
+        },
+        {
+          "file": "ui/src/components/portals/PaymentInitiationDialog.tsx",
+          "line": 152
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/payment/initiate",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/consignment/register",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1754
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/consignment/register",
+          "file": "banking.ts"
+        },
+        {
+          "method": "GET",
+          "path": "/banking/consignment/:consignmentID",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/payment/${selectedPayment.paymentID}/verify-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1790
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/payment/:paymentID/verify-documents",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/examine-documents",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1825
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcID/examine-documents",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/documents/${documentId}/verify",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1870
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/documents/:documentID/verify",
+          "file": "documents.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${selectedLC.lcId}",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1889
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1905
+        },
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1919
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/banking/lc/:lcID",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lcId}/release-payment",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1942
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcID/release-payment",
+          "file": "banking.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/request",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 1988
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/forex/:forexId",
+          "file": "forex.ts"
+        },
+        {
+          "method": "POST",
+          "path": "/forex/request",
+          "file": "forex.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/forex/allocate",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 2021
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "GET",
+          "path": "/forex/:forexId",
+          "file": "forex.ts"
+        },
+        {
+          "method": "POST",
+          "path": "/forex/allocate",
+          "file": "forex.ts"
+        }
+      ]
+    },
+    {
+      "endpoint": "/banking/lc/${lc.lcId}/issue",
+      "locations": [
+        {
+          "file": "ui/src/components/portals/BanksPortal.tsx",
+          "line": 3145
+        }
+      ],
+      "backendRoutes": [
+        {
+          "method": "POST",
+          "path": "/banking/lc/:lcID/issue",
+          "file": "banking.ts"
+        }
+      ]
+    }
+  ]
+}

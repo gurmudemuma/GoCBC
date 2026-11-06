@@ -1,0 +1,120 @@
+╔════════════════════════════════════════════════════════════════╗
+║ FINAL INTEGRATION CHECK                                        ║
+║ Complete frontend-backend endpoint validation                  ║
+╚════════════════════════════════════════════════════════════════╝
+
+Step 1: Extracting backend routes with full base paths...
+─────────────────────────────────────────────────────────
+Found 432 backend endpoints with full paths
+
+Step 2: Extracting frontend API calls...
+─────────────────────────────────────────────────────────
+Found 187 unique frontend API calls
+
+Step 3: Matching frontend calls to backend endpoints...
+─────────────────────────────────────────────────────────
+
+✅ Matched: 162 endpoints
+❌ Orphaned: 25 endpoints (TRUE orphans)
+
+╔════════════════════════════════════════════════════════════════╗
+║ TRUE ORPHANED FRONTEND CALLS                                   ║
+║ These frontend calls have NO matching backend endpoint         ║
+╚════════════════════════════════════════════════════════════════╝
+
+❌ /analytics/blockchain
+   📄 ui/src/components/BlockchainMonitor.tsx:69
+
+❌ /customs/risk-rules
+   📄 ui/src/components/admin/RiskRulesManager.tsx:14
+   📄 ui/src/components/admin/RiskRulesManager.tsx:36
+
+❌ /blockchain-signatures/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}
+   📄 ui/src/components/blockchain/EntityBlockchainVerification.tsx:91
+
+❌ /bordercrossing/${crossing.borderCrossingId}/${endpoint}
+   📄 ui/src/components/bordercrossing/ClearanceDecisionDialog.tsx:22
+
+❌ /bordercrossing/${crossing.borderCrossingId}/inspect
+   📄 ui/src/components/bordercrossing/PhysicalInspectionDialog.tsx:20
+
+❌ /inspection/${inspection.inspectionId}/conduct
+   📄 ui/src/components/inspection/InspectionConductDialog.tsx:71
+
+❌ /quality/inspections/by-shipment/${shipmentId}
+   📄 ui/src/components/portals/CustomsPortal.tsx:351
+
+❌ /insurance
+   📄 ui/src/components/portals/InsuranceCertificates.tsx:93
+
+❌ /phytosanitary
+   📄 ui/src/components/portals/PhytosanitaryCertificates.tsx:78
+
+❌ /phytosanitary/shipment/${searchShipmentId}
+   📄 ui/src/components/portals/PhytosanitaryCertificates.tsx:136
+
+❌ /phytosanitary/${certificateId}/revoke
+   📄 ui/src/components/portals/PhytosanitaryCertificates.tsx:160
+
+❌ /lcs
+   📄 ui/src/components/portals/banks/utils/dataLoader.ts:129
+
+❌ /swift-messages
+   📄 ui/src/components/portals/banks/utils/dataLoader.ts:131
+   📄 ui/src/components/portals/nbe/utils/dataLoader.ts:121
+
+❌ /settlements
+   📄 ui/src/components/portals/banks/utils/dataLoader.ts:133
+
+❌ /lc-discrepancies
+   📄 ui/src/components/portals/banks/utils/dataLoader.ts:134
+
+❌ /customs/inspections
+   📄 ui/src/components/portals/customs/utils/dataLoader.ts:120
+
+❌ /customs/border-crossings
+   📄 ui/src/components/portals/customs/utils/dataLoader.ts:122
+
+❌ /contracts${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:127
+
+❌ /forex${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:130
+
+❌ /lcs${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:133
+
+❌ /shipments${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:136
+
+❌ /payments${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:139
+
+❌ /customs/declarations${exporterFilter}
+   📄 ui/src/components/portals/exporter/utils/dataLoader.ts:142
+
+❌ /compliance-checks
+   📄 ui/src/components/portals/nbe/utils/dataLoader.ts:122
+
+❌ /swift/messages/${messageId}/nbe-approve
+   📄 ui/src/services/swiftApi.ts:224
+
+═══════════════════════════════════════════════════════════════
+FINAL INTEGRATION STATUS
+═══════════════════════════════════════════════════════════════
+Backend endpoints: 432
+Frontend API calls: 187
+✅ Successfully integrated: 162
+❌ True orphans (need fixing): 25
+
+📊 Report saved to: INTEGRATION-STATUS-FINAL.json
+
+═══════════════════════════════════════════════════════════════
+ACTIONS REQUIRED
+═══════════════════════════════════════════════════════════════
+
+For each orphaned call, you need to either:
+  1. CREATE the missing backend endpoint
+  2. REMOVE the dead frontend code (if feature deprecated)
+  3. FIX the frontend URL (if it's incorrect)
+
