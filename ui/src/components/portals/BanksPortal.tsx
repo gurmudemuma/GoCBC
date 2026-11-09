@@ -5898,7 +5898,7 @@ const BanksPortal: React.FC = () => {
                               <IconButton 
                                 size="small"
                                 color="primary"
-                                onClick={() => handleApproveBulkLCs([lc.lcId])}
+                                onClick={() => handleApproveLC(lc.lcId, lc.exporterId)}
                               >
                                 <CheckCircle />
                               </IconButton>

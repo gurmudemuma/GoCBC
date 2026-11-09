@@ -78,9 +78,11 @@ wallet/
 .eslintcache
 .stylelintcache
 
-# Hyperledger Fabric binaries
-bin/
-config/
+# Hyperledger Fabric binaries (root-level download dirs only — a bare
+# `config/` pattern also swallowed ui/src/config/, which is why the
+# frontend config modules were never committed)
+/bin/
+/config/
 
 # Logs
 logs/**/*.log

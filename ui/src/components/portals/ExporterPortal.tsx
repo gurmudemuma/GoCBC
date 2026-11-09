@@ -298,9 +298,12 @@ interface ShipmentStatus {
   quantity: number;
   grade?: string;
   // Workflow status (backend): DRAFT, REGISTERED, QUALITY_PENDING, QUALITY_APPROVED, QUALITY_REJECTED, CUSTOMS_CLEARED, COMPLETED
-  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED';
+  // plus the lifecycle values the shipment endpoints actually return
+  // (CREATED, BOOKED, LOADED, DEPARTED, IN_TRANSIT, SHIPPED, ARRIVED,
+  // DELIVERED, CONFIRMED — see api/src/routes/shipments.ts).
+  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'SHIPPED' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED';
   // Logistics tracking status: PENDING, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED, CONFIRMED
-  logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED';
+  logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'CREATED' | 'SHIPPED';
   transportMode?: TransportMode;
   billOfLading?: string;
   vesselName?: string;
@@ -2289,9 +2292,9 @@ const ExporterPortal: React.FC = () => {
     
     // Payment statuses
     const paymentsPending = payments.filter(p => p.status === 'PENDING').length;
-    const paymentsProcessing = payments.filter(p => ['DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED'].includes(p.status)).length;
-    const paymentsReceived = payments.filter(p => p.status === 'SWIFT_RECEIVED').length;
-    const paymentsSettled = payments.filter(p => p.status === 'SETTLED').length;
+    const paymentsProcessing = payments.filter(p => ['DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED'].includes(p.paymentTrackingStatus ?? '')).length;
+    const paymentsReceived = payments.filter(p => p.paymentTrackingStatus === 'SWIFT_RECEIVED').length;
+    const paymentsSettled = payments.filter(p => p.paymentTrackingStatus === 'SETTLED').length;
     
     // Reports/analytics
     const totalExportValue = contracts.reduce((sum, c) => sum + (c.totalValue || 0), 0);

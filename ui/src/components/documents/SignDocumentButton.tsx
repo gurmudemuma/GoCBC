@@ -409,7 +409,7 @@ const SignDocumentButton: React.FC<SignDocumentButtonProps> = ({
             Cancel
           </Button>
           <Button
-            onClick={handleSign}
+            onClick={() => handleSign()}
             disabled={loading || success}
             variant="contained"
             color={currentTypeInfo.color}
