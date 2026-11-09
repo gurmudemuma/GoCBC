@@ -17,9 +17,10 @@
 #    updates its package ID in the compose file, so invocations keep working)
 # 6. Verifies the database is reachable (the API runs the tracked
 #    migrations itself on startup — this script does not re-apply them)
-# 7. Prints manual startup instructions for the API and UI servers
-#    (the user starts those by hand; --auto starts them instead)
-# 8. With --auto only: starts API/UI and runs system health checks
+# 7. Prints manual startup instructions for the API and UI servers.
+#    The auto-start calls are commented out in main() below — start
+#    API/UI by hand in their own terminals.
+# 8. (With the calls uncommented: starts API/UI and runs health checks)
 #
 # Port Cleanup Feature:
 # - Automatically scans all required ports (3000, 3001, 5432, 7050-7062, etc.)
@@ -64,7 +65,6 @@ SKIP_BUILD=false
 SKIP_BLOCKCHAIN=false
 SKIP_TESTS=false
 CLEAN=false
-AUTO=false
 VERBOSE=false
 
 # Compose command (v2 plugin preferred, v1 binary as fallback). Detected once
@@ -107,15 +107,6 @@ parse_arguments() {
                 CLEAN=true
                 shift
                 ;;
-            --auto)
-                AUTO=true
-                shift
-                ;;
-            --manual)
-                # Manual API/UI startup is the default; accepted for clarity.
-                AUTO=false
-                shift
-                ;;
             --verbose|-v)
                 VERBOSE=true
                 shift
@@ -143,10 +134,6 @@ show_usage() {
     echo "  --skip-tests          Skip health checks and tests"
     echo "  --clean               Wipe all data (Postgres + ledger volumes) before starting"
     echo "                        Default keeps existing data — a plain restart never deletes it"
-    echo "  --auto                Also start the API and UI servers and run health checks"
-    echo "                        Default: prepare everything, then print the manual"
-    echo "                        startup instructions so you can start API/UI by hand"
-    echo "  --manual              Same as the default (manual API/UI startup)"
     echo "  --verbose, -v         Show verbose output"
     echo "  --help, -h            Show this help message"
     echo ""
@@ -1368,17 +1355,12 @@ main() {
     initialize_chaincode
     initialize_database
 
-    if [ "$AUTO" = true ]; then
-        # Only with --auto: start the servers and check them.
-        start_api_server
-        start_ui_server
-        run_health_checks
-        show_final_status
-    else
-        # Default: prepare everything, then let the user start API/UI by
-        # hand (more manageable — logs stay in their own terminals).
-        show_manual_startup_instructions
-    fi
+    # SKIP AUTOMATIC API AND UI STARTUP - start them manually
+    # start_api_server    # COMMENTED OUT - Manual startup
+    # start_ui_server     # COMMENTED OUT - Manual startup
+    # run_health_checks   # COMMENTED OUT - Run after manual startup
+
+    show_manual_startup_instructions
     
     # Calculate duration
     END_TIME=$(date +%s)
