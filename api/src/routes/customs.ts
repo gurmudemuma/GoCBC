@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { CustomsService } from '../services/customsService';
@@ -1337,6 +1337,9 @@ router.post('/declaration/:declarationId/complete-inspection',
  */
 router.post('/declaration/:declarationId/reject',
   authMiddleware,
+  // Previously auth-only: any authenticated user could reject a customs
+  // declaration. Only customs officers may do that.
+  requireRole('CUSTOMS'),
   [
     param('declarationId').notEmpty(),
     body('rejectionReason').trim().notEmpty(),

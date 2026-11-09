@@ -8,12 +8,10 @@ volumes:
   orderer.cecbs.et:
   peer0.ecta.cecbs.et:
   peer0.ecx.cecbs.et:
-  peer0.exporters.cecbs.et:
   peer0.banks.cecbs.et:
   peer0.nbe.cecbs.et:
   peer0.customs.cecbs.et:
   peer0.shipping.cecbs.et:
-  peer0.buyers.cecbs.et:
   couchdb.ecta-data:
   couchdb.ecx-data:
   couchdb.banks-data:
@@ -22,8 +20,6 @@ volumes:
   couchdb.shipping-data:
   postgres-data:
   redis-data:
-  kafka-data:
-  zookeeper-data:
 
 services:
   # Orderer
@@ -434,7 +430,7 @@ services:
     image: coffee-chaincode:2.2
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_1.73:1a98e2ff3a0091d86552052d62684f2f861f9bef69a6ce218e79540245c5438b
+      - CORE_CHAINCODE_ID_NAME=coffee_2.2:c748a1d9ec2c13d63bfd18c08479442c8241bdffd2bff9296537a3d142232c39
       - CHAINCODE_TLS_DISABLED=true
       - CORE_CHAINCODE_LOGGING_LEVEL=INFO
     expose:
@@ -459,45 +455,18 @@ services:
       - cecbs
 
   # Redis
+  # Password is NOT hardcoded: set REDIS_PASSWORD in the environment (or a
+  # .env file next to this compose file). Compose fails fast if it is unset.
+  # Nothing in api/src currently uses Redis (REDIS_ENABLED=false in
+  # api/.env.example), so this only affects direct redis-cli use.
   redis:
     container_name: cecbs-redis
     image: redis:7-alpine
-    command: redis-server --requirepass redis123
+    command: redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     ports:
       - 6379:6379
-    networks:
-      - cecbs
-
-  # Zookeeper
-  zookeeper:
-    container_name: cecbs-zookeeper
-    image: confluentinc/cp-zookeeper:7.5.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - zookeeper-data:/var/lib/zookeeper/data
-    networks:
-      - cecbs
-
-  # Kafka
-  kafka:
-    container_name: cecbs-kafka
-    image: confluentinc/cp-kafka:7.5.0
-    depends_on:
-      - zookeeper
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    volumes:
-      - kafka-data:/var/lib/kafka/data
-    ports:
-      - 9092:9092
     networks:
       - cecbs
 

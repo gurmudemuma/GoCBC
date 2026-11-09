@@ -56,26 +56,41 @@ class ApplicantCredentialsService {
   }
 
   /**
-   * Generate a secure random password
+   * Generate a secure random password.
+   * Previously this used Math.random (predictable, and the shuffle used
+   * Array.sort(() => Math.random() - 0.5), which is biased). All
+   * randomness now comes from crypto.randomInt.
    */
   private generateSecurePassword(): string {
-    const length = 12;
-    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-    let password = '';
-    
+    const length = 16;
+    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lower = 'abcdefghijklmnopqrstuvwxyz';
+    const digits = '0123456789';
+    const symbols = '!@#$%^&*';
+    const charset = upper + lower + digits + symbols;
+    const pick = (chars: string): string =>
+      chars[crypto.randomInt(chars.length)];
+
     // Ensure at least one of each type
-    password += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)];
-    password += 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
-    password += '0123456789'[Math.floor(Math.random() * 10)];
-    password += '!@#$%^&*'[Math.floor(Math.random() * 8)];
-    
+    const chars: string[] = [
+      pick(upper),
+      pick(lower),
+      pick(digits),
+      pick(symbols),
+    ];
+
     // Fill remaining characters
-    for (let i = password.length; i < length; i++) {
-      password += charset[Math.floor(Math.random() * charset.length)];
+    for (let i = chars.length; i < length; i++) {
+      chars.push(pick(charset));
     }
-    
-    // Shuffle password
-    return password.split('').sort(() => Math.random() - 0.5).join('');
+
+    // Fisher–Yates shuffle with crypto randomness
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+
+    return chars.join('');
   }
 
   /**

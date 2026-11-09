@@ -656,6 +656,10 @@ router.post('/lc/:lcID/reject',
  */
 router.post('/forex/:forexID/reject',
   authMiddleware,
+  // Previously auth-only: any authenticated user could reject a forex
+  // request. Only the issuing bank may do that (LC approve/reject in
+  // this file already require BANKS).
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('forexID').notEmpty().withMessage('Forex ID is required'),
     body('rejectionReason').notEmpty().withMessage('Rejection reason is required'),
@@ -3291,7 +3295,7 @@ router.post('/lc/:lcID/release-payment',
             const db = DatabaseService.getInstance();
             const documents = await db.all(
               `SELECT document_type, verification_status FROM documents 
-               WHERE entity_type = 'shipping' AND entity_id = ? AND status = 'active'`,
+               WHERE entity_type = 'shipping' AND entity_id = $1 AND status = 'active'`,
               [shipmentID]
             );
             

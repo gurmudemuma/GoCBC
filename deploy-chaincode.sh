@@ -80,15 +80,38 @@ cd "$CHAINCODE_DIR"
 # Remove old package
 rm -f "coffee_${VERSION}.tar.gz"
 
+# Package the chaincode - CCAAS (Chaincode-as-a-Service), NOT golang.
+# The live chaincode runs as the coffee-chaincode Docker image at
+# coffee-chaincode:9999. A CCAAS package contains only metadata.json
+# (type "ccaas", label coffee_<version>) and connection.json, and is
+# packaged with --lang external. The version/sequence here are derived
+# above from the live channel: with v2.2 / seq 21 committed, the next
+# run packages v2.3 / seq 22.
+
+# Build the CCAAS package directory: label must match this run's version.
+rm -rf pkg-temp
+mkdir -p pkg-temp
+cat > pkg-temp/metadata.json <<EOF
+{
+  "type": "ccaas",
+  "label": "coffee_${VERSION}"
+}
+EOF
+cp connection.json pkg-temp/
+
 # Package the chaincode - let Docker run as root, then fix ownership
 docker run --rm \
-    -v "$CHAINCODE_DIR":/chaincode \
-    -w /chaincode \
+    -v "$CHAINCODE_DIR/pkg-temp":/pkg \
+    -v "$CHAINCODE_DIR":/out \
+    -w /out \
     hyperledger/fabric-tools:2.5 \
     peer lifecycle chaincode package "coffee_${VERSION}.tar.gz" \
-    --path /chaincode \
-    --lang golang \
+    --path /pkg \
+    --lang external \
     --label "coffee_${VERSION}"
+
+# Clean up the temporary package directory
+rm -rf pkg-temp
 
 if [ ! -f "$CHAINCODE_PACKAGE" ]; then
     echo -e "${RED}✗ Failed to create chaincode package${NC}"

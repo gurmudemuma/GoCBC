@@ -4,7 +4,39 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { logger } from '../utils/logger';
+import { getJwtSecret } from '../config/env.validation';
+import { DatabaseService } from '../services/databaseService';
 import FabricService from '../services/fabricService';
+
+// Set to true the first time we notice the revocation table is missing
+// (migration 053 not applied yet). We warn once and continue so a
+// rollout that has not run migrations yet does not lock everyone out;
+// the table is created by runMigrations() at startup, so in a normal
+// deployment this never triggers.
+let revokedTableMissingWarned = false;
+
+export async function isTokenRevoked(jti: string): Promise<boolean> {
+  const db = DatabaseService.getInstance();
+  const row = await db.get(
+    'SELECT jti FROM revoked_tokens WHERE jti = $1',
+    [jti]
+  );
+  return !!row;
+}
+
+export async function revokeToken(
+  jti: string,
+  userId: string | number,
+  expiresAt: Date
+): Promise<void> {
+  const db = DatabaseService.getInstance();
+  await db.run(
+    `INSERT INTO revoked_tokens (jti, user_id, expires_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (jti) DO NOTHING`,
+    [jti, String(userId), expiresAt]
+  );
+}
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -173,14 +205,14 @@ export const ROLE_PERMISSIONS = {
   },
 };
 
-export const authMiddleware = (
+export const authMiddleware = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
@@ -193,28 +225,82 @@ export const authMiddleware = (
     }
 
     const token = authHeader.substring(7);
-    
-    // TEST MODE BYPASS - Only in development
-    if (process.env.NODE_ENV === 'development' && token === 'test-bypass-admin') {
-      req.user = {
-        sub: 'test-admin',
-        org: 'ECX',
-        organization: 'ECX',
-        role: 'ADMIN',
-        permissions: ROLE_PERMISSIONS.ADMIN.permissions,
-        userId: 'test-admin-id',
-        username: 'test-admin',
-        exporterId: 'test-admin',
-      };
-      logger.warn('⚠️ TEST MODE: Bypassing authentication with admin privileges');
-      return next();
-    }
-    
-    const jwtSecret = process.env.JWT_SECRET || 'cecbs-secret-key';
+
+    // There is deliberately no test-mode bypass here any more: a fixed
+    // token that granted full ADMIN in development was a second way to
+    // forge admin access, and it also existed in the documents
+    // download route. Test with a real token issued by /auth/login.
+    const jwtSecret = getJwtSecret();
 
     const decoded = jwt.verify(token, jwtSecret) as any;
     const rawOrg = decoded.organization || decoded.org || '';
     const role = decoded.role || 'EXPORTER';
+
+    // Token revocation: a token whose jti is in revoked_tokens (written
+    // by /auth/logout and by /auth/refresh rotation) is dead even
+    // though its expiry has not passed.
+    if (decoded.jti) {
+      try {
+        if (await isTokenRevoked(decoded.jti)) {
+          return res.status(401).json({
+            success: false,
+            error: {
+              code: 'TOKEN_REVOKED',
+              message: 'This token has been revoked. Please log in again.',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (error: any) {
+        if (error?.message?.includes('revoked_tokens') && error.message.includes('does not exist')) {
+          if (!revokedTableMissingWarned) {
+            revokedTableMissingWarned = true;
+            logger.warn(
+              'revoked_tokens table is missing (run migrations). Token revocation checks are skipped until it exists.'
+            );
+          }
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // Re-check the account in the database on every request. A token
+    // used to keep working until its 24h expiry even after the account
+    // was suspended; now a suspended account is rejected immediately.
+    // 'inactive'/'rejected' accounts are applicants-in-waiting (their
+    // temp user is created with status 'inactive' and they log in to
+    // see their application), so they are admitted here with the
+    // restricted permissions their token was issued with — see
+    // routes/auth.ts. Anything else is not a usable account state.
+    if (role !== 'APPLICANT') {
+      const db = DatabaseService.getInstance();
+      const userId = decoded.userId || decoded.sub;
+      const account = await db.get(
+        'SELECT id, status FROM users WHERE id = $1',
+        [userId]
+      );
+      if (!account) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'USER_NOT_FOUND',
+            message: 'The account for this token no longer exists',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (account.status === 'suspended' || !['active', 'inactive', 'rejected'].includes(account.status)) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'ACCOUNT_SUSPENDED',
+            message: `Your account is ${account.status}. Please contact support.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
     const fabricService = FabricService.getInstance();
     const mspId = fabricService.getMspFromRole(role);
     logger.info(`🔍 [AUTH] User: ${decoded.username}, Role: ${role}, MSP: ${mspId}`);

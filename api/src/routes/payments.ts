@@ -1026,7 +1026,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
             SELECT c.buyer_id AS buyer_name, c.buyer_country
             FROM shipments s
             LEFT JOIN contracts c ON s.contract_id = c.contract_id
-            WHERE s.shipment_id = ?
+            WHERE s.shipment_id = $1
           `, [shipmentId]);
           
           if (buyerData) {

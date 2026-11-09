@@ -4,7 +4,7 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
@@ -424,7 +424,7 @@ router.post('/:id/certificate', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/:id/approve — Approve inspection
-router.post('/:id/approve', authMiddleware, async (req, res) => {
+router.post('/:id/approve', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
@@ -461,7 +461,7 @@ router.post('/:id/approve', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/:id/reject — Reject inspection
-router.post('/:id/reject', authMiddleware, async (req, res) => {
+router.post('/:id/reject', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { rejectionReason } = req.body;

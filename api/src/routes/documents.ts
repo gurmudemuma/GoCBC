@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -630,7 +631,27 @@ router.post('/upload',
 );
 
 // Upload registration document (for exporter applications - NO AUTH REQUIRED)
+// It stays public because applicants have no token yet when they
+// register, but it is rate-limited: previously anyone could upload
+// files and write blockchain-anchored document hashes without limit.
+// Residual risk (anonymous upload) needs an applicant-token flow in
+// the frontend before this can require auth — see the fix report.
+const uploadRegistrationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      code: 'TOO_MANY_UPLOADS',
+      message: 'Too many registration uploads from this address. Please try again later.',
+    },
+  },
+});
+
 router.post('/upload-registration',
+  uploadRegistrationLimiter,
   upload.single('file'),
   async (req: Request, res: Response) => {
     try {
@@ -773,54 +794,19 @@ router.post('/upload-registration',
 
 // Download/View document
 router.get('/:documentId/download',
-  // Custom auth middleware that accepts token from query params or Authorization header
-  async (req: Request, res: Response, next: any) => {
-    try {
-      const { token } = req.query;
-      const authHeader = req.headers.authorization;
-      
-      let jwtToken: string | null = null;
-      
-      // Try to get token from query param first (for iframe access)
-      if (token && typeof token === 'string') {
-        jwtToken = token;
-      }
-      // Fall back to Authorization header
-      else if (authHeader && authHeader.startsWith('Bearer ')) {
-        jwtToken = authHeader.substring(7);
-      }
-      
-      if (!jwtToken) {
-        return res.status(401).json({
-          success: false,
-          error: { code: 'UNAUTHORIZED', message: 'No authentication token provided' },
-          timestamp: new Date().toISOString()
-        });
-      }
-      
-      // ✅ TEST BYPASS: Allow test-bypass-admin token
-      if (jwtToken === 'test-bypass-admin') {
-        (req as any).user = { 
-          username: 'admin', 
-          role: 'ADMIN',
-          sub: 'test-admin'
-        };
-        return next();
-      }
-      
-      // Verify the token (same logic as authMiddleware)
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(jwtToken, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
-      (req as any).user = decoded;
-      next();
-    } catch (error: any) {
-      logger.error('Authentication failed in download route:', error);
-      return res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' },
-        timestamp: new Date().toISOString()
-      });
+  // Iframes cannot set an Authorization header, so the viewer passes
+  // ?token=... — move it into the header and let authMiddleware do the
+  // full verification (required secret, revocation, account status).
+  // The previous inline auth is removed: it accepted a fixed test
+  // token granting ADMIN unconditionally, and verified other tokens
+  // with a second hard-coded fallback secret.
+  // (Prefer the Authorization header: tokens in URLs leak into logs.)
+  (req: Request, res: Response, next: any) => {
+    const tokenFromQuery = req.query.token;
+    if (tokenFromQuery && typeof tokenFromQuery === 'string' && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${tokenFromQuery}`;
     }
+    return authMiddleware(req as any, res, next);
   },
   async (req: Request, res: Response) => {
     try {

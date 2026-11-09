@@ -2,7 +2,7 @@
 // National Bank of Ethiopia (NBE) Routes - Forex Management
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 
@@ -55,7 +55,7 @@ router.get('/forex', authMiddleware, async (req: Request, res: Response) => {
  * POST /api/v1/nbe/forex/:forexId/approve
  * Approve forex allocation
  */
-router.post('/forex/:forexId/approve', authMiddleware, async (req: Request, res: Response) => {
+router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async (req: Request, res: Response) => {
   try {
     const { forexId } = req.params;
     const { approvalNotes } = req.body;
@@ -111,7 +111,7 @@ router.post('/forex/:forexId/approve', authMiddleware, async (req: Request, res:
  * POST /api/v1/nbe/forex/:forexId/repatriation
  * Record forex repatriation
  */
-router.post('/forex/:forexId/repatriation', authMiddleware, async (req: Request, res: Response) => {
+router.post('/forex/:forexId/repatriation', authMiddleware, requireRole('NBE'), async (req: Request, res: Response) => {
   try {
     const { forexId } = req.params;
     const { repatriationAmount, repatriationDate, bankReference, repatriationMethod } = req.body;

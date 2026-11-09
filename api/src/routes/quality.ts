@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
 import axios from 'axios';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { ShipmentService } from '../services/shipmentService';
@@ -617,6 +617,9 @@ ${remarks || 'No additional remarks'}
  */
 router.post('/inspections/:inspectionID/approve',
   authMiddleware,
+  // Previously auth-only despite the "@access ECTA Quality Director"
+  // note on this route. Only ECTA may approve an inspection.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
   ],
@@ -869,6 +872,7 @@ router.post('/inspections/:inspectionID/approve',
 // PUT version of approve for compatibility with tests
 router.put('/inspections/:inspectionID/approve',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
   ],

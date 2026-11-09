@@ -650,28 +650,34 @@ router.put('/:userId',
         });
       }
 
-      // Build update query dynamically
+      // Build update query dynamically.
+      // Previously every SET clause used a '?' placeholder while the
+      // pg pool only understands $n — and the final WHERE used $1,
+      // which bound the FIRST param (the new email) as the user id.
+      // Profile updates therefore failed or targeted the wrong row.
+      // Placeholders are now numbered in parameter order.
       const updates: string[] = [];
       const params: any[] = [];
+      const placeholder = (): string => `$${params.length + 1}`;
 
       if (email) {
-        updates.push('email = ?');
+        updates.push(`email = ${placeholder()}`);
         params.push(email);
       }
 
       if (fullName) {
-        updates.push('full_name = ?');
+        updates.push(`full_name = ${placeholder()}`);
         params.push(fullName);
       }
 
       if (phone !== undefined) {
-        updates.push('phone = ?');
+        updates.push(`phone = ${placeholder()}`);
         params.push(phone);
       }
 
       // Only admins and org managers can update permissions
       if (permissions && (isAdmin || (canManageUsers && isSameOrg))) {
-        updates.push('permissions = ?');
+        updates.push(`permissions = ${placeholder()}`);
         params.push(JSON.stringify(permissions));
       }
 
@@ -689,7 +695,7 @@ router.put('/:userId',
       updates.push('updated_at = CURRENT_TIMESTAMP');
       params.push(userId);
 
-      const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $1`;
+      const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${params.length}`;
       await db.run(query, params);
 
       logger.info(`User updated: ${userId} by ${requestingUser.username}`);
@@ -1831,17 +1837,18 @@ router.get('/activity-log',
       `;
       const params: any[] = [];
 
+      // pg uses $n placeholders, not '?' (see the profile-update fix above)
       if (userId) {
-        query += ' AND user_id = ?';
+        query += ` AND user_id = $${params.length + 1}`;
         params.push(userId);
       }
 
       if (action) {
-        query += ' AND action = ?';
+        query += ` AND action = $${params.length + 1}`;
         params.push(action);
       }
 
-      query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+      query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       params.push(parseInt(limit as string), parseInt(offset as string));
 
       const logs = await db.all(query, params);
@@ -1851,12 +1858,12 @@ router.get('/activity-log',
       const countParams: any[] = [];
 
       if (userId) {
-        countQuery += ' AND user_id = ?';
+        countQuery += ` AND user_id = $${countParams.length + 1}`;
         countParams.push(userId);
       }
 
       if (action) {
-        countQuery += ' AND action = ?';
+        countQuery += ` AND action = $${countParams.length + 1}`;
         countParams.push(action);
       }
 

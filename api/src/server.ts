@@ -319,8 +319,11 @@ class CECBSServer {
     // V3.1 Post-Delivery Workflow Management
     apiV1.use('/post-delivery', authMiddleware, postDeliveryWorkflowRoutes); // Payment, Forex, LC, Audit, Closure
 
-    // V3.2 Blockchain Signatures - Cryptographic proof for all entities (public endpoint)
-    apiV1.use('/blockchain-signatures', blockchainSignaturesRoutes); // Entity-level blockchain signatures - public transparency
+    // V3.2 Blockchain Signatures - Cryptographic proof for all entities
+    // Authenticated: both routes enforce authMiddleware per-route, despite
+    // an earlier comment calling this public. Do not make it public —
+    // transaction arguments may contain regulated business data.
+    apiV1.use('/blockchain-signatures', blockchainSignaturesRoutes); // Entity-level blockchain signatures (authenticated)
 
     // V3.3 Blockchain Sync Management
     apiV1.use('/blockchain-sync', authMiddleware, blockchainSyncRoutes); // Blockchain sync management (Admin only)

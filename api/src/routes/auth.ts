@@ -4,21 +4,111 @@
 import { Router, Request, Response } from 'express';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
 import { logger } from '../utils/logger';
 import { DatabaseService } from '../services/databaseService';
+import { getJwtSecret, getJwtExpiry } from '../config/env.validation';
+import {
+  ROLE_PERMISSIONS,
+  isTokenRevoked,
+  revokeToken,
+} from '../middleware/auth';
 
 const router = Router();
 const db = DatabaseService.getInstance();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'cecbs-secret-key';
-const JWT_EXPIRY = process.env.JWT_EXPIRY || '24h';
+// No fallback secret: getJwtSecret() throws (and startup validation
+// fails first) if JWT_SECRET is missing or is a published value.
+// JWT_EXPIRY is honoured — previously it was defined and never used,
+// while every token was hard-coded to 24h.
+
+/**
+ * Login-specific rate limiting: 10 attempts per 15 minutes per
+ * IP + username. The global limiter (1000 req / 15 min per IP) does
+ * not stop credential stuffing against one account.
+ */
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Keyed by client address + username, so one account cannot be
+  // hammered from many addresses and one address cannot hammer many
+  // accounts. Uses remoteAddress, not req.ip: express-rate-limit
+  // rejects key generators that read req.ip directly (IPv6 handling),
+  // and the ipKeyGenerator helper is not exported by the installed
+  // express-rate-limit 7.5.1.
+  keyGenerator: (req) =>
+    `${req.socket?.remoteAddress || 'unknown'}:${(req.body?.username || '').toString().toLowerCase()}`,
+  message: {
+    success: false,
+    error: {
+      code: 'TOO_MANY_LOGIN_ATTEMPTS',
+      message: 'Too many login attempts. Please try again in 15 minutes.',
+    },
+  },
+});
+
+const APPLICANT_PERMISSIONS = ['application:view', 'application:resubmit'];
+
+/** Permissions for a token: role permissions plus any per-user
+ *  permissions stored in users.permissions (previously the column
+ *  was written but never read, so it could not grant or restrict
+ *  anything). Stored permissions are merged, never a replacement
+ *  for the role baseline. */
+function buildPermissions(role: string, storedPermissions: unknown): string[] {
+  const roleConfig =
+    ROLE_PERMISSIONS[role as keyof typeof ROLE_PERMISSIONS] ||
+    ROLE_PERMISSIONS.EXPORTER;
+  const permissions = new Set<string>(roleConfig.permissions);
+  try {
+    const stored =
+      typeof storedPermissions === 'string'
+        ? JSON.parse(storedPermissions || '[]')
+        : storedPermissions;
+    if (Array.isArray(stored)) {
+      for (const p of stored) {
+        if (typeof p === 'string') permissions.add(p);
+      }
+    }
+  } catch {
+    // A malformed stored value must not break login; role permissions stand.
+  }
+  return [...permissions];
+}
+
+function signToken(payload: Record<string, unknown>): string {
+  const options: SignOptions = { expiresIn: getJwtExpiry() as any };
+  return jwt.sign(
+    { ...payload, jti: crypto.randomUUID() },
+    getJwtSecret(),
+    options
+  ) as string;
+}
+
+async function assertTokenUsable(decoded: any): Promise<string | null> {
+  if (decoded.jti && (await isTokenRevoked(decoded.jti))) {
+    return 'This token has been revoked. Please log in again.';
+  }
+  if (decoded.role !== 'APPLICANT') {
+    const account = await db.get('SELECT id, status FROM users WHERE id = $1', [
+      decoded.userId || decoded.sub,
+    ]);
+    if (!account) return 'The account for this token no longer exists';
+    if (account.status === 'suspended' || !['active', 'inactive', 'rejected'].includes(account.status)) {
+      return `Your account is ${account.status}. Please contact support.`;
+    }
+  }
+  return null;
+}
 
 /**
  * @route   POST /api/v1/auth/login
  * @desc    Authenticate user and return JWT token
  * @access  Public
  */
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
 
@@ -34,8 +124,8 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Find user in database
     const user = await db.get(
-      `SELECT id, username, email, password_hash, role, organization, status, 
-              exporter_id, ecta_license, phone, full_name
+      `SELECT id, username, email, password_hash, role, organization, status,
+              exporter_id, ecta_license, phone, full_name, permissions
        FROM users WHERE username = $1`,
       [username]
     );
@@ -77,133 +167,37 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Role-based permissions mapping
-    const rolePermissionsMap: Record<string, string[]> = {
-      ADMIN: [
-        'admin:system',
-        'users:create',
-        'users:read',
-        'users:update',
-        'users:delete',
-        'users:manage-all',
-        'blockchain:enroll',
-        'blockchain:revoke',
-        'blockchain:renew',
-        'analytics:view-all',
-        'settings:manage',
-        'audit:view-all',
-        'organizations:manage-all',
-      ],
-      ECTA: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'quality:manage',
-        'permits:manage',
-        'phytosanitary:manage',
-        'licenses:manage',
-        'analytics:view-org',
-        'exporters:approve',
-        'exporters:verify',
-      ],
-      ECX: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'contracts:manage',
-        'grading:manage',
-        'warehouse:manage',
-        'release:manage',
-        'analytics:view-org',
-      ],
-      NBE: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'forex:manage',
-        'forex:allocate',
-        'forex:approve',
-        'compliance:verify',
-        'analytics:view-org',
-        'payments:monitor',
-      ],
-      BANKS: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'lc:issue',
-        'lc:manage',
-        'payments:process',
-        'advance:manage',
-        'collections:manage',
-        'analytics:view-org',
-      ],
-      CUSTOMS: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'customs:declare',
-        'customs:inspect',
-        'customs:clear',
-        'customs:assess-duty',
-        'analytics:view-org',
-      ],
-      SHIPPING: [
-        'users:create-org',
-        'users:read-org',
-        'users:update-org',
-        'users:delete-org',
-        'blockchain:enroll-org',
-        'shipments:create',
-        'shipments:update',
-        'shipments:track',
-        'logistics:manage',
-        'analytics:view-org',
-      ],
-      EXPORTER: [
-        'contracts:create',
-        'contracts:view-own',
-        'shipments:create-own',
-        'shipments:view-own',
-        'documents:upload-own',
-        'documents:view-own',
-        'permits:apply',
-        'lc:view-own',
-        'payments:view-own',
-        'analytics:view-own',
-      ],
-    };
+    // Permissions come from the single role map in middleware/auth.ts
+    // (previously this file kept a second, duplicated copy) plus any
+    // per-user permissions stored in users.permissions.
+    // Applicants-in-waiting (status 'inactive' — their temp account is
+    // created that way — and 'rejected') may log in to see their
+    // application, but they must NOT receive full exporter permissions:
+    // previously a rejected/inactive account got a full role JWT.
+    const permissions =
+      user.status === 'active'
+        ? buildPermissions(user.role, user.permissions)
+        : [...APPLICANT_PERMISSIONS];
 
-    // Get permissions based on role
-    const permissions = rolePermissionsMap[user.role] || rolePermissionsMap.EXPORTER;
+    // Generate JWT token (expiry honoured from JWT_EXPIRY, default 8h)
+    const token = signToken({
+      sub: user.id,
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      org: user.organization,
+      organization: user.organization,
+      exporterId: user.exporter_id || undefined,
+      ectaLicense: user.ecta_license || undefined,
+      permissions,
+    });
 
-    // Generate JWT token
-    const signOptions: jwt.SignOptions = { expiresIn: '24h' };
-    const token = jwt.sign(
-      {
-        sub: user.id,
-        userId: user.id,
-        username: user.username,
-        role: user.role,
-        org: user.organization,
-        organization: user.organization,
-        exporterId: user.exporter_id || undefined,
-        ectaLicense: user.ecta_license || undefined,
-        permissions,
-      },
-      JWT_SECRET,
-      signOptions
-    ) as string;
+    // Record last login (best effort — must not break login)
+    try {
+      await db.run('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]);
+    } catch (e) {
+      logger.warn('Failed to update last_login:', e);
+    }
 
     // Log audit trail
     try {
@@ -276,7 +270,15 @@ router.get('/me', async (req: Request, res: Response) => {
     }
 
     // Verify token
-    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const decoded: any = jwt.verify(token, getJwtSecret());
+
+    const unusable = await assertTokenUsable(decoded);
+    if (unusable) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'ACCOUNT_SUSPENDED', message: unusable },
+      });
+    }
 
     // Find user in database
     const userId = decoded.sub || decoded.userId;
@@ -329,6 +331,22 @@ router.get('/me', async (req: Request, res: Response) => {
  */
 router.post('/logout', async (req: Request, res: Response) => {
   try {
+    // Logout used to be client-side only, so a logged-out token kept
+    // working until expiry. Revoke it server-side by its jti.
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (token) {
+      try {
+        const decoded: any = jwt.verify(token, getJwtSecret());
+        if (decoded.jti) {
+          const expiresAt = new Date((decoded.exp || 0) * 1000);
+          await revokeToken(decoded.jti, decoded.userId || decoded.sub, expiresAt);
+        }
+      } catch (e) {
+        // An expired/invalid token is already unusable; a missing
+        // revoked_tokens table (migration not run) is logged, not fatal.
+        logger.warn('Logout revocation skipped:', (e as Error).message);
+      }
+    }
     logger.info('User logged out');
     res.json({
       success: true,
@@ -366,7 +384,15 @@ router.get('/validate', async (req: Request, res: Response) => {
     }
 
     // Verify token
-    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const decoded: any = jwt.verify(token, getJwtSecret());
+
+    const unusable = await assertTokenUsable(decoded);
+    if (unusable) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'ACCOUNT_SUSPENDED', message: unusable },
+      });
+    }
 
     res.json({
       success: true,
@@ -409,23 +435,55 @@ router.post('/refresh', async (req: Request, res: Response) => {
     }
 
     // Verify token
-    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const decoded: any = jwt.verify(token, getJwtSecret());
+
+    // Refresh used to re-issue from any unexpired token with no DB
+    // check, so a suspended user's token could be extended forever.
+    const unusable = await assertTokenUsable(decoded);
+    if (unusable) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'ACCOUNT_SUSPENDED', message: unusable },
+      });
+    }
+
+    // Rotate: revoke the old token so it cannot be reused, then issue
+    // a fresh one with a new jti.
+    if (decoded.jti) {
+      try {
+        await revokeToken(
+          decoded.jti,
+          decoded.userId || decoded.sub,
+          new Date((decoded.exp || 0) * 1000)
+        );
+      } catch (e) {
+        logger.warn('Refresh rotation skipped:', (e as Error).message);
+      }
+    }
+
+    // Re-derive permissions from the database, not from the old token.
+    let permissions: string[] = decoded.permissions || [];
+    if (decoded.role !== 'APPLICANT') {
+      const account = await db.get(
+        'SELECT role, permissions, status FROM users WHERE id = $1',
+        [decoded.userId || decoded.sub]
+      );
+      permissions =
+        account?.status === 'active'
+          ? buildPermissions(account.role, account.permissions)
+          : [...APPLICANT_PERMISSIONS];
+    }
 
     // Generate new token
-    const refreshOptions: jwt.SignOptions = { expiresIn: '24h' };
-    const newToken = jwt.sign(
-      {
-        sub: decoded.userId || decoded.sub,
-        userId: decoded.userId || decoded.sub,
-        username: decoded.username,
-        role: decoded.role,
-        org: decoded.organization || decoded.org,
-        organization: decoded.organization || decoded.org,
-        permissions: decoded.permissions || [],
-      },
-      JWT_SECRET,
-      refreshOptions
-    ) as string;
+    const newToken = signToken({
+      sub: decoded.userId || decoded.sub,
+      userId: decoded.userId || decoded.sub,
+      username: decoded.username,
+      role: decoded.role,
+      org: decoded.organization || decoded.org,
+      organization: decoded.organization || decoded.org,
+      permissions,
+    });
 
     res.json({
       success: true,
@@ -450,7 +508,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
  * @desc    Authenticate applicant using temporary credentials
  * @access  Public
  */
-router.post('/applicant/login', async (req: Request, res: Response) => {
+router.post('/applicant/login', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
 
@@ -502,19 +560,15 @@ router.post('/applicant/login', async (req: Request, res: Response) => {
       [verification.applicationId]
     );
 
-    // Generate JWT token with APPLICANT role
-    const token = jwt.sign(
-      {
-        sub: verification.applicationId,
-        applicationId: verification.applicationId,
-        username,
-        role: 'APPLICANT',
-        status: application.status,
-        permissions: ['application:view', 'application:resubmit'],
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    ) as string;
+    // Generate JWT token with APPLICANT role (expiry honoured from JWT_EXPIRY)
+    const token = signToken({
+      sub: verification.applicationId,
+      applicationId: verification.applicationId,
+      username,
+      role: 'APPLICANT',
+      status: application.status,
+      permissions: [...APPLICANT_PERMISSIONS],
+    });
 
     logger.info(`✅ Applicant login successful: ${username} (Application: ${verification.applicationId})`);
 
@@ -562,7 +616,7 @@ router.get('/applicant/status', async (req: Request, res: Response) => {
     }
 
     const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, getJwtSecret()) as any;
 
     if (decoded.role !== 'APPLICANT') {
       return res.status(403).json({

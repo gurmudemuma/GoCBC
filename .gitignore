@@ -31,6 +31,16 @@ ui/logs/
 .env.test.local
 .env.production.local
 .env.*.local
+# Blockchain env files carry live credentials — never commit them.
+# (api/.env.blockchain and api/.env.blockchain.fixed are already tracked
+# from before this rule; they are referenced as env_file by
+# docker-compose-fabric.yml, so removing them needs a coordinated
+# deployment change. Rotate their secrets.)
+api/.env.blockchain
+api/.env.blockchain.fixed
+
+# Local SQLite databases — legacy test artefacts, no code reads them
+*.db
 
 # IDE
 .vscode/

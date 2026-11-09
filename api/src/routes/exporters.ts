@@ -305,6 +305,10 @@ router.post('/exporter-applications',
 // 4. Sends professional email with license download link
 router.post('/exporter-applications/:applicationId/approve',
   authMiddleware,
+  // Previously authMiddleware only: ANY authenticated (or forged) user
+  // could approve an application, register the exporter on-chain and
+  // generate a licence. Only ECTA admins may do that.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('applicationId').notEmpty(),
     body('exporterId').notEmpty(),
@@ -325,8 +329,11 @@ router.post('/exporter-applications/:applicationId/approve',
       // ✅ FIX: Use application_id (APP-XXXXX) not id (numeric)
       const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
       
-      if (!application || (application.status !== 'pending' && application.status !== 'approved')) {
-        res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or already rejected' }, timestamp: new Date().toISOString() });
+      // Only a pending application can be approved. Previously an
+      // already-approved application could be approved again, which
+      // re-registered the exporter on-chain and regenerated a licence.
+      if (!application || application.status !== 'pending') {
+        res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or not pending approval' }, timestamp: new Date().toISOString() });
         return;
       }
 
@@ -536,7 +543,7 @@ router.post('/exporter-applications/:applicationId/approve',
 );
 
 // ALIAS for backward compatibility
-router.post('/applications/:applicationId/approve', authMiddleware, async (req, res) => {
+router.post('/applications/:applicationId/approve', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   // @ts-ignore - reuse the same logic by redirecting/forwarding to the correct route handler
   // For Express, we can just call the other route's handler or use a shared function.
   // A simple way is to just call the other endpoint via a internal redirect or just repeat the logic.
@@ -551,6 +558,7 @@ router.post('/applications/:applicationId/approve', authMiddleware, async (req, 
 // This endpoint updates the application status but KEEPS the user account for resubmission
 router.post('/exporter-applications/:applicationId/reject',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('applicationId').notEmpty(),
     body('reason').notEmpty(),
@@ -650,23 +658,21 @@ router.post('/exporter-applications/:applicationId/reject',
 
 // GET /exporter-applications/check/:email - Check application status (PUBLIC - no auth)
 // Allows applicants to check their application status using their email
+// Public by design (applicants check their status before they have a
+// token), but it must only expose status fields — never TIN, bank
+// details, contact data, documents or credential hashes.
 router.get('/exporter-applications/check/:email', async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     const application = await postgresDb.get(
-      'SELECT * FROM exporter_applications WHERE email = $1 ORDER BY submitted_at DESC LIMIT 1',
+      `SELECT id, application_id, company_name, email, status,
+              submitted_at, rejection_reason, approved_at,
+              license_number, exporter_id
+       FROM exporter_applications WHERE email = $1 ORDER BY submitted_at DESC LIMIT 1`,
       [email]
     );
 
-    if (application?.documents && typeof application.documents === 'string') {
-      try {
-        application.documents = JSON.parse(application.documents);
-      } catch (err) {
-        logger.warn('Failed to parse application documents JSON:', err);
-      }
-    }
-    
     if (!application) {
       res.status(404).json({ 
         success: false, 
@@ -687,9 +693,31 @@ router.get('/exporter-applications/check/:email', async (req, res) => {
   }
 });
 
-// POST /exporter-applications/:applicationId/resubmit - Resubmit rejected application (PUBLIC - no auth)
-// Allows applicants to resubmit a corrected application after rejection
+// POST /exporter-applications/:applicationId/resubmit - Resubmit rejected application
+// Requires the applicant's own token (issued by /auth/applicant/login)
+// for this application, or an ECTA/ADMIN token. Previously public,
+// guarded only by a caller-supplied email — which the public status
+// check endpoint returns — so anyone could edit a rejected application.
 router.post('/exporter-applications/:applicationId/resubmit',
+  authMiddleware,
+  (req: Request, res: Response, next: any) => {
+    const user = (req as any).user;
+    const isApplicantForThisApplication =
+      user?.role === 'APPLICANT' &&
+      String(user.applicationId) === String(req.params.applicationId);
+    const isStaff = ['ECTA', 'ECTA_ADMIN', 'ADMIN'].includes(user?.role);
+    if (!isApplicantForThisApplication && !isStaff) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Only the applicant (logged in with their temporary credentials) or ECTA may resubmit this application',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+    next();
+  },
   [
     param('applicationId').notEmpty(),
     body('companyName').optional().notEmpty().withMessage('Company name is required when provided'),

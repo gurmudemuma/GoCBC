@@ -5,7 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -388,6 +388,9 @@ router.get('/shipment/:shipmentId', authMiddleware, async (req, res) => {
  */
 router.post('/:certificateId/revoke',
   authMiddleware,
+  // Previously auth-only: any authenticated user could revoke a
+  // phytosanitary certificate. Only ECTA may do that.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('certificateId').notEmpty(),
     body('reason').notEmpty().withMessage('Revocation reason is required'),
