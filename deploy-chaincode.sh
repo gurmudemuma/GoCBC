@@ -18,11 +18,31 @@ echo -e "${BLUE}  Coffee Chaincode Deployment${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# Repo root is derived from this script's location, not hardcoded: the script
+# runs from the user's checkout wherever it lives.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHAINCODE_DIR="$REPO_ROOT/chaincodes/coffee"
+COMPOSE_FILE="$REPO_ROOT/docker-compose-fabric.yml"
+
+# Compose command (v2 plugin preferred, v1 binary as fallback)
+if docker compose version &> /dev/null 2>&1; then
+    COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE="docker-compose"
+else
+    echo -e "${RED}✗ Neither 'docker compose' nor 'docker-compose' is available${NC}"
+    exit 1
+fi
+
 # Check if already committed and determine version/sequence
 echo -e "${YELLOW}Checking if chaincode is already deployed...${NC}"
 CURRENT_VERSION=""
 CURRENT_SEQUENCE=""
-VERSION="1.0"
+# The current code version is the label in chaincodes/coffee/metadata.json
+# (coffee_2.3). A fresh channel deploys that version at sequence 1; an
+# upgrade bumps the minor version and sequence from what is committed.
+METADATA_VERSION=$(grep -oP '"label":\s*"coffee_\K[0-9.]+' "$CHAINCODE_DIR/metadata.json" 2>/dev/null || echo "2.3")
+VERSION="$METADATA_VERSION"
 SEQUENCE="1"
 
 if docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
@@ -38,7 +58,6 @@ if docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
     echo -e "${GREEN}✓ Chaincode already deployed: v${CURRENT_VERSION}, sequence ${CURRENT_SEQUENCE}${NC}"
     
     # Check if chaincode source has changed
-    CHAINCODE_DIR="/home/guda/GoCBC/chaincodes/coffee"
     if [ -f "$CHAINCODE_DIR/.last_deployed" ]; then
         LAST_HASH=$(cat "$CHAINCODE_DIR/.last_deployed" 2>/dev/null || echo "")
         CURRENT_HASH=$(find "$CHAINCODE_DIR" -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | awk '{print $1}')
@@ -70,7 +89,6 @@ fi
 echo ""
 
 # Locate or create chaincode package
-CHAINCODE_DIR="/home/guda/GoCBC/chaincodes/coffee"
 CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee_${VERSION}.tar.gz"
 
 # Always rebuild package for deployment
@@ -122,13 +140,10 @@ fi
 sudo chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || true
 chmod 644 "$CHAINCODE_PACKAGE" 2>/dev/null || true
 
-# Record hash for change detection
-find "$CHAINCODE_DIR" -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | awk '{print $1}' > "$CHAINCODE_DIR/.last_deployed"
-
 echo -e "${GREEN}✓ Chaincode package created: coffee_${VERSION}.tar.gz${NC}"
 echo ""
 
-cd /home/guda/GoCBC
+cd "$REPO_ROOT"
 
 # Install on ECTA peer first
 echo -e "${YELLOW}Installing chaincode v${VERSION} on ECTA peer...${NC}"
@@ -177,6 +192,50 @@ if [ -z "$PACKAGE_ID" ]; then
 fi
 
 echo -e "${GREEN}✓ Package ID: $PACKAGE_ID${NC}"
+echo ""
+
+# ── Update the chaincode server for the new package ID ──────────────────────
+# CCAAS peers route invocations to the chaincode server registered under the
+# package ID of the committed definition. The server (coffee-chaincode
+# container) still registers under the OLD package ID, so after an upgrade
+# every invoke/query would fail with no server for the new ID. Before
+# approving/committing, point the compose file at the new package ID and
+# image tag, rebuild the server image (it carries the new Go code), and
+# recreate the container so it registers under the new ID. If the ID is
+# unchanged (same version re-installed) this is a no-op rewrite.
+echo -e "${YELLOW}Updating chaincode server to package ID ${PACKAGE_ID}...${NC}"
+sed -i "s|^\(\s*\)image: coffee-chaincode:.*|\1image: coffee-chaincode:${VERSION}|" "$COMPOSE_FILE"
+sed -i "s|^\(\s*- \)CORE_CHAINCODE_ID_NAME=.*|\1CORE_CHAINCODE_ID_NAME=${PACKAGE_ID}|" "$COMPOSE_FILE"
+sed -i "s|\"label\": \"coffee_[0-9.]*\"|\"label\": \"coffee_${VERSION}\"|" "$CHAINCODE_DIR/metadata.json"
+echo -e "${GREEN}✓ Compose file updated: coffee-chaincode:${VERSION}, ID ${PACKAGE_ID}${NC}"
+
+cd "$REPO_ROOT"
+if ! $COMPOSE -f docker-compose-fabric.yml build coffee-chaincode; then
+    echo -e "${RED}✗ Failed to rebuild the coffee-chaincode image${NC}"
+    echo -e "${RED}  The v${VERSION} definition must not be committed while the server still runs old code — stopping here.${NC}"
+    exit 1
+fi
+if ! $COMPOSE -f docker-compose-fabric.yml up -d coffee-chaincode; then
+    echo -e "${RED}✗ Failed to recreate the coffee-chaincode container${NC}"
+    exit 1
+fi
+
+# Wait for the rebuilt server to come up and answer on 9999 (inside the
+# cecbs-network; docker exec from the host cannot reach it directly, so
+# check the container state and give it a few seconds to register).
+for i in $(seq 1 15); do
+    if docker ps --filter "name=^coffee-chaincode$" --format "{{.Status}}" 2>/dev/null | grep -q "Up"; then
+        break
+    fi
+    sleep 2
+done
+if ! docker ps --filter "name=^coffee-chaincode$" --format "{{.Status}}" 2>/dev/null | grep -q "Up"; then
+    echo -e "${RED}✗ coffee-chaincode container did not come up after the rebuild${NC}"
+    echo -e "${RED}  Check: docker logs coffee-chaincode${NC}"
+    exit 1
+fi
+sleep 5
+echo -e "${GREEN}✓ Chaincode server rebuilt and running with the new package ID${NC}"
 echo ""
 
 # Approve for all organizations
@@ -260,7 +319,7 @@ echo ""
 
 # Commit chaincode
 echo -e "${YELLOW}Committing chaincode v${VERSION} to channel (requires majority endorsement)...${NC}"
-docker exec peer0.ecta.cecbs.et peer lifecycle chaincode commit \
+COMMIT_OUTPUT=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode commit \
     -o orderer.cecbs.et:7050 --ordererTLSHostnameOverride orderer.cecbs.et \
     --tls --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
     --channelID coffeechannel --name coffee --version ${VERSION} --sequence ${SEQUENCE} \
@@ -275,7 +334,12 @@ docker exec peer0.ecta.cecbs.et peer lifecycle chaincode commit \
     --peerAddresses peer0.customs.cecbs.et:11051 \
     --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/customs-ca.crt \
     --peerAddresses peer0.shipping.cecbs.et:12051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/shipping-ca.crt 2>&1 | grep -E "committed with status|Error"
+    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/shipping-ca.crt 2>&1)
+echo "$COMMIT_OUTPUT" | grep -E "committed with status|Error" || true
+if ! echo "$COMMIT_OUTPUT" | grep -q "committed with status"; then
+    echo -e "${RED}✗ Chaincode commit did not succeed — see output above${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}✓ Chaincode v${VERSION} committed${NC}"
 echo ""
@@ -284,9 +348,17 @@ echo ""
 echo -e "${YELLOW}Verifying deployment...${NC}"
 sleep 3
 
-if docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
-    --channelID coffeechannel --name coffee 2>/dev/null | grep -q "Version:"; then
-    echo -e "${GREEN}✓ Deployment verified successfully${NC}"
+# The check must match THIS version and sequence: merely finding "a"
+# committed version would pass even if the commit failed and the old
+# definition (e.g. v2.2 seq 21) were still in place.
+COMMITTED_INFO=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
+    --channelID coffeechannel --name coffee 2>/dev/null || echo "")
+if echo "$COMMITTED_INFO" | grep -q "Version: ${VERSION}" && echo "$COMMITTED_INFO" | grep -q "Sequence: ${SEQUENCE}"; then
+    echo -e "${GREEN}✓ Deployment verified successfully (coffee v${VERSION}, sequence ${SEQUENCE})${NC}"
+    # Record the source hash ONLY now that the deploy verified: writing it
+    # before a failed deploy would make the next run think the code was
+    # already deployed and skip the upgrade.
+    find "$CHAINCODE_DIR" -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | awk '{print $1}' > "$CHAINCODE_DIR/.last_deployed"
 else
     echo -e "${RED}✗ Deployment verification failed${NC}"
     exit 1

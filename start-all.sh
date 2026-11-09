@@ -5,14 +5,20 @@
 # Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 #
 # This script:
-# 1. Checks all system prerequisites
+# 1. Checks all system prerequisites (incl. a strong JWT_SECRET in api/.env —
+#    the API refuses to start without one since the auth fixes)
 # 2. Validates environment configuration
 # 3. **AUTOMATICALLY DETECTS AND KILLS PROCESSES ON REQUIRED PORTS**
-# 4. Starts Hyperledger Fabric blockchain network
-# 5. Deploys and verifies chaincode
-# 6. Initializes database with seed data
-# 7. Starts API and UI servers
-# 8. Runs system health checks
+# 4. Starts Hyperledger Fabric blockchain network (WITHOUT wiping data:
+#    volumes are preserved unless --clean is passed)
+# 5. Packages + deploys the chaincode at the CURRENT code version
+#    (deploy-chaincode.sh detects source changes and upgrades, e.g. v2.2
+#    seq 21 -> v2.3 seq 22; it also rebuilds the chaincode server image and
+#    updates its package ID in the compose file, so invocations keep working)
+# 6. Verifies the database is reachable (the API runs the tracked
+#    migrations itself on startup — this script does not re-apply them)
+# 7. Starts API and UI servers (Docker container, or host fallback)
+# 8. Runs system health checks, incl. a real chaincode read query
 #
 # Port Cleanup Feature:
 # - Automatically scans all required ports (3000, 3001, 5432, 7050-7062, etc.)
@@ -56,7 +62,25 @@ SKIP_PREREQUISITES=false
 SKIP_BUILD=false
 SKIP_BLOCKCHAIN=false
 SKIP_TESTS=false
+CLEAN=false
+MANUAL=false
 VERBOSE=false
+
+# Compose command (v2 plugin preferred, v1 binary as fallback). Detected once
+# in main(); every compose call in this script uses $COMPOSE.
+COMPOSE="docker compose"
+
+detect_compose() {
+    if docker compose version &> /dev/null 2>&1; then
+        COMPOSE="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        COMPOSE="docker-compose"
+    else
+        write_error "Neither 'docker compose' nor 'docker-compose' is available"
+        exit 1
+    fi
+    log_verbose "Using compose command: $COMPOSE"
+}
 
 # Parse command-line arguments
 parse_arguments() {
@@ -76,6 +100,14 @@ parse_arguments() {
                 ;;
             --skip-tests)
                 SKIP_TESTS=true
+                shift
+                ;;
+            --clean)
+                CLEAN=true
+                shift
+                ;;
+            --manual)
+                MANUAL=true
                 shift
                 ;;
             --verbose|-v)
@@ -103,6 +135,10 @@ show_usage() {
     echo "  --skip-build          Skip npm install steps"
     echo "  --skip-blockchain     Skip blockchain network startup"
     echo "  --skip-tests          Skip health checks and tests"
+    echo "  --clean               Wipe all data (Postgres + ledger volumes) before starting"
+    echo "                        Default keeps existing data — a plain restart never deletes it"
+    echo "  --manual              Prepare everything but do NOT start API/UI automatically;"
+    echo "                        print the manual startup instructions instead"
     echo "  --verbose, -v         Show verbose output"
     echo "  --help, -h            Show this help message"
     echo ""
@@ -280,10 +316,10 @@ check_prerequisites() {
         
         # Check Node version
         node_ver=$(echo "$node_version" | cut -d'v' -f2 | cut -d'.' -f1)
-        if [ "$node_ver" -ge 16 ] 2>/dev/null; then
-            log_verbose "Node.js version is sufficient (>= v16)"
+        if [ "$node_ver" -ge 18 ] 2>/dev/null; then
+            log_verbose "Node.js version is sufficient (>= v18)"
         else
-            warnings+=("Node.js version $node_version is old. Recommended: >= v18")
+            warnings+=("Node.js version $node_version is old. Recommended: >= v18 (api/package.json engines)")
         fi
     else
         write_error "Node.js is not installed"
@@ -385,9 +421,23 @@ check_prerequisites() {
     
     # Check environment files
     write_step "Checking environment configuration..."
+    # api/.env is gitignored and is read by the API itself (dotenv in
+    # server.ts), both on the host and inside the cecbs-api container
+    # (./api is bind-mounted). The API refuses to start without a strong
+    # JWT_SECRET since the auth fixes, so ensure one exists here.
+    if [ ! -f "$API_DIR/.env" ]; then
+        if [ -f "$API_DIR/.env.example" ]; then
+            write_info "Creating $API_DIR/.env from .env.example"
+            cp "$API_DIR/.env.example" "$API_DIR/.env"
+        else
+            write_error "No .env or .env.example found in API directory"
+            all_good=false
+        fi
+    fi
+
     if [ -f "$API_DIR/.env" ]; then
         write_success "API .env file exists"
-        
+
         # Validate DATABASE_URL
         if grep -q "DATABASE_URL" "$API_DIR/.env"; then
             log_verbose "DATABASE_URL is configured"
@@ -395,23 +445,48 @@ check_prerequisites() {
             write_warning "DATABASE_URL not found in .env"
             warnings+=("DATABASE_URL should be configured in api/.env")
         fi
-        
-        # Validate JWT_SECRET
-        if grep -q "JWT_SECRET" "$API_DIR/.env"; then
-            log_verbose "JWT_SECRET is configured"
+
+        # Validate JWT_SECRET — must be present, >= 32 chars, and not a
+        # published/example value (api/src/config/env.validation.ts enforces
+        # all three at API startup and refuses to start otherwise). The
+        # .env.example placeholder is 64 chars but is a published phrase, so
+        # length alone is not enough. Generate a fresh random one whenever
+        # the value is missing, too short, a known-weak value, or identical
+        # to the example's value; api/.env is gitignored, so the generated
+        # secret never gets committed.
+        JWT_VALUE=$(grep "^JWT_SECRET=" "$API_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+        EXAMPLE_JWT=$(grep "^JWT_SECRET=" "$API_DIR/.env.example" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+        JWT_WEAK=false
+        case "$JWT_VALUE" in
+            ""|"cecbs-secret-key"|"your-secret-key-change-in-production"|"change-me"|"changeme"|"secret"|"test-secret"|"your-secret-key"|"jwt-secret") JWT_WEAK=true ;;
+        esac
+        if [ -n "$EXAMPLE_JWT" ] && [ "$JWT_VALUE" = "$EXAMPLE_JWT" ]; then JWT_WEAK=true; fi
+        if [ "$JWT_WEAK" = false ] && [ -n "$JWT_VALUE" ] && [ "${#JWT_VALUE}" -ge 32 ]; then
+            log_verbose "JWT_SECRET is configured (${#JWT_VALUE} chars)"
         else
-            write_warning "JWT_SECRET not found in .env"
-            warnings+=("JWT_SECRET should be configured for security")
+            if command -v openssl &> /dev/null; then
+                NEW_JWT=$(openssl rand -base64 48 | tr -d '\n')
+                # Replace a weak/placeholder line, or append if absent
+                if grep -q "^JWT_SECRET=" "$API_DIR/.env"; then
+                    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$NEW_JWT|" "$API_DIR/.env"
+                else
+                    echo "JWT_SECRET=$NEW_JWT" >> "$API_DIR/.env"
+                fi
+                write_success "Generated a fresh JWT_SECRET in api/.env (gitignored, never committed)"
+            else
+                write_error "JWT_SECRET is missing or shorter than 32 chars and openssl is not available to generate one"
+                write_info "Set a random 32+ char JWT_SECRET in $API_DIR/.env (openssl rand -base64 48)"
+                all_good=false
+            fi
         fi
+    fi
+
+    # The compose API loads Fabric connection settings from this file.
+    if [ -f "$API_DIR/.env.blockchain.fixed" ]; then
+        log_verbose "Fabric env file api/.env.blockchain.fixed exists"
     else
-        write_warning "API .env file not found"
-        if [ -f "$API_DIR/.env.example" ]; then
-            write_info "Copy .env.example to .env and configure it"
-            warnings+=("Create $API_DIR/.env from .env.example")
-        else
-            write_error "No .env.example found in API directory"
-            all_good=false
-        fi
+        write_warning "api/.env.blockchain.fixed not found — the API's Fabric connection settings come from it"
+        warnings+=("Restore api/.env.blockchain.fixed (it carries the Fabric wallet/connection config)")
     fi
     
     # Summary
@@ -499,13 +574,15 @@ cleanup_ports() {
                 write_info "  └─ PID $pid: $process_name"
             done
             
-            # Kill the processes (including ts-node-dev and npm)
+            # Kill the processes (ts-node-dev API server, Next.js UI server)
             write_step "  └─ Terminating processes on port $port..."
             echo "$pids" | xargs kill -9 2>/dev/null || true
-            
-            # Also kill any ts-node or npm processes related to API/UI
+
+            # Also kill known API/UI dev processes (narrow patterns only, so
+            # unrelated node processes are not touched)
             pkill -9 -f "ts-node.*server.ts" 2>/dev/null || true
-            pkill -9 -f "node.*api" 2>/dev/null || true
+            pkill -9 -f "node dist/server.js" 2>/dev/null || true
+            pkill -9 -f "next-server" 2>/dev/null || true
             
             # Verify port is now free
             sleep 1
@@ -613,33 +690,47 @@ start_blockchain_network() {
     write_step "Checking if blockchain network is already running..."
     if docker ps 2>/dev/null | grep -q "peer0.ecta"; then
         write_info "Blockchain network is already running"
-        
+
         # Verify it's healthy
         if docker ps 2>/dev/null | grep "peer0.ecta" | grep -q "Up"; then
             write_success "Existing blockchain network is healthy"
+            # Still apply the compose file (idempotent): a changed service
+            # (e.g. a new chaincode image tag) gets recreated, healthy
+            # containers are left alone.
+            cd "$PROJECT_ROOT"
+            $COMPOSE -f docker-compose-fabric.yml up -d
             return 0
         else
             write_warning "Existing blockchain network may be unhealthy"
             write_step "Restarting blockchain network..."
         fi
     fi
-    
+
     # Ensure external builders are set up
     setup_external_builders
-    
-    # Clean up old containers if needed
+
+    # Clean up old containers if needed. By default this is a plain `down`:
+    # containers are removed but named volumes (Postgres data, ledger,
+    # CouchDB state) are PRESERVED, so a restart never deletes data.
+    # Only --clean wipes the volumes (full reset: DB + ledger are gone and
+    # the channel/chaincode must be recreated by the later phases).
     write_step "Cleaning up old containers (if any)..."
     cd "$PROJECT_ROOT"
-    docker-compose -f docker-compose-fabric.yml down -v 2>/dev/null || true
+    if [ "$CLEAN" = true ]; then
+        write_warning "--clean: removing ALL data volumes (Postgres + ledger)"
+        $COMPOSE -f docker-compose-fabric.yml down -v 2>/dev/null || true
+    else
+        $COMPOSE -f docker-compose-fabric.yml down 2>/dev/null || true
+    fi
     sleep 2
-    
+
     # Start Fabric network
     write_step "Starting Fabric network containers..."
-    docker-compose -f docker-compose-fabric.yml up -d
-    
+    $COMPOSE -f docker-compose-fabric.yml up -d
+
     if [ $? -ne 0 ]; then
         write_error "Failed to start Fabric network containers"
-        write_info "Check: docker-compose -f docker-compose-fabric.yml logs"
+        write_info "Check: $COMPOSE -f docker-compose-fabric.yml logs"
         exit 1
     fi
     
@@ -665,7 +756,7 @@ start_blockchain_network() {
     
     if [ "$PEER_COUNT" -lt 6 ] || [ "$ORDERER_COUNT" -lt 1 ]; then
         write_error "Not all required containers are running!"
-        write_info "Check logs: docker-compose -f docker-compose-fabric.yml logs"
+        write_info "Check logs: $COMPOSE -f docker-compose-fabric.yml logs"
         exit 1
     fi
     
@@ -793,118 +884,74 @@ initialize_chaincode() {
     if [ "$SKIP_BLOCKCHAIN" = true ]; then
         return 0
     fi
-    
-    write_header "Phase 5: Initializing Chaincode"
-    
-    # Check if chaincode is already deployed
-    write_step "Checking chaincode status..."
-    
-    CHAINCODE_CHECK=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
-        --channelID coffeechannel --name coffee 2>/dev/null || echo "NOT_FOUND")
-    
-    if echo "$CHAINCODE_CHECK" | grep -q "Version:"; then
-        CURRENT_VERSION=$(echo "$CHAINCODE_CHECK" | grep -oP 'Version: \K[0-9.]+' || echo "unknown")
-        CURRENT_SEQUENCE=$(echo "$CHAINCODE_CHECK" | grep -oP 'Sequence: \K[0-9]+' || echo "unknown")
-        
-        write_success "Chaincode already deployed:"
-        echo "  • Name: coffee"
-        echo "  • Version: $CURRENT_VERSION"
-        echo "  • Sequence: $CURRENT_SEQUENCE"
-        
-        # Test chaincode
-        test_chaincode_basic
-        return 0
-    else
-        write_info "Chaincode not deployed yet"
-    fi
-    
-    # Deploy chaincode
-    write_step "Deploying chaincode..."
-    
-    # First, ensure chaincode package exists
-    CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee_1.0.tar.gz"
-    if [ ! -f "$CHAINCODE_PACKAGE" ]; then
-        write_info "Chaincode package not found, creating it..."
-        
-        # Package the chaincode
-        write_step "Packaging chaincode..."
-        cd "$CHAINCODE_DIR"
-        
-        if command -v peer &> /dev/null; then
-            # Use local peer CLI
-            peer lifecycle chaincode package coffee_1.0.tar.gz \
-                --path . \
-                --lang golang \
-                --label coffee_1.0
-        else
-            # Use Docker with fabric-tools
-            docker run --rm \
-                -v "$CHAINCODE_DIR":/chaincode \
-                -w /chaincode \
-                hyperledger/fabric-tools:2.5 \
-                peer lifecycle chaincode package coffee_1.0.tar.gz \
-                --path . \
-                --lang golang \
-                --label coffee_1.0
-            
-            # Fix ownership of generated package (try without sudo first, then with sudo)
-            if [ -f "$CHAINCODE_PACKAGE" ]; then
-                chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || \
-                sudo chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || \
-                write_warning "Could not change ownership of chaincode package, may cause issues"
-                chmod 644 "$CHAINCODE_PACKAGE" 2>/dev/null || true
-            fi
-        fi
-        
-        if [ $? -eq 0 ] && [ -f "$CHAINCODE_PACKAGE" ]; then
-            write_success "Chaincode package created"
-        else
-            write_error "Failed to create chaincode package"
-            return 1
-        fi
-        
-        cd "$PROJECT_ROOT"
-    else
-        write_info "Using existing chaincode package"
-    fi
-    
-    # Now deploy
+
+    write_header "Phase 5: Packaging + Deploying Chaincode"
+
+    # Do NOT short-circuit here when a version is already committed: the
+    # code in chaincodes/coffee may be newer than what is on the channel
+    # (e.g. v2.2 seq 21 committed, source now carries the v2.3 fixes).
+    # deploy-chaincode.sh hashes the Go sources, skips the redeploy when
+    # nothing changed, and upgrades (minor version +1, sequence +1) when it
+    # did. It also rebuilds the chaincode server image and updates its
+    # package ID in the compose file, which is required for invocations to
+    # keep working after an upgrade (the server registers by package ID).
     if [ -f "$PROJECT_ROOT/deploy-chaincode.sh" ]; then
+        write_step "Running chaincode deploy (detects changes, upgrades if needed)..."
         bash "$PROJECT_ROOT/deploy-chaincode.sh"
         if [ $? -eq 0 ]; then
-            write_success "Chaincode deployed successfully"
-            test_chaincode_basic
+            write_success "Chaincode deploy step completed"
         else
             write_error "Chaincode deployment failed"
-            write_info "You may need to deploy manually"
+            write_info "You may need to deploy manually: bash deploy-chaincode.sh"
             return 1
         fi
     else
-        write_warning "deploy-chaincode.sh not found"
+        write_error "deploy-chaincode.sh not found"
         write_info "Chaincode must be deployed manually"
         return 1
     fi
+
+    # Verify what is actually committed on the channel
+    write_step "Verifying committed chaincode..."
+    CHAINCODE_CHECK=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
+        --channelID coffeechannel --name coffee 2>/dev/null || echo "NOT_FOUND")
+
+    if echo "$CHAINCODE_CHECK" | grep -q "Version:"; then
+        CURRENT_VERSION=$(echo "$CHAINCODE_CHECK" | grep -oP 'Version: \K[0-9.]+' || echo "unknown")
+        CURRENT_SEQUENCE=$(echo "$CHAINCODE_CHECK" | grep -oP 'Sequence: \K[0-9]+' || echo "unknown")
+        write_success "Chaincode committed on coffeechannel:"
+        echo "  • Name: coffee"
+        echo "  • Version: $CURRENT_VERSION"
+        echo "  • Sequence: $CURRENT_SEQUENCE"
+    else
+        write_error "No chaincode committed on coffeechannel after deploy"
+        return 1
+    fi
+
+    test_chaincode_basic
 }
 
+# Smoke test: a real read-only query against the committed chaincode. This
+# exercises the full path (peer -> chaincode server at coffee-chaincode:9999),
+# so it fails if the server was not rebuilt/restarted with the new package
+# ID after an upgrade. QueryAllLCs returns [] on an empty ledger, which is
+# a pass — only a connection/endorsement error is a failure.
 test_chaincode_basic() {
-    write_step "Testing chaincode connectivity..."
-    
-    PING_RESULT=$(docker exec \
+    write_step "Testing chaincode with a read query (QueryAllLCs)..."
+    QUERY_RESULT=$(docker exec \
         -e CORE_PEER_LOCALMSPID=ECTAMSP \
-        -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/User1@ecta.cecbs.et/msp \
-        peer0.ecta.cecbs.et peer chaincode invoke \
-        -o orderer.cecbs.et:7050 --ordererTLSHostnameOverride orderer.cecbs.et \
-        --tls --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
+        -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
+        peer0.ecta.cecbs.et peer chaincode query \
         -C coffeechannel -n coffee \
-        --peerAddresses peer0.ecta.cecbs.et:7051 \
-        --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/ecta-ca.crt \
-        -c '{"function":"ping","Args":[]}' 2>&1 || echo "FAILED")
-    
-    if echo "$PING_RESULT" | grep -qE "FAILED|Error|error"; then
-        write_warning "Chaincode test failed (this may be normal initially)"
-        log_verbose "Error: $PING_RESULT"
+        -c '{"function":"QueryAllLCs","Args":[]}' 2>&1 || echo "FAILED")
+
+    if echo "$QUERY_RESULT" | grep -qE "FAILED|Error|error"; then
+        write_error "Chaincode query failed — the chaincode server may not be serving the committed version"
+        log_verbose "Error: $QUERY_RESULT"
+        write_info "Check: docker logs coffee-chaincode"
+        return 1
     else
-        write_success "Chaincode is responding to invocations"
+        write_success "Chaincode is responding to queries"
     fi
 }
 
@@ -935,38 +982,25 @@ initialize_database() {
     if command -v psql &> /dev/null; then
         if psql "$DATABASE_URL" -c "SELECT 1;" &>/dev/null; then
             write_success "Database connection successful"
-            
-            # Run database migrations
-            write_step "Running database migrations..."
-            MIGRATIONS_DIR="$API_DIR/src/migrations"
-            
-            if [ -d "$MIGRATIONS_DIR" ]; then
-                # Get list of migration files sorted by name
-                MIGRATION_FILES=$(ls "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort -V)
-                
-                if [ -n "$MIGRATION_FILES" ]; then
-                    MIGRATION_COUNT=0
-                    for migration_file in $MIGRATION_FILES; do
-                        migration_name=$(basename "$migration_file")
-                        write_step "  └─ Applying migration: $migration_name"
-                        
-                        if psql "$DATABASE_URL" -f "$migration_file" >/dev/null 2>&1; then
-                            log_verbose "    ✓ $migration_name applied successfully"
-                            MIGRATION_COUNT=$((MIGRATION_COUNT + 1))
-                        else
-                            # Don't fail if migration already applied (idempotent migrations)
-                            log_verbose "    ⚠ $migration_name may already be applied (this is OK)"
-                        fi
-                    done
-                    
-                    write_success "Processed $MIGRATION_COUNT migration file(s)"
-                else
-                    write_info "No migration files found in $MIGRATIONS_DIR"
+
+            # Migrations are NOT applied here. The API runs them itself on
+            # startup through its tracked runner (api/src/migrations,
+            # _schema_migrations table) and refuses to start if one fails.
+            # Re-applying every file with psql, as this script used to do,
+            # ignores errors and races with the API's own runner, which
+            # starts with the compose stack in Phase 3. Just report state.
+            write_step "Checking applied migrations..."
+            APPLIED_COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM _schema_migrations;" 2>/dev/null | tr -d ' ' || echo "")
+            if [ -n "$APPLIED_COUNT" ]; then
+                TOTAL_COUNT=$(ls "$API_DIR/src/migrations"/*.sql 2>/dev/null | wc -l | tr -d ' ')
+                write_success "Migrations applied: $APPLIED_COUNT (files on disk: $TOTAL_COUNT)"
+                if [ "$APPLIED_COUNT" != "$TOTAL_COUNT" ]; then
+                    write_info "The API will apply the remaining migrations when it starts"
                 fi
             else
-                write_info "Migrations directory not found: $MIGRATIONS_DIR"
+                write_info "No _schema_migrations table yet — the API will run all migrations on startup"
             fi
-            
+
             # Check if users table exists and has data
             write_step "Checking for seed data..."
             USER_COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM users WHERE status='active';" 2>/dev/null | tr -d ' ' || echo "0")
@@ -1243,10 +1277,11 @@ show_final_status() {
         echo -e "${COLOR_CYAN}Blockchain Network:${COLOR_RESET}"
         PEER_COUNT=$(docker ps 2>/dev/null | grep -c "peer0\." || echo "0")
         ORDERER_COUNT=$(docker ps 2>/dev/null | grep -c "orderer\." || echo "0")
-        CHAINCODE_COUNT=$(docker ps 2>/dev/null | grep -c "coffee" || echo "0")
+        COMMITTED=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
+            --channelID coffeechannel --name coffee 2>/dev/null | grep -oP 'Version: [0-9.]+, Sequence: [0-9]+' || echo "")
         echo "  • Peers:     $PEER_COUNT running"
         echo "  • Orderer:   $ORDERER_COUNT running"
-        echo "  • Chaincode: $([ "$CHAINCODE_COUNT" -gt 0 ] && echo 'Deployed' || echo 'Ready')"
+        echo "  • Chaincode: $([ -n "$COMMITTED" ] && echo "coffee ($COMMITTED)" || echo 'not committed')"
         echo ""
     fi
     
@@ -1281,7 +1316,7 @@ show_final_status() {
     echo -e "${COLOR_BLUE}${COLOR_BOLD}Useful Commands:${COLOR_RESET}"
     echo "  • View API logs:        tail -f logs/api.log"
     echo "  • View UI logs:         tail -f logs/ui.log"
-    echo "  • View blockchain logs: docker-compose -f docker-compose-fabric.yml logs -f"
+    echo "  • View blockchain logs: $COMPOSE -f docker-compose-fabric.yml logs -f"
     echo "  • Check system status:  ./status.sh"
     echo "  • Stop system:          ./stop-all.sh"
     echo ""
@@ -1309,10 +1344,13 @@ main() {
     
     # Parse arguments
     parse_arguments "$@"
-    
+
+    # Which compose binary to use (v2 plugin preferred, v1 fallback)
+    detect_compose
+
     # Start time
     START_TIME=$(date +%s)
-    
+
     # Execute phases
     check_prerequisites
     cleanup_ports
@@ -1321,13 +1359,16 @@ main() {
     create_channel
     initialize_chaincode
     initialize_database
-    
-    # SKIP AUTOMATIC API AND UI STARTUP - Let user start manually
-    # start_api_server    # COMMENTED OUT - Manual startup
-    # start_ui_server     # COMMENTED OUT - Manual startup
-    # run_health_checks   # COMMENTED OUT - Run after manual startup
-    
-    show_manual_startup_instructions
+
+    if [ "$MANUAL" = true ]; then
+        # Prepare everything, but let the user start API/UI by hand
+        show_manual_startup_instructions
+    else
+        start_api_server
+        start_ui_server
+        run_health_checks
+        show_final_status
+    fi
     
     # Calculate duration
     END_TIME=$(date +%s)
