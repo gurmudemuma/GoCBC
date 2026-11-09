@@ -409,6 +409,41 @@ router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/v1/nbe/lc-monitoring - NBE monitors all LCs for forex compliance
+router.get('/lc-monitoring', requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
+  try {
+    logger.info('[NBE] ===== LC MONITORING ENDPOINT HIT =====');
+    logger.info('[NBE] User:', (req as any).user);
+    logger.info('[NBE] Fetching all LCs from PostgreSQL...');
+    
+    // Get all LCs from PostgreSQL
+    const lcs = await postgresDb.all(`
+      SELECT * FROM letters_of_credit 
+      ORDER BY created_at DESC
+    `);
+    
+    logger.info(`[NBE] Query executed successfully`);
+    logger.info(`[NBE] Retrieved ${lcs.length} LCs for monitoring`);
+    logger.info(`[NBE] Sample LC:`, lcs[0]);
+    
+    return res.json({
+      success: true,
+      data: lcs,
+      count: lcs.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[NBE] ===== ERROR IN LC MONITORING =====');
+    logger.error('[NBE] Error fetching LCs for monitoring:', error);
+    logger.error('[NBE] Stack trace:', error.stack);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // ==================== GENERIC ROUTES (MUST BE LAST) ====================
 
 // GET /api/v1/forex/:forexId — single forex allocation by ID
@@ -860,4 +895,5 @@ router.post('/utilize', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
 // ==================== SINGLE FOREX RECORD (MUST BE LAST) ====================
 
 // GET /api/v1/forex/:forexId — single forex record
+
 export default router;

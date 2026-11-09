@@ -218,4 +218,57 @@ function generateCSVReport(kpis: any, organization: string): string {
   return rows.map(row => row.join(',')).join('\n');
 }
 
+/**
+ * GET /api/v1/analytics/breakdown
+ * Get detailed breakdown analytics by various dimensions
+ */
+router.get('/breakdown', authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { dimension, dateFrom, dateTo } = req.query;
+    
+    const organization = user.org || user.organization || 'SYSTEM';
+    
+    // Validate dimension parameter
+    const validDimensions = ['exporter', 'region', 'product', 'status', 'bank', 'destination'];
+    if (dimension && !validDimensions.includes(dimension as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { 
+          code: 'INVALID_DIMENSION', 
+          message: `Invalid dimension. Must be one of: ${validDimensions.join(', ')}` 
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Get breakdown data based on dimension
+    const breakdownData = await analyticsService.getBreakdownAnalytics(
+      organization,
+      (dimension as string) || 'exporter',
+      dateFrom as string,
+      dateTo as string
+    );
+    
+    res.json({
+      success: true,
+      data: breakdownData,
+      organization,
+      dimension: dimension || 'exporter',
+      period: {
+        from: dateFrom || 'all',
+        to: dateTo || 'now'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('Error fetching breakdown analytics:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'ANALYTICS_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 export default router;

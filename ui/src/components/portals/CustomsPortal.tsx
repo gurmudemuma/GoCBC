@@ -774,7 +774,7 @@ ${solution}`);
       console.log('[CUSTOMS] Auto-mapping inspection data for:', declaration.exporterId);
       
       // Fetch exporter data from API (users table has contact info)
-      const exporterResponse = await apiFetch(`/users/${declaration.exporterId}`, {
+      const exporterResponse = await apiFetch(`/users/by-exporter/${declaration.exporterId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
@@ -867,7 +867,7 @@ ${solution}`);
       expiryDate.setDate(expiryDate.getDate() + validityDays);
       
       // Fetch exporter company name
-      const exporterResponse = await apiFetch(`/users/${declaration.exporterId}`, {
+      const exporterResponse = await apiFetch(`/users/by-exporter/${declaration.exporterId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       

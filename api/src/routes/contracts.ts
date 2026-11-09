@@ -1915,3 +1915,53 @@ router.post('/:contractID/nbe-approve',
 );
 
 export default router;
+
+
+/**
+ * POST /api/v1/contracts/:contractId/cancel
+ * Cancel a contract
+ */
+router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { contractId } = req.params;
+    const { cancellationReason } = req.body;
+    const user = (req as any).user;
+    
+    logger.info(`[CONTRACTS] Cancelling contract: ${contractId}`);
+    
+    // Update contract status to cancelled
+    const { DatabaseService } = await import('../services/databaseService');
+    const db = DatabaseService.getInstance();
+    
+    await db.run(`
+      UPDATE contracts
+      SET status = 'CANCELLED',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE contract_id = $1
+    `, [contractId]);
+    
+    logger.info(`[CONTRACTS] ✅ Contract cancelled: ${contractId}`);
+    
+    res.json({
+      success: true,
+      data: {
+        contractId,
+        status: 'CANCELLED',
+        cancellationReason,
+        cancelledBy: user?.username
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    logger.error('[CONTRACTS] Error cancelling contract:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to cancel contract'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});

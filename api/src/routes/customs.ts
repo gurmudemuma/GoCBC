@@ -135,15 +135,18 @@ router.post('/',
 /**
  * GET /api/v1/customs/declarations
  * Get all customs declarations (for checking which shipments have declarations)
+ * Supports filtering by status query parameter
  */
 router.get('/declarations',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      logger.info('[CUSTOMS] Fetching all customs declarations');
+      const { status } = req.query;
+      
+      logger.info(`[CUSTOMS] Fetching customs declarations${status ? ` with status=${status}` : ''}`);
 
-      const declarations = await postgresDb.all(
-        `SELECT 
+      // Build query with optional status filter
+      let query = `SELECT 
           declaration_number, 
           shipment_id, 
           contract_id,
@@ -166,9 +169,17 @@ router.get('/declarations',
           blockchain_tx_id,
           created_at,
           updated_at
-        FROM customs_declarations 
-        ORDER BY created_at DESC`
-      );
+        FROM customs_declarations`;
+      
+      const params: any[] = [];
+      if (status) {
+        query += ` WHERE UPPER(status) = UPPER($1)`;
+        params.push(status);
+      }
+      
+      query += ` ORDER BY created_at DESC`;
+
+      const declarations = await postgresDb.all(query, params);
 
       logger.info(`[CUSTOMS] Found ${declarations.length} declarations`);
 
@@ -1082,36 +1093,38 @@ router.post('/declaration/:declarationId/review',
  * POST /api/v1/customs/declarations/:id/inspect
  * Start customs inspection and move declaration to INSPECTING status
  */
-router.post('/declarations/:id/inspect',
-  authMiddleware,
-  param('id').notEmpty(),
-  async (req: Request, res: Response) => {
+const inspectHandler = async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const { id, declarationId } = req.params;
+      const declId = id || declarationId;
       const user = (req as any).user;
 
-      logger.info(`[CUSTOMS] Starting inspection for declaration ${id} by ${user.username}`);
+      logger.info(`[CUSTOMS] Starting inspection for declaration ${declId} by ${user.username}`);
+
+      // Get database instance
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
 
       // Check if declaration exists
-      const declaration = await postgresDb.get(
+      const declaration = await db.get(
         `SELECT declaration_number, status FROM customs_declarations WHERE declaration_number = $1`,
-        [id]
+        [declId]
       );
 
       if (!declaration) {
         return res.status(404).json({
           success: false,
-          error: { code: 'NOT_FOUND', message: `Declaration ${id} not found` },
+          error: { code: 'NOT_FOUND', message: `Declaration ${declId} not found` },
           timestamp: new Date().toISOString()
         });
       }
 
       // Update status to INSPECTING
-      await postgresDb.run(
+      await db.run(
         `UPDATE customs_declarations 
-         SET status = $1, customs_officer = $2, updated_at = NOW() 
+         SET status = $1, customs_officer = $2, updated_at = CURRENT_TIMESTAMP 
          WHERE declaration_number = $3`,
-        ['INSPECTING', user.username, id]
+        ['INSPECTING', user.username, declId]
       );
 
       // Also update CouchDB
@@ -1121,7 +1134,7 @@ router.post('/declarations/:id/inspect',
         
         // Get current document
         const getResp = await axios.get(
-          `${couchDbUrl}/coffeechannel_coffee/customs:${id}`,
+          `${couchDbUrl}/coffeechannel_coffee/customs:${declId}`,
           { auth: { username: 'admin', password: 'adminpw' } }
         );
         
@@ -1132,24 +1145,24 @@ router.post('/declarations/:id/inspect',
         
         // Update document
         await axios.put(
-          `${couchDbUrl}/coffeechannel_coffee/customs:${id}`,
+          `${couchDbUrl}/coffeechannel_coffee/customs:${declId}`,
           doc,
           {
             auth: { username: 'admin', password: 'adminpw' },
             headers: { 'Content-Type': 'application/json' }
           }
         );
-        logger.info(`✅ [CUSTOMS] Declaration ${id} updated in CouchDB: status=inspecting`);
+        logger.info(`✅ [CUSTOMS] Declaration ${declId} updated in CouchDB: status=inspecting`);
       } catch (couchError: any) {
         logger.warn(`[CUSTOMS] CouchDB update failed (non-critical):`, couchError.message);
       }
 
-      logger.info(`[CUSTOMS] ✅ Declaration ${id} inspection started: status=INSPECTING`);
+      logger.info(`[CUSTOMS] ✅ Declaration ${declId} inspection started: status=INSPECTING`);
 
       res.json({
         success: true,
         data: {
-          declarationId: id,
+          declarationId: declId,
           status: 'INSPECTING',
           customsOfficer: user.username,
           message: 'Inspection started successfully'
@@ -1164,8 +1177,11 @@ router.post('/declarations/:id/inspect',
         timestamp: new Date().toISOString()
       });
     }
-  }
-);
+};
+
+// Register both plural and singular routes
+router.post('/declarations/:id/inspect', authMiddleware, param('id').notEmpty(), inspectHandler);
+router.post('/declaration/:declarationId/inspect', authMiddleware, param('declarationId').notEmpty(), inspectHandler);
 
 /**
  * POST /api/v1/customs/declarations/:id/clear

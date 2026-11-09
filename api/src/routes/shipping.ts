@@ -322,4 +322,279 @@ router.get('/tracking', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/v1/shipping/bookings
+ * Create a new shipping booking
+ */
+router.post('/bookings', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const {
+      shipmentID,
+      exporterID,
+      shippingLine,
+      vesselName,
+      voyageNumber,
+      containerType,
+      numberOfContainers,
+      portOfLoading,
+      portOfDischarge,
+      estimatedDepartureDate,
+      estimatedArrivalDate
+    } = req.body;
+
+    const bookingID = `BOOK-${Date.now()}`;
+    
+    logger.info(`[SHIPPING] Creating booking: ${bookingID} for shipment: ${shipmentID}`);
+
+    // Insert booking record (using shipments table for now)
+    await dbService.run(`
+      INSERT INTO shipments (
+        shipment_id, contract_id, carrier, origin, destination,
+        estimated_departure, estimated_arrival, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+    `, [
+      bookingID,
+      shipmentID || null,
+      shippingLine || 'Maersk Line',
+      portOfLoading || 'Djibouti',
+      portOfDischarge || 'New York',
+      estimatedDepartureDate || null,
+      estimatedArrivalDate || null,
+      'BOOKED'
+    ]);
+
+    logger.info(`[SHIPPING] ✅ Booking created: ${bookingID}`);
+
+    res.json({
+      success: true,
+      data: {
+        bookingID,
+        shipmentID,
+        status: 'BOOKED',
+        shippingLine,
+        vesselName,
+        voyageNumber,
+        portOfLoading,
+        portOfDischarge
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[SHIPPING] Error creating booking:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to create booking'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/load
+ * Record cargo loading
+ */
+router.post('/bookings/:bookingId/load', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { bookingId } = req.params;
+    const { loadingDate, containerNumbers, sealNumbers, loadedBy } = req.body;
+
+    logger.info(`[SHIPPING] Recording cargo loading for booking: ${bookingId}`);
+
+    // Update shipment status to LOADED
+    await dbService.run(`
+      UPDATE shipments
+      SET status = $1,
+          container_number = $2,
+          seal_number = $3,
+          updated_at = NOW()
+      WHERE shipment_id = $4
+    `, [
+      'LOADED',
+      Array.isArray(containerNumbers) ? containerNumbers.join(',') : containerNumbers,
+      Array.isArray(sealNumbers) ? sealNumbers.join(',') : sealNumbers,
+      bookingId
+    ]);
+
+    logger.info(`[SHIPPING] ✅ Cargo loaded for booking: ${bookingId}`);
+
+    res.json({
+      success: true,
+      data: {
+        bookingId,
+        status: 'LOADED',
+        loadingDate,
+        containerNumbers,
+        sealNumbers
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[SHIPPING] Error recording cargo loading:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to record cargo loading'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/depart
+ * Record vessel departure
+ */
+router.post('/bookings/:bookingId/depart', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { bookingId } = req.params;
+    const { departureDate, actualDepartureTime } = req.body;
+
+    logger.info(`[SHIPPING] Recording vessel departure for booking: ${bookingId}`);
+
+    // Update shipment status to IN_TRANSIT
+    await dbService.run(`
+      UPDATE shipments
+      SET status = $1,
+          actual_departure = $2,
+          updated_at = NOW()
+      WHERE shipment_id = $3
+    `, [
+      'IN_TRANSIT',
+      departureDate || new Date().toISOString().split('T')[0],
+      bookingId
+    ]);
+
+    logger.info(`[SHIPPING] ✅ Vessel departed for booking: ${bookingId}`);
+
+    res.json({
+      success: true,
+      data: {
+        bookingId,
+        status: 'IN_TRANSIT',
+        departureDate,
+        actualDepartureTime
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[SHIPPING] Error recording vessel departure:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to record vessel departure'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/arrive
+ * Record vessel arrival
+ */
+router.post('/bookings/:bookingId/arrive', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { bookingId } = req.params;
+    const { arrivalDate, actualArrivalTime } = req.body;
+
+    logger.info(`[SHIPPING] Recording vessel arrival for booking: ${bookingId}`);
+
+    // Update shipment status to ARRIVED
+    await dbService.run(`
+      UPDATE shipments
+      SET status = $1,
+          actual_arrival = $2,
+          updated_at = NOW()
+      WHERE shipment_id = $3
+    `, [
+      'ARRIVED',
+      arrivalDate || new Date().toISOString().split('T')[0],
+      bookingId
+    ]);
+
+    logger.info(`[SHIPPING] ✅ Vessel arrived for booking: ${bookingId}`);
+
+    res.json({
+      success: true,
+      data: {
+        bookingId,
+        status: 'ARRIVED',
+        arrivalDate,
+        actualArrivalTime
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[SHIPPING] Error recording vessel arrival:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to record vessel arrival'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/deliver
+ * Record cargo delivery
+ */
+router.post('/bookings/:bookingId/deliver', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { bookingId } = req.params;
+    const { deliveryDate, receivedBy, deliveryNotes } = req.body;
+
+    logger.info(`[SHIPPING] Recording cargo delivery for booking: ${bookingId}`);
+
+    // Update shipment status to DELIVERED
+    await dbService.run(`
+      UPDATE shipments
+      SET status = $1,
+          delivery_date = $2,
+          updated_at = NOW()
+      WHERE shipment_id = $3
+    `, [
+      'DELIVERED',
+      deliveryDate || new Date().toISOString().split('T')[0],
+      bookingId
+    ]);
+
+    logger.info(`[SHIPPING] ✅ Cargo delivered for booking: ${bookingId}`);
+
+    res.json({
+      success: true,
+      data: {
+        bookingId,
+        status: 'DELIVERED',
+        deliveryDate,
+        receivedBy,
+        deliveryNotes
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[SHIPPING] Error recording cargo delivery:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to record cargo delivery'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 export default router;

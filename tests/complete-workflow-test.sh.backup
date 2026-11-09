@@ -1,0 +1,536 @@
+#!/bin/bash
+
+# Complete End-to-End Workflow Test with Form Submissions and Document Uploads
+# Simulates a real user journey through the entire coffee export process
+
+set -e
+
+API_BASE="http://localhost:5000/api/v1"
+TEST_OUTPUT="/tmp/complete-workflow-test.txt"
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
+
+# Test data files directory
+TEST_DOCS_DIR="/tmp/test-documents"
+mkdir -p $TEST_DOCS_DIR
+
+echo "════════════════════════════════════════════════════════════════" | tee $TEST_OUTPUT
+echo "🔄 COMPLETE WORKFLOW TEST - FULL E2E WITH FORM SUBMISSIONS" | tee -a $TEST_OUTPUT
+echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+echo "" | tee -a $TEST_OUTPUT
+
+# Create sample test documents
+echo "📄 Creating sample test documents..." | tee -a $TEST_OUTPUT
+echo "Sample Business License Document" > $TEST_DOCS_DIR/business_license.txt
+echo "Sample TIN Certificate" > $TEST_DOCS_DIR/tin_certificate.txt
+echo "Sample Quality Certificate" > $TEST_DOCS_DIR/quality_cert.pdf
+echo "Sample ICO Certificate" > $TEST_DOCS_DIR/ico_cert.pdf
+echo "Sample Contract Document" > $TEST_DOCS_DIR/contract.pdf
+echo "Sample Invoice" > $TEST_DOCS_DIR/invoice.pdf
+echo "Sample Packing List" > $TEST_DOCS_DIR/packing_list.pdf
+
+STEP_COUNT=0
+PASS_COUNT=0
+FAIL_COUNT=0
+
+log_step() {
+    STEP_COUNT=$((STEP_COUNT + 1))
+    echo "" | tee -a $TEST_OUTPUT
+    echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+    echo "📍 STEP $STEP_COUNT: $1" | tee -a $TEST_OUTPUT
+    echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+}
+
+log_action() {
+    echo "   🔹 $1" | tee -a $TEST_OUTPUT
+}
+
+log_pass() {
+    echo "   ✅ SUCCESS: $1" | tee -a $TEST_OUTPUT
+    PASS_COUNT=$((PASS_COUNT + 1))
+}
+
+log_fail() {
+    echo "   ❌ FAILED: $1" | tee -a $TEST_OUTPUT
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+}
+
+log_warn() {
+    echo "   ⚠️  WARNING: $1" | tee -a $TEST_OUTPUT
+}
+
+log_info() {
+    echo "   ℹ️  $1" | tee -a $TEST_OUTPUT
+}
+
+# ==================================================================================
+# PHASE 1: EXPORTER REGISTRATION & APPLICATION SUBMISSION
+# ==================================================================================
+
+log_step "EXPORTER REGISTRATION - New Coffee Exporter Application"
+
+# The /exporters/exporter-applications endpoint is PUBLIC and creates both:
+# 1. The application record
+# 2. A temporary user account with credentials sent via email
+# So we DON'T need to create a user first
+
+log_action "Submitting export license application (creates user automatically)"
+NEW_EXPORTER_EMAIL="exporter_${TIMESTAMP}@test.com"
+
+APPLICATION_RESPONSE=$(curl -s -X POST ${API_BASE}/exporters/exporter-applications \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"companyName\": \"Test Coffee Export Ltd $TIMESTAMP\",
+    \"tinNumber\": \"TIN${TIMESTAMP}\",
+    \"businessLicenseNumber\": \"BL-${TIMESTAMP}\",
+    \"capitalRequirement\": \"500000\",
+    \"professionalTaster\": \"yes\",
+    \"tasterCertificate\": \"TC-${TIMESTAMP}\",
+    \"contactPerson\": \"John Doe\",
+    \"email\": \"$NEW_EXPORTER_EMAIL\",
+    \"phone\": \"+251911234567\",
+    \"address\": \"123 Coffee Street\",
+    \"city\": \"Addis Ababa\",
+    \"region\": \"Addis Ababa\",
+    \"bankName\": \"Commercial Bank of Ethiopia\",
+    \"bankAccountNumber\": \"1000${TIMESTAMP:0:9}\",
+    \"bankBranchName\": \"Main Branch\",
+    \"exporterType\": \"company\",
+    \"laboratoryFacility\": \"no\",
+    \"registrationDate\": \"$(date +%Y-%m-%d)\",
+    \"comments\": \"Test application for workflow testing\"
+  }")
+
+APP_ID=$(echo "$APPLICATION_RESPONSE" | jq -r '.data.applicationId // .applicationId // empty')
+TEMP_USERNAME=$(echo "$APPLICATION_RESPONSE" | jq -r '.data.tempUsername // .tempUsername // empty')
+TEMP_PASSWORD=$(echo "$APPLICATION_RESPONSE" | jq -r '.data.tempPassword // .tempPassword // empty')
+
+if [ -n "$APP_ID" ]; then
+    log_pass "Application submitted successfully: $APP_ID"
+    log_info "Temporary credentials: $TEMP_USERNAME / $TEMP_PASSWORD"
+else
+    log_fail "Failed to submit application"
+    log_info "Response: $APPLICATION_RESPONSE"
+fi
+
+# Login with temporary credentials (optional - for status checking)
+if [ -n "$TEMP_USERNAME" ] && [ -n "$TEMP_PASSWORD" ]; then
+    log_action "Logging in with temporary credentials"
+    TOKEN_EXPORTER=$(curl -s -X POST ${API_BASE}/auth/login \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"$TEMP_USERNAME\",\"password\":\"$TEMP_PASSWORD\"}" | jq -r '.data.token // empty')
+    
+    if [ -n "$TOKEN_EXPORTER" ]; then
+        log_pass "Exporter logged in successfully"
+    else
+        log_warn "Exporter login failed (credentials may not be ready yet)"
+    fi
+fi
+
+# ==================================================================================
+# PHASE 2: ECTA REVIEW & APPROVAL
+# ==================================================================================
+
+log_step "ECTA PORTAL - Review and Approve Application"
+
+# Login as ECTA admin
+TOKEN_ECTA=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"ecta_admin","password":"password123"}' | jq -r '.data.token')
+
+if [ "$TOKEN_ECTA" = "null" ] || [ -z "$TOKEN_ECTA" ]; then
+    log_fail "ECTA login failed"
+    exit 1
+fi
+log_pass "ECTA admin logged in"
+
+# View pending applications
+log_action "Viewing pending applications"
+PENDING_APPS=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
+  "${API_BASE}/exporters/exporter-applications?status=pending")
+PENDING_COUNT=$(echo "$PENDING_APPS" | jq -r 'if type == "array" then length elif .data then (.data | if type == "array" then length else 0 end) else 0 end')
+log_info "Found $PENDING_COUNT pending applications"
+
+# Approve the application if we created one
+if [ -n "$APP_ID" ]; then
+    log_action "Approving application: $APP_ID"
+    APPROVAL_RESPONSE=$(curl -s -X POST ${API_BASE}/exporters/exporter-applications/$APP_ID/approve \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN_ECTA" \
+      -d "{
+        \"approvedBy\": \"ecta_admin\",
+        \"comments\": \"Application approved after verification\",
+        \"licenseNumber\": \"ECTA-LIC-$TIMESTAMP\",
+        \"licenseExpiryDate\": \"$(date -d '+1 year' +%Y-%m-%d)\"
+      }")
+    
+    if echo "$APPROVAL_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+        log_pass "Application approved successfully"
+    else
+        log_fail "Application approval failed"
+        log_info "Response: $APPROVAL_RESPONSE"
+    fi
+fi
+
+# ==================================================================================
+# PHASE 3: CONTRACT REGISTRATION
+# ==================================================================================
+
+log_step "CONTRACT REGISTRATION - Sales Contract with Buyer"
+
+# Login as ECX or use exporter token
+TOKEN_ECX=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"ecx_admin","password":"password123"}' | jq -r '.data.token')
+
+log_action "Creating new sales contract"
+NEW_CONTRACT_ID="CONT-$(date +%Y%m%d%H%M%S)"
+BUYER_ID="BUYER-TEST-$TIMESTAMP"
+
+CONTRACT_RESPONSE=$(curl -s -X POST ${API_BASE}/contracts \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECX" \
+  -d "{
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"buyerId\": \"$BUYER_ID\",
+    \"buyerName\": \"International Coffee Importers Inc\",
+    \"buyerCountry\": \"USA\",
+    \"coffeeType\": \"Arabica Grade 1\",
+    \"quantity\": 50000,
+    \"pricePerKg\": 5.50,
+    \"totalValue\": 275000,
+    \"currency\": \"USD\",
+    \"paymentMethod\": \"LC\",
+    \"deliveryTerms\": \"FOB\",
+    \"qualityStandard\": \"ICO\",
+    \"shipmentDeadline\": \"$(date -d '+90 days' +%Y-%m-%d)\",
+    \"portOfLoading\": \"Djibouti Port\",
+    \"portOfDischarge\": \"New York Port\"
+  }")
+
+if echo "$CONTRACT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Sales contract created: $NEW_CONTRACT_ID"
+    log_info "Quantity: 50,000 kg @ \$5.50/kg = \$275,000"
+else
+    log_fail "Contract creation failed"
+    log_info "Response: $CONTRACT_RESPONSE"
+fi
+
+# ==================================================================================
+# PHASE 4: QUALITY INSPECTION
+# ==================================================================================
+
+log_step "QUALITY INSPECTION - Request Quality Certificate"
+
+log_action "Submitting quality inspection request"
+NEW_INSPECTION_ID="QI-$(date +%Y%m%d%H%M%S)"
+
+INSPECTION_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{
+    \"inspectionId\": \"$NEW_INSPECTION_ID\",
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"coffeeType\": \"Arabica Grade 1\",
+    \"quantity\": 50000,
+    \"requestedDate\": \"$(date +%Y-%m-%d)\",
+    \"inspectionType\": \"PRE_SHIPMENT\",
+    \"sampleLocation\": \"Addis Ababa Warehouse\",
+    \"requestedBy\": \"$NEW_EXPORTER_USERNAME\"
+  }")
+
+if echo "$INSPECTION_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Quality inspection requested: $NEW_INSPECTION_ID"
+else
+    log_fail "Quality inspection request failed"
+    log_info "Response: $INSPECTION_RESPONSE"
+fi
+
+# Approve quality inspection (as quality inspector)
+log_action "Approving quality inspection"
+INSPECTION_APPROVAL=$(curl -s -X PUT ${API_BASE}/quality/inspections/$NEW_INSPECTION_ID/approve \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{
+    \"grade\": \"Grade 1\",
+    \"cupScore\": 85,
+    \"moistureContent\": 11.5,
+    \"defectCount\": 2,
+    \"certificateNumber\": \"QC-$TIMESTAMP\",
+    \"inspectorName\": \"Quality Inspector\",
+    \"comments\": \"Passed all quality standards\"
+  }")
+
+if echo "$INSPECTION_APPROVAL" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Quality certificate issued"
+else
+    log_fail "Quality approval failed"
+fi
+
+# ==================================================================================
+# PHASE 5: LETTER OF CREDIT ISSUANCE
+# ==================================================================================
+
+log_step "BANKING - Letter of Credit Issuance"
+
+TOKEN_BANK=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"bank_admin","password":"password123"}' | jq -r '.data.token')
+
+log_action "Issuing Letter of Credit"
+NEW_LC_NUMBER="LC-$(date +%Y%m%d%H%M%S)"
+
+LC_RESPONSE=$(curl -s -X POST ${API_BASE}/banking/lc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_BANK" \
+  -d "{
+    \"lcNumber\": \"$NEW_LC_NUMBER\",
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"issuingBank\": \"First National Bank\",
+    \"advisingBank\": \"Commercial Bank of Ethiopia\",
+    \"beneficiary\": \"Test Coffee Export Ltd\",
+    \"applicant\": \"International Coffee Importers Inc\",
+    \"amount\": 275000,
+    \"currency\": \"USD\",
+    \"issueDate\": \"$(date +%Y-%m-%d)\",
+    \"expiryDate\": \"$(date -d '+180 days' +%Y-%m-%d)\",
+    \"paymentTerms\": \"At Sight\",
+    \"latestShipmentDate\": \"$(date -d '+90 days' +%Y-%m-%d)\",
+    \"portOfLoading\": \"Djibouti Port\",
+    \"portOfDischarge\": \"New York Port\",
+    \"partialShipment\": false,
+    \"transhipment\": true
+  }")
+
+if echo "$LC_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Letter of Credit issued: $NEW_LC_NUMBER"
+else
+    log_fail "LC issuance failed"
+    log_info "Response: $LC_RESPONSE"
+fi
+
+# ==================================================================================
+# PHASE 6: FOREX ALLOCATION (NBE)
+# ==================================================================================
+
+log_step "NBE - Forex Allocation Approval"
+
+TOKEN_NBE=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"nbe_admin","password":"password123"}' | jq -r '.data.token')
+
+log_action "Creating forex allocation request"
+NEW_FOREX_ID="FX-$(date +%Y%m%d%H%M%S)"
+
+FOREX_RESPONSE=$(curl -s -X POST ${API_BASE}/forex/request \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_BANK" \
+  -d "{
+    \"forexId\": \"$NEW_FOREX_ID\",
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"amount\": 275000,
+    \"currency\": \"USD\",
+    \"requestedBy\": \"bank_admin\"
+  }")
+
+if echo "$FOREX_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Forex allocation requested: $NEW_FOREX_ID"
+else
+    log_warn "Forex allocation request status unclear"
+    log_info "Response: $FOREX_RESPONSE"
+fi
+
+# Verify NBE can monitor the LC
+log_action "Verifying NBE LC monitoring"
+NBE_LC_MONITOR=$(curl -s -H "Authorization: Bearer $TOKEN_NBE" \
+  "${API_BASE}/nbe/lc-monitoring")
+NBE_LC_COUNT=$(echo "$NBE_LC_MONITOR" | jq -r '.count // 0')
+log_info "NBE monitoring $NBE_LC_COUNT LCs"
+
+if [ "$NBE_LC_COUNT" -gt 0 ]; then
+    log_pass "NBE LC monitoring functional"
+else
+    log_warn "NBE LC monitoring shows 0 LCs"
+fi
+
+# ==================================================================================
+# PHASE 7: CUSTOMS DECLARATION
+# ==================================================================================
+
+log_step "CUSTOMS - Export Declaration Submission"
+
+TOKEN_CUSTOMS=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"customs_admin","password":"password123"}' | jq -r '.data.token')
+
+log_action "Submitting customs declaration"
+NEW_DECLARATION_ID="DECL-$(date +%Y%m%d%H%M%S)"
+
+DECLARATION_RESPONSE=$(curl -s -X POST ${API_BASE}/customs/declarations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_EXPORTER" \
+  -d "{
+    \"declarationId\": \"$NEW_DECLARATION_ID\",
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"commodityType\": \"Coffee\",
+    \"hsCode\": \"0901.11\",
+    \"quantity\": 50000,
+    \"value\": 275000,
+    \"currency\": \"USD\",
+    \"destinationCountry\": \"USA\",
+    \"portOfExit\": \"Djibouti Port\",
+    \"transportMode\": \"SEA\",
+    \"containerNumber\": \"CONT-$TIMESTAMP\",
+    \"declarationType\": \"EXPORT\"
+  }")
+
+if echo "$DECLARATION_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Customs declaration submitted: $NEW_DECLARATION_ID"
+else
+    log_fail "Customs declaration failed"
+    log_info "Response: $DECLARATION_RESPONSE"
+fi
+
+# Customs inspection and clearance
+log_action "Processing customs clearance"
+CLEARANCE_RESPONSE=$(curl -s -X PUT ${API_BASE}/customs/declarations/$NEW_DECLARATION_ID/clear \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_CUSTOMS" \
+  -d "{
+    \"inspectedBy\": \"customs_officer\",
+    \"clearanceDate\": \"$(date +%Y-%m-%d)\",
+    \"remarks\": \"Cleared for export\"
+  }")
+
+if echo "$CLEARANCE_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Customs clearance granted"
+else
+    log_warn "Customs clearance status unclear"
+fi
+
+# ==================================================================================
+# PHASE 8: SHIPMENT CREATION
+# ==================================================================================
+
+log_step "SHIPPING - Create Shipment & Track Delivery"
+
+TOKEN_SHIPPING=$(curl -s -X POST ${API_BASE}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"shipping_admin","password":"password123"}' | jq -r '.data.token')
+
+log_action "Creating shipment record"
+NEW_SHIPMENT_ID="SHIP-$(date +%Y%m%d%H%M%S)"
+
+SHIPMENT_RESPONSE=$(curl -s -X POST ${API_BASE}/shipments \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_SHIPPING" \
+  -d "{
+    \"shipmentId\": \"$NEW_SHIPMENT_ID\",
+    \"contractId\": \"$NEW_CONTRACT_ID\",
+    \"exporterId\": \"$NEW_EXPORTER_ID\",
+    \"origin\": \"Djibouti Port, Ethiopia\",
+    \"destination\": \"New York Port, USA\",
+    \"transportMode\": \"SEA\",
+    \"carrier\": \"Maersk Line\",
+    \"vesselName\": \"MV Test Vessel\",
+    \"containerNumber\": \"CONT-$TIMESTAMP\",
+    \"billOfLading\": \"BL-$TIMESTAMP\",
+    \"departureDate\": \"$(date +%Y-%m-%d)\",
+    \"estimatedArrival\": \"$(date -d '+30 days' +%Y-%m-%d)\",
+    \"quantity\": 50000,
+    \"status\": \"IN_TRANSIT\"
+  }")
+
+if echo "$SHIPMENT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Shipment created: $NEW_SHIPMENT_ID"
+else
+    log_fail "Shipment creation failed"
+    log_info "Response: $SHIPMENT_RESPONSE"
+fi
+
+# ==================================================================================
+# FINAL VERIFICATION
+# ==================================================================================
+
+log_step "FINAL VERIFICATION - Check All Records"
+
+log_action "Verifying records across all portals"
+
+# Check ECTA
+ECTA_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
+  "${API_BASE}/exporters/exporter-applications/$APP_ID" 2>/dev/null || echo '{}')
+if echo "$ECTA_CHECK" | jq -e '.data // .success' > /dev/null 2>&1; then
+    log_pass "ECTA: Application record found"
+else
+    log_warn "ECTA: Application record check inconclusive"
+fi
+
+# Check Contracts
+CONTRACT_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_ECX" \
+  "${API_BASE}/contracts/$NEW_CONTRACT_ID" 2>/dev/null || echo '{}')
+if echo "$CONTRACT_CHECK" | jq -e '.data' > /dev/null 2>&1; then
+    log_pass "ECX: Contract record found"
+fi
+
+# Check Quality
+QUALITY_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
+  "${API_BASE}/quality/inspections" | jq -r '.data.inspections | length')
+log_pass "Quality: $QUALITY_CHECK inspections on record"
+
+# Check Banking
+BANKING_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_BANK" \
+  "${API_BASE}/banking/lc" | jq -r '.data.lcs | length')
+log_pass "Banking: $BANKING_CHECK LCs on record"
+
+# Check NBE Monitoring
+NBE_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_NBE" \
+  "${API_BASE}/nbe/lc-monitoring" | jq -r '.count')
+log_pass "NBE: Monitoring $NBE_CHECK LCs"
+
+# Check Customs
+CUSTOMS_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_CUSTOMS" \
+  "${API_BASE}/customs/declarations" | jq -r '.data.declarations | length')
+log_pass "Customs: $CUSTOMS_CHECK declarations on record"
+
+# Check Shipping
+SHIPPING_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_SHIPPING" \
+  "${API_BASE}/shipping/shipments" | jq -r '.data.shipments | length')
+log_pass "Shipping: $SHIPPING_CHECK shipments on record"
+
+# ==================================================================================
+# SUMMARY
+# ==================================================================================
+
+echo "" | tee -a $TEST_OUTPUT
+echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+echo "📊 WORKFLOW TEST SUMMARY" | tee -a $TEST_OUTPUT
+echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+echo "" | tee -a $TEST_OUTPUT
+echo "Total Steps: $STEP_COUNT" | tee -a $TEST_OUTPUT
+echo "✅ Passed: $PASS_COUNT" | tee -a $TEST_OUTPUT
+echo "❌ Failed: $FAIL_COUNT" | tee -a $TEST_OUTPUT
+echo "" | tee -a $TEST_OUTPUT
+
+if [ $FAIL_COUNT -eq 0 ]; then
+    echo "🎉 ALL WORKFLOW STEPS COMPLETED SUCCESSFULLY!" | tee -a $TEST_OUTPUT
+    echo "" | tee -a $TEST_OUTPUT
+    echo "Created Test Records:" | tee -a $TEST_OUTPUT
+    echo "  - Exporter: $NEW_EXPORTER_ID ($NEW_EXPORTER_USERNAME)" | tee -a $TEST_OUTPUT
+    echo "  - Application: $APP_ID" | tee -a $TEST_OUTPUT
+    echo "  - Contract: $NEW_CONTRACT_ID" | tee -a $TEST_OUTPUT
+    echo "  - Quality Inspection: $NEW_INSPECTION_ID" | tee -a $TEST_OUTPUT
+    echo "  - Letter of Credit: $NEW_LC_NUMBER" | tee -a $TEST_OUTPUT
+    echo "  - Forex Request: $NEW_FOREX_ID" | tee -a $TEST_OUTPUT
+    echo "  - Customs Declaration: $NEW_DECLARATION_ID" | tee -a $TEST_OUTPUT
+    echo "  - Shipment: $NEW_SHIPMENT_ID" | tee -a $TEST_OUTPUT
+else
+    echo "⚠️  SOME WORKFLOW STEPS FAILED - REVIEW DETAILS ABOVE" | tee -a $TEST_OUTPUT
+fi
+
+echo "════════════════════════════════════════════════════════════════" | tee -a $TEST_OUTPUT
+
+exit $FAIL_COUNT

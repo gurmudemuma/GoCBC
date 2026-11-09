@@ -1092,4 +1092,222 @@ router.post('/messages/:messageID/validate',
   }
 );
 
+/**
+ * GET /api/v1/swift
+ * Base SWIFT route - Get overview/dashboard
+ */
+router.get('/',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      // Get SWIFT statistics and recent messages
+      const statsResult = await fabricService.queryChaincode('GetSWIFTMessageStatistics', []);
+      
+      // Get recent messages (limit to 10)
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      let recentMessages = [];
+      try {
+        const allMessages = await couchDBService.queryAllSWIFTMessages();
+        recentMessages = allMessages.slice(0, 10);
+      } catch (couchErr) {
+        logger.warn('[SWIFT] CouchDB query failed for recent messages, using Fabric...', couchErr);
+        const messagesResult = await fabricService.queryChaincode('QueryAllSWIFTMessages', []);
+        if (messagesResult.success) {
+          recentMessages = (messagesResult.data || []).slice(0, 10);
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          statistics: statsResult.success ? statsResult.data : {},
+          recentMessages,
+          overview: {
+            totalMessages: statsResult.data?.total || 0,
+            pendingApproval: statsResult.data?.pendingApproval || 0,
+            sent: statsResult.data?.sent || 0,
+            received: statsResult.data?.received || 0,
+          }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[SWIFT] Error fetching overview:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/swift/analytics
+ * Get SWIFT analytics data
+ */
+router.get('/analytics',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { dateFrom, dateTo, messageType, bic } = req.query;
+      
+      // Get all messages for analytics
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      let messages = [];
+      
+      try {
+        messages = await couchDBService.queryAllSWIFTMessages();
+      } catch (couchErr) {
+        logger.warn('[SWIFT] CouchDB query failed for analytics, using Fabric...', couchErr);
+        const result = await fabricService.queryChaincode('QueryAllSWIFTMessages', []);
+        if (result.success) {
+          messages = result.data || [];
+        }
+      }
+
+      // Filter by date range if provided
+      if (dateFrom || dateTo) {
+        messages = messages.filter((msg: any) => {
+          const msgDate = new Date(msg.createdAt || msg.timestamp);
+          if (dateFrom && msgDate < new Date(dateFrom as string)) return false;
+          if (dateTo && msgDate > new Date(dateTo as string)) return false;
+          return true;
+        });
+      }
+
+      // Filter by message type if provided
+      if (messageType) {
+        messages = messages.filter((msg: any) => msg.messageType === messageType);
+      }
+
+      // Filter by BIC if provided
+      if (bic) {
+        messages = messages.filter((msg: any) => 
+          msg.senderBIC === bic || msg.receiverBIC === bic
+        );
+      }
+
+      // Calculate analytics
+      const byType = messages.reduce((acc: any, msg: any) => {
+        const type = msg.messageType || 'UNKNOWN';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {});
+
+      const byStatus = messages.reduce((acc: any, msg: any) => {
+        const status = msg.status || 'UNKNOWN';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {});
+
+      const byCurrency = messages.reduce((acc: any, msg: any) => {
+        const currency = msg.currency || 'USD';
+        const amount = parseFloat(msg.amount || '0');
+        if (!acc[currency]) acc[currency] = { count: 0, total: 0 };
+        acc[currency].count++;
+        acc[currency].total += amount;
+        return acc;
+      }, {});
+
+      res.json({
+        success: true,
+        data: {
+          total: messages.length,
+          byType,
+          byStatus,
+          byCurrency,
+          filters: { dateFrom, dateTo, messageType, bic }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[SWIFT] Error fetching analytics:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/swift/compliance
+ * Get SWIFT compliance dashboard data
+ */
+router.get('/compliance',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { status, dateFrom, dateTo } = req.query;
+      
+      // Get all messages for compliance review
+      const { CouchDBDirectService } = require('../services/couchDBDirectService');
+      const couchDBService = new CouchDBDirectService();
+      let messages = [];
+      
+      try {
+        messages = await couchDBService.queryAllSWIFTMessages();
+      } catch (couchErr) {
+        logger.warn('[SWIFT] CouchDB query failed for compliance, using Fabric...', couchErr);
+        const result = await fabricService.queryChaincode('QueryAllSWIFTMessages', []);
+        if (result.success) {
+          messages = result.data || [];
+        }
+      }
+
+      // Filter by status if provided
+      if (status) {
+        messages = messages.filter((msg: any) => msg.status === status);
+      }
+
+      // Filter by date range if provided
+      if (dateFrom || dateTo) {
+        messages = messages.filter((msg: any) => {
+          const msgDate = new Date(msg.createdAt || msg.timestamp);
+          if (dateFrom && msgDate < new Date(dateFrom as string)) return false;
+          if (dateTo && msgDate > new Date(dateTo as string)) return false;
+          return true;
+        });
+      }
+
+      // Calculate compliance metrics
+      const pendingApproval = messages.filter((msg: any) => msg.status === 'PENDING_NBE_APPROVAL').length;
+      const nbeApproved = messages.filter((msg: any) => msg.status === 'NBE_APPROVED').length;
+      const rejected = messages.filter((msg: any) => msg.status === 'REJECTED').length;
+      const flagged = messages.filter((msg: any) => 
+        msg.amlCheck === 'FLAGGED' || msg.sanctionScreening === 'FLAGGED'
+      ).length;
+
+      // High-value transactions (>$100k)
+      const highValue = messages.filter((msg: any) => parseFloat(msg.amount || '0') > 100000).length;
+
+      res.json({
+        success: true,
+        data: {
+          total: messages.length,
+          pendingApproval,
+          nbeApproved,
+          rejected,
+          flagged,
+          highValue,
+          complianceRate: messages.length > 0 
+            ? ((nbeApproved / messages.length) * 100).toFixed(2) + '%' 
+            : '0%',
+          messages: messages.slice(0, 50), // Return first 50 for display
+          filters: { status, dateFrom, dateTo }
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[SWIFT] Error fetching compliance data:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
 export default router;

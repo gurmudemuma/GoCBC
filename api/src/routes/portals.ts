@@ -72,6 +72,7 @@ router.get('/:portal',
       // Route to specific portal dashboard
       switch (portal.toLowerCase()) {
         case 'ecta':
+        case 'quality':  // Alias for ECTA (quality officers use this)
           return await getECTADashboard(req, res);
         case 'banks':
           return await getBanksDashboard(req, res);
@@ -90,7 +91,7 @@ router.get('/:portal',
             success: false,
             error: { 
               code: 'PORTAL_NOT_FOUND', 
-              message: `Portal '${portal}' not found. Available portals: ecta, banks, nbe, customs, shipping, exporters, ecx` 
+              message: `Portal '${portal}' not found. Available portals: ecta, banks, nbe, customs, shipping, exporters, ecx, quality` 
             },
             timestamp: new Date().toISOString()
           });
@@ -117,30 +118,31 @@ async function getECTADashboard(req: Request, res: Response) {
       pendingContracts,
       pendingInspections,
       recentActivities,
-      statistics
+      applicationStats,
+      contractStats
     ] = await Promise.all([
-      // Pending exporter applications
+      // Pending exporter applications (limited for display)
       db.all(
         `SELECT * FROM exporter_applications 
          WHERE status = $1 
          ORDER BY created_at DESC LIMIT 10`,
-        ['PENDING']
+        ['pending']
       ),
       
-      // Contracts awaiting approval
+      // Contracts awaiting approval (limited for display)
       db.all(
         `SELECT * FROM contracts 
          WHERE status = $1 
          ORDER BY created_at DESC LIMIT 10`,
-        ['PENDING']
+        ['pending']
       ),
       
-      // Quality inspections pending
+      // Quality inspections pending (limited for display)
       db.all(
         `SELECT * FROM quality_inspections 
          WHERE status IN ($1, $2) 
          ORDER BY created_at DESC LIMIT 10`,
-        ['PENDING', 'INSPECTED']
+        ['pending', 'inspected']
       ),
       
       // Recent activities (last 24 hours)
@@ -152,13 +154,23 @@ async function getECTADashboard(req: Request, res: Response) {
         ['ECTAMSP']
       ),
       
-      // Statistics
+      // Application Statistics (total counts for KPI cards)
       db.get(`
         SELECT 
-          COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending_count,
-          COUNT(CASE WHEN status = 'APPROVED' THEN 1 END) as approved_count,
-          COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_count,
-          COUNT(*) as total_count
+          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_applications,
+          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_applications,
+          COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_applications,
+          COUNT(*) as total_applications
+        FROM exporter_applications
+      `),
+      
+      // Contract Statistics (total counts for KPI cards)
+      db.get(`
+        SELECT 
+          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_contracts,
+          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_contracts,
+          COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_contracts,
+          COUNT(*) as total_contracts
         FROM contracts
         WHERE created_at > NOW() - INTERVAL '30 days'
       `)
@@ -178,7 +190,10 @@ async function getECTADashboard(req: Request, res: Response) {
         pendingContracts,
         pendingInspections,
         recentActivities,
-        statistics,
+        statistics: {
+          applications: applicationStats,
+          contracts: contractStats
+        },
         timestamp: new Date().toISOString()
       }
     });
@@ -396,9 +411,10 @@ async function getCustomsDashboard(req: Request, res: Response) {
       
       db.all(
         `SELECT * FROM customs_declarations 
-         WHERE status = $1 
-         ORDER BY created_at DESC LIMIT 10`,
-        ['UNDER_REVIEW']
+         WHERE inspection_required = true 
+         AND status IN ($1, $2)
+         ORDER BY created_at DESC`,
+        ['SUBMITTED', 'UNDER_REVIEW']
       ),
       
       db.all(
@@ -411,11 +427,21 @@ async function getCustomsDashboard(req: Request, res: Response) {
       db.get(`
         SELECT 
           COUNT(*) as total_declarations,
+          COUNT(CASE WHEN status = 'SUBMITTED' THEN 1 END) as submitted_count,
+          COUNT(CASE WHEN status = 'INSPECTING' THEN 1 END) as inspecting_count,
+          COUNT(CASE WHEN status = 'UNDER_REVIEW' THEN 1 END) as under_review_count,
           COUNT(CASE WHEN status = 'CLEARED' THEN 1 END) as cleared_count,
           COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_count
         FROM customs_declarations
         WHERE created_at > NOW() - INTERVAL '30 days'
-      `).catch(() => ({ total_declarations: 0, cleared_count: 0, rejected_count: 0 }))
+      `).catch(() => ({ 
+        total_declarations: 0, 
+        submitted_count: 0,
+        inspecting_count: 0,
+        under_review_count: 0,
+        cleared_count: 0, 
+        rejected_count: 0 
+      }))
     ]);
 
     return res.json({
@@ -432,6 +458,9 @@ async function getCustomsDashboard(req: Request, res: Response) {
         todayClearances,
         statistics: {
           totalDeclarations: statistics?.total_declarations || 0,
+          submittedCount: statistics?.submitted_count || 0,
+          inspectingCount: statistics?.inspecting_count || 0,
+          underReviewCount: statistics?.under_review_count || 0,
           clearedCount: statistics?.cleared_count || 0,
           rejectedCount: statistics?.rejected_count || 0,
           revenueCollected: 0
@@ -718,3 +747,132 @@ async function getECXDashboard(req: Request, res: Response) {
 }
 
 export default router;
+
+// ============================================================================
+// PORTAL TAB ENDPOINTS - Specific data views for each portal
+// ============================================================================
+
+// ECTA Portal - Approved Exporters Tab
+router.get('/ecta/approved-exporters',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const exporters = await db.all(
+        `SELECT * FROM exporter_applications 
+         WHERE status = 'approved' 
+         ORDER BY approval_date DESC`
+      );
+      res.json({ success: true, data: exporters, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching approved exporters:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch approved exporters' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// ECX Portal - Active Contracts Tab
+router.get('/ecx/active-contracts',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const contracts = await db.all(
+        `SELECT * FROM contracts 
+         WHERE status IN ('ACTIVE', 'SIGNED') 
+         ORDER BY created_at DESC`
+      );
+      res.json({ success: true, data: contracts, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching active contracts:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch active contracts' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// Banking Portal - Active LCs Tab
+router.get('/banks/active-lcs',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const lcs = await db.all(
+        `SELECT * FROM letter_of_credits 
+         WHERE status IN ('ISSUED', 'ACTIVE', 'CONFIRMED') 
+         ORDER BY issued_at DESC`
+      );
+      res.json({ success: true, data: lcs, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching active LCs:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch active LCs' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// Quality Portal - Certificates Issued Tab
+router.get('/quality/certificates-issued',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const certificates = await db.all(
+        `SELECT * FROM quality_certificates 
+         WHERE status = 'issued' 
+         ORDER BY issue_date DESC`
+      );
+      res.json({ success: true, data: certificates, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching certificates:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch certificates' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// Customs Portal - Cleared Shipments Tab
+router.get('/customs/cleared-shipments',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const declarations = await db.all(
+        `SELECT * FROM customs_declarations 
+         WHERE status = 'CLEARED' 
+         ORDER BY clearance_date DESC`
+      );
+      res.json({ success: true, data: declarations, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching cleared shipments:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch cleared shipments' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// Shipping Portal - Active Shipments Tab
+router.get('/shipping/active-shipments',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const shipments = await db.all(
+        `SELECT * FROM shipments 
+         WHERE status IN ('IN_TRANSIT', 'LOADED', 'DEPARTED') 
+         ORDER BY created_at DESC`
+      );
+      res.json({ success: true, data: shipments, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching active shipments:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch active shipments' }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// NBE Portal - Forex Monitoring Tab
+router.get('/nbe/forex-monitoring',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const forexAllocations = await db.all(
+        `SELECT * FROM forex_allocations 
+         ORDER BY created_at DESC LIMIT 100`
+      );
+      res.json({ success: true, data: forexAllocations, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.error('Error fetching forex data:', error);
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch forex data' }, timestamp: new Date().toISOString() });
+    }
+  }
+);

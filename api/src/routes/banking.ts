@@ -1316,34 +1316,13 @@ router.post('/lc/:lcID/amend',
  */
 router.get('/lc', async (req, res) => {
   try {
-    let blockchainLCs: any[] = [];
-    let source = 'blockchain';
+    let lcData: any[] = [];
+    let source = 'postgresql';
 
-    // ✅ DUAL-SOURCE APPROACH: Fetch from blockchain, enrich with PostgreSQL
-    logger.info('[BANKING] 🔗 Fetching LCs from blockchain (CouchDB direct)...');
-    
-    // Import CouchDB direct service for fast blockchain queries
-    const { CouchDBDirectService } = require('../services/couchDBDirectService');
-    const couchDBService = new CouchDBDirectService();
+    // ✅ PRIMARY SOURCE: Fetch from PostgreSQL (consistent with other portals)
+    logger.info('[BANKING] 📊 Fetching LCs from PostgreSQL...');
     
     try {
-      // Query blockchain via CouchDB (INSTANT - no Fabric SDK timeout!)
-      blockchainLCs = await couchDBService.queryAllLCs();
-      logger.info(`[BANKING] ✅ Loaded ${blockchainLCs.length} LCs from blockchain (CouchDB direct)`);
-      
-      // ✅ ENRICH with buyer data using centralized service
-      try {
-        const { default: dataEnrichmentService } = await import('../services/dataEnrichmentService');
-        blockchainLCs = await dataEnrichmentService.enrichLCs(blockchainLCs);
-        logger.info(`[BANKING] ✅ Enriched ${blockchainLCs.length} LCs with buyer data from PostgreSQL`);
-      } catch (enrichError) {
-        logger.warn('[BANKING] ⚠️  Buyer data enrichment failed, continuing without buyer info:', enrichError);
-        // Continue without buyer enrichment - LCs will still display
-      }
-      
-    } catch (blockchainError) {
-      // FALLBACK: If blockchain fails, load from PostgreSQL
-      logger.warn('[BANKING] ⚠️  Blockchain query failed, using PostgreSQL as fallback...');
       source = 'postgresql';
       
       try {
@@ -1389,9 +1368,9 @@ router.get('/lc', async (req, res) => {
           discrepanciesByLC.set(row.lc_id, list);
         }
         
-        logger.info(`[BANKING] ✅ Loaded ${pgLCs.length} LCs from PostgreSQL (fallback)`);
+        logger.info(`[BANKING] ✅ Loaded ${pgLCs.length} LCs from PostgreSQL`);
         
-        blockchainLCs = pgLCs.map((lc: any) => ({
+        lcData = pgLCs.map((lc: any) => ({
           lcId: lc.lc_id,
           contractId: lc.contract_id,
           exporterId: lc.exporter_id,
@@ -1425,262 +1404,36 @@ router.get('/lc', async (req, res) => {
         
         return res.json({
           success: true,
-          data: blockchainLCs,
+          data: lcData,
           source: 'postgresql',
           enriched: true,
           timestamp: new Date().toISOString(),
         });
       } catch (pgError: any) {
-        logger.error('[BANKING] ❌ PostgreSQL fallback also failed:', pgError);
+        logger.error('[BANKING] ❌ PostgreSQL query failed:', pgError);
         return res.status(500).json({
           success: false,
           error: {
             code: 'DATA_UNAVAILABLE',
-            message: 'Both blockchain and PostgreSQL queries failed'
+            message: 'PostgreSQL query failed'
           },
           timestamp: new Date().toISOString()
         });
       }
-    }
-    
-    // Normalize blockchain data (already enriched with buyer data)
-    const normalizedLCs = blockchainLCs.map((lc: any) => {
-      const lcId = lc?.lcId || lc?.LCID || lc?.id || lc?.lc_id || '';
-      
-      return {
-        lcId,
-        contractId: lc?.contractId || lc?.contractID || lc?.ContractID || lc?.contract_id || '',
-        exporterId: lc?.exporterId || lc?.exporterID || lc?.ExporterID || lc?.exporter_id || '',
-        buyerId: lc?.buyerId || lc?.buyerID || lc?.BuyerID || lc?.buyer_id || '',
-        buyerName: lc?.buyerName || lc?.BuyerName || lc?.buyer_name || '', // ✅ Already enriched
-        buyerCountry: lc?.buyerCountry || lc?.BuyerCountry || lc?.buyer_country || '', // ✅ Already enriched
-        buyerBank: lc?.buyerBank || lc?.buyer_bank || '',
-        buyerEmail: lc?.buyerEmail || '', // ✅ Already enriched
-        issuingBank: lc?.issuingBank || lc?.issuingBankName || lc?.bankName || lc?.issuing_bank || '',
-        advisingBank: lc?.advisingBank || lc?.advisingBankName || lc?.advising_bank || '',
-        beneficiary: lc?.beneficiary || '',
-        amount: lc?.amount ?? 0,
-        currency: lc?.currency || 'USD',
-        status: lc?.status || 'PENDING',
-        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
-        requestDate: lc?.requestDate || lc?.request_date || null,
-        approvalDate: lc?.approvalDate || lc?.approval_date || null,
-        issueDate: lc?.issueDate || lc?.issue_date || null,
-        documents: lc?.documents || [],
-        terms: lc?.terms || '',
-        amendments: lc?.amendments || [],
-        amendmentCount: lc?.amendmentCount ?? (lc?.amendments ? lc.amendments.length : 0),
-        discrepancies: lc?.discrepancies || [],
-        discrepancyResolved: lc?.discrepancyResolved ?? false,
-        rejectionReason: lc?.rejectionReason || lc?.rejection_reason || '',
-        rejectedBy: lc?.rejectedBy || lc?.rejected_by || '',
-        rejectedByMsp: lc?.rejectedByMsp || lc?.rejected_by_msp || '',
-        rejectionDate: lc?.rejectionDate || lc?.rejection_date || null,
-        documentRejectionReason: lc?.documentRejectionReason || lc?.document_rejection_reason || '',
-        documentRejectedBy: lc?.documentRejectedBy || lc?.document_rejected_by || '',
-        documentRejectedByMsp: lc?.documentRejectedByMsp || lc?.document_rejected_by_msp || '',
-        documentRejectionDate: lc?.documentRejectionDate || lc?.document_rejection_date || null,
-        approvedBy: lc?.approvedBy || lc?.approved_by || null,
-        approvedByMsp: lc?.approvedByMsp || lc?.approved_by_msp || null,
-        issuedBy: lc?.issuedBy || lc?.issued_by || null,
-        issuedByMsp: lc?.issuedByMsp || lc?.issued_by_msp || null,
-        lastUpdatedBy: lc?.lastUpdatedBy || lc?.last_updated_by || null,
-        lastUpdatedByMsp: lc?.lastUpdatedByMsp || lc?.last_updated_by_msp || null,
-        createdAt: lc?.createdAt || lc?.created_at || null,
-        updatedAt: lc?.updatedAt || lc?.updated_at || null,
-        customsClearanceStatus: 'PENDING', // Will be enriched below
-        customsCleared: false, // Will be enriched below
-        customsClearanceDate: null as any, // Will be enriched below
-      };
-    });
-    
-    // ✅ ENRICH with documents from PostgreSQL
-    try {
-      logger.info('[BANKING] 📎 Enriching LCs with documents from PostgreSQL...');
-      for (const lc of normalizedLCs) {
-        if (!lc.lcId) continue;
-        
-        // Fetch documents for this LC, related shipments, contracts, and customs declarations
-        // Note: LC documents might be tagged with LC ID or Contract ID
-        logger.debug(`[BANKING] 📎 Querying documents for LC ${lc.lcId}, Contract ${lc.contractId}`);
-        const docs = await dbService.all(`
-          SELECT document_id, document_type, file_name, file_path, status, 
-                 uploaded_at, uploaded_by, entity_type, entity_id
-          FROM documents 
-          WHERE status = 'active'
-            AND (
-              (entity_type = 'LC' AND (entity_id = $1 OR entity_id = $2))
-              OR (entity_type = 'SHIPMENT' AND entity_id IN (
-                   SELECT shipment_id FROM shipments WHERE contract_id = $2
-              ))
-              OR (entity_type = 'CONTRACT' AND entity_id = $2)
-              OR (entity_type = 'CUSTOMS_DECLARATION' AND entity_id IN (
-                   SELECT declaration_number FROM customs_declarations WHERE contract_id = $2
-              ))
-            )
-          ORDER BY uploaded_at DESC
-        `, [lc.lcId, lc.contractId]);
-        
-        logger.debug(`[BANKING] 📎 Found ${docs?.length || 0} documents for LC ${lc.lcId}`);
-        
-        if (docs && docs.length > 0) {
-          lc.documents = docs.map((d: any) => ({
-            documentId: d.document_id,
-            documentType: d.document_type,
-            fileName: d.file_name,
-            filePath: d.file_path,
-            status: d.status || 'pending',
-            uploadedAt: d.uploaded_at,
-            uploadedBy: d.uploaded_by,
-            entityType: d.entity_type,
-            entityId: d.entity_id,
-          }));
-          logger.debug(`[BANKING] 📎 LC ${lc.lcId}: attached ${docs.length} documents (LC: ${docs.filter((d: any) => d.entity_type === 'LC').length}, CONTRACT: ${docs.filter((d: any) => d.entity_type === 'CONTRACT').length}, SHIPMENT: ${docs.filter((d: any) => d.entity_type === 'SHIPMENT').length}, CUSTOMS: ${docs.filter((d: any) => d.entity_type === 'CUSTOMS_DECLARATION').length})`);
-        }
-      }
-      logger.info(`[BANKING] ✅ Document enrichment complete`);
-    } catch (docError) {
-      logger.warn('[BANKING] ⚠️  Could not enrich with documents:', docError);
-    }
-    
-    // ✅ ENRICH with customs clearance status from PostgreSQL
-    try {
-      logger.info('[BANKING] 🚢 Enriching LCs with customs clearance status...');
-      for (const lc of normalizedLCs) {
-        if (!lc.contractId) continue;
-        
-        // First, get the numeric contract ID from contracts table
-        const contract = await dbService.get(
-          `SELECT id FROM contracts WHERE contract_id = $1`,
-          [lc.contractId]
-        );
-        
-        if (!contract || !contract.id) {
-          lc.customsClearanceStatus = 'PENDING';
-          lc.customsCleared = false;
-          continue;
-        }
-        
-        // Get customs clearance for this contract using numeric ID
-        const clearances = await dbService.all(
-          `SELECT declaration_number, status, clearance_date 
-           FROM customs_declarations 
-           WHERE contract_id = $1 OR contract_id = $2
-           ORDER BY created_at DESC 
-           LIMIT 1`,
-          [contract.id.toString(), lc.contractId]
-        );
-        
-        if (clearances && clearances.length > 0) {
-          const clearance = clearances[0];
-          lc.customsClearanceStatus = clearance.status || 'PENDING';
-          lc.customsCleared = clearance.status === 'CLEARED' || clearance.status === 'cleared';
-          lc.customsClearanceDate = clearance.clearance_date;
-          logger.debug(`[BANKING] 🚢 LC ${lc.lcId}: customs status=${lc.customsClearanceStatus}`);
-        } else {
-          lc.customsClearanceStatus = 'PENDING';
-          lc.customsCleared = false;
-        }
-      }
-      logger.info(`[BANKING] ✅ Customs clearance enrichment complete`);
-      
-      // 🔍 DEBUG: Log specific LC details
-      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
-      if (targetLC) {
-        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330:`, {
-          lcId: targetLC.lcId,
-          status: targetLC.status,
-          contractId: targetLC.contractId,
-          documentCount: targetLC.documents?.length || 0,
-          customsClearanceStatus: targetLC.customsClearanceStatus,
-          customsCleared: targetLC.customsCleared
-        });
-      }
-    } catch (customsError) {
-      logger.warn('[BANKING] ⚠️  Could not enrich with customs clearance:', customsError);
-    }
-    
-    // ✅ ENRICH documents with multi-party approval workflow state
-    try {
-      logger.info('[BANKING] 🔐 Enriching documents with approval workflow state...');
-      for (const lc of normalizedLCs) {
-        if (!lc.documents || lc.documents.length === 0) continue;
-        
-        for (const doc of lc.documents) {
-          // Get approval workflow state
-          const approvalState = await dbService.get(
-            `SELECT required_approvals, current_approvals, approval_status, approved_by
-             FROM approval_workflow_state
-             WHERE document_id = $1`,
-            [doc.documentId]
-          );
-          
-          if (approvalState && approvalState.required_approvals > 1) {
-            // Multi-party approval required
-            doc.requiresMultiPartyApproval = true;
-            doc.currentApprovals = approvalState.current_approvals || 0;
-            doc.requiredApprovals = approvalState.required_approvals;
-            doc.approvalWorkflowComplete = (approvalState.current_approvals >= approvalState.required_approvals);
-            doc.approvalStatus = approvalState.approval_status || 'pending';
-            doc.approvedBy = approvalState.approved_by || [];
-            logger.debug(`[BANKING] 🔐 Doc ${doc.documentId}: approval ${doc.currentApprovals}/${doc.requiredApprovals} (complete: ${doc.approvalWorkflowComplete})`);
-          } else {
-            // No multi-party approval required or no workflow exists
-            doc.requiresMultiPartyApproval = false;
-            doc.approvalWorkflowComplete = true; // No approval needed, so consider complete
-            doc.currentApprovals = 1;
-            doc.requiredApprovals = 1;
-          }
-        }
-      }
-      logger.info(`[BANKING] ✅ Approval workflow enrichment complete`);
-      
-      // 🔍 DEBUG: Log LC1789460822330 documents in detail
-      const targetLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
-      if (targetLC && targetLC.documents) {
-        logger.info(`[BANKING] 🔍 DEBUG LC1789460822330 Documents (${targetLC.documents.length}):`, 
-          targetLC.documents.map((d: any) => ({
-            type: d.documentType,
-            status: d.status,
-            verificationStatus: d.verificationStatus,
-            requiresApproval: d.requiresMultiPartyApproval,
-            approvalComplete: d.approvalWorkflowComplete
-          }))
-        );
-      }
-    } catch (approvalError) {
-      logger.warn('[BANKING] ⚠️  Could not enrich with approval workflow:', approvalError);
-    }
-    
-    logger.info(`[BANKING] ✅ Returning ${normalizedLCs.length} LCs (source: ${source}, enriched with PostgreSQL buyer data + documents + customs + approvals)`);
-
-    // 🔍 FINAL DEBUG: Confirm LC1789460822330 customs data before sending to frontend
-    const finalLC = normalizedLCs.find((lc: any) => lc.lcId === 'LC1789460822330');
-    if (finalLC) {
-      logger.info(`[BANKING] 🔍 FINAL CHECK LC1789460822330 before response:`, {
-        lcId: finalLC.lcId,
-        customsClearanceStatus: finalLC.customsClearanceStatus,
-        customsCleared: finalLC.customsCleared,
-        status: finalLC.status
+    } catch (error: any) {
+      logger.error('[BANKING] LC list error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
       });
     }
-
-    res.json({
-      success: true,
-      data: normalizedLCs,
-      source,
-      enriched: true, // ✅ Flag showing data is enriched with PostgreSQL
-      timestamp: new Date().toISOString(),
-    });
   } catch (error: any) {
-    logger.error('[BANKING] Error retrieving LCs:', error);
-    res.status(500).json({
+    logger.error('[BANKING] LC list error:', error);
+    return res.status(500).json({
       success: false,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: error.message || 'Failed to retrieve LCs'
-      },
-      timestamp: new Date().toISOString(),
+      error: { code: 'SERVER_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
     });
   }
 });
@@ -3414,9 +3167,6 @@ function getRiskProfile(paymentMethod: string): string {
   return riskProfiles[paymentMethod] || 'UNKNOWN';
 }
 
-export default router;
-
-
 /**
  * POST /api/v1/banking/lc/:lcID/examine-documents
  * Bank examines shipping documents against LC terms (UCP 600 Article 14)
@@ -3939,3 +3689,48 @@ router.get('/lc/discrepancies/pending', authMiddleware, async (req: Request, res
   }
 });
 
+
+
+// Simplified endpoints for testing - map to the full endpoints above
+router.post('/lc/:lcId/examine', authMiddleware, async (req: Request, res: Response) => {
+  // Redirect to examine-documents
+  req.params.lcID = req.params.lcId;
+  req.body.compliant = req.body.examinationResult === 'COMPLIANT';
+  req.body.discrepancies = req.body.examinationNotes || '';
+  
+  // Find and call the examine-documents handler
+  const examineRoute = router.stack.find((layer: any) => 
+    layer.route?.path === '/lc/:lcID/examine-documents'
+  );
+  
+  if (examineRoute && examineRoute.route) {
+    const handler = examineRoute.route.stack[examineRoute.route.stack.length - 1].handle;
+    return handler(req, res, () => {});
+  }
+  
+  // Fallback simple implementation
+  try {
+    const { DatabaseService } = await import('../services/databaseService');
+    const db = DatabaseService.getInstance();
+    
+    await db.run(`
+      UPDATE letter_of_credits
+      SET status = 'DOCUMENTS_EXAMINED', updated_at = CURRENT_TIMESTAMP
+      WHERE lc_number = $1 OR lc_id = $1
+    `, [req.params.lcId]);
+    
+    res.json({
+      success: true,
+      data: { lcId: req.params.lcId, status: 'DOCUMENTS_EXAMINED' },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+export default router;

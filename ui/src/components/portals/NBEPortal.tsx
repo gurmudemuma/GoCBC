@@ -79,6 +79,31 @@ interface ContractWithTransport extends SalesContract {
   transportMode?: TransportMode;
 }
 
+interface LetterOfCredit {
+  id: number;
+  lc_number: string;
+  lc_id: string;
+  contract_id: string;
+  exporter_id: string;
+  issuing_bank: string;
+  advising_bank: string;
+  beneficiary: string;
+  applicant: string;
+  amount: string;
+  currency: string;
+  status: string;
+  issue_date: string | null;
+  expiry_date: string;
+  latest_shipment_date: string;
+  port_of_loading: string;
+  port_of_discharge: string;
+  payment_terms: string;
+  partial_shipment: boolean;
+  transhipment: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 interface ForexAllocation {
   forexId: string;
   contractId: string;
@@ -169,6 +194,7 @@ const NBEPortal: React.FC = () => {
   const [contracts, setContracts] = useState<SalesContract[]>([]);
   const [allContracts, setAllContracts] = useState<SalesContract[]>([]);
   const [forexAllocations, setForexAllocations] = useState<ForexAllocation[]>([]);
+  const [lettersOfCredit, setLettersOfCredit] = useState<LetterOfCredit[]>([]);
   const [deliveredShipments, setDeliveredShipments] = useState<any[]>([]);
   const [allForexAllocations, setAllForexAllocations] = useState<ForexAllocation[]>([]);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
@@ -225,7 +251,7 @@ const NBEPortal: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (tabValue === 6) {
+    if (tabValue === 7) {
       loadAuditStats();
     }
   }, [tabValue]);
@@ -296,6 +322,26 @@ const NBEPortal: React.FC = () => {
       } catch (error) {
         console.error('[NBE] ❌ Failed to load forex from API:', error);
         setForexAllocations([]);
+      }
+
+      // 🔗 Load Letters of Credit for monitoring
+      console.log('[NBE] 🔗 Loading LCs from API...');
+      try {
+        const lcResponse = await apiFetch('/nbe/lc-monitoring', {
+          method: 'GET',
+        });
+        
+        if (!lcResponse.ok) {
+          throw new Error(`Failed to fetch LCs: ${lcResponse.statusText}`);
+        }
+        
+        const lcResult = await lcResponse.json();
+        const lcs = lcResult.data || [];
+        console.log(`[NBE] ✅ Loaded ${lcs.length} LCs for monitoring`);
+        setLettersOfCredit(lcs);
+      } catch (error) {
+        console.error('[NBE] ❌ Failed to load LCs:', error);
+        setLettersOfCredit([]);
       }
 
       // Load exchange rates from blockchain/API
@@ -467,7 +513,11 @@ const NBEPortal: React.FC = () => {
         }
         break;
         
-      case 1: // Contract Approval
+      case 1: // LC Monitoring
+        // No filters for LC monitoring yet
+        break;
+
+      case 2: // Exchange Rates
         if (filterKey === 'ALL_CONTRACTS') setContracts(allContracts);
         else if (filterKey === 'APPROVED') setContracts(allContracts.filter(c => c.contractStatus === 'APPROVED'));
         else if (filterKey === 'PENDING') setContracts(allContracts.filter(c => c.contractStatus === 'REGISTERED'));
@@ -731,14 +781,15 @@ const NBEPortal: React.FC = () => {
     const allTabs = [
       // Operational Tabs (like Banks Portal)
       { index: 0, label: `Forex Monitoring`, icon: <CurrencyExchange sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer'] },
-      { index: 1, label: `Exchange Rates`, icon: <TrendingUp sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Exchange Rate Officer'] },
-      { index: 2, label: 'SWIFT Monitoring', icon: <FlightTakeoff sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Settlement Officer'] },
-      { index: 3, label: 'Forex Repatriation', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Settlement Officer'] },
-      { index: 4, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
+      { index: 1, label: `LC Monitoring`, icon: <AccountBalance sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer'] },
+      { index: 2, label: `Exchange Rates`, icon: <TrendingUp sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Exchange Rate Officer'] },
+      { index: 3, label: 'SWIFT Monitoring', icon: <FlightTakeoff sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Settlement Officer'] },
+      { index: 4, label: 'Forex Repatriation', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Settlement Officer'] },
+      { index: 5, label: 'Policy & Compliance', icon: <Gavel sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Compliance Officer', 'Screening Officer'] },
       // Analytics & Admin Tabs
-      { index: 5, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
-      { index: 6, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
-      { index: 7, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
+      { index: 6, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
+      { index: 7, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
+      { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -1074,11 +1125,17 @@ const NBEPortal: React.FC = () => {
               { icon: <Assignment />, label: 'Back to All', value: forexAllocations.length, color: BRAND_COLOR, onClick: () => setForexSubTab(0) },
             ]
           ) : tabValue === 1 ? [
+            // LC Monitoring KPIs
+            { icon: <AccountBalance />, label: 'Total LCs', value: lettersOfCredit.length, color: BRAND_COLOR },
+            { icon: <CheckCircle />, label: 'Active LCs', value: lettersOfCredit.filter(lc => lc.status === 'ISSUED').length, color: '#4caf50' },
+            { icon: <AttachMoney />, label: 'Total Value (M USD)', value: `$${(lettersOfCredit.reduce((sum, lc) => sum + parseFloat(lc.amount), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
+            { icon: <Warning />, label: 'Expiring Soon', value: lettersOfCredit.filter(lc => new Date(lc.expiry_date) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)).length, color: '#ff9800' },
+          ] : tabValue === 2 ? [
             { icon: <CurrencyExchange />, label: 'Current Rate (ETB/USD)', value: currentRate ? currentRate.toFixed(2) : 'Unavailable', color: BRAND_COLOR },
             { icon: <TrendingUp />, label: 'Active Currencies', value: new Set(exchangeRates.filter(rate => rate.status === 'ACTIVE').map(rate => rate.currency)).size, color: '#4caf50' },
             { icon: <Assessment />, label: 'Rate Updates', value: exchangeRates.length, color: '#2196f3' },
             { icon: <CheckCircle />, label: 'Active Rates', value: exchangeRates.filter(rate => rate.status === 'ACTIVE').length, color: '#4caf50' },
-          ] : tabValue === 2 ? (
+          ] : tabValue === 3 ? (
             // SWIFT Monitoring - KPIs change dynamically based on active sub-tab
             swiftSubTab === 0 ? [
               // Sub-tab 0: All Messages - Show message overview metrics
@@ -1099,12 +1156,12 @@ const NBEPortal: React.FC = () => {
               { icon: <Assessment />, label: 'Under Review', value: swiftMessages.filter(m => m.status === 'PENDING').length, color: '#2196f3' },
               { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
             ]
-          ) : tabValue === 3 ? [
+          ) : tabValue === 4 ? [
             { icon: <Gavel />, label: 'Active Coffee Policy', value: coffeeRetentionPolicy ? 1 : 0, color: BRAND_COLOR },
             { icon: <CheckCircle />, label: 'Retention Compliant', value: forexAllocations.filter(f => f.retentionStatus === 'COMPLIED').length, color: '#4caf50' },
             { icon: <Warning />, label: 'Review Required', value: forexAllocations.filter(f => ['PENDING', 'NON_COMPLIANT'].includes(f.retentionStatus || '')).length, color: '#ff9800' },
             { icon: <Assessment />, label: 'Audit Activities', value: auditStats.totalActivities, color: '#2196f3' },
-          ] : tabValue === 4 ? (
+          ] : tabValue === 5 ? (
             // Analytics Tab - KPIs change based on sub-tab (Overview, Trends, Breakdown)
             analyticsSubTab === 0 ? [
               // Overview - Show summary of all entities
@@ -1125,7 +1182,7 @@ const NBEPortal: React.FC = () => {
               { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => (c as any).transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
               { icon: <TrendingUp />, label: 'Top Destination', value: topDestination, color: '#1976d2' },
             ]
-          ) : tabValue === 6 ? [
+          ) : tabValue === 7 ? [
             { icon: <Timeline />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
             { icon: <Assessment />, label: 'Today\'s Actions', value: auditStats.todaysActions, color: '#4caf50' },
             { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
@@ -1328,7 +1385,7 @@ const NBEPortal: React.FC = () => {
           </>
         )}
         {/* Exchange Rates Tab KPIs */}
-        {tabValue === 1 && (
+        {tabValue === 2 && (
           <>
             <Grid item xs={12} md={3}>
               <Card sx={{ 
@@ -1438,7 +1495,7 @@ const NBEPortal: React.FC = () => {
         )}
 
         {/* SWIFT Monitoring Tab KPIs */}
-        {tabValue === 2 && (
+        {tabValue === 3 && (
           <>
             <Grid item xs={12} md={3}>
               <Card sx={{ 
@@ -1650,7 +1707,114 @@ const NBEPortal: React.FC = () => {
             />
           </Box>
         </TabPanel>
+
+        {/* LC Monitoring Tab - NEW */}
         <TabPanel value={tabValue} index={1}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+            <Typography variant="h5" fontWeight={600}>
+              Letters of Credit Monitoring
+            </Typography>
+            <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
+              Export Report
+            </Button>
+          </Box>
+
+          <DataGrid
+            rows={lettersOfCredit.map(lc => ({ ...lc, id: lc.id }))}
+            columns={[
+              { 
+                field: 'lc_number', 
+                headerName: 'LC Number', 
+                width: 180,
+                renderCell: (params) => (
+                  <Typography variant="body2" fontWeight={600}>
+                    {params.value}
+                  </Typography>
+                )
+              },
+              { 
+                field: 'contract_id', 
+                headerName: 'Contract ID', 
+                width: 180
+              },
+              { 
+                field: 'exporter_id', 
+                headerName: 'Exporter', 
+                width: 150
+              },
+              { 
+                field: 'amount', 
+                headerName: 'Amount', 
+                width: 130,
+                renderCell: (params) => (
+                  <Typography variant="body2" fontWeight={600} color="primary">
+                    {formatCurrency(parseFloat(params.row.amount), params.row.currency)}
+                  </Typography>
+                )
+              },
+              { 
+                field: 'issuing_bank', 
+                headerName: 'Issuing Bank', 
+                width: 200
+              },
+              { 
+                field: 'advising_bank', 
+                headerName: 'Advising Bank', 
+                width: 200
+              },
+              { 
+                field: 'status', 
+                headerName: 'Status', 
+                width: 120,
+                renderCell: (params) => (
+                  <Chip 
+                    label={params.value} 
+                    size="small"
+                    sx={{
+                      bgcolor: getStatusColor(params.value),
+                      color: 'white',
+                      fontWeight: 600
+                    }}
+                  />
+                )
+              },
+              { 
+                field: 'expiry_date', 
+                headerName: 'Expiry Date', 
+                width: 150,
+                renderCell: (params) => formatDate(params.value)
+              },
+              { 
+                field: 'created_at', 
+                headerName: 'Issued Date', 
+                width: 150,
+                renderCell: (params) => formatDate(params.value)
+              },
+            ]}
+            autoHeight
+            disableRowSelectionOnClick
+            initialState={{
+              pagination: {
+                paginationModel: { page: 0, pageSize: 10 },
+              },
+            }}
+            pageSizeOptions={[10, 25, 50]}
+            sx={{
+              '& .MuiDataGrid-root': {
+                border: 'none',
+              },
+              '& .MuiDataGrid-cell': {
+                borderBottom: '1px solid #f0f0f0',
+              },
+              '& .MuiDataGrid-columnHeaders': {
+                backgroundColor: '#f5f5f5',
+                borderBottom: '2px solid #e0e0e0',
+              },
+            }}
+          />
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={2}>
           <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3}>
             <Box display="flex" gap={2}>
               <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
@@ -1693,7 +1857,7 @@ const NBEPortal: React.FC = () => {
           </Grid>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={2}>
+        <TabPanel value={tabValue} index={3}>
           {/* SWIFT Monitoring Tab - Uses NBE colors (Bronze) not CBE colors */}
           <SWIFTMonitoringWrapper 
             primaryColor={BRAND_COLOR}
@@ -1705,12 +1869,12 @@ const NBEPortal: React.FC = () => {
           />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <TabPanel value={tabValue} index={4}>
           {/* Forex Repatriation Tab */}
           <RepatriationManagementTab />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={4}>
+        <TabPanel value={tabValue} index={5}>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Card>
@@ -1746,7 +1910,7 @@ const NBEPortal: React.FC = () => {
           </Grid>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <TabPanel value={tabValue} index={6}>
           {/* Analytics Tab */}
           <AnalyticsDashboard 
             activeSubTab={analyticsSubTab}
@@ -1754,12 +1918,12 @@ const NBEPortal: React.FC = () => {
           />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={7}>
           {/* User Management Tab */}
           <UserManagement />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <TabPanel value={tabValue} index={8}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="NBE Portal - Complete Transaction History"

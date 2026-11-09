@@ -1,0 +1,6 @@
+
+[0;34m═══════════════════════════════════════════════════════[0m
+[0;34m  PHASE 1: SETUP - Login Portal Users[0m
+[0;34m═══════════════════════════════════════════════════════[0m
+[0;34mℹ INFO[0m: Logging in as admin...
+[0;32m✓ PASS[0m: Admin login successful

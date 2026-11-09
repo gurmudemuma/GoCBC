@@ -476,4 +476,127 @@ export class AnalyticsService {
     
     return filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
   }
+
+  // ==================== BREAKDOWN ANALYTICS ====================
+
+  async getBreakdownAnalytics(organizationType: string, dimension: string, dateFrom?: string, dateTo?: string) {
+    try {
+      const whereClause = this.buildDateFilter(dateFrom, dateTo);
+      
+      let query = '';
+      switch (dimension) {
+        case 'exporter':
+          query = `
+            SELECT 
+              metadata->>'exporterId' as category,
+              COUNT(*) as count,
+              SUM(CAST(metadata->>'totalValue' AS NUMERIC)) as total_value
+            FROM audit_trail
+            WHERE entity_type = 'CONTRACT' AND action = 'CREATE'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY total_value DESC NULLS LAST
+            LIMIT 20
+          `;
+          break;
+        
+        case 'region':
+          query = `
+            SELECT 
+              metadata->>'region' as category,
+              COUNT(*) as count,
+              SUM(CAST(metadata->>'quantity' AS NUMERIC)) as total_quantity
+            FROM audit_trail
+            WHERE entity_type = 'SHIPMENT' AND action = 'CREATE'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY total_quantity DESC NULLS LAST
+          `;
+          break;
+        
+        case 'product':
+          query = `
+            SELECT 
+              metadata->>'coffeeType' as category,
+              COUNT(*) as count,
+              AVG(CAST(metadata->>'pricePerKg' AS NUMERIC)) as avg_price
+            FROM audit_trail
+            WHERE entity_type = 'CONTRACT' AND action = 'CREATE'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY count DESC
+          `;
+          break;
+        
+        case 'status':
+          query = `
+            SELECT 
+              metadata->>'status' as category,
+              COUNT(*) as count
+            FROM audit_trail
+            WHERE entity_type = 'CONTRACT'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY count DESC
+          `;
+          break;
+        
+        case 'bank':
+          query = `
+            SELECT 
+              metadata->>'bankName' as category,
+              COUNT(*) as count,
+              SUM(CAST(metadata->>'amount' AS NUMERIC)) as total_amount
+            FROM audit_trail
+            WHERE entity_type = 'PAYMENT'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY total_amount DESC NULLS LAST
+            LIMIT 15
+          `;
+          break;
+        
+        case 'destination':
+          query = `
+            SELECT 
+              metadata->>'destination' as category,
+              COUNT(*) as count,
+              SUM(CAST(metadata->>'quantity' AS NUMERIC)) as total_quantity
+            FROM audit_trail
+            WHERE entity_type = 'SHIPMENT' AND action = 'CREATE'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY total_quantity DESC NULLS LAST
+            LIMIT 15
+          `;
+          break;
+        
+        default:
+          // Default to exporter breakdown
+          query = `
+            SELECT 
+              metadata->>'exporterId' as category,
+              COUNT(*) as count,
+              SUM(CAST(metadata->>'totalValue' AS NUMERIC)) as total_value
+            FROM audit_trail
+            WHERE entity_type = 'CONTRACT' AND action = 'CREATE'
+            ${whereClause.replace('WHERE', 'AND')}
+            GROUP BY category
+            ORDER BY total_value DESC NULLS LAST
+            LIMIT 20
+          `;
+      }
+
+      const results = await this.db.all(query);
+      return results.map(r => ({
+        category: r.category || 'Unknown',
+        count: parseInt(r.count || 0),
+        value: parseFloat(r.total_value || r.total_amount || r.total_quantity || r.avg_price || 0)
+      }));
+    } catch (error) {
+      logger.error('Error getting breakdown analytics:', error);
+      // Return empty array on error instead of throwing
+      return [];
+    }
+  }
 }

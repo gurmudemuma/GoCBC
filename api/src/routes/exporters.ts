@@ -1318,13 +1318,45 @@ router.post('/',
  */
 router.get('/', authMiddleware, async (req, res) => {
   try {
+    const { status, limit = 50, offset = 0 } = req.query;
+
+    // If status is 'pending', 'approved', or 'rejected', query applications instead of exporters
+    if (status && ['pending', 'approved', 'rejected'].includes(status as string)) {
+      // Query from exporter_applications table (PostgreSQL)
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      
+      const applications = await db.all(
+        'SELECT * FROM exporter_applications WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+        [status, parseInt(limit as string), parseInt(offset as string)]
+      );
+      
+      const totalCount = await db.get(
+        'SELECT COUNT(*) as count FROM exporter_applications WHERE status = $1',
+        [status]
+      );
+
+      return res.json({
+        success: true,
+        data: applications,
+        pagination: {
+          total: totalCount?.count || 0,
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+          hasMore: parseInt(offset as string) + parseInt(limit as string) < (totalCount?.count || 0),
+        },
+        source: 'database',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Otherwise, query exporters from blockchain
     const result = await fabricService.getAllExporters();
 
     if (result.success) {
       const exporters = result.data || [];
-      const { status, limit = 50, offset = 0 } = req.query;
 
-      // Apply filters
+      // Apply filters for licenseStatus if provided
       let filteredExporters = exporters;
       if (status) {
         filteredExporters = exporters.filter((exp: any) => exp.licenseStatus === status);
@@ -1345,6 +1377,7 @@ router.get('/', authMiddleware, async (req, res) => {
           offset: parseInt(offset as string),
           hasMore: parseInt(offset as string) + parseInt(limit as string) < filteredExporters.length,
         },
+        source: 'blockchain',
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -1480,6 +1513,142 @@ router.get('/renewals', authMiddleware, async (req, res) => {
       success: false,
       error: { code: 'QUERY_FAILED', message: error.message },
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/exporters/forex:
+ *   get:
+ *     summary: Get exporter's forex allocations
+ *     tags: [Exporter Portal]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Forex allocations retrieved successfully
+ */
+router.get('/forex', authMiddleware, async (req, res) => {
+  try {
+    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
+    
+    try {
+      // Query forex allocations filtered by exporterId
+      const result = await fabricService.queryForexAllocations({ exporterId });
+
+      if (result.success && result.data) {
+        const normalizedForex = (result.data || []).map((fx: any) => ({
+          forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
+          contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
+          exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
+          amount: fx?.amount ?? fx?.Amount ?? 0,
+          currency: fx?.currency || fx?.Currency || 'USD',
+          status: fx?.status || fx?.Status || 'REQUESTED',
+          allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
+          exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
+          retention: fx?.retention ?? fx?.Retention ?? 0,
+          expiryDate: fx?.expiryDate || fx?.expiry_date || null,
+          requestDate: fx?.requestDate || fx?.request_date || null,
+          utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
+          nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
+        }));
+
+        return res.json({
+          success: true,
+          data: normalizedForex,
+          source: 'blockchain',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (blockchainError) {
+      logger.warn('Blockchain query failed for forex, returning empty data:', blockchainError);
+    }
+    
+    // Graceful fallback: return empty array if blockchain unavailable
+    return res.json({
+      success: true,
+      data: [],
+      source: 'fallback',
+      message: 'No forex allocations found or blockchain unavailable',
+      timestamp: new Date().toISOString(),
+    });
+    
+  } catch (error) {
+    logger.error('Error retrieving exporter forex:', error);
+    // Even on error, return empty array instead of 500
+    res.json({
+      success: true,
+      data: [],
+      source: 'error_fallback',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/exporters/lc:
+ *   get:
+ *     summary: Get exporter's letters of credit
+ *     tags: [Exporter Portal]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: LCs retrieved successfully
+ */
+router.get('/lc', authMiddleware, async (req, res) => {
+  try {
+    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
+    
+    // Query LCs filtered by exporterId
+    const result = await fabricService.queryLettersOfCredit({ exporterId });
+
+    if (result.success) {
+      const normalizedLCs = (result.data || []).map((lc: any) => ({
+        lcId: lc?.lcId || lc?.LCID || lc?.id || '',
+        contractId: lc?.contractId || lc?.ContractID || lc?.contractID || '',
+        exporterId: lc?.exporterId || lc?.ExporterID || lc?.exporterID || '',
+        bankName: lc?.bankName || lc?.BankName || '',
+        issuingBank: lc?.issuingBank || lc?.IssuingBank || '',
+        advisingBank: lc?.advisingBank || lc?.AdvisingBank || '',
+        beneficiary: lc?.beneficiary || '',
+        amount: lc?.amount ?? lc?.Amount ?? 0,
+        currency: lc?.currency || lc?.Currency || 'USD',
+        status: lc?.status || lc?.Status || 'REQUESTED',
+        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
+        requestDate: lc?.requestDate || lc?.request_date || null,
+        approvalDate: lc?.approvalDate || lc?.approval_date || null,
+        issueDate: lc?.issueDate || lc?.issue_date || null,
+        terms: lc?.terms || lc?.Terms || '',
+        documents: lc?.documents || lc?.Documents || [],
+      }));
+
+      res.json({
+        success: true,
+        data: normalizedLCs,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_FAILED',
+          message: 'Failed to retrieve letters of credit',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    logger.error('Error retrieving exporter LCs:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
     });
   }
 });
@@ -1891,142 +2060,6 @@ router.get('/contracts', authMiddleware, async (req, res) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Failed to retrieve contracts'
-      },
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-/**
- * @swagger
- * /api/v1/exporters/forex:
- *   get:
- *     summary: Get exporter's forex allocations
- *     tags: [Exporter Portal]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Forex allocations retrieved successfully
- */
-router.get('/forex', authMiddleware, async (req, res) => {
-  try {
-    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
-    
-    try {
-      // Query forex allocations filtered by exporterId
-      const result = await fabricService.queryForexAllocations({ exporterId });
-
-      if (result.success && result.data) {
-        const normalizedForex = (result.data || []).map((fx: any) => ({
-          forexId: fx?.forexId || fx?.ForexID || fx?.id || '',
-          contractId: fx?.contractId || fx?.ContractID || fx?.contractID || '',
-          exporterId: fx?.exporterId || fx?.ExporterID || fx?.exporterID || '',
-          amount: fx?.amount ?? fx?.Amount ?? 0,
-          currency: fx?.currency || fx?.Currency || 'USD',
-          status: fx?.status || fx?.Status || 'REQUESTED',
-          allocatedAmount: fx?.allocatedAmount ?? fx?.AllocatedAmount ?? 0,
-          exchangeRate: fx?.exchangeRate ?? fx?.ExchangeRate ?? 0,
-          retention: fx?.retention ?? fx?.Retention ?? 0,
-          expiryDate: fx?.expiryDate || fx?.expiry_date || null,
-          requestDate: fx?.requestDate || fx?.request_date || null,
-          utilizationDate: fx?.utilizationDate || fx?.utilization_date || null,
-          nbeApprovalRef: fx?.nbeApprovalRef || fx?.NbeApprovalRef || fx?.nbeReference || '',
-        }));
-
-        return res.json({
-          success: true,
-          data: normalizedForex,
-          source: 'blockchain',
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (blockchainError) {
-      logger.warn('Blockchain query failed for forex, returning empty data:', blockchainError);
-    }
-    
-    // Graceful fallback: return empty array if blockchain unavailable
-    return res.json({
-      success: true,
-      data: [],
-      source: 'fallback',
-      message: 'No forex allocations found or blockchain unavailable',
-      timestamp: new Date().toISOString(),
-    });
-    
-  } catch (error) {
-    logger.error('Error retrieving exporter forex:', error);
-    // Even on error, return empty array instead of 500
-    res.json({
-      success: true,
-      data: [],
-      source: 'error_fallback',
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-/**
- * @swagger
- * /api/v1/exporters/lc:
- *   get:
- *     summary: Get exporter's letters of credit
- *     tags: [Exporter Portal]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: LCs retrieved successfully
- */
-router.get('/lc', authMiddleware, async (req, res) => {
-  try {
-    const exporterId = (req as any).user?.exporterId || 'EXP2026001';
-    
-    // Query LCs filtered by exporterId
-    const result = await fabricService.queryLettersOfCredit({ exporterId });
-
-    if (result.success) {
-      const normalizedLCs = (result.data || []).map((lc: any) => ({
-        lcId: lc?.lcId || lc?.LCID || lc?.id || '',
-        contractId: lc?.contractId || lc?.ContractID || lc?.contractID || '',
-        exporterId: lc?.exporterId || lc?.ExporterID || lc?.exporterID || '',
-        bankName: lc?.bankName || lc?.BankName || '',
-        issuingBank: lc?.issuingBank || lc?.IssuingBank || '',
-        advisingBank: lc?.advisingBank || lc?.AdvisingBank || '',
-        beneficiary: lc?.beneficiary || '',
-        amount: lc?.amount ?? lc?.Amount ?? 0,
-        currency: lc?.currency || lc?.Currency || 'USD',
-        status: lc?.status || lc?.Status || 'REQUESTED',
-        expiryDate: lc?.expiryDate || lc?.expiry_date || null,
-        requestDate: lc?.requestDate || lc?.request_date || null,
-        approvalDate: lc?.approvalDate || lc?.approval_date || null,
-        issueDate: lc?.issueDate || lc?.issue_date || null,
-        terms: lc?.terms || lc?.Terms || '',
-        documents: lc?.documents || lc?.Documents || [],
-      }));
-
-      res.json({
-        success: true,
-        data: normalizedLCs,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'QUERY_FAILED',
-          message: 'Failed to retrieve letters of credit',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  } catch (error) {
-    logger.error('Error retrieving exporter LCs:', error);
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
       },
       timestamp: new Date().toISOString(),
     });

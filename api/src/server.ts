@@ -88,6 +88,7 @@ import warehouseRoutes from './routes/warehouse'; // ECX warehouse management
 import marketRoutes from './routes/market'; // ECX market analytics
 import shippingRoutes from './routes/shipping'; // Complete shipping management
 import certificatesRoutes from './routes/certificates'; // Phyto & COO certificates
+import nbeRoutes from './routes/nbe'; // NBE forex and repatriation management
 
 // Load environment variables
 dotenv.config();
@@ -251,6 +252,7 @@ class CECBSServer {
     // V1.4 New routes
     apiV1.use('/banking', authMiddleware, bankingRoutes);
     apiV1.use('/forex', authMiddleware, forexRoutes);
+    apiV1.use('/nbe', authMiddleware, nbeRoutes); // NBE forex approval and repatriation endpoints
     apiV1.use('/customs', authMiddleware, customsRoutes);
     apiV1.use('/ecx', authMiddleware, ecxRoutes);
     apiV1.use('/quality', authMiddleware, qualityRoutes);

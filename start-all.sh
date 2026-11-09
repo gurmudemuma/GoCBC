@@ -936,6 +936,37 @@ initialize_database() {
         if psql "$DATABASE_URL" -c "SELECT 1;" &>/dev/null; then
             write_success "Database connection successful"
             
+            # Run database migrations
+            write_step "Running database migrations..."
+            MIGRATIONS_DIR="$API_DIR/src/migrations"
+            
+            if [ -d "$MIGRATIONS_DIR" ]; then
+                # Get list of migration files sorted by name
+                MIGRATION_FILES=$(ls "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort -V)
+                
+                if [ -n "$MIGRATION_FILES" ]; then
+                    MIGRATION_COUNT=0
+                    for migration_file in $MIGRATION_FILES; do
+                        migration_name=$(basename "$migration_file")
+                        write_step "  └─ Applying migration: $migration_name"
+                        
+                        if psql "$DATABASE_URL" -f "$migration_file" >/dev/null 2>&1; then
+                            log_verbose "    ✓ $migration_name applied successfully"
+                            MIGRATION_COUNT=$((MIGRATION_COUNT + 1))
+                        else
+                            # Don't fail if migration already applied (idempotent migrations)
+                            log_verbose "    ⚠ $migration_name may already be applied (this is OK)"
+                        fi
+                    done
+                    
+                    write_success "Processed $MIGRATION_COUNT migration file(s)"
+                else
+                    write_info "No migration files found in $MIGRATIONS_DIR"
+                fi
+            else
+                write_info "Migrations directory not found: $MIGRATIONS_DIR"
+            fi
+            
             # Check if users table exists and has data
             write_step "Checking for seed data..."
             USER_COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM users WHERE status='active';" 2>/dev/null | tr -d ' ' || echo "0")
