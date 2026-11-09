@@ -506,7 +506,7 @@ export class PostDeliveryWorkflowService {
   async closeContract(
     shipmentId: string,
     userId: string
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; blockchainSynced?: boolean; blockchainWarning?: string | null }> {
     try {
       logger.info(`📋 Closing contract for shipment: ${shipmentId}`);
 
@@ -539,16 +539,32 @@ export class PostDeliveryWorkflowService {
         };
       }
 
-      // Update contract status on blockchain. NOTE: UpdateContractStatus
-      // does not exist in chaincodes/coffee/ (see TEST-STATUS-MATRIX §17),
-      // so this is best-effort — a failure is logged, not fatal, until the
-      // chaincode function is implemented.
-      const chainResult = await this.fabricService.invokeChaincode('UpdateContractStatus', [
-        statusResult.contractId,
-        'COMPLETED'
-      ]);
-      if (!chainResult.success) {
-        logger.warn(`📋 Chaincode UpdateContractStatus failed for ${statusResult.contractId} (function not implemented yet):`, chainResult.error);
+      // Mark the contract completed on-chain (TEST-STATUS-MATRIX §17 #7).
+      // CompleteContract takes (contractID, completedBy); UpdateContractStatus
+      // takes (contractID, newStatus) and is tried as a fallback if
+      // CompleteContract is not committed yet. Both are best-effort — a chain
+      // failure must not fail the PG close, and is reported honestly in the
+      // response.
+      let blockchainSynced = false;
+      let blockchainWarning: string | null = null;
+      const syncAttempts: Array<{ fn: string; args: string[] }> = [
+        { fn: 'CompleteContract', args: [statusResult.contractId, userId] },
+        { fn: 'UpdateContractStatus', args: [statusResult.contractId, 'COMPLETED'] },
+      ];
+      for (const attempt of syncAttempts) {
+        try {
+          const chainResult = await this.fabricService.invokeChaincode(attempt.fn, attempt.args);
+          if (chainResult.success) {
+            blockchainSynced = true;
+            logger.info(`📋 Contract ${statusResult.contractId} marked COMPLETED on-chain via ${attempt.fn}`);
+            break;
+          }
+          blockchainWarning = `Chaincode ${attempt.fn} did not complete ${statusResult.contractId}: ${chainResult.error || 'unknown error'}`;
+          logger.warn(`📋 ${blockchainWarning}`);
+        } catch (chainError: any) {
+          blockchainWarning = `Could not complete ${statusResult.contractId} on the ledger via ${attempt.fn} (no Fabric here?): ${chainError.message}`;
+          logger.warn(`📋 ${blockchainWarning}`);
+        }
       }
 
       // Update post-delivery tracking
@@ -572,9 +588,9 @@ export class PostDeliveryWorkflowService {
       // Send final notifications
       await this.notifyStakeholders(shipmentId, statusResult.contractId, statusResult.exporterId, 'WORKFLOW_COMPLETED');
 
-      logger.info(`✅ Contract closed for ${shipmentId}`);
+      logger.info(`✅ Contract closed for ${shipmentId} (blockchainSynced: ${blockchainSynced})`);
 
-      return { success: true };
+      return { success: true, blockchainSynced, blockchainWarning };
     } catch (error: any) {
       logger.error('Failed to close contract:', error);
       return { success: false, error: error.message };
@@ -603,6 +619,16 @@ export class PostDeliveryWorkflowService {
       return 'COMPLETED';
     }
 
+    // A close refused for incomplete steps writes overall_status = 'ISSUE'
+    // to the row (closeContract); the read-time derivation must not hide
+    // it behind PENDING/IN_PROGRESS. ISSUE is a stored state; DELAYED
+    // below is read-time only — no background job persists it, so the
+    // stored column keeps PENDING/IN_PROGRESS while the read reports
+    // DELAYED (TEST-STATUS-MATRIX §17 #11).
+    if (record.overall_status === 'ISSUE') {
+      return 'ISSUE';
+    }
+
     if (!record.payment_received && daysElapsed > this.PAYMENT_SLA) {
       return 'DELAYED';
     }
@@ -614,6 +640,18 @@ export class PostDeliveryWorkflowService {
       if (paymentDays > this.FOREX_SLA) {
         return 'DELAYED';
       }
+    }
+
+    // Payment and forex are done but LC settlement (when an LC was used)
+    // or the ECTA audit is still outstanding past the payment SLA: the
+    // workflow is overdue even though no single step has its own timer.
+    if (
+      record.payment_received &&
+      record.forex_repatriated &&
+      ((record.lc_used && !record.lc_settled) || !record.ecta_audit_completed) &&
+      daysElapsed > this.PAYMENT_SLA
+    ) {
+      return 'DELAYED';
     }
 
     if (record.payment_received || record.forex_repatriated || record.ecta_audit_completed) {

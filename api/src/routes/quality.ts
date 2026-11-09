@@ -14,6 +14,36 @@ const fabricService = FabricService.getInstance();
 const shipmentService = ShipmentService.getInstance();
 
 /**
+ * Best-effort chaincode sync for quality approve/reject
+ * (TEST-STATUS-MATRIX §17 #6). The QualityInspection entity
+ * (quality.go) has no approve/reject function yet; the chaincode agent is
+ * adding ApproveQualityInspection / RejectQualityInspection. Until those
+ * are committed the call fails and is logged — it must never fail the
+ * Postgres update, following the NBE forex approve pattern (nbe.ts).
+ * Args mirror the existing ApproveInspection / RejectInspection forms
+ * (inspectionID + approver / reason). If the implemented functions take
+ * different args, update the call sites below.
+ */
+async function syncQualityDecisionBestEffort(
+  functionName: 'ApproveQualityInspection' | 'RejectQualityInspection',
+  args: string[]
+): Promise<{ blockchainSynced: boolean; blockchainWarning: string | null; blockchain_tx_id: string | null }> {
+  try {
+    const chainResult = await fabricService.invokeChaincode(functionName, args);
+    if (chainResult.success) {
+      return { blockchainSynced: true, blockchainWarning: null, blockchain_tx_id: chainResult.txId || null };
+    }
+    const warning = `Chaincode ${functionName} did not sync ${args[0]}: ${chainResult.error || 'unknown error'}`;
+    logger.warn(`[QUALITY] ${warning}`);
+    return { blockchainSynced: false, blockchainWarning: warning, blockchain_tx_id: null };
+  } catch (chainError: any) {
+    const warning = `Could not sync ${args[0]} to the ledger via ${functionName} (no Fabric here?): ${chainError.message}`;
+    logger.warn(`[QUALITY] ${warning}`);
+    return { blockchainSynced: false, blockchainWarning: warning, blockchain_tx_id: null };
+  }
+}
+
+/**
  * @route GET /api/v1/quality/inspections
  * @route GET /api/v1/quality-inspections
  * @desc Get all quality inspections (with optional filters)
@@ -330,6 +360,16 @@ router.post('/inspections',
         updatedAt: new Date().toISOString()
       };
 
+      // Best-effort: the perform route below already treats the CouchDB
+      // update as non-blocking (logs and continues to the PG update), and
+      // the shipment-create route does the same for its CouchDB write.
+      // Previously this throw made inspection creation impossible
+      // whenever CouchDB was unreachable, so no PG row existed for the
+      // approve route to read (handoff H5 could not start). PG is the
+      // authoritative off-chain store; the CouchDB write is a shortcut
+      // around chaincode endorsement delays, not a precondition.
+      let couchdbSynced = true;
+      let couchdbWarning: string | undefined;
       try {
         const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
         const couchResponse = await axios.put(
@@ -345,7 +385,9 @@ router.post('/inspections',
         if (couchError.response?.status === 409) {
           logger.warn(`[INSPECTION] Inspection ${inspectionID} already exists in CouchDB (409 conflict)`);
         } else {
-          throw couchError;
+          couchdbSynced = false;
+          couchdbWarning = `CouchDB write failed (${couchError.code || couchError.message}); inspection saved to Postgres only and will need a CouchDB sync on the Fabric host.`;
+          logger.warn(`[INSPECTION] ${couchdbWarning}`);
         }
       }
 
@@ -363,7 +405,7 @@ router.post('/inspections',
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'PENDING', blockchain_tx_id: null },
+        data: { inspectionID, status: 'PENDING', blockchain_tx_id: null, couchdbSynced, couchdbWarning },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -701,6 +743,20 @@ router.post('/inspections/:inspectionID/approve',
         [inspectionID, certificateNo || `CERT${inspectionID}`]
       );
 
+      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6): the
+      // QualityInspection approve was PG-only. A chain failure must not
+      // fail the approval — the Postgres record is what the portals read.
+      const chainSync = await syncQualityDecisionBestEffort('ApproveQualityInspection', [
+        inspectionID,
+        approvedBy || 'ECTA Quality Director',
+      ]);
+      if (chainSync.blockchainSynced) {
+        await postgresDb.run(
+          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
+          [inspectionID, chainSync.blockchain_tx_id]
+        );
+      }
+
       logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNo}`);
 
       // ✅ SIGN INSPECTION DOCUMENTS - Add cryptographic signature with approver's identity
@@ -853,7 +909,9 @@ router.post('/inspections/:inspectionID/approve',
           inspectionID, 
           status: 'APPROVED', 
           certificateNo, 
-          blockchain_tx_id: null,
+          blockchain_tx_id: chainSync.blockchain_tx_id,
+          blockchainSynced: chainSync.blockchainSynced,
+          blockchainWarning: chainSync.blockchainWarning,
           customsAutoTriggered: true
         },
         timestamp: new Date().toISOString()
@@ -925,6 +983,19 @@ router.put('/inspections/:inspectionID/approve',
         [certificateNumber || `CERT-${inspectionID}`, grade || 'Grade 1', remarks || 'Approved', inspectionID]
       );
 
+      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6, same as the
+      // POST approve route above): never fails the PG approval.
+      const chainSync = await syncQualityDecisionBestEffort('ApproveQualityInspection', [
+        inspectionID,
+        approvedBy || 'ECTA Quality Director',
+      ]);
+      if (chainSync.blockchainSynced) {
+        await postgresDb.run(
+          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
+          [inspectionID, chainSync.blockchain_tx_id]
+        );
+      }
+
       logger.info(`Inspection ${inspectionID} approved via PUT by ${user.username}`);
 
       res.json({
@@ -933,7 +1004,10 @@ router.put('/inspections/:inspectionID/approve',
           inspectionID,
           status: 'APPROVED',
           certificateNumber: certificateNumber || `CERT-${inspectionID}`,
-          grade: grade || 'Grade 1'
+          grade: grade || 'Grade 1',
+          blockchain_tx_id: chainSync.blockchain_tx_id,
+          blockchainSynced: chainSync.blockchainSynced,
+          blockchainWarning: chainSync.blockchainWarning
         },
         timestamp: new Date().toISOString()
       });
@@ -990,36 +1064,48 @@ router.post('/inspections/:inspectionID/reject',
         });
       }
 
-      // ✅ BLOCKCHAIN-FIRST: Call RejectInspection chaincode BEFORE DB update
-      const blockchainResult = await fabricService.invokeChaincode(
-        'RejectInspection',
-        [
-          inspectionID,
-          rejectedBy || 'ECTA Quality Director',
-          reason
-        ]
-      );
-      
-      const blockchain_tx_id = blockchainResult?.txId || null;
-      logger.info(`✅ Inspection rejection recorded on blockchain: ${inspectionID}, TX: ${blockchain_tx_id}`);
-
-      // Now reject inspection in database
+      // Reject inspection in the database first, then best-effort sync to
+      // the chain (TEST-STATUS-MATRIX §17 #6). The old handler called
+      // RejectInspection blockchain-first — but that function belongs to
+      // the *other* inspection entity (PreShipmentInspection,
+      // inspection.go) and takes 2 args, not the 3 passed here, so the
+      // chain call could throw and the PG rejection never happened. The
+      // QualityInspection reject is now RejectQualityInspection, called
+      // best-effort after the PG update (NBE forex approve pattern).
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'REJECTED',
           passed = false,
           remarks = $2,
-          blockchain_tx_id = $3,
+          blockchain_tx_id = NULL,
           updated_at = NOW()
         WHERE inspection_id = $1`,
-        [inspectionID, `REJECTED: ${reason}`, blockchain_tx_id]
+        [inspectionID, `REJECTED: ${reason}`]
       );
+
+      // NOTE: `rejectedBy` is accepted from the caller but not passed to
+      // the chaincode — RejectInspection sets RejectedBy from the client
+      // identity, and the new function is expected to do the same. If the
+      // implemented RejectQualityInspection takes a rejecter arg, add it
+      // here as the 3rd arg.
+      const chainSync = await syncQualityDecisionBestEffort('RejectQualityInspection', [
+        inspectionID,
+        reason,
+      ]);
+      if (chainSync.blockchainSynced) {
+        await postgresDb.run(
+          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
+          [inspectionID, chainSync.blockchain_tx_id]
+        );
+      }
+      const blockchain_tx_id = chainSync.blockchain_tx_id;
+      logger.info(`✅ Inspection rejection recorded: ${inspectionID}, TX: ${blockchain_tx_id}`);
 
       logger.info(`Quality inspection rejected: ${inspectionID}, Reason: ${reason}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'REJECTED', reason, blockchain_tx_id },
+        data: { inspectionID, status: 'REJECTED', reason, blockchain_tx_id, blockchainSynced: chainSync.blockchainSynced, blockchainWarning: chainSync.blockchainWarning },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -1795,6 +1881,13 @@ router.put('/inspections/:inspectionID/reject',
         [rejectionReason, inspectionID]
       );
 
+      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6, same as the
+      // POST reject route above): never fails the PG rejection.
+      const chainSync = await syncQualityDecisionBestEffort('RejectQualityInspection', [
+        inspectionID,
+        rejectionReason,
+      ]);
+
       logger.info(`Inspection ${inspectionID} rejected by ${user.username}: ${rejectionReason}`);
 
       res.json({
@@ -1802,7 +1895,10 @@ router.put('/inspections/:inspectionID/reject',
         data: {
           inspectionID,
           status: 'REJECTED',
-          rejectionReason
+          rejectionReason,
+          blockchain_tx_id: chainSync.blockchain_tx_id,
+          blockchainSynced: chainSync.blockchainSynced,
+          blockchainWarning: chainSync.blockchainWarning
         },
         timestamp: new Date().toISOString()
       });

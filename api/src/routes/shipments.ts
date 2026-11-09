@@ -2790,15 +2790,18 @@ router.post('/:shipmentId/container/stuff',
 
       logger.info(`[SHIPPING] Recording container stuffing for: ${shipmentId}`);
 
-      const result = await fabricService.invokeChaincode('RecordContainerStuffing', [
+      // StuffContainer is the chaincode function for this step (there is no
+      // RecordContainerStuffing on-chain). It takes 6 args; stuffingDate and
+      // containerCondition have no chaincode counterpart — the ledger stamps
+      // the transaction time and records condition GOOD — so they are not
+      // passed. The caller-supplied values are kept in the response below.
+      const result = await fabricService.invokeChaincode('StuffContainer', [
         shipmentId,
         containerNumber || `CNT-${Date.now()}`,
         containerType || 'DRY',
-        stuffingDate || new Date().toISOString(),
-        stuffingLocation || 'Djibouti Port',
+        sealNumber || `SEAL-${Date.now()}`,
         stuffedBy || 'Port Authority',
-        containerCondition || 'GOOD',
-        sealNumber || `SEAL-${Date.now()}`
+        stuffingLocation || 'Djibouti Port',
       ]);
 
       if (result.success) {

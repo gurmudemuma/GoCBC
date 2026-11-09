@@ -376,6 +376,11 @@ router.post('/:shipmentId/close-contract',
         res.json({
           success: true,
           message: 'Contract closed successfully',
+          data: {
+            shipmentId,
+            blockchainSynced: result.blockchainSynced ?? false,
+            blockchainWarning: result.blockchainWarning ?? null,
+          },
           timestamp: new Date().toISOString()
         });
       } else {

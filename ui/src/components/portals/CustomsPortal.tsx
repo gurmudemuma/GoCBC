@@ -83,9 +83,6 @@ import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/compo
 // NEW: Border Crossing Documentation Tab
 import { BorderCrossingTab } from '@/components/bordercrossing';
 
-// Status types for chips
-type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | string;
-
 interface CustomsDeclaration {
   declarationId: string;
   shipmentId: string;
@@ -97,7 +94,13 @@ interface CustomsDeclaration {
   currency: string;
   destination: string;
   transportMode?: 'SEA' | 'AIR';
-  status: 'DRAFT' | 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | 'CLEARED' | 'HELD' | 'REJECTED';
+  // Declaration status — the chaincode customs machine (customs.go).
+  // HELD was removed: no chaincode, API or UI transition produces it, so
+  // it was a dead value in the type and the hierarchy below. Re-adding it
+  // needs a product decision (a hold action + chaincode guard), not a
+  // type change. DRAFT stays: a declaration draft is a legitimate
+  // pre-submit UI state and the table deliberately hides draft rows.
+  status: 'DRAFT' | 'SUBMITTED' | 'UNDER_INSPECTION' | 'UNDER_REVIEW' | 'CLEARED' | 'REJECTED';
   submissionDate: string;
   clearanceDate?: string;
   customsOfficer: string;
@@ -1935,7 +1938,6 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       'UNDER_REVIEW': 3,
       'CLEARED': 4,
       'REJECTED': 4, // Same level as cleared (terminal state)
-      'HELD': 3, // Same level as under review
     };
     
     // Count declarations that have reached or passed each stage

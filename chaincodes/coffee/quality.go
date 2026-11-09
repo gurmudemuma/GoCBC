@@ -73,8 +73,9 @@ type QualityInspection struct {
 	Remarks         string `json:"remarks"`
 	RejectionReason string `json:"rejectionReason"`
 
-	ApprovedBy   string `json:"approvedBy"`
-	ApprovedDate string `json:"approvedDate"`
+	ApprovedBy    string `json:"approvedBy"`
+	ApprovedByMSP string `json:"approvedByMsp"` // MSP ID of approver
+	ApprovedDate  string `json:"approvedDate"`
 	// ✅ MSP Identity Fields for Rejection
 	RejectedBy    string    `json:"rejectedBy"`    // X.509 certificate of rejecter
 	RejectedByMSP string    `json:"rejectedByMsp"` // MSP ID of rejecter
@@ -368,6 +369,152 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 		changes, "Quality inspection performed by ECTA", compliance)
 	if err != nil {
 		return fmt.Errorf("PerformInspection: failed to create audit log: %w", err)
+	}
+
+	return nil
+}
+
+// ApproveQualityInspection - ECTA approves a performed quality inspection
+// (TEST-STATUS-MATRIX §17 #6: the API quality approve was PG-only because no
+// chaincode function existed for this entity. Mirrors ApproveInspection on
+// the PreShipmentInspection entity, but keyed INSPECTION_ + inspectionID
+// and guarded INSPECTED -> APPROVED.)
+func (c *CoffeeContract) ApproveQualityInspection(ctx contractapi.TransactionContextInterface,
+	inspectionID, approvedBy string) error {
+	ledgerNow, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to read inspection: %w", err)
+	}
+	if inspectionJSON == nil {
+		return fmt.Errorf("ApproveQualityInspection: inspection %s does not exist", inspectionID)
+	}
+
+	var inspection QualityInspection
+	err = json.Unmarshal(inspectionJSON, &inspection)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to unmarshal: %w", err)
+	}
+
+	// GUARD: only an INSPECTED inspection can be approved.
+	if inspection.Status != "INSPECTED" {
+		return fmt.Errorf("ApproveQualityInspection: inspection must be INSPECTED to approve, current status: %s", inspection.Status)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to get MSP ID: %w", err)
+	}
+
+	inspection.Status = "APPROVED"
+	inspection.ApprovedBy = approvedBy
+	inspection.ApprovedByMSP = mspID
+	inspection.ApprovedDate = ledgerNow.Format("2006-01-02T15:04:05Z07:00")
+	inspection.UpdatedAt = ledgerNow
+
+	inspectionJSON, err = json.Marshal(inspection)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to update state: %w", err)
+	}
+
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "INSPECTED", NewValue: "APPROVED", DataType: "string"},
+		{FieldName: "approvedBy", OldValue: "", NewValue: approvedBy, DataType: "string"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: inspection.EUDRCompliant,
+		ICOCompliance:  true,
+		ComplianceNote: "Quality inspection approved by ECTA",
+	}
+	err = c.CreateAuditLog(ctx, "APPROVE", "INSPECTION", inspectionID, "INSPECTED", "APPROVED",
+		changes, "Quality inspection approved by ECTA", compliance)
+	if err != nil {
+		return fmt.Errorf("ApproveQualityInspection: failed to create audit log: %w", err)
+	}
+
+	return nil
+}
+
+// RejectQualityInspection - ECTA rejects a performed quality inspection
+func (c *CoffeeContract) RejectQualityInspection(ctx contractapi.TransactionContextInterface,
+	inspectionID, reason string) error {
+	ledgerNow, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	inspectionJSON, err := ctx.GetStub().GetState("INSPECTION_" + inspectionID)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to read inspection: %w", err)
+	}
+	if inspectionJSON == nil {
+		return fmt.Errorf("RejectQualityInspection: inspection %s does not exist", inspectionID)
+	}
+
+	var inspection QualityInspection
+	err = json.Unmarshal(inspectionJSON, &inspection)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to unmarshal: %w", err)
+	}
+
+	// GUARD: only an INSPECTED inspection can be rejected.
+	if inspection.Status != "INSPECTED" {
+		return fmt.Errorf("RejectQualityInspection: inspection must be INSPECTED to reject, current status: %s", inspection.Status)
+	}
+
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to get client identity: %w", err)
+	}
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to get MSP ID: %w", err)
+	}
+
+	inspection.Status = "REJECTED"
+	inspection.RejectionReason = reason
+	inspection.RejectedBy = clientID
+	inspection.RejectedByMSP = mspID
+	inspection.UpdatedAt = ledgerNow
+
+	inspectionJSON, err = json.Marshal(inspection)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to marshal: %w", err)
+	}
+
+	err = ctx.GetStub().PutState("INSPECTION_"+inspectionID, inspectionJSON)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to update state: %w", err)
+	}
+
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "INSPECTED", NewValue: "REJECTED", DataType: "string"},
+		{FieldName: "rejectionReason", OldValue: "", NewValue: reason, DataType: "string"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		NBECompliance:  true,
+		UCP600Check:    false,
+		EUDRCompliance: inspection.EUDRCompliant,
+		ICOCompliance:  true,
+		ComplianceNote: "Quality inspection rejected by ECTA",
+	}
+	err = c.CreateAuditLog(ctx, "REJECT", "INSPECTION", inspectionID, "INSPECTED", "REJECTED",
+		changes, "Quality inspection rejected by ECTA", compliance)
+	if err != nil {
+		return fmt.Errorf("RejectQualityInspection: failed to create audit log: %w", err)
 	}
 
 	return nil

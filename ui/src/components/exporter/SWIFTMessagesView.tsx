@@ -170,7 +170,10 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
       'ISSUED': 'green',
       'DOCUMENTS_SUBMITTED': 'orange',
       'UNDER_REVIEW': 'gold',
-      'PAID': 'purple',
+      // PAID was not an LC status (the completed LC/payment state is
+      // SETTLED — see TEST-STATUS-MATRIX §17 #15); mapped, not removed,
+      // so settled LCs keep their purple chip.
+      'SETTLED': 'purple',
       'CLOSED': 'default',
     };
     return colors[status] || 'default';
@@ -344,7 +347,7 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
             <Option value="all">All Status</Option>
             <Option value="ISSUED">Issued</Option>
             <Option value="DOCUMENTS_SUBMITTED">Under Review</Option>
-            <Option value="PAID">Paid</Option>
+            <Option value="SETTLED">Settled</Option>
           </Select>
         </Space>
 

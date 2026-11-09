@@ -2154,8 +2154,12 @@ const BanksPortal: React.FC = () => {
       devLog(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
     }
     if (filterStatus !== 'ALL') {
-      if (filterStatus === 'APPROVED_OR_ALLOCATED') {
-        filtered = filtered.filter(forex => forex.status === 'APPROVED' || forex.status === 'ALLOCATED');
+      // CONFIRMED_OR_ALLOCATED is a filter bucket, not a status: it matches
+      // NBE-confirmed (CONFIRMED) or allocated (ALLOCATED) forex. The old
+      // bucket APPROVED_OR_ALLOCATED matched APPROVED, a state the
+      // chaincode never assigns (NBE approve now writes CONFIRMED).
+      if (filterStatus === 'CONFIRMED_OR_ALLOCATED') {
+        filtered = filtered.filter(forex => forex.status === 'CONFIRMED' || forex.status === 'ALLOCATED');
       } else {
         filtered = filtered.filter(forex => forex.status === filterStatus);
       }
@@ -2454,15 +2458,15 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <CheckCircle />, 
                 label: 'Allocated', 
-                value: persistedForexAllocations.filter(f => f.status === 'APPROVED' || f.status === 'ALLOCATED').length,
+                value: persistedForexAllocations.filter(f => f.status === 'CONFIRMED' || f.status === 'ALLOCATED').length,
                 color: '#4caf50',
                 subtitle: 'Ready to Use',
-                description: 'Forex approved or already allocated.',
+                description: 'Forex confirmed by NBE or already allocated.',
                 clickable: true,
-                selected: filterStatus === 'APPROVED_OR_ALLOCATED',
+                selected: filterStatus === 'CONFIRMED_OR_ALLOCATED',
                 onClick: () => {
                   setSearchTerm('');
-                  setFilterStatus('APPROVED_OR_ALLOCATED');
+                  setFilterStatus('CONFIRMED_OR_ALLOCATED');
                   setAmountMin('');
                   setAmountMax('');
                   setCurrentPage(0);
@@ -2471,12 +2475,15 @@ const BanksPortal: React.FC = () => {
               { 
                 icon: <AccessTime />, 
                 label: 'Pending Allocation', 
-                value: persistedForexAllocations.filter(f => f.status === 'PENDING' || f.status === 'REQUESTED').length,
+                // REQUESTED is the only awaiting-allocation forex state; the
+                // old PENDING arm matched nothing (stored values are
+                // uppercase REQUESTED, and no machine produces PENDING).
+                value: persistedForexAllocations.filter(f => f.status === 'REQUESTED').length,
                 color: '#ff9800',
                 subtitle: 'Awaiting Action',
                 description: 'LC issued, awaiting bank forex allocation.',
                 clickable: true,
-                selected: filterStatus === 'PENDING' || filterStatus === 'REQUESTED',
+                selected: filterStatus === 'REQUESTED',
                 onClick: () => {
                   setSearchTerm('');
                   setFilterStatus('REQUESTED');
@@ -3224,8 +3231,8 @@ const BanksPortal: React.FC = () => {
                 }
               }
               
-              // Handle approved contract (AWAITING_LC status)
-              if (payment.status === 'AWAITING_LC' && payment.isContract && payment.contractData) {
+              // Handle approved-contract rows (not LCs yet)
+              if (payment.isContract && payment.contractData) {
                 handleViewContractDetails(payment.contractData);
                 return;
               }
@@ -3438,8 +3445,7 @@ const BanksPortal: React.FC = () => {
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="REQUESTED">Requested (Awaiting Allocation)</MenuItem>
               <MenuItem value="ALLOCATED">Allocated</MenuItem>
-              <MenuItem value="APPROVED_OR_ALLOCATED">Approved</MenuItem>
-              <MenuItem value="PENDING">Pending</MenuItem>
+              <MenuItem value="CONFIRMED_OR_ALLOCATED">Approved</MenuItem>
               <MenuItem value="UTILIZED">Utilized</MenuItem>
               <MenuItem value="EXPIRED">Expired</MenuItem>
             </TextField>

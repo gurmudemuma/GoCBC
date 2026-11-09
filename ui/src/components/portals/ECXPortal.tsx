@@ -308,16 +308,13 @@ const ECXPortal: React.FC = () => {
     totalKg: lots.reduce((s, l) => s + l.quantity, 0),
   };
 
-  const nextActionLabel = (lot: CoffeeLot) => {
-    switch (lot.status) {
-      case 'WAREHOUSED': return 'Grade lot';
-      case 'GRADED': return 'Assign contract';
-      case 'ASSIGNED': return 'Release lot';
-      case 'RELEASED': return 'Completed';
-      case 'REJECTED': return 'Review rejection';
-      default: return 'Review';
-    }
-  };
+  // NOTE: lot actions are status-gated in the table below (Grade only on
+  // WAREHOUSED, Assign only on GRADED, Release only on ASSIGNED), so a
+  // REJECTED lot is terminal in the UI with no re-entry action — the
+  // "Review required" chip is display-only. A re-grade / re-intake path
+  // for rejected lots does not exist anywhere (the API pre-empts the
+  // chaincode's REJECTED branch, matrix §11); adding one is a product
+  // decision, not a status fix.
 
 
   return (

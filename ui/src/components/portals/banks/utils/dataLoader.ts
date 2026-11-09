@@ -19,7 +19,10 @@ export interface LC {
   issuingBank: string;
   amount: number;
   currency: string;
-  status: 'DRAFT' | 'SUBMITTED' | 'ISSUED' | 'FOREX_BACKED' | 'FOREX_ALLOCATED' | 'UTILIZED' | 'EXPIRED' | 'CLOSED';
+  // LC status — the chaincode machine (banking.go UpdateLCStatus) plus the
+  // PENDING Postgres default. FOREX_BACKED was invented (no machine
+  // produces it) and DRAFT/SUBMITTED/CLOSED are not LC states.
+  status: 'PENDING' | 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'ISSUED' | 'FOREX_ALLOCATED' | 'AMENDED' | 'UTILIZED' | 'PAYMENT_RELEASED' | 'SETTLED' | 'EXPIRED';
   issueDate?: string;
   expiryDate?: string;
   utilizationDate?: string;
@@ -153,7 +156,7 @@ export const loadBanksData = async (): Promise<BanksPortalData> => {
       issuingBank: lc.issuingBank || '',
       amount: lc.amount || 0,
       currency: lc.currency || 'USD',
-      status: lc.status || 'DRAFT',
+      status: lc.status || 'PENDING',
       issueDate: lc.issueDate || undefined,
       expiryDate: lc.expiryDate || undefined,
       utilizationDate: lc.utilizationDate || undefined,
@@ -283,7 +286,7 @@ export const calculateBanksStats = (data: BanksPortalData) => {
     // Tab 0: Payment Methods
     paymentMethods: {
       activeLCs: data.lcs.filter(lc => 
-        ['ISSUED', 'FOREX_BACKED', 'FOREX_ALLOCATED'].includes(lc.status)
+        ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)
       ).length,
       pendingPayments: data.payments.filter(p => p.status === 'PENDING').length,
       completedToday: data.payments.filter(p => 

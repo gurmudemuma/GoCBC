@@ -193,6 +193,11 @@ func (c *CoffeeContract) ScheduleInspection(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("ScheduleInspection: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17): REQUESTED -> SCHEDULED.
+	if inspection.Status != "REQUESTED" {
+		return fmt.Errorf("ScheduleInspection: inspection must be REQUESTED to schedule, current status: %s", inspection.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -393,6 +398,14 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("ApproveInspection: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17): COMPLETED -> APPROVED.
+	// Results must be recorded first (RecordInspectionResults sets
+	// COMPLETED); a REQUESTED or SCHEDULED inspection has nothing to
+	// approve yet.
+	if inspection.Status != "COMPLETED" {
+		return fmt.Errorf("ApproveInspection: inspection must be COMPLETED to approve, current status: %s", inspection.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -447,6 +460,14 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 	err = json.Unmarshal(inspectionJSON, &inspection)
 	if err != nil {
 		return fmt.Errorf("RejectInspection: failed to unmarshal: %w", err)
+	}
+
+	// GUARD (status-transition audit §17): COMPLETED -> REJECTED.
+	// Results must be recorded first (RecordInspectionResults sets
+	// COMPLETED); a REQUESTED or SCHEDULED inspection has nothing to
+	// reject yet.
+	if inspection.Status != "COMPLETED" {
+		return fmt.Errorf("RejectInspection: inspection must be COMPLETED to reject, current status: %s", inspection.Status)
 	}
 
 	// Get caller identity

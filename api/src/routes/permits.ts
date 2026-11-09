@@ -1,7 +1,7 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
@@ -27,7 +27,13 @@ async function mirrorPermitPG(permitId: string, contractId: string, approvedBy: 
 
 
 // POST /api/v1/permits — Issue permit (wrapper for /issue endpoint)
-router.post('/', async (req, res) => {
+// NOTE (TEST-STATUS-MATRIX §17 #10): the router is mounted behind
+// authMiddleware in server.ts, so unauthenticated requests already 401 —
+// but any authenticated role could issue permits. IssueCBEExportPermit is
+// Banks-MSP-only on-chain (permit.go), so the mutating routes below are
+// additionally gated to BANKS/BANK_ADMIN, mirroring banking.ts LC issue.
+// Reads stay auth-only: any authenticated role may read a permit.
+router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
   try {
     const {
       permitID,
@@ -116,7 +122,7 @@ router.post('/', async (req, res) => {
 });
 
 // Issue export permit
-router.post('/issue', async (req, res) => {
+router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
   try {
     const {
       permitId,
@@ -180,7 +186,7 @@ router.post('/issue', async (req, res) => {
 });
 
 // Utilize export permit
-router.post('/utilize', async (req, res) => {
+router.post('/utilize', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
   try {
     const { permitId } = req.body;
 
@@ -198,7 +204,7 @@ router.post('/utilize', async (req, res) => {
 });
 
 // Settle export permit
-router.post('/settle', async (req, res) => {
+router.post('/settle', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
   try {
     const { permitId, repatriatedAmount } = req.body;
 
@@ -219,7 +225,7 @@ router.post('/settle', async (req, res) => {
 });
 
 // Get permit by ID
-router.get('/:permitId', async (req, res) => {
+router.get('/:permitId', authMiddleware, async (req, res) => {
   try {
     const { permitId } = req.params;
     const result = await fabricService.queryChaincode('ReadExportPermit', [permitId]);
@@ -236,7 +242,7 @@ router.get('/:permitId', async (req, res) => {
 });
 
 // Query permits by exporter
-router.get('/exporter/:exporterId', async (req, res) => {
+router.get('/exporter/:exporterId', authMiddleware, async (req, res) => {
   try {
     const { exporterId } = req.params;
     const result = await fabricService.queryChaincode('QueryPermitsByExporter', [exporterId]);
@@ -253,7 +259,7 @@ router.get('/exporter/:exporterId', async (req, res) => {
 });
 
 // Query outstanding permits
-router.get('/outstanding/all', async (req, res) => {
+router.get('/outstanding/all', authMiddleware, async (req, res) => {
   try {
     const result = await fabricService.queryChaincode('QueryOutstandingPermits', []);
     

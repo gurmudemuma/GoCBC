@@ -1965,9 +1965,48 @@ router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Res
     const { contractId } = req.params;
     const { cancellationReason } = req.body;
     const user = (req as any).user;
-    
+    const userOrg = String(user?.org || '').toUpperCase();
+    const userRole = String(user?.role || '').toUpperCase();
+
+    // Cancel is ECTA-only, mirroring the approve route — previously any
+    // authenticated role could cancel a contract.
+    if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA' && userRole !== 'ECTA_ADMIN') {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Only ECTA users can cancel sales contracts' },
+        timestamp: new Date().toISOString()
+      });
+    }
+
     logger.info(`[CONTRACTS] Cancelling contract: ${contractId}`);
     
+    // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #7): the cancel
+    // was PG-only — CancelContract is being added by the chaincode agent.
+    // A chain failure must not fail the cancellation; the Postgres row is
+    // what the portals read. NOTE: no PG existence check here — contract
+    // creation writes no PG row (chain-only by design), so a missing row
+    // does not mean the contract does not exist on-chain.
+    let blockchainSynced = false;
+    let blockchainWarning: string | null = null;
+    try {
+      // CancelContract takes (contractID, cancelledBy, reason) — arg order
+      // matters: reason second would be recorded as the canceller.
+      const chainResult = await fabricService.invokeChaincode('CancelContract', [
+        contractId,
+        user?.username || '',
+        cancellationReason || '',
+      ]);
+      if (chainResult.success) {
+        blockchainSynced = true;
+      } else {
+        blockchainWarning = `Chaincode CancelContract did not cancel ${contractId}: ${chainResult.error || 'unknown error'}`;
+        logger.warn(`[CONTRACTS] ${blockchainWarning}`);
+      }
+    } catch (chainError: any) {
+      blockchainWarning = `Could not cancel ${contractId} on the ledger (no Fabric here?): ${chainError.message}`;
+      logger.warn(`[CONTRACTS] ${blockchainWarning}`);
+    }
+
     // Update contract status to cancelled
     const { DatabaseService } = await import('../services/databaseService');
     const db = DatabaseService.getInstance();
@@ -1979,7 +2018,7 @@ router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Res
       WHERE contract_id = $1
     `, [contractId]);
     
-    logger.info(`[CONTRACTS] ✅ Contract cancelled: ${contractId}`);
+    logger.info(`[CONTRACTS] ✅ Contract cancelled: ${contractId} (blockchainSynced: ${blockchainSynced})`);
     
     res.json({
       success: true,
@@ -1987,7 +2026,9 @@ router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Res
         contractId,
         status: 'CANCELLED',
         cancellationReason,
-        cancelledBy: user?.username
+        cancelledBy: user?.username,
+        blockchainSynced,
+        blockchainWarning
       },
       timestamp: new Date().toISOString()
     });

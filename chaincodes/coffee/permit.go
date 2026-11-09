@@ -215,7 +215,37 @@ func (c *CoffeeContract) IssueCBEExportPermit(ctx contractapi.TransactionContext
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("PermitIssued", eventJSON)
 
-	return ctx.GetStub().PutState("PERMIT_"+permitID, permitJSON)
+	if err := ctx.GetStub().PutState("PERMIT_"+permitID, permitJSON); err != nil {
+		return err
+	}
+
+	// CASCADE (status-transition audit §17 #4): the export permit has no
+	// ShipmentID field — it links to shipments through ContractID — so
+	// set every CREATED shipment under this contract to PERMIT_ISSUED.
+	// Best-effort: the permit is already issued, and in the documented
+	// flow the permit is usually issued before any shipment exists, so
+	// finding no shipments is the normal case. Shipments past CREATED
+	// (e.g. FREIGHT_BOOKED) are left alone — moving one backwards to
+	// PERMIT_ISSUED would regress it.
+	if contractID != "" {
+		shipments, qErr := c.QueryShipmentsByContract(ctx, contractID)
+		if qErr != nil {
+			fmt.Printf("IssueCBEExportPermit: WARNING: could not list shipments for contract %s: %v\n", contractID, qErr)
+		} else {
+			for _, shipment := range shipments {
+				if shipment.Status != "CREATED" {
+					continue
+				}
+				if err := c.UpdateShipmentStatus(ctx, shipment.ShipmentID, "PERMIT_ISSUED"); err != nil {
+					fmt.Printf("IssueCBEExportPermit: WARNING: failed to update shipment %s to PERMIT_ISSUED: %v\n", shipment.ShipmentID, err)
+				} else {
+					fmt.Printf("IssueCBEExportPermit: Shipment %s status updated to PERMIT_ISSUED\n", shipment.ShipmentID)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // UtilizeExportPermit - Mark permit as utilized (shipment made)

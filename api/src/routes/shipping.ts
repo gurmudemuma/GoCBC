@@ -11,6 +11,59 @@ const router = Router();
 const dbService = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
 
+// A freight booking is stored as its own shipments row (shipment_id =
+// bookingID, contract_id = the real shipmentID, status BOOKED). The
+// lifecycle handlers below update that booking row, but the real
+// shipment row — the one every other portal reads — stayed
+// FREIGHT_BOOKED forever: the load/depart/arrive/deliver statuses never
+// landed on the shipment, so the freight -> delivery handoff (H9) was
+// broken at the Postgres layer and the delivery status was invisible
+// outside the Shipping portal. Mirror each lifecycle status onto the
+// real shipment row (resolved via the booking row's contract_id) and
+// best-effort sync it on-chain the same way booking-create mirrors
+// FREIGHT_BOOKED. Never fails the request: a booking with no linked
+// shipment simply has nothing to mirror. Column names in `extras` are
+// hardcoded by the callers below, never user input.
+async function mirrorBookingStatusToShipment(
+  bookingId: string,
+  status: string,
+  extras: Array<[string, any]> = [],
+): Promise<void> {
+  try {
+    const booking = await dbService.get(
+      'SELECT contract_id FROM shipments WHERE shipment_id = $1',
+      [bookingId],
+    );
+    const shipmentID = (booking as any)?.contract_id as string | undefined;
+    if (!shipmentID) {
+      logger.warn(`[SHIPPING] Booking ${bookingId} has no linked shipment; status ${status} mirrored to the booking row only`);
+      return;
+    }
+    const sets = ['status = $1'];
+    const params: any[] = [status];
+    extras.forEach(([col, val], i) => {
+      sets.push(`${col} = $${i + 2}`);
+      params.push(val);
+    });
+    params.push(shipmentID);
+    await dbService.run(
+      `UPDATE shipments SET ${sets.join(', ')}, updated_at = NOW() WHERE shipment_id = $${params.length}`,
+      params,
+    );
+    logger.info(`[SHIPPING] ✅ Shipment ${shipmentID} mirrored to ${status} (booking ${bookingId})`);
+    try {
+      const chainResult = await fabricService.updateShipmentStatus(shipmentID, status);
+      if (!chainResult?.success) {
+        logger.warn(`[SHIPPING] Chain mirror of ${shipmentID} -> ${status} did not succeed: ${chainResult?.error || 'unknown error'}`);
+      }
+    } catch (chainError: any) {
+      logger.warn(`[SHIPPING] Fabric unavailable, shipment ${shipmentID} status ${status} mirrored in PostgreSQL only: ${chainError.message}`);
+    }
+  } catch (mirrorError: any) {
+    logger.warn(`[SHIPPING] Failed to mirror booking ${bookingId} status ${status} to its shipment: ${mirrorError.message}`);
+  }
+}
+
 /**
  * GET /api/v1/shipping/shipments
  * Get all shipments with optional status filtering
@@ -463,6 +516,12 @@ router.post('/bookings/:bookingId/load', authMiddleware, async (req: Request, re
       bookingId
     ]);
 
+    // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
+    await mirrorBookingStatusToShipment(bookingId, 'LOADED', [
+      ['container_number', Array.isArray(containerNumbers) ? containerNumbers.join(',') : containerNumbers],
+      ['seal_number', Array.isArray(sealNumbers) ? sealNumbers.join(',') : sealNumbers],
+    ]);
+
     logger.info(`[SHIPPING] ✅ Cargo loaded for booking: ${bookingId}`);
 
     res.json({
@@ -512,6 +571,11 @@ router.post('/bookings/:bookingId/depart', authMiddleware, async (req: Request, 
       'IN_TRANSIT',
       departureDate || new Date().toISOString().split('T')[0],
       bookingId
+    ]);
+
+    // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
+    await mirrorBookingStatusToShipment(bookingId, 'IN_TRANSIT', [
+      ['actual_departure', departureDate || new Date().toISOString().split('T')[0]],
     ]);
 
     logger.info(`[SHIPPING] ✅ Vessel departed for booking: ${bookingId}`);
@@ -564,6 +628,11 @@ router.post('/bookings/:bookingId/arrive', authMiddleware, async (req: Request, 
       bookingId
     ]);
 
+    // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
+    await mirrorBookingStatusToShipment(bookingId, 'ARRIVED', [
+      ['actual_arrival', arrivalDate || new Date().toISOString().split('T')[0]],
+    ]);
+
     logger.info(`[SHIPPING] ✅ Vessel arrived for booking: ${bookingId}`);
 
     res.json({
@@ -612,6 +681,11 @@ router.post('/bookings/:bookingId/deliver', authMiddleware, async (req: Request,
       'DELIVERED',
       deliveryDate || new Date().toISOString().split('T')[0],
       bookingId
+    ]);
+
+    // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
+    await mirrorBookingStatusToShipment(bookingId, 'DELIVERED', [
+      ['delivery_date', deliveryDate || new Date().toISOString().split('T')[0]],
     ]);
 
     logger.info(`[SHIPPING] ✅ Cargo delivered for booking: ${bookingId}`);

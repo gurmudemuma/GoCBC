@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
@@ -24,7 +25,7 @@ type PaymentSettlement struct {
 	RetentionRate        float64      `json:"retentionRate"`   // NBE retention percentage (NBE FXD/01/2024: 100% allowed)
 	RetainedAmount       float64      `json:"retainedAmount"`  // Amount retained in forex
 	ConvertedAmount      float64      `json:"convertedAmount"` // Amount converted to Birr
-	Status               string       `json:"status"`          // PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED
+	Status               string       `json:"status"`          // PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED, CONFIRMED
 	PaymentMethod        string       `json:"paymentMethod"`   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
 	PaymentDate          string       `json:"paymentDate"`
 	ReceivingBank        string       `json:"receivingBank"`      // Ethiopian bank
@@ -45,12 +46,33 @@ type PaymentSettlement struct {
 	DocumentsSubmittedBy string       `json:"documentsSubmittedBy"` // ✅ X.509 certificate of document submitter
 	SettledBy            string       `json:"settledBy"`            // ✅ X.509 certificate of settler
 	// ✅ MSP Identity Fields for Rejection and Updates
-	RejectedBy       string    `json:"rejectedBy"`       // ✅ X.509 certificate of rejecter
-	RejectedByMSP    string    `json:"rejectedByMsp"`    // ✅ MSP ID of rejecter
-	LastUpdatedBy    string    `json:"lastUpdatedBy"`    // ✅ X.509 certificate of last updater
-	LastUpdatedByMSP string    `json:"lastUpdatedByMsp"` // ✅ MSP ID of last updater
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	RejectedBy       string `json:"rejectedBy"`       // ✅ X.509 certificate of rejecter
+	RejectedByMSP    string `json:"rejectedByMsp"`    // ✅ MSP ID of rejecter
+	LastUpdatedBy    string `json:"lastUpdatedBy"`    // ✅ X.509 certificate of last updater
+	LastUpdatedByMSP string `json:"lastUpdatedByMsp"` // ✅ MSP ID of last updater
+	// ==================== SETTLEMENT CONFIRMATION FIELDS ====================
+	// Set by ConfirmSettlement (SETTLED -> CONFIRMED).
+	ConfirmedBy         string `json:"confirmedBy"`      // ✅ X.509 certificate of confirmer
+	ConfirmedByMSP      string `json:"confirmedByMsp"`   // ✅ MSP ID of confirmer
+	ConfirmationType    string `json:"confirmationType"` // BANK_VERIFICATION, NBE_APPROVAL, FOREX_REPATRIATION
+	ConfirmationDate    string `json:"confirmationDate"` // When settlement was confirmed
+	ConfirmationRemarks string `json:"confirmationRemarks"`
+	// ==================== FOREX REPATRIATION FIELDS ====================
+	// Set by RecordForexRepatriation on a SETTLED or CONFIRMED payment.
+	// Recording repatriation does NOT change Status (no status in the
+	// payment machine represents it; the NBE repatriation entity in
+	// repatriation.go tracks the compliance lifecycle separately).
+	RepatriationAmount         float64 `json:"repatriationAmount"`
+	RepatriationCurrency       string  `json:"repatriationCurrency"`
+	RepatriationExchangeRate   float64 `json:"repatriationExchangeRate"`
+	RepatriationSWIFTReference string  `json:"repatriationSwiftReference"`
+	RepatriationNBEApprovalRef string  `json:"repatriationNbeApprovalRef"`
+	RepatriationDate           string  `json:"repatriationDate"`
+	// Link to the SWIFT message evidencing this payment (set by
+	// LinkSWIFTMessageToPayment in swift.go).
+	LinkedSWIFTMessageID string    `json:"linkedSwiftMessageId"`
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 
 	// ==================== PAYMENT METHOD-SPECIFIC FIELDS ====================
 	// Added June 26, 2026 for payment method differentiation
@@ -123,7 +145,8 @@ func validateStatusTransition(currentStatus, newStatus, paymentMethod string) er
 			"VERIFIED":            []string{"SWIFT_INITIATED", "SETTLED"},
 			"SWIFT_INITIATED":     []string{"SWIFT_RECEIVED", "REJECTED"},
 			"SWIFT_RECEIVED":      []string{"SETTLED"},
-			"SETTLED":             []string{"DOCUMENTS_RELEASED"},
+			"SETTLED":             []string{"DOCUMENTS_RELEASED", "CONFIRMED"},
+			"CONFIRMED":           []string{"DOCUMENTS_RELEASED"},
 		},
 		"CAD": {
 			"PENDING":                []string{"GOODS_SHIPPED"},
@@ -837,6 +860,212 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 	return nil
 }
 
+// ConfirmSettlement - Confirm a settled payment (settlement-confirmation step).
+// CONFIRMED is a genuine post-SETTLED state, not a synonym for
+// DOCUMENTS_RELEASED: it records that the settlement itself was verified
+// (by the bank, by NBE, or as part of forex repatriation) while the
+// documents may still be held. The LC validator table above gains
+// SETTLED -> CONFIRMED and CONFIRMED -> DOCUMENTS_RELEASED so the generic
+// UpdatePaymentStatus agrees; other methods treat CONFIRMED as terminal
+// (their tables are untouched) and release documents via
+// ReleaseDocumentsToBuyer, which accepts CONFIRMED.
+// Called by PUT /payments/:paymentID/confirm with
+// (paymentID, confirmedBy, confirmationType, remarks). The API connects as
+// NBEMSP for NBE_APPROVAL and as BanksMSP otherwise; the chaincode
+// enforces the same mapping.
+func (c *CoffeeContract) ConfirmSettlement(ctx contractapi.TransactionContextInterface,
+	paymentID, confirmedBy, confirmationType, remarks string) error {
+	if err := ValidateID(paymentID, "paymentID"); err != nil {
+		return fmt.Errorf("ConfirmSettlement: %w", err)
+	}
+	if err := ValidateEnum(confirmationType,
+		[]string{"BANK_VERIFICATION", "NBE_APPROVAL", "FOREX_REPATRIATION"}, "confirmationType"); err != nil {
+		return fmt.Errorf("ConfirmSettlement: %w", err)
+	}
+	if err := ValidateNonEmptyString(confirmedBy, "confirmedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("ConfirmSettlement: %w", err)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("ConfirmSettlement: failed to get MSP ID: %w", err)
+	}
+	// NBE confirmations must come from NBE; bank / repatriation
+	// confirmations must come from a bank consortium member.
+	if confirmationType == "NBE_APPROVAL" {
+		if mspID != "NBEMSP" {
+			return fmt.Errorf("ConfirmSettlement: NBE_APPROVAL confirmations require NBEMSP, got: %s", mspID)
+		}
+	} else if !isBankMSP(mspID) {
+		return fmt.Errorf("ConfirmSettlement: %s confirmations require a bank member, got: %s", confirmationType, mspID)
+	}
+	confirmerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		confirmerID = mspID // Fallback
+	}
+
+	payment, err := c.ReadPayment(ctx, paymentID)
+	if err != nil {
+		return fmt.Errorf("ConfirmSettlement: %w", err)
+	}
+	if payment.Status != "SETTLED" {
+		return fmt.Errorf("ConfirmSettlement: only SETTLED payments can be confirmed, current status: %s", payment.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("ConfirmSettlement: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := payment.Status
+	payment.Status = "CONFIRMED"
+	payment.ConfirmedBy = confirmerID
+	payment.ConfirmedByMSP = mspID
+	payment.ConfirmationType = confirmationType
+	payment.ConfirmationDate = txTime.Format(time.RFC3339)
+	payment.ConfirmationRemarks = strings.TrimSpace(remarks)
+	// Keep the caller-supplied confirmer name on record as well.
+	payment.Comments = fmt.Sprintf("Settlement confirmed by %s (%s)", confirmedBy, confirmationType)
+	payment.UpdatedAt = txTime
+
+	paymentJSON, err := json.Marshal(payment)
+	if err != nil {
+		return fmt.Errorf("ConfirmSettlement: failed to marshal payment: %w", err)
+	}
+	if err := ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON); err != nil {
+		return fmt.Errorf("ConfirmSettlement: failed to save payment: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":        "SettlementConfirmed",
+		"paymentID":        paymentID,
+		"confirmationType": confirmationType,
+		"confirmedBy":      confirmedBy,
+		"timestamp":        txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("SettlementConfirmed", eventJSON)
+
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: previousStatus, NewValue: "CONFIRMED", DataType: "string"},
+		{FieldName: "confirmationType", OldValue: "", NewValue: confirmationType, DataType: "string"},
+		{FieldName: "confirmedByMsp", OldValue: "", NewValue: mspID, DataType: "string"},
+		{FieldName: "confirmationDate", OldValue: "", NewValue: payment.ConfirmationDate, DataType: "date"},
+	}
+	compliance := ComplianceMetadata{
+		NBECompliance:  confirmationType == "NBE_APPROVAL" || confirmationType == "FOREX_REPATRIATION",
+		ComplianceNote: fmt.Sprintf("Payment settlement confirmed (%s) by %s", confirmationType, mspID),
+	}
+	if err := c.CreateAuditLog(ctx, "CONFIRM", "PAYMENT", paymentID, previousStatus, "CONFIRMED", changes,
+		fmt.Sprintf("Settlement confirmed by %s (%s)", confirmedBy, confirmationType), compliance); err != nil {
+		return fmt.Errorf("ConfirmSettlement: failed to create audit log: %w", err)
+	}
+	return nil
+}
+
+// RecordForexRepatriation - Record forex repatriation against a settled
+// (or confirmed) payment. Distinct from RecordForexRetention (forex.go),
+// which records the NBE retention split on the forex allocation, and from
+// the ExportProceedsRepatriation entity (repatriation.go), which tracks
+// the NBE compliance lifecycle. This function records the repatriation
+// evidence on the payment itself and deliberately does NOT change Status:
+// no value in the payment machine represents repatriation, so the payment
+// stays SETTLED (or CONFIRMED after ConfirmSettlement).
+// Called by POST /payments/:paymentID/forex-repatriation with
+// (paymentID, repatriationAmount, repatriationCurrency, exchangeRate,
+// swiftReference, nbeApprovalRef). The API connects as NBEMSP.
+func (c *CoffeeContract) RecordForexRepatriation(ctx contractapi.TransactionContextInterface,
+	paymentID, repatriationAmountStr, repatriationCurrency, exchangeRateStr,
+	swiftReference, nbeApprovalRef string) error {
+	if err := ValidateID(paymentID, "paymentID"); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: %w", err)
+	}
+	if err := ValidateCurrency(repatriationCurrency); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: %w", err)
+	}
+	amount, err := strconv.ParseFloat(repatriationAmountStr, 64)
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: invalid repatriation amount: %w", err)
+	}
+	if err := ValidateAmount(amount, "repatriationAmount"); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: %w", err)
+	}
+	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: invalid exchange rate: %w", err)
+	}
+	if err := ValidateExchangeRate(exchangeRate); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: %w", err)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: failed to get MSP ID: %w", err)
+	}
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("RecordForexRepatriation: unauthorized - only NBE can record forex repatriation, got: %s", mspID)
+	}
+
+	payment, err := c.ReadPayment(ctx, paymentID)
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: %w", err)
+	}
+	if payment.Status != "SETTLED" && payment.Status != "CONFIRMED" {
+		return fmt.Errorf("RecordForexRepatriation: forex repatriation can only be recorded for SETTLED or CONFIRMED payments, current status: %s", payment.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := payment.Status
+	payment.RepatriationAmount = amount
+	payment.RepatriationCurrency = strings.ToUpper(repatriationCurrency)
+	payment.RepatriationExchangeRate = exchangeRate
+	payment.RepatriationSWIFTReference = strings.TrimSpace(swiftReference)
+	payment.RepatriationNBEApprovalRef = strings.TrimSpace(nbeApprovalRef)
+	payment.RepatriationDate = txTime.Format(time.RFC3339)
+	payment.UpdatedAt = txTime
+
+	paymentJSON, err := json.Marshal(payment)
+	if err != nil {
+		return fmt.Errorf("RecordForexRepatriation: failed to marshal payment: %w", err)
+	}
+	if err := ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: failed to save payment: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":            "ForexRepatriationRecorded",
+		"paymentID":            paymentID,
+		"repatriationAmount":   amount,
+		"repatriationCurrency": payment.RepatriationCurrency,
+		"swiftReference":       payment.RepatriationSWIFTReference,
+		"nbeApprovalRef":       payment.RepatriationNBEApprovalRef,
+		"timestamp":            txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ForexRepatriationRecorded", eventJSON)
+
+	changes := []FieldChange{
+		{FieldName: "repatriationAmount", OldValue: "", NewValue: fmt.Sprintf("%.2f", amount), DataType: "number"},
+		{FieldName: "repatriationCurrency", OldValue: "", NewValue: payment.RepatriationCurrency, DataType: "string"},
+		{FieldName: "repatriationExchangeRate", OldValue: "", NewValue: fmt.Sprintf("%.4f", exchangeRate), DataType: "number"},
+		{FieldName: "repatriationSwiftReference", OldValue: "", NewValue: payment.RepatriationSWIFTReference, DataType: "string"},
+		{FieldName: "repatriationNbeApprovalRef", OldValue: "", NewValue: payment.RepatriationNBEApprovalRef, DataType: "string"},
+	}
+	// Status is unchanged by design; the audit log records the same
+	// before/after status so the repatriation is traceable without
+	// inventing a new payment state.
+	if err := c.CreateAuditLog(ctx, "RECORD_REPATRIATION", "PAYMENT", paymentID, previousStatus, previousStatus, changes,
+		fmt.Sprintf("Forex repatriation of %.2f %s recorded (SWIFT %s)", amount, payment.RepatriationCurrency, payment.RepatriationSWIFTReference),
+		ComplianceMetadata{NBECompliance: true}); err != nil {
+		return fmt.Errorf("RecordForexRepatriation: failed to create audit log: %w", err)
+	}
+	return nil
+}
+
 // ReadPayment - Get payment details
 func (c *CoffeeContract) ReadPayment(ctx contractapi.TransactionContextInterface,
 	paymentID string) (*PaymentSettlement, error) {
@@ -1103,6 +1332,18 @@ func (c *CoffeeContract) RejectSWIFTPayment(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("failed to unmarshal payment: %v", err)
 	}
 
+	// GUARD (status-transition audit §17): rejecting the SWIFT leg of a
+	// payment that is already SETTLED, CONFIRMED, or DOCUMENTS_RELEASED
+	// rewrites history, and a SWIFT leg that is already SETTLED/REJECTED
+	// is terminal. This function only touches SWIFTDetails.Status, never
+	// the payment-level Status.
+	if payment.Status == "SETTLED" || payment.Status == "CONFIRMED" || payment.Status == "DOCUMENTS_RELEASED" {
+		return fmt.Errorf("cannot reject SWIFT payment for a %s payment", payment.Status)
+	}
+	if payment.SWIFTDetails.Status == "SETTLED" || payment.SWIFTDetails.Status == "REJECTED" {
+		return fmt.Errorf("cannot reject SWIFT payment, SWIFT status is already %s", payment.SWIFTDetails.Status)
+	}
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -1209,9 +1450,12 @@ func (c *CoffeeContract) ReleaseDocumentsToBuyer(ctx contractapi.TransactionCont
 	}
 
 	// Verify payment received (for CAD) or settled (for LC)
+	// CONFIRMED is accepted too: a confirmed settlement is still a
+	// confirmed payment, and confirmation must not block document release.
 	validStatuses := map[string]bool{
 		"PAYMENT_RECEIVED": true, // CAD
 		"SETTLED":          true, // LC
+		"CONFIRMED":        true, // LC, after ConfirmSettlement
 		"VERIFIED":         true, // LC alt
 	}
 	if !validStatuses[payment.Status] {
@@ -1256,6 +1500,17 @@ func (c *CoffeeContract) ReceiveAdvancePayment(ctx contractapi.TransactionContex
 	// Validate payment method
 	if payment.PaymentMethod != "ADVANCE" && payment.PaymentMethod != "TT_ADVANCE" {
 		return fmt.Errorf("advance payment only for ADVANCE/TT_ADVANCE methods (current: %s)", payment.PaymentMethod)
+	}
+
+	// GUARD (status-transition audit §17): the advance can only be
+	// received from the states the validator tables say precede
+	// ADVANCE_RECEIVED (PENDING, ADVANCE_REQUESTED for TT_ADVANCE,
+	// PROFORMA_ISSUED for ADVANCE). No function ever assigns
+	// ADVANCE_REQUESTED/PROFORMA_ISSUED today, so in practice this means
+	// PENDING; the other two are accepted so the guard does not make the
+	// function dead if those states are ever produced.
+	if payment.Status != "PENDING" && payment.Status != "ADVANCE_REQUESTED" && payment.Status != "PROFORMA_ISSUED" {
+		return fmt.Errorf("advance payment cannot be received from status %s (must be PENDING, ADVANCE_REQUESTED, or PROFORMA_ISSUED)", payment.Status)
 	}
 
 	advancePercentage, err := strconv.ParseFloat(advancePercentageStr, 64)
@@ -1322,6 +1577,12 @@ func (c *CoffeeContract) ReceiveBalancePayment(ctx contractapi.TransactionContex
 
 	if payment.PaymentStage != "ADVANCE" {
 		return fmt.Errorf("balance can only be received after advance (current stage: %s)", payment.PaymentStage)
+	}
+
+	// GUARD (status-transition audit §17): the stage check alone does not
+	// prove the advance was recorded — require the matching Status too.
+	if payment.Status != "ADVANCE_RECEIVED" {
+		return fmt.Errorf("balance can only be received after an advance payment (current status: %s)", payment.Status)
 	}
 
 	amountReceived, err := strconv.ParseFloat(amountReceivedStr, 64)
@@ -1613,6 +1874,22 @@ func (c *CoffeeContract) UpdateCADStatus(ctx contractapi.TransactionContextInter
 	err = json.Unmarshal(collectionJSON, &collection)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal collection: %v", err)
+	}
+
+	// GUARD (status-transition audit §17): UpdateCADStatus used to accept
+	// any caller-supplied target from any state. The step functions in
+	// collection.go define the machine — SENT -> PRESENTED -> ACCEPTED ->
+	// PAID, with FORWARDED as an intermediate hop after SENT and REJECTED
+	// reachable from any pre-payment state. PAID is terminal here
+	// (RETURNED goes through ReturnDocumentaryCollection).
+	allowedCADTransitions := map[string]map[string]bool{
+		"SENT":      {"FORWARDED": true, "PRESENTED": true, "REJECTED": true},
+		"FORWARDED": {"PRESENTED": true, "REJECTED": true},
+		"PRESENTED": {"ACCEPTED": true, "PAID": true, "REJECTED": true},
+		"ACCEPTED":  {"PAID": true, "REJECTED": true},
+	}
+	if !allowedCADTransitions[collection.Status][newStatus] {
+		return fmt.Errorf("UpdateCADStatus: invalid transition from %s to %s", collection.Status, newStatus)
 	}
 
 	oldStatus := collection.Status

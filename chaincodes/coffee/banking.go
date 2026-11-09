@@ -731,6 +731,27 @@ func (c *CoffeeContract) ReadLC(ctx contractapi.TransactionContextInterface,
 }
 
 // UpdateLCStatus - Update LC status
+// validLCTransitions is the single LC status machine, shared by
+// UpdateLCStatus and UpdateLC so the two writers cannot disagree.
+// ISSUED -> AMENDED is the AmendLC edge (banking.go AmendLC sets AMENDED);
+// AMENDED -> ISSUED/FOREX_ALLOCATED/UTILIZED/EXPIRED is the re-issue path.
+var validLCTransitions = map[string]map[string]bool{
+	"REQUESTED":        {"APPROVED": true, "REJECTED": true},
+	"APPROVED":         {"ISSUED": true, "EXPIRED": true},
+	"ISSUED":           {"FOREX_ALLOCATED": true, "UTILIZED": true, "AMENDED": true, "EXPIRED": true},
+	"FOREX_ALLOCATED":  {"UTILIZED": true, "EXPIRED": true},
+	"AMENDED":          {"ISSUED": true, "FOREX_ALLOCATED": true, "UTILIZED": true, "EXPIRED": true},
+	"UTILIZED":         {"PAYMENT_RELEASED": true, "EXPIRED": true}, // EXPIRED: RejectLCDocuments performs UTILIZED -> EXPIRED (banking.go:1913); the table previously rejected it
+	"PAYMENT_RELEASED": {"SETTLED": true},
+}
+
+func validateLCStatusTransition(currentStatus, newStatus string) error {
+	if !validLCTransitions[currentStatus][newStatus] {
+		return fmt.Errorf("invalid LC status transition from %s to %s", currentStatus, newStatus)
+	}
+	return nil
+}
+
 func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterface,
 	lcID, newStatus string) error {
 
@@ -764,17 +785,8 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 		return fmt.Errorf("failed to unmarshal LC: %v", err)
 	}
 	previousStatus := lc.Status
-	allowedTransitions := map[string]map[string]bool{
-		"REQUESTED":        {"APPROVED": true, "REJECTED": true},
-		"APPROVED":         {"ISSUED": true, "EXPIRED": true},
-		"ISSUED":           {"FOREX_ALLOCATED": true, "UTILIZED": true, "EXPIRED": true},
-		"FOREX_ALLOCATED":  {"UTILIZED": true, "EXPIRED": true},
-		"AMENDED":          {"ISSUED": true, "FOREX_ALLOCATED": true, "UTILIZED": true, "EXPIRED": true},
-		"UTILIZED":         {"PAYMENT_RELEASED": true, "EXPIRED": true}, // EXPIRED: RejectLCDocuments performs UTILIZED -> EXPIRED (banking.go:1913); the table previously rejected it
-		"PAYMENT_RELEASED": {"SETTLED": true},
-	}
-	if !allowedTransitions[previousStatus][newStatus] {
-		return fmt.Errorf("UpdateLCStatus: invalid transition from %s to %s", previousStatus, newStatus)
+	if err := validateLCStatusTransition(previousStatus, newStatus); err != nil {
+		return fmt.Errorf("UpdateLCStatus: %w", err)
 	}
 
 	lc.Status = newStatus
@@ -926,6 +938,12 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 	// Add amendment to history
 	lc.Amendments = append(lc.Amendments, amendment)
 	lc.AmendmentCount = lc.AmendmentCount + 1
+	// The LC itself moves to AMENDED (status-transition audit §17 #5):
+	// the old code left it ISSUED, so the AMENDED state in the validator
+	// table was unreachable. UpdateLCStatus accepts AMENDED ->
+	// ISSUED/FOREX_ALLOCATED/UTILIZED/EXPIRED, so the amended LC can be
+	// re-issued or utilised from here.
+	lc.Status = "AMENDED"
 	lc.UpdatedAt = txTime
 
 	// Save amended LC
@@ -954,6 +972,7 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 
 	// ✅ CREATE CRYPTOGRAPHIC AUDIT TRAIL
 	changes := []FieldChange{
+		{FieldName: "status", OldValue: "ISSUED", NewValue: "AMENDED", DataType: "string"},
 		{FieldName: "amendmentCount", OldValue: fmt.Sprintf("%d", lc.AmendmentCount-1), NewValue: fmt.Sprintf("%d", lc.AmendmentCount), DataType: "number"},
 		{FieldName: "changes", OldValue: "", NewValue: changesDescription, DataType: "string"},
 	}
@@ -967,7 +986,7 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 		ComplianceNote: fmt.Sprintf("LC amendment #%d: %s", lc.AmendmentCount, amendmentReason),
 	}
 
-	auditErr := c.CreateAuditLog(ctx, "AMEND", "LC", lcID, "ISSUED", "ISSUED", changes,
+	auditErr := c.CreateAuditLog(ctx, "AMEND", "LC", lcID, "ISSUED", "AMENDED", changes,
 		fmt.Sprintf("LC amended by %s: %s", amendedBy, amendmentReason), compliance)
 	if auditErr != nil {
 		return fmt.Errorf("AmendLC: failed to create audit log: %w", auditErr)
@@ -2107,6 +2126,21 @@ func (c *CoffeeContract) UpdateLC(ctx contractapi.TransactionContextInterface, l
 		return fmt.Errorf("failed to get tx timestamp: %v", err)
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	// GUARD (status-transition audit §17): UpdateLC used to unmarshal
+	// caller JSON over the stored LC, so any Status string could be
+	// written from any state. A status change must now follow the same
+	// machine UpdateLCStatus enforces; an omitted status keeps the
+	// stored one, and non-status field updates are unaffected. The LC ID
+	// is forced to the key so the payload cannot re-key the record.
+	if updatedLC.Status == "" {
+		updatedLC.Status = existingLC.Status
+	} else if updatedLC.Status != existingLC.Status {
+		if err := validateLCStatusTransition(existingLC.Status, updatedLC.Status); err != nil {
+			return fmt.Errorf("UpdateLC: %w", err)
+		}
+	}
+	updatedLC.LCID = lcID
 
 	// Update audit fields
 	updatedLC.LastUpdatedBy = updaterID

@@ -204,6 +204,11 @@ func (c *CoffeeContract) ClearForExit(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("ClearForExit: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17 #3): PENDING -> CLEARED_EXIT.
+	if crossing.Status != "PENDING" {
+		return fmt.Errorf("ClearForExit: crossing must be PENDING to clear for exit, current status: %s", crossing.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -266,6 +271,13 @@ func (c *CoffeeContract) RecordDeparture(ctx contractapi.TransactionContextInter
 		return fmt.Errorf("RecordDeparture: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17 #3): PENDING or CLEARED_EXIT ->
+	// IN_TRANSIT. Exit clearance is optional, so a PENDING crossing may
+	// depart directly.
+	if crossing.Status != "PENDING" && crossing.Status != "CLEARED_EXIT" {
+		return fmt.Errorf("RecordDeparture: crossing must be PENDING or CLEARED_EXIT to depart, current status: %s", crossing.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -324,6 +336,11 @@ func (c *CoffeeContract) RecordBorderCrossing(ctx contractapi.TransactionContext
 	err = json.Unmarshal(crossingJSON, &crossing)
 	if err != nil {
 		return fmt.Errorf("RecordBorderCrossing: failed to unmarshal: %w", err)
+	}
+
+	// GUARD (status-transition audit §17 #3): IN_TRANSIT -> CROSSED.
+	if crossing.Status != "IN_TRANSIT" {
+		return fmt.Errorf("RecordBorderCrossing: crossing must be IN_TRANSIT to cross the border, current status: %s", crossing.Status)
 	}
 
 	// Get caller identity
@@ -501,6 +518,12 @@ func (c *CoffeeContract) ClearBorderCrossing(ctx contractapi.TransactionContextI
 		return fmt.Errorf("ClearBorderCrossing: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17 #3): CROSSED, ARRIVED or
+	// INSPECTED -> CLEARED.
+	if crossing.Status != "CROSSED" && crossing.Status != "ARRIVED" && crossing.Status != "INSPECTED" {
+		return fmt.Errorf("ClearBorderCrossing: crossing must be CROSSED, ARRIVED, or INSPECTED to clear, current status: %s", crossing.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -565,6 +588,12 @@ func (c *CoffeeContract) DetainBorderCrossing(ctx contractapi.TransactionContext
 		return fmt.Errorf("DetainBorderCrossing: failed to unmarshal: %w", err)
 	}
 
+	// GUARD (status-transition audit §17 #3): PENDING, INSPECTED or
+	// INSPECTION_FAILED -> DETAINED.
+	if crossing.Status != "PENDING" && crossing.Status != "INSPECTED" && crossing.Status != "INSPECTION_FAILED" {
+		return fmt.Errorf("DetainBorderCrossing: crossing must be PENDING, INSPECTED, or INSPECTION_FAILED to detain, current status: %s", crossing.Status)
+	}
+
 	// Get caller identity
 	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -626,6 +655,13 @@ func (c *CoffeeContract) RecordBorderInspection(ctx contractapi.TransactionConte
 	err = json.Unmarshal(crossingJSON, &crossing)
 	if err != nil {
 		return fmt.Errorf("RecordBorderInspection: failed to unmarshal: %w", err)
+	}
+
+	// GUARD (status-transition audit §17 #3): PENDING or
+	// INSPECTION_FAILED -> INSPECTED / INSPECTION_FAILED. The second
+	// from-state is the re-inspection path after a failed inspection.
+	if crossing.Status != "PENDING" && crossing.Status != "INSPECTION_FAILED" {
+		return fmt.Errorf("RecordBorderInspection: crossing must be PENDING or INSPECTION_FAILED to inspect, current status: %s", crossing.Status)
 	}
 
 	// Get caller identity
@@ -692,6 +728,11 @@ func (c *CoffeeContract) RecordArrival(ctx contractapi.TransactionContextInterfa
 	err = json.Unmarshal(crossingJSON, &crossing)
 	if err != nil {
 		return fmt.Errorf("RecordArrival: failed to unmarshal: %w", err)
+	}
+
+	// GUARD (status-transition audit §17 #3): CROSSED -> ARRIVED.
+	if crossing.Status != "CROSSED" {
+		return fmt.Errorf("RecordArrival: crossing must be CROSSED to record arrival, current status: %s", crossing.Status)
 	}
 
 	// Get caller identity
@@ -762,6 +803,18 @@ func (c *CoffeeContract) VerifyCompliance(ctx contractapi.TransactionContextInte
 	err = json.Unmarshal(crossingJSON, &crossing)
 	if err != nil {
 		return fmt.Errorf("VerifyCompliance: failed to unmarshal: %w", err)
+	}
+
+	// GUARD (status-transition audit §17 #3): VerifyCompliance changes
+	// ComplianceStatus only, but it used to let a DETAINED or
+	// INSPECTION_FAILED crossing be marked COMPLIANT, contradicting its
+	// own Status. A failed/detained crossing cannot verify as compliant,
+	// and the verdict itself must be a known value.
+	if err := ValidateEnum(complianceStatus, []string{"COMPLIANT", "NON_COMPLIANT", "UNDER_REVIEW"}, "complianceStatus"); err != nil {
+		return fmt.Errorf("VerifyCompliance: %w", err)
+	}
+	if complianceStatus == "COMPLIANT" && (crossing.Status == "DETAINED" || crossing.Status == "INSPECTION_FAILED") {
+		return fmt.Errorf("VerifyCompliance: a %s crossing cannot be verified COMPLIANT", crossing.Status)
 	}
 
 	// Get caller identity

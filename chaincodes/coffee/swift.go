@@ -63,6 +63,21 @@ const (
 	SWIFT_STATUS_FAILED     = "FAILED"
 )
 
+// NBE_APPROVED is the regulatory pre-approval state: NBEApproveSWIFTMessage
+// moves a DRAFT message here (AML + sanctions screening passed), and
+// ApproveSWIFTMessage accepts DRAFT or NBE_APPROVED. The dedicated
+// NBEApproval* fields below preserve the NBE decision after the message
+// moves on to APPROVED.
+const SWIFT_STATUS_NBE_APPROVED = "NBE_APPROVED"
+
+// SWIFTDocument is one document attached to a SWIFT message by
+// AddSWIFTDocuments. At least one of ID, Name, Hash must be non-empty.
+type SWIFTDocument struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+}
+
 // Charge Codes
 const (
 	CHARGE_OUR = "OUR" // All charges borne by sender
@@ -156,6 +171,18 @@ type SWIFTMessageEnhanced struct {
 	SentBy      string `json:"sentBy"`      // User who sent
 	ProcessedBy string `json:"processedBy"` // User who processed
 	ReceivedBy  string `json:"receivedBy"`  // User who received
+
+	// NBE regulatory approval (set by NBEApproveSWIFTMessage; survives the
+	// later DRAFT/NBE_APPROVED -> APPROVED transition).
+	NBEApprovedBy        string `json:"nbeApprovedBy"`
+	NBEApprovalDate      string `json:"nbeApprovalDate"`
+	NBEAMLCheck          string `json:"nbeAmlCheck"`          // PASS or FAIL
+	NBESanctionScreening string `json:"nbeSanctionScreening"` // PASS or FAIL
+	NBEApprovalComments  string `json:"nbeApprovalComments"`
+
+	// Documents attached after creation (set by AddSWIFTDocuments).
+	// Documents (above) remains the required-documents list from creation.
+	AttachedDocuments []SWIFTDocument `json:"attachedDocuments"`
 
 	// Raw and Hash
 	RawMessage      string `json:"rawMessage"`      // Original SWIFT format
@@ -677,8 +704,12 @@ func (c *CoffeeContract) ApproveSWIFTMessage(ctx contractapi.TransactionContextI
 		return fmt.Errorf("failed to unmarshal message: %w", err)
 	}
 
-	if msg.Status != SWIFT_STATUS_DRAFT {
-		return fmt.Errorf("can only approve DRAFT messages, current status: %s", msg.Status)
+	// NBE approval is a pre-approval gate: a message may go DRAFT ->
+	// APPROVED directly, or DRAFT -> NBE_APPROVED (NBEApproveSWIFTMessage)
+	// -> APPROVED. The NBE decision itself is preserved in the
+	// NBEApproval* fields, so it survives this transition.
+	if msg.Status != SWIFT_STATUS_DRAFT && msg.Status != SWIFT_STATUS_NBE_APPROVED {
+		return fmt.Errorf("can only approve DRAFT or NBE_APPROVED messages, current status: %s", msg.Status)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
@@ -696,6 +727,114 @@ func (c *CoffeeContract) ApproveSWIFTMessage(ctx contractapi.TransactionContextI
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
+	return ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON)
+}
+
+// NBEApproveSWIFTMessage - NBE regulatory approval for a SWIFT message.
+//
+// ORDERING (decided from swift.go's machine and the API flow in
+// swift.ts): NBE approval is a pre-approval gate that applies to a
+// message in DRAFT, BEFORE ApproveSWIFTMessage. The API drives
+// create -> NBE approve -> (bank) approve -> send, and returns status
+// NBE_APPROVED. The message moves DRAFT -> NBE_APPROVED here, and
+// ApproveSWIFTMessage accepts DRAFT or NBE_APPROVED, so the gate is
+// optional: a message that does not need NBE approval can still go
+// DRAFT -> APPROVED directly. The NBE decision (approver, AML and
+// sanctions results, comments) is recorded in the dedicated NBEApproval*
+// fields, which survive the later transition to APPROVED — the Status
+// field alone cannot carry it, because SendSWIFTMessage requires
+// APPROVED.
+//
+// NOTE for the API owner: the statusManager SWIFT table has no
+// NBE_APPROVED row yet (DRAFT lists only APPROVED/REJECTED); it needs
+// DRAFT -> NBE_APPROVED and NBE_APPROVED -> APPROVED/REJECTED.
+func (c *CoffeeContract) NBEApproveSWIFTMessage(ctx contractapi.TransactionContextInterface,
+	messageID, approvedBy, amlCheck, sanctionScreening, comments, timestamp string) error {
+
+	if err := ValidateID(messageID, "messageID"); err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: %w", err)
+	}
+	if err := ValidateNonEmptyString(approvedBy, "approvedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: %w", err)
+	}
+	if err := ValidateEnum(amlCheck, []string{"PASS", "FAIL"}, "amlCheck"); err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: %w", err)
+	}
+	if err := ValidateEnum(sanctionScreening, []string{"PASS", "FAIL"}, "sanctionScreening"); err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: %w", err)
+	}
+	if err := ValidateDate(timestamp); err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: %w", err)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: failed to get MSP ID: %w", err)
+	}
+	if mspID != "NBEMSP" {
+		return fmt.Errorf("NBEApproveSWIFTMessage: unauthorized - only NBE can approve SWIFT messages, got: %s", mspID)
+	}
+
+	// A failed screening can never be approved, on-chain or off. The API
+	// route rejects FAIL before invoking; this is the same rule enforced
+	// at the ledger so a direct invoke cannot bypass it.
+	if amlCheck == "FAIL" || sanctionScreening == "FAIL" {
+		return fmt.Errorf("NBEApproveSWIFTMessage: message failed compliance screening (amlCheck=%s, sanctionScreening=%s)", amlCheck, sanctionScreening)
+	}
+
+	msgJSON, err := ctx.GetStub().GetState("SWIFT_" + messageID)
+	if err != nil {
+		return fmt.Errorf("failed to read message: %w", err)
+	}
+	if msgJSON == nil {
+		return fmt.Errorf("message %s not found", messageID)
+	}
+
+	var msg SWIFTMessageEnhanced
+	if err := json.Unmarshal(msgJSON, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	if msg.Status != SWIFT_STATUS_DRAFT {
+		return fmt.Errorf("NBE approval applies to DRAFT messages only, current status: %s", msg.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("NBEApproveSWIFTMessage: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	msg.Status = SWIFT_STATUS_NBE_APPROVED
+	msg.NBEApprovedBy = approvedBy
+	msg.NBEApprovalDate = timestamp
+	msg.NBEAMLCheck = amlCheck
+	msg.NBESanctionScreening = sanctionScreening
+	msg.NBEApprovalComments = comments
+	msg.UpdatedAt = txTime
+
+	// Recompute hash — the NBE approval fields are part of the message.
+	msg.MessageHash = ComputeMessageHash(&msg)
+
+	msgJSON, err = json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	eventPayload := map[string]interface{}{
+		"messageId":         messageID,
+		"messageType":       msg.MessageType,
+		"swiftRef":          msg.SWIFTReference,
+		"approvedBy":        approvedBy,
+		"amlCheck":          amlCheck,
+		"sanctionScreening": sanctionScreening,
+		"status":            msg.Status,
+		"approvalDate":      timestamp,
+	}
+	eventJSON, _ := json.Marshal(eventPayload)
+	ctx.GetStub().SetEvent("SWIFTMessageNBEApproved", eventJSON)
+
+	fmt.Printf("NBEApproveSWIFTMessage: %s message %s NBE-approved by %s (AML %s, sanctions %s)\n",
+		msg.MessageType, messageID, approvedBy, amlCheck, sanctionScreening)
 	return ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON)
 }
 
@@ -916,6 +1055,13 @@ func (c *CoffeeContract) RejectSWIFTMessage(ctx contractapi.TransactionContextIn
 	var msg SWIFTMessageEnhanced
 	if err := json.Unmarshal(msgJSON, &msg); err != nil {
 		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	// GUARD (status-transition audit §17): a SETTLED, REJECTED, CANCELLED
+	// or FAILED message is terminal and cannot be rejected.
+	if msg.Status == SWIFT_STATUS_SETTLED || msg.Status == SWIFT_STATUS_REJECTED ||
+		msg.Status == SWIFT_STATUS_CANCELLED || msg.Status == SWIFT_STATUS_FAILED {
+		return fmt.Errorf("cannot reject message in terminal status: %s", msg.Status)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
@@ -1461,5 +1607,169 @@ func (c *CoffeeContract) LinkSWIFTMessageToLC(ctx contractapi.TransactionContext
 		return fmt.Errorf("failed to save message: %w", err)
 	}
 
+	return nil
+}
+
+// AddSWIFTDocuments - Attach documents to a SWIFT message.
+// Called by POST /swift/messages (fire-and-forget) with
+// (messageID, JSON(documents)) right after the message is created.
+// documentsJSON must be a JSON array; each entry is either an object
+// with at least one of id / name / hash, or a bare string (treated as
+// the document name). Entries are appended to AttachedDocuments (the
+// structured list) and their display name (name, else id, else hash) is
+// also appended to the legacy Documents list so existing consumers of
+// that list see them. Only DRAFT and NBE_APPROVED messages accept new
+// documents — once a message is approved and sent, its document set is
+// frozen.
+func (c *CoffeeContract) AddSWIFTDocuments(ctx contractapi.TransactionContextInterface,
+	messageID, documentsJSON string) error {
+
+	if err := ValidateID(messageID, "messageID"); err != nil {
+		return fmt.Errorf("AddSWIFTDocuments: %w", err)
+	}
+	if strings.TrimSpace(documentsJSON) == "" {
+		return fmt.Errorf("AddSWIFTDocuments: documents JSON is required")
+	}
+
+	var rawDocs []json.RawMessage
+	if err := json.Unmarshal([]byte(documentsJSON), &rawDocs); err != nil {
+		return fmt.Errorf("AddSWIFTDocuments: documents must be a JSON array: %w", err)
+	}
+	if len(rawDocs) == 0 {
+		return fmt.Errorf("AddSWIFTDocuments: documents array must not be empty")
+	}
+	docs := make([]SWIFTDocument, 0, len(rawDocs))
+	for i, raw := range rawDocs {
+		// Bare string entry: treat it as the document name.
+		var name string
+		if err := json.Unmarshal(raw, &name); err == nil {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return fmt.Errorf("AddSWIFTDocuments: document at index %d must not be an empty string", i)
+			}
+			docs = append(docs, SWIFTDocument{Name: name})
+			continue
+		}
+		var doc SWIFTDocument
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("AddSWIFTDocuments: document at index %d is not an object or string: %w", i, err)
+		}
+		doc.ID = strings.TrimSpace(doc.ID)
+		doc.Name = strings.TrimSpace(doc.Name)
+		doc.Hash = strings.TrimSpace(doc.Hash)
+		if doc.ID == "" && doc.Name == "" && doc.Hash == "" {
+			return fmt.Errorf("AddSWIFTDocuments: document at index %d must have at least one of id, name, hash", i)
+		}
+		docs = append(docs, doc)
+	}
+
+	msgJSON, err := ctx.GetStub().GetState("SWIFT_" + messageID)
+	if err != nil {
+		return fmt.Errorf("failed to read message: %w", err)
+	}
+	if msgJSON == nil {
+		return fmt.Errorf("message %s not found", messageID)
+	}
+
+	var msg SWIFTMessageEnhanced
+	if err := json.Unmarshal(msgJSON, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	if msg.Status != SWIFT_STATUS_DRAFT && msg.Status != SWIFT_STATUS_NBE_APPROVED {
+		return fmt.Errorf("AddSWIFTDocuments: documents can only be added to DRAFT or NBE_APPROVED messages, current status: %s", msg.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("AddSWIFTDocuments: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	for _, doc := range docs {
+		msg.AttachedDocuments = append(msg.AttachedDocuments, doc)
+		display := doc.Name
+		if display == "" {
+			display = doc.ID
+		}
+		if display == "" {
+			display = doc.Hash
+		}
+		msg.Documents = append(msg.Documents, display)
+	}
+	msg.UpdatedAt = txTime
+	msg.MessageHash = ComputeMessageHash(&msg)
+
+	msgJSON, err = json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	fmt.Printf("AddSWIFTDocuments: %d document(s) attached to message %s\n", len(docs), messageID)
+	return ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON)
+}
+
+// LinkSWIFTMessageToPayment - Link a SWIFT message to a payment record.
+// Modelled on LinkSWIFTMessageToLC: both records must exist, and the link
+// is set on both — LinkedPaymentID on the message and
+// LinkedSWIFTMessageID on the payment — so either side can be queried
+// for the other. Called by POST /swift/messages (fire-and-forget) with
+// (messageID, linkedPaymentId).
+func (c *CoffeeContract) LinkSWIFTMessageToPayment(ctx contractapi.TransactionContextInterface,
+	messageID, linkedPaymentId string) error {
+
+	if messageID == "" {
+		return fmt.Errorf("message ID is required")
+	}
+	if linkedPaymentId == "" {
+		return fmt.Errorf("payment ID is required")
+	}
+
+	msgJSON, err := ctx.GetStub().GetState("SWIFT_" + messageID)
+	if err != nil {
+		return fmt.Errorf("failed to read message: %w", err)
+	}
+	if msgJSON == nil {
+		return fmt.Errorf("message %s not found", messageID)
+	}
+
+	var msg SWIFTMessageEnhanced
+	if err := json.Unmarshal(msgJSON, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	payment, err := c.ReadPayment(ctx, linkedPaymentId)
+	if err != nil {
+		return fmt.Errorf("LinkSWIFTMessageToPayment: %w", err)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("LinkSWIFTMessageToPayment: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	msg.LinkedPaymentID = linkedPaymentId
+	msg.UpdatedAt = txTime
+	msg.MessageHash = ComputeMessageHash(&msg)
+
+	msgJSON, err = json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	if err := ctx.GetStub().PutState("SWIFT_"+messageID, msgJSON); err != nil {
+		return fmt.Errorf("failed to save message: %w", err)
+	}
+
+	payment.LinkedSWIFTMessageID = messageID
+	payment.UpdatedAt = txTime
+
+	paymentJSON, err := json.Marshal(payment)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payment: %w", err)
+	}
+	if err := ctx.GetStub().PutState("PAYMENT_"+linkedPaymentId, paymentJSON); err != nil {
+		return fmt.Errorf("LinkSWIFTMessageToPayment: failed to save payment: %w", err)
+	}
+
+	fmt.Printf("LinkSWIFTMessageToPayment: message %s linked to payment %s\n", messageID, linkedPaymentId)
 	return nil
 }

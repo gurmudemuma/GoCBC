@@ -124,16 +124,42 @@ router.post('/:shipmentID/border-crossing',
   async (req, res) => {
     try {
       const { shipmentID } = req.params;
-      const { crossingTime, customsOfficer, sealVerified, notes } = req.body;
+      const { crossingTime, customsOfficer, notes } = req.body;
 
       logger.info(`[LAND-TRANSPORT] Recording border crossing for: ${shipmentID}`);
 
+      // RecordBorderCrossing takes (crossingID, crossingDate,
+      // borderCustomsOfficer, borderClearanceRef, borderStampURL) and is
+      // guarded IN_TRANSIT -> CROSSED — it cannot be called with a shipment
+      // ID as the crossing key. Find the shipment's crossing that is already
+      // in transit (initiate -> clear-for-exit -> departure) and record
+      // against that. If none is in transit, the border flow has not
+      // reached that step yet.
+      const crossingsResult = await fabricService.queryChaincode('QueryBorderCrossingsByShipment', [shipmentID]);
+      if (!crossingsResult.success || !Array.isArray(crossingsResult.data)) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'RECORDING_FAILED', message: `Could not list border crossings for shipment ${shipmentID}: ${crossingsResult.error || 'query failed'}` },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const inTransit = crossingsResult.data.find(
+        (c: any) => String(c.status || c.Status || '').toUpperCase() === 'IN_TRANSIT'
+      );
+      if (!inTransit) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'RECORDING_FAILED', message: `No border crossing in IN_TRANSIT for shipment ${shipmentID} — initiate the crossing, clear it for exit and record departure first` },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const crossingID = String(inTransit.crossingId || inTransit.crossingID || inTransit.CrossingID || '');
       const result = await fabricService.invokeChaincode('RecordBorderCrossing', [
-        shipmentID,
+        crossingID,
         crossingTime,
         customsOfficer,
-        (sealVerified !== undefined ? sealVerified : true).toString(),
         notes || 'Seal intact, documents verified',
+        '',
       ]);
 
       if (result.success) {

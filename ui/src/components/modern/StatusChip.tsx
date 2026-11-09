@@ -39,8 +39,6 @@ export type StatusType =
   | 'CLEARED'
   | 'HELD'
   | 'REGISTERED'
-  | 'TRADING'
-  | 'SOLD'
   | 'SHIPPED'
   | 'BOOKED'
   | 'LOADED'
@@ -63,7 +61,36 @@ export type StatusType =
   | 'DRAFT'
   | 'COMPLETED'
   | 'CREATED'
-  | 'INSPECTED';
+  | 'INSPECTED'
+  // Real machine statuses the portals pass through params.value (any), so
+  // they previously fell through to the default grey chip:
+  | 'CONFIRMED'
+  | 'FOREX_ALLOCATED'
+  | 'PAYMENT_RELEASED'
+  | 'FREIGHT_BOOKED'
+  | 'CUSTOMS_CLEARED'
+  | 'CUSTOMS_REJECTED'
+  | 'LAND_TRANSPORT'
+  | 'PORT_ARRIVED'
+  | 'CONTAINER_STUFFED'
+  | 'VESSEL_LOADED'
+  | 'DESTINATION_ARRIVED'
+  | 'CANCELLED'
+  | 'IN_PROGRESS'
+  | 'SAMPLE_COLLECTED'
+  | 'CERTIFICATE_ISSUED'
+  | 'GRADED'
+  | 'ASSIGNED'
+  | 'RELEASED'
+  | 'WAREHOUSED'
+  | 'COMPLIED'
+  | 'NON_COMPLIANT'
+  | 'OVERDUE'
+  | 'PARTIAL'
+  | 'READY_FOR_VERIFICATION'
+  | 'WAIVED';
+  // NOTE: TRADING and SOLD were removed (TEST-STATUS-MATRIX §17 #15) — no
+  // machine produces them. The consignment state is GOODS_SOLD, not SOLD.
 
 interface StatusChipProps extends Omit<ChipProps, 'color'> {
   /**
@@ -132,7 +159,6 @@ const StyledChip = styled(Chip, {
     ALLOCATED: restrictedColors.success,
     UTILIZED: restrictedColors.success,
     ISSUED: restrictedColors.success,
-    SOLD: restrictedColors.success,
     DELIVERED: restrictedColors.success,
     VERIFIED: restrictedColors.success,
     SETTLED: restrictedColors.success,
@@ -141,6 +167,14 @@ const StyledChip = styled(Chip, {
     QUALITY_APPROVED: restrictedColors.success,
     PERMIT_ISSUED: restrictedColors.success,
     COMPLETED: restrictedColors.success,
+    CONFIRMED: restrictedColors.success,
+    FOREX_ALLOCATED: restrictedColors.success,
+    PAYMENT_RELEASED: restrictedColors.success,
+    CUSTOMS_CLEARED: restrictedColors.success,
+    DESTINATION_ARRIVED: restrictedColors.success,
+    CERTIFICATE_ISSUED: restrictedColors.success,
+    RELEASED: restrictedColors.success,
+    COMPLIED: restrictedColors.success,
     
     // All rejected/error states = Purple
     rejected: restrictedColors.error,
@@ -150,6 +184,9 @@ const StyledChip = styled(Chip, {
     HELD: restrictedColors.error,
     EXPIRED: restrictedColors.error,
     error: restrictedColors.error,
+    CUSTOMS_REJECTED: restrictedColors.error,
+    CANCELLED: restrictedColors.error,
+    NON_COMPLIANT: restrictedColors.error,
     
     // All pending/warning states = Golden  
     pending: restrictedColors.pending,
@@ -161,6 +198,8 @@ const StyledChip = styled(Chip, {
     INSPECTING: restrictedColors.pending,
     UNDER_INSPECTION: restrictedColors.pending,
     DRAFT: restrictedColors.pending,
+    OVERDUE: restrictedColors.pending,
+    WAREHOUSED: restrictedColors.pending,
     
     // All processing/info states = Purple
     processing: restrictedColors.processing,
@@ -168,7 +207,6 @@ const StyledChip = styled(Chip, {
     SUBMITTED: restrictedColors.processing,
     DOCUMENTS_SUBMITTED: restrictedColors.processing,
     UNDER_REVIEW: restrictedColors.processing,
-    TRADING: restrictedColors.processing,
     LOADED: restrictedColors.processing,
     DEPARTED: restrictedColors.processing,
     IN_TRANSIT: restrictedColors.processing,
@@ -180,6 +218,18 @@ const StyledChip = styled(Chip, {
     info: restrictedColors.processing,
     CREATED: restrictedColors.processing,
     INSPECTED: restrictedColors.processing,
+    FREIGHT_BOOKED: restrictedColors.processing,
+    LAND_TRANSPORT: restrictedColors.processing,
+    PORT_ARRIVED: restrictedColors.processing,
+    CONTAINER_STUFFED: restrictedColors.processing,
+    VESSEL_LOADED: restrictedColors.processing,
+    IN_PROGRESS: restrictedColors.processing,
+    SAMPLE_COLLECTED: restrictedColors.processing,
+    GRADED: restrictedColors.processing,
+    ASSIGNED: restrictedColors.processing,
+    PARTIAL: restrictedColors.processing,
+    READY_FOR_VERIFICATION: restrictedColors.processing,
+    WAIVED: restrictedColors.processing,
     
     default: restrictedColors.default,
   } : {
@@ -191,12 +241,19 @@ const StyledChip = styled(Chip, {
     ALLOCATED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     UTILIZED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
-    SOLD: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     DELIVERED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     VERIFIED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     SETTLED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     RECEIVED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     success: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    CONFIRMED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    FOREX_ALLOCATED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    PAYMENT_RELEASED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    CUSTOMS_CLEARED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    DESTINATION_ARRIVED: { bg: alpha('#00bcd4', 0.15), text: '#006064', border: '#00bcd4' },
+    CERTIFICATE_ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    RELEASED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
+    COMPLIED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     rejected: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
     REJECTED: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
     SUSPENDED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
@@ -204,11 +261,16 @@ const StyledChip = styled(Chip, {
     HELD: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
     EXPIRED: { bg: alpha('#9e9e9e', 0.15), text: '#616161', border: '#9e9e9e' },
     error: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
+    CUSTOMS_REJECTED: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
+    CANCELLED: { bg: alpha('#9e9e9e', 0.15), text: '#616161', border: '#9e9e9e' },
+    NON_COMPLIANT: { bg: alpha('#f44336', 0.15), text: '#c62828', border: '#f44336' },
     pending: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     PENDING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     REQUESTED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     BOOKED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     REGISTERED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    OVERDUE: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    WAREHOUSED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     processing: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     PROCESSING: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     SUBMITTED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
@@ -218,7 +280,6 @@ const StyledChip = styled(Chip, {
     UNDER_INSPECTION: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     QUALITY_APPROVED: { bg: alpha('#8bc34a', 0.15), text: '#558b2f', border: '#8bc34a' },
     PERMIT_ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
-    TRADING: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     LOADED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     DEPARTED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     IN_TRANSIT: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
@@ -227,6 +288,18 @@ const StyledChip = styled(Chip, {
     SENT: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     ARRIVED: { bg: alpha('#00bcd4', 0.15), text: '#006064', border: '#00bcd4' },
     SHIPPED: { bg: alpha('#673ab7', 0.15), text: '#4527a0', border: '#673ab7' },
+    FREIGHT_BOOKED: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    LAND_TRANSPORT: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    PORT_ARRIVED: { bg: alpha('#00bcd4', 0.15), text: '#006064', border: '#00bcd4' },
+    CONTAINER_STUFFED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    VESSEL_LOADED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    IN_PROGRESS: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    SAMPLE_COLLECTED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    GRADED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    ASSIGNED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    PARTIAL: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    READY_FOR_VERIFICATION: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
+    WAIVED: { bg: alpha('#9e9e9e', 0.15), text: '#616161', border: '#9e9e9e' },
     info: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     warning: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     DRAFT: { bg: alpha('#9e9e9e', 0.15), text: '#616161', border: '#9e9e9e' },
@@ -236,14 +309,20 @@ const StyledChip = styled(Chip, {
     default: { bg: alpha(theme.palette.text.primary, 0.08), text: theme.palette.text.primary, border: alpha(theme.palette.text.primary, 0.3) },
   };
   
-  // Use brand color if provided, otherwise use status color with fallback to default
+  // Use brand color if provided, otherwise use status color with fallback to default.
+  // The lookup is case-insensitive (TEST-STATUS-MATRIX §17 #15): callers pass
+  // mixed case ('pending' from the ECTA contract chip, 'APPROVED', 'Approved'
+  // from API rows), and the old exact-key lookup silently fell through to the
+  // default grey for anything but the exact union spelling. Lowercase tone
+  // aliases ('approved', 'info', ...) keep working via the lower-case arm.
+  const colorMap = statusColors as unknown as Record<string, { bg: string; text: string; border: string }>;
   const colors = brandColor
     ? {
         bg: alpha(brandColor, 0.15),
         text: brandColor,
         border: brandColor,
       }
-    : (statusColors[status] || statusColors.default);
+    : (colorMap[status] || colorMap[String(status).toUpperCase()] || colorMap[String(status).toLowerCase()] || statusColors.default);
   
   return {
     backgroundColor: colors.bg,
@@ -282,27 +361,27 @@ const getStatusIcon = (status: StatusType): React.ReactElement => {
   const upperStatus = status.toUpperCase();
   
   // Success/Approved states
-  if (['APPROVED', 'SUCCESS', 'ACTIVE', 'CLEARED', 'ALLOCATED', 'UTILIZED', 'ISSUED', 'SOLD', 'DELIVERED', 'VERIFIED', 'SETTLED', 'RECEIVED', 'COMPLETED'].includes(upperStatus)) {
+  if (['APPROVED', 'SUCCESS', 'ACTIVE', 'CLEARED', 'ALLOCATED', 'UTILIZED', 'ISSUED', 'DELIVERED', 'VERIFIED', 'SETTLED', 'RECEIVED', 'COMPLETED', 'CONFIRMED', 'FOREX_ALLOCATED', 'PAYMENT_RELEASED', 'CUSTOMS_CLEARED', 'CERTIFICATE_ISSUED', 'RELEASED', 'COMPLIED'].includes(upperStatus)) {
     return <CheckCircleIcon />;
   }
   
   // Error/Rejected states
-  if (['REJECTED', 'ERROR', 'HELD', 'REVOKED'].includes(upperStatus)) {
+  if (['REJECTED', 'ERROR', 'HELD', 'REVOKED', 'CUSTOMS_REJECTED', 'NON_COMPLIANT'].includes(upperStatus)) {
     return <CancelIcon />;
   }
   
   // Warning states
-  if (['SUSPENDED', 'EXPIRED', 'WARNING'].includes(upperStatus)) {
+  if (['SUSPENDED', 'EXPIRED', 'WARNING', 'OVERDUE', 'CANCELLED'].includes(upperStatus)) {
     return <WarningIcon />;
   }
   
   // Pending states
-  if (['PENDING', 'BOOKED', 'REGISTERED', 'REQUESTED', 'DRAFT'].includes(upperStatus)) {
+  if (['PENDING', 'BOOKED', 'REGISTERED', 'REQUESTED', 'DRAFT', 'WAREHOUSED'].includes(upperStatus)) {
     return <ScheduleIcon />;
   }
   
   // Processing/In-Progress states
-  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'INSPECTING', 'UNDER_INSPECTION', 'TRADING', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED'].includes(upperStatus)) {
+  if (['PROCESSING', 'SUBMITTED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'INSPECTING', 'UNDER_INSPECTION', 'LOADED', 'DEPARTED', 'IN_TRANSIT', 'ARRIVED', 'SHIPPED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SENT', 'CREATED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED', 'DESTINATION_ARRIVED', 'IN_PROGRESS', 'SAMPLE_COLLECTED', 'GRADED', 'ASSIGNED', 'PARTIAL', 'READY_FOR_VERIFICATION'].includes(upperStatus)) {
     return <HourglassEmptyIcon />;
   }
   

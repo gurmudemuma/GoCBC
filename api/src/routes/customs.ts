@@ -492,9 +492,9 @@ router.get('/permit-ready',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      logger.info('[CUSTOMS] Fetching permit-ready shipments (status=permit_issued)');
+      logger.info('[CUSTOMS] Fetching permit-ready shipments (status=PERMIT_ISSUED)');
       
-      // Fetch all inspections with status 'permit_issued'
+      // Fetch all inspections with status 'PERMIT_ISSUED'
       const inspections = await postgresDb.all(`
         SELECT 
           qi.inspection_id,
@@ -515,12 +515,12 @@ router.get('/permit-ready',
           cd.declaration_number
         FROM quality_inspections qi
         LEFT JOIN customs_declarations cd ON qi.shipment_id = cd.shipment_id
-        WHERE qi.status = 'permit_issued'
+        WHERE qi.status = 'PERMIT_ISSUED'
           AND cd.declaration_number IS NULL
         ORDER BY qi.updated_at DESC, qi.created_at DESC
       `);
       
-      logger.info(`[CUSTOMS] Found ${inspections.length} quality inspections with permit_issued status (excluding already declared)`);
+      logger.info(`[CUSTOMS] Found ${inspections.length} quality inspections with PERMIT_ISSUED status (excluding already declared)`);
       
       // Transform to camelCase and extract permit number and score from remarks
       const transformed = inspections.map((insp: any) => {
@@ -1231,7 +1231,7 @@ router.post('/declarations/:id/clear',
         );
         
         const doc = getResp.data;
-        doc.status = 'cleared';
+        doc.status = 'CLEARED';
         doc.clearedBy = user.username;
         doc.clearanceDate = new Date().toISOString();
         doc.updatedAt = new Date().toISOString();
@@ -1245,7 +1245,7 @@ router.post('/declarations/:id/clear',
             headers: { 'Content-Type': 'application/json' }
           }
         );
-        logger.info(`✅ [CUSTOMS] Declaration ${id} updated in CouchDB: status=cleared`);
+        logger.info(`✅ [CUSTOMS] Declaration ${id} updated in CouchDB: status=CLEARED`);
       } catch (couchError: any) {
         logger.warn(`[CUSTOMS] CouchDB update failed (non-critical):`, couchError.message);
       }

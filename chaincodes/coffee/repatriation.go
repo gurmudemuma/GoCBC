@@ -323,6 +323,15 @@ func (c *CoffeeContract) RecordRepatriation(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("RecordRepatriation: unauthorized - only a bank can record repatriation")
 	}
 
+	// GUARD (status-transition audit §17 #2): COMPLIED, NON_COMPLIANT and
+	// WAIVED are terminal — NBE has already verified (or waived) the
+	// record. Recording further entries against one must fail instead of
+	// resurrecting it as PARTIAL and then OVERDUE.
+	switch repatriation.Status {
+	case "COMPLIED", "NON_COMPLIANT", "WAIVED":
+		return fmt.Errorf("RecordRepatriation: repatriation %s is already %s and cannot accept further entries", repatriationID, repatriation.Status)
+	}
+
 	// Parse amounts
 	repatriatedAmount, err := strconv.ParseFloat(repatriatedAmountStr, 64)
 	if err != nil {
@@ -417,14 +426,15 @@ func (c *CoffeeContract) RecordRepatriation(ctx contractapi.TransactionContextIn
 			repatriation.ConvertedAmount, repatriation.RequiredConversion)
 	}
 
-	// Check if overdue
-	if now.After(repatriation.ComplianceDeadline) && repatriation.Status != "COMPLIED" {
-		repatriation.IsOverdue = true
-		repatriation.Status = "OVERDUE"
-	}
-
-	// Update days remaining
-	repatriation.DaysRemaining = int(math.Ceil(repatriation.ComplianceDeadline.Sub(now).Hours() / 24))
+	// Derive the deadline state with the SAME function the read path uses
+	// (updateRepatriationDeadline), so the stored status and the status a
+	// read returns can never disagree. The old code checked
+	// `Status != "COMPLIED"` here, but Status had just been overwritten
+	// to PARTIAL/READY_FOR_VERIFICATION above, so that check was dead and
+	// a COMPLIED record could be resurrected as OVERDUE. The terminal
+	// guard above now rejects COMPLIED/NON_COMPLIANT/WAIVED outright, and
+	// this derivation also sets IsOverdue and DaysRemaining uniformly.
+	updateRepatriationDeadline(&repatriation, now)
 
 	// Update audit fields
 	repatriation.LastUpdatedBy = clientID
@@ -498,12 +508,18 @@ func (c *CoffeeContract) VerifyRepatriation(ctx contractapi.TransactionContextIn
 	if strings.TrimSpace(verificationRef) == "" {
 		return fmt.Errorf("VerifyRepatriation: verification reference is required")
 	}
-	if repatriation.Status != "READY_FOR_VERIFICATION" && repatriation.Status != "OVERDUE" {
-		return fmt.Errorf("VerifyRepatriation: record is not ready for compliance verification (current status: %s)", repatriation.Status)
-	}
 	now, err := repatriationTransactionTime(ctx)
 	if err != nil {
 		return fmt.Errorf("VerifyRepatriation: %w", err)
+	}
+	// Derive the deadline state the same way the read path does: a record
+	// stored as PARTIAL/READY_FOR_VERIFICATION past its deadline reads
+	// as OVERDUE, so the guard below must see the derived status, not
+	// the stored one — otherwise it rejects exactly what a read shows as
+	// verifiable (status-transition audit §17 #2).
+	updateRepatriationDeadline(&repatriation, now)
+	if repatriation.Status != "READY_FOR_VERIFICATION" && repatriation.Status != "OVERDUE" {
+		return fmt.Errorf("VerifyRepatriation: record is not ready for compliance verification (current status: %s)", repatriation.Status)
 	}
 	previousStatus := repatriation.Status
 
@@ -580,6 +596,15 @@ func (c *CoffeeContract) ApplyNonCompliancePenalty(ctx contractapi.TransactionCo
 	if err != nil {
 		return fmt.Errorf("ApplyNonCompliancePenalty: failed to get client identity: %w", err)
 	}
+	now, err := repatriationTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("ApplyNonCompliancePenalty: %w", err)
+	}
+	// Derive the deadline state the same way the read path does (see
+	// VerifyRepatriation): a stored PARTIAL past its deadline reads as
+	// OVERDUE, so the guard below must see the derived status, not the
+	// stored one — otherwise it rejects what a read shows as penalizable.
+	updateRepatriationDeadline(&repatriation, now)
 	if repatriation.Status != "NON_COMPLIANT" && repatriation.Status != "OVERDUE" {
 		return fmt.Errorf("ApplyNonCompliancePenalty: penalties require an overdue or non-compliant repatriation (current status: %s)", repatriation.Status)
 	}
@@ -592,10 +617,7 @@ func (c *CoffeeContract) ApplyNonCompliancePenalty(ctx contractapi.TransactionCo
 	if math.IsNaN(penaltyAmount) || math.IsInf(penaltyAmount, 0) || penaltyAmount <= 0 || strings.TrimSpace(penaltyCurrency) == "" || strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("ApplyNonCompliancePenalty: positive amount, currency, and reason are required")
 	}
-	now, err := repatriationTransactionTime(ctx)
-	if err != nil {
-		return fmt.Errorf("ApplyNonCompliancePenalty: %w", err)
-	}
+	// previousStatus is the derived status the guard just accepted.
 	previousStatus := repatriation.Status
 
 	repatriation.PenaltyAmount = penaltyAmount

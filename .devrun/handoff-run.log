@@ -1,0 +1,124 @@
+NAMESPACE=HANDOFF1447
+== Phase A: logins ==
+LOGIN OK ADMIN
+LOGIN OK ECTA
+LOGIN OK ECX
+LOGIN OK NBE
+LOGIN OK BANKS
+LOGIN OK CUSTOMS
+LOGIN OK SHIPPING
+LOGIN OK EXPORTER
+== Phase 1: licence application ==
+01-app-submit                          201  {"success":true,"data":{"applicationId":"APP-1794235668817-0D95V4","status":"pending","submittedAt":"2026-11-09T14:47:48.814Z","credentials":{"username":"applicant_dev1794235667_7","emailSent":false,"message":"Email deli
+APP_ID=APP-1794235668817-0D95V4 APP_USER=applicant_dev1794235667_7
+02-app-check-email                     200  {"success":true,"data":{"id":7,"application_id":"APP-1794235668817-0D95V4","company_name":"Dev Coffee Exporters HANDOFF1447","email":"dev1794235667@devmode.et","status":"pending","submitted_at":"2026-11-09T14:47:48.814Z"
+04-app-approve-ecta                    400  {"success":false,"error":{"code":"BLOCKCHAIN_ERROR","message":"Blockchain registration failed: Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestam
+05-app2-submit                         201  {"success":true,"data":{"applicationId":"APP-1794235693056-OH9J9W","status":"pending","submittedAt":"2026-11-09T14:48:13.055Z","credentials":{"username":"applicant_dev21794235667_8","emailSent":false,"message":"Email del
+06-app2-reject-ecta                    200  {"success":true,"data":{"applicationId":"APP-1794235693056-OH9J9W","status":"rejected","reason":"Capital requirement below minimum threshold","emailDelivery":"failed","message":"Application rejected and credentials for r
+07-app2-reject-as-exporter             403  {"success":false,"error":{"code":"AUTHORIZATION_ERROR","message":"Insufficient privileges. Required role: ECTA or ECTA_ADMIN","requiredRoles":["ECTA","ECTA_ADMIN"],"userRole":"EXPORTER"},"timestamp":"2026-11-09T14:48:13.
+08-applicant2-login                    true  {"success":true,"data":{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjgsImFwcGxpY2F0aW9uSWQiOjgsInVzZXJuYW1lIjoiYXBwbGljYW50X2RldjIxNzk0MjM1NjY3XzgiLCJyb2xlIjoiQVBQTElDQU
+APP2_NUMID=8 APP1_NUMID=7
+09-app2-resubmit-applicant             200  {"success":true,"data":{"applicationId":"8","status":"pending","emailDelivery":"failed","message":"Application resubmitted successfully and is now pending review, but ECTA email notification failed."},"timestamp":"2026-1
+09b-app2-resubmit-wrong-app            403  {"success":false,"error":{"code":"FORBIDDEN","message":"Only the applicant (logged in with their temporary credentials) or ECTA may resubmit this application"},"timestamp":"2026-11-09T14:48:14.000Z"}
+10-app-resubmit-no-token               401  {"success":false,"error":{"code":"AUTHENTICATION_ERROR","message":"Missing or invalid authorization header"},"timestamp":"2026-11-09T14:48:14.018Z"}
+== Phase 2: contract + ECX lot ==
+11-contract-create                     500  {"success":false,"error":{"code":"REGISTRATION_ERROR","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:48:38.057Z"}
+12-contract-approve                    404  {"success":false,"error":{"code":"NOT_FOUND","message":"Contract not found"},"timestamp":"2026-11-09T14:48:38.095Z"}
+13-ecx-lot-intake                      400  {"success":false,"error":{"code":"INTAKE_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:49:02.132Z"}
+ecx_lots rows for ECX-LOT-HANDOFF1447: 0
+14-portals-ecx                         200  {"success":true,"data":{"portal":"ECX","pendingTasks":{"pendingReleases":0,"total":0},"availableLots":[],"pendingReleases":[],"qualityCertificates":[{"id":1,"shipment_id":"SHIP-STMATRIX1-1","inspector_id":null,"inspectio
+== Phase 3: shipment + quality ==
+15-shipment-create                     202  {"success":true,"warning":"Shipment saved but blockchain sync pending","data":{"shipmentID":"SHP-HANDOFF1447","status":"CREATED","blockchainSynced":false},"autoMapped":{"exporterID":"EXP-HANDOFF1447","buyerID":"BUY-HANDO
+16-quality-create                      500  {"success":false,"error":{"code":"SERVER_ERROR","message":"socket hang up"},"timestamp":"2026-11-09T14:49:02.613Z"}
+17-quality-approve-nonexistent         404  {"success":false,"error":{"code":"NOT_FOUND","message":"Inspection not found"},"timestamp":"2026-11-09T14:49:02.642Z"}
+18-quality-approve-real                404  {"success":false,"error":{"code":"NOT_FOUND","message":"Inspection not found"},"timestamp":"2026-11-09T14:49:02.665Z"}
+== Phase 4: LC + forex ==
+19-lc-issue                            500  {"success":false,"error":{"code":"LC_ISSUE_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:49:26.704Z"}
+20-lc-examine                          400  {"success":false,"error":{"code":"EXAMINATION_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:49:50.741Z"}
+21-lc-release-payment                  400  {"success":false,"error":{"code":"PAYMENT_RELEASE_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:50:14.78
+22-forex-request                       400  {"success":false,"error":{"code":"REQUEST_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created.","hint":"Peers may not be synchronized. Wait 
+23-nbe-forex-approve-nonexistent       404  {"success":false,"error":{"code":"NOT_FOUND","message":"Forex allocation not found"},"timestamp":"2026-11-09T14:50:38.855Z"}
+INSERT 0 1
+23b-nbe-portal-pending-check           200  {"success":true,"data":{"portal":"NBE","pendingTasks":{"forexRequests":1,"retentionConversions":0,"total":1},"pendingForexRequests":[{"id":6,"allocation_id":"FOREX-HANDOFF1447","shipment_id":"SHP-HANDOFF1447","lc_number"
+24-nbe-forex-approve-real              200  {"success":true,"data":{"forexId":"FOREX-HANDOFF1447","status":"CONFIRMED","approvedBy":"test_nbe_TMW977G36","approvalNotes":"Forex allocation approved based on contract value","blockchainSynced":false,"blockchainWarning
+25-nbe-forex-repatriation              200  {"success":true,"data":{"forexId":"FOREX-HANDOFF1447","repatriationAmount":55000,"repatriationDate":"2024-06-20","bankReference":"BR1794235667","repatriationMethod":"Wire Transfer","status":"COMPLETED","blockchainSynced"
+== Phase 5: permit + phyto + inspection ==
+26-permit-issue                        403  {"success":false,"error":{"code":"AUTHORIZATION_ERROR","message":"Insufficient privileges. Required role: BANKS or BANK_ADMIN","requiredRoles":["BANKS","BANK_ADMIN"],"userRole":"ECTA"},"timestamp":"2026-11-09T14:51:03.03
+27-phyto-request                       400  {"success":false,"error":{"code":"REQUEST_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:51:27.061Z"}
+28-inspection-request                  500  {"success":false,"error":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."}
+== Phase 6: shipping booking ==
+29-booking-create                      200  {"success":true,"data":{"bookingID":"BOOK-1794235911128","shipmentID":"SHP-HANDOFF1447","status":"BOOKED","shippingLine":"Maersk Line","vesselName":"Maersk Explorer","voyageNumber":"VOY1794235667","portOfLoading":"Djibou
+BOOK_ID=BOOK-1794235911128
+30-portals-shipping                    200  {"success":true,"data":{"portal":"SHIPPING","pendingTasks":{"readyForPickup":0,"freightBookings":4,"inTransit":0,"total":4},"readyForPickup":[],"freightBookings":[{"id":11,"shipment_id":"SHP-HANDOFF1447","contract_id":"C
+31-booking-load                        200  {"success":true,"data":{"bookingId":"BOOK-1794235911128","status":"LOADED"},"timestamp":"2026-11-09T14:52:15.215Z"}
+32-booking-depart                      200  {"success":true,"data":{"bookingId":"BOOK-1794235911128","status":"IN_TRANSIT"},"timestamp":"2026-11-09T14:52:15.235Z"}
+33-booking-arrive                      500  {"success":false,"error":{"code":"INTERNAL_ERROR","message":"new row for relation \"shipments\" violates check constraint \"chk_shipments_status\""},"timestamp":"2026-11-09T14:52:15.257Z"}
+34-booking-deliver                     200  {"success":true,"data":{"bookingId":"BOOK-1794235911128","status":"DELIVERED"},"timestamp":"2026-11-09T14:52:15.279Z"}
+35-book-freight                        404  {"success":false,"error":{"message":"Shipment not found"}}
+36-shipment-land-transport             400  {"success":false,"error":{"code":"LAND_TRANSPORT_START_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:52:
+== Phase 7: customs ==
+37-customs-submit                      200  {"success":true,"data":{"declarationID":"DECL-HANDOFF1447","shipmentID":"SHP-HANDOFF1447","status":"SUBMITTED","blockchain_tx_id":null,"message":"Declaration submitted successfully and ready for customs officer review"},
+38-portals-customs                     200  {"success":true,"data":{"portal":"CUSTOMS","pendingTasks":{"pendingReview":1,"scheduledInspections":1,"total":2},"pendingDeclarations":[{"id":5,"declaration_id":"DECL-HANDOFF1447","shipment_id":"SHP-HANDOFF1447","declara
+39-customs-review                      200  {"success":true,"data":{"declarationId":"DECL-HANDOFF1447","status":"UNDER_INSPECTION","assignedOfficer":"test_customs_TMW977G36","blockchain_tx_id":null,"message":"Inspection scheduled successfully"},"timestamp":"2026-1
+40-customs-inspect                     200  {"success":true,"data":{"declarationId":"DECL-HANDOFF1447","status":"UNDER_INSPECTION","customsOfficer":"test_customs_TMW977G36","message":"Inspection started successfully"},"timestamp":"2026-11-09T14:53:27.757Z"}
+41-customs-complete-inspection         200  {"success":true,"data":{"declarationId":"DECL-HANDOFF1447","status":"UNDER_REVIEW","inspectionResult":"PASSED","message":"Inspection completed successfully. Declaration moved to UNDER_REVIEW for final clearance."},"times
+42-customs-clear                       200  {"success":true,"data":{"declarationId":"DECL-HANDOFF1447","status":"CLEARED","clearedBy":"test_customs_TMW977G36","clearanceDate":"2026-11-09T14:53:52.226Z","message":"Customs clearance completed successfully"},"timesta
+43-border-initiate                     500  {"success":false,"error":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."}
+== Phase 8: payments + SWIFT + settlement ==
+44-payment-initiate                    400  {"success":false,"error":{"code":"INITIATION_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:54:40.312Z"}
+45-payment-record                      500  {"success":false,"error":{"code":"INTERNAL_ERROR","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:55:04.346Z"}
+46-swift-create                        400  {"success":false,"error":{"code":"SWIFT_MESSAGE_CREATE_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:55:
+47-payment-settle                      404  {"success":false,"error":{"code":"NOT_FOUND","message":"Payment not found"},"timestamp":"2026-11-09T14:55:28.427Z"}
+48-payment-release-nbe                 404  {"success":false,"error":{"code":"NOT_FOUND","message":"Payment not found: PAY-HANDOFF1447"},"timestamp":"2026-11-09T14:55:28.451Z"}
+49-retention-policy-get                200  {"success":true,"data":{"policyId":"DEFAULT-COFFEE-POLICY","commodityType":"COFFEE","retentionPercentage":40,"surrenderRate":60,"setBy":"NBE","effectiveDate":"2026-11-09T14:55:28.475Z","justification":"NBE Coffee Export 
+50-retention-record                    404  {"success":false,"error":{"code":"FOREX_NOT_FOUND"},"timestamp":"2026-11-09T14:55:28.501Z"}
+== Phase 9: post-delivery — phantom-fix verification FIRST (no tracking row must 404) ==
+51a-postdelivery-payment-no-row        404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.530Z"}
+52a-postdelivery-forex-no-row          404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.553Z"}
+53a-postdelivery-lc-no-row             404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.577Z"}
+54a-postdelivery-audit-no-row          404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.597Z"}
+ERROR:  there is no unique or exclusion constraint matching the ON CONFLICT specification
+post_delivery_tracking rows for SHP-HANDOFF1447 after seed: 0
+== Phase 9b: post-delivery retests with seeded row ==
+51b-postdelivery-payment               404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.749Z"}
+52b-postdelivery-forex                 404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.781Z"}
+53b-postdelivery-lc                    404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.807Z"}
+54b-postdelivery-audit                 404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.829Z"}
+55-postdelivery-close                  404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found"},"timestamp":"2026-11-09T14:55:28.858Z"}
+56-postdelivery-status                 404  {"success":false,"error":{"code":"NOT_FOUND","message":"Post-delivery record not found for this shipment"},"timestamp":"2026-11-09T14:55:28.884Z"}
+57-postdelivery-dashboard              200  {"success":true,"data":{"summary":[{"total_shipments":4,"pending":0,"in_progress":0,"completed":2,"delayed":0,"payments_received":4,"forex_repatriated":2,"lc_settled":2,"ecta_audits_completed":2,"contracts_closed":2,"avg
+== Phase 10: documents + signatures ==
+58-doc-upload                          200  {"success":true,"data":{"documentId":"DOC-1794236129032292179","fileName":"test-doc-HANDOFF1447.pdf","hash":"a6946076beaeb23e666cc3e268cac0b34c2c281d1497aaf7952609d31043199f","ipfsCID":null,"status":"uploaded","blockchai
+DOC_ID=DOC-1794236129032292179
+59-doc-list                            200  {"success":true,"data":{"documents":[{"id":3,"document_id":"DOC-1794236129032292179","shipment_id":null,"document_type":"COMMERCIAL_INVOICE","document_name":null,"file_hash":"a6946076beaeb23e666cc3e268cac0b34c2c281d1497a
+60-doc-sign                            503  {"success":false,"error":{"code":"LEDGER_QUERY_FAILED","message":"Fabric is unavailable while confirming this document hash. Please retry signing.","details":"Not connected to Fabric network"},"timestamp":"2026-11-09T14:
+61-doc-signatures                      200  {"success":true,"data":{"documentId":"DOC-1794236129032292179","fileName":"test-doc-HANDOFF1447.pdf","status":"active","signatures":[],"signatureCount":0,"latestSignature":null},"timestamp":"2026-11-09T14:55:53.094Z"}
+62-doc-download                        200  %PDF-1.41 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>endobjtrailer<< /Root 1 0 R >>%%EOF
+63-bc-signatures                       200  {"success":true,"data":{"entityType":"DOCUMENT","entityId":"DOC-1794236129032292179","currentState":null,"transactions":[],"summary":{"total":0,"verified":0,"organizations":[],"latestTx":null},"sources":{"fabricLedger":0
+== Phase 11: portals + status ==
+64-portals-ecta                        200  {"success":true,"data":{"portal":"ECTA","pendingTasks":{"applications":7,"contracts":0,"inspections":0,"total":7},"pendingApplications":[{"id":8,"company_name":"Dev Coffee Exporters HANDOFF1447","tin":null,"license_numbe
+65-portals-banks                       200  {"success":true,"data":{"portal":"BANKS","pendingTasks":{"lcRequests":0,"forexAllocations":0,"paymentsToProcess":0,"total":0},"pendingLCs":[],"forexRequests":[],"paymentsToProcess":[],"lcStats":{"total":"0","requested":"
+66-portals-nbe                         200  {"success":true,"data":{"portal":"NBE","pendingTasks":{"forexRequests":0,"retentionConversions":0,"total":0},"pendingForexRequests":[],"retentionConversions":[],"forexStatistics":{"totalAllocations":"4","totalAllocated":
+67-portals-exporters                   200  {"success":true,"data":{"portal":"EXPORTER","exporterId":"EXP-TEST-001","pendingTasks":{"items":[],"total":0},"contracts":{"items":[],"total":0,"pending":0,"approved":0},"shipments":{"items":[],"total":0,"inProgress":0},
+68-status-contract                     200  {"success":true,"data":{"entityType":"CONTRACT","transitions":{"REGISTERED":["APPROVED","REJECTED","CANCELLED"],"APPROVED":["CANCELLED","COMPLETED"],"REJECTED":["REGISTERED"],"CANCELLED":[],"COMPLETED":[]}},"timestamp":"
+69-status-shipment                     200  {"success":true,"data":{"entityType":"SHIPMENT","transitions":{"CREATED":["CUSTOMS_CLEARED","FREIGHT_BOOKED","IN_TRANSIT","CANCELLED"],"FREIGHT_BOOKED":["CUSTOMS_CLEARED","LOADED"],"PERMIT_ISSUED":["IN_TRANSIT"],"CUSTOMS
+70-status-payment                      200  {"success":true,"data":{"entityType":"PAYMENT","transitions":{"PENDING":["DOCUMENTS_SUBMITTED","CANCELLED"],"DOCUMENTS_SUBMITTED":["VERIFIED","REJECTED"],"VERIFIED":["SWIFT_INITIATED","SETTLED"],"SWIFT_INITIATED":["SWIFT
+71-workflow-status                     200  {"success":true,"data":{"rootEntity":{"type":"CONTRACT","id":"CTR-HANDOFF1447"},"statuses":{"contract":{"id":"CTR-HANDOFF1447","status":"NOT_FOUND","lastUpdated":null},"forex":[],"lc":[],"shipment":[],"payment":[]}},"tim
+DONE NS=HANDOFF1447
+== Phase 12: new-fix verifications (handoff audit) ==
+INSERT 0 1
+72-quality-approve-seeded              200  {"success":true,"data":{"inspectionID":"QI-HANDOFF-HANDOFF1447","status":"APPROVED","certificateNumber":"QC1794235667","grade":"Grade 1","blockchain_tx_id":null,"blockchainSynced":false,"blockchainWarning":"Chaincode App
+73-quality-approve-again               400  {"success":false,"error":{"code":"INVALID_STATUS","message":"Cannot approve inspection. Current status: APPROVED. Must be 'INSPECTED' first."},"timestamp":"2026-11-09T14:56:17.518Z"}
+74-permits-issue-noauth                401  {"success":false,"error":{"code":"AUTHENTICATION_ERROR","message":"Missing or invalid authorization header"},"timestamp":"2026-11-09T14:56:17.536Z"}
+75-permits-issue-ecta-403              403  {"success":false,"error":{"code":"AUTHORIZATION_ERROR","message":"Insufficient privileges. Required role: BANKS or BANK_ADMIN","requiredRoles":["BANKS","BANK_ADMIN"],"userRole":"ECTA"},"timestamp":"2026-11-09T14:56:17.55
+76-permits-list-noauth                 401  {"success":false,"error":{"code":"AUTHENTICATION_ERROR","message":"Missing or invalid authorization header"},"timestamp":"2026-11-09T14:56:17.572Z"}
+77-cancel-as-exporter-403              403  {"success":false,"error":{"code":"FORBIDDEN","message":"Only ECTA users can cancel sales contracts"},"timestamp":"2026-11-09T14:56:17.593Z"}
+78-cancel-as-ecta                      200  {"success":true,"data":{"contractId":"CTR-HANDOFF1447","status":"CANCELLED","cancellationReason":"Handoff test cancel","cancelledBy":"test_ecta_TMW977G36","blockchainSynced":false,"blockchainWarning":"Chaincode CancelCon
+79-phyto-issue-no-cert                 400  {"success":false,"error":{"code":"ISSUANCE_FAILED","message":"Certificate PHYTO-NOPE-HANDOFF1447 must be requested and inspected on-chain before it can be issued: Not connected to Fabric network"},"timestamp":"2026-11-09
+80-land-border-crossing                400  {"success":false,"error":{"code":"RECORDING_FAILED","message":"Could not list border crossings for shipment SHP-HANDOFF1447: Not connected to Fabric network"},"timestamp":"2026-11-09T14:56:41.679Z"}
+81-stuff-container                     400  {"success":false,"error":{"code":"CONTAINER_STUFFING_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:57:05
+82-forex-reject-confirmed              400  {"success":false,"error":{"code":"FOREX_REJECTION_FAILED","message":"Not connected to Fabric network. Fabric rejected the proposal before ordering; no ledger transaction was created."},"timestamp":"2026-11-09T14:57:29.75
+83-status-forex                        200  {"success":true,"data":{"entityType":"FOREX","transitions":{"REQUESTED":["CONFIRMED","ALLOCATED","REJECTED"],"CONFIRMED":["ALLOCATED","REJECTED"],"ALLOCATED":["UTILIZED"],"UTILIZED":[],"REJECTED":[]}},"timestamp":"2026-1
+84-status-swift                        200  {"success":true,"data":{"entityType":"SWIFT","transitions":{"DRAFT":["NBE_APPROVED","APPROVED","REJECTED"],"NBE_APPROVED":["APPROVED","REJECTED"],"APPROVED":["SENT","REJECTED"],"SENT":["RECEIVED","REJECTED"],"RECEIVED":[
+85-status-phyto                        200  {"success":true,"data":{"entityType":"PHYTOSANITARY","transitions":{"PENDING":["INSPECTED"],"INSPECTED":["ISSUED"],"ISSUED":["REVOKED"],"REVOKED":[]}},"timestamp":"2026-11-09T14:57:29.828Z"}
+DONE NS=HANDOFF1447

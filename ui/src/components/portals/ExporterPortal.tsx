@@ -2260,7 +2260,7 @@ const ExporterPortal: React.FC = () => {
     
     // LC statuses
     const lcRequested = lcStatuses.filter(lc => lc.status === 'REQUESTED').length;
-    const lcIssued = lcStatuses.filter(lc => ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
+    const lcIssued = lcStatuses.filter(lc => ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)).length;
     
     // Customs statuses
     // Customs KPI calculations based on customs status logic (matching the table display)
@@ -2995,7 +2995,7 @@ const ExporterPortal: React.FC = () => {
               value={2}
               label={`Forex & Banking (${(() => {
                 const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
-                const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED', 'FOREX_BACKED'].includes(lc.status)).length;
+                const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED'].includes(lc.status)).length;
                 const pendingLCContracts = contracts.filter(c => {
                   const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
                   const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);

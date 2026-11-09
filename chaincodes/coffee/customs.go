@@ -260,8 +260,15 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 
 	// ✅ VALIDATE ECTA EXPORT PERMIT EXISTS BEFORE CUSTOMS DECLARATION
 	// This ensures proper workflow sequencing: ECTA Permit → Customs Declaration
+	// Shipments are stored under the SHIPMENT_ prefix (see ReadShipment);
+	// the old code read the bare ID, which never matches a stored
+	// shipment, so this guard silently never fired. Fall back to the bare
+	// key for legacy rows stored without the prefix.
 	if shipmentID != "" {
-		shipmentJSON, err := ctx.GetStub().GetState(shipmentID)
+		shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
+		if err == nil && shipmentJSON == nil {
+			shipmentJSON, err = ctx.GetStub().GetState(shipmentID)
+		}
 		if err == nil && shipmentJSON != nil {
 			var shipment CoffeeShipment
 			if json.Unmarshal(shipmentJSON, &shipment) == nil {
@@ -331,7 +338,24 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err := ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON); err != nil {
+		return err
+	}
+
+	// CASCADE (status-transition audit §17 #4): submitting the declaration
+	// moves the linked shipment PERMIT_ISSUED -> CUSTOMS_DECLARED,
+	// completing the documented path (the guard above already requires
+	// PERMIT_ISSUED or CUSTOMS_DECLARED, so this is a forward move or a
+	// no-op). Best-effort: the declaration is already stored.
+	if shipmentID != "" {
+		if err := c.UpdateShipmentStatus(ctx, shipmentID, "CUSTOMS_DECLARED"); err != nil {
+			log.Printf("WARNING: Failed to update shipment status: %v", err)
+		} else {
+			fmt.Printf("SubmitCustomsDeclaration: Shipment %s status updated to CUSTOMS_DECLARED\n", shipmentID)
+		}
+	}
+
+	return nil
 }
 
 // ReviewDeclaration - Customs officer starts physical inspection
@@ -742,7 +766,25 @@ func (c *CoffeeContract) ClearCustomsDeclaration(ctx contractapi.TransactionCont
 		return fmt.Errorf("failed to marshal declaration: %v", err)
 	}
 
-	return ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON)
+	if err := ctx.GetStub().PutState("DECL_"+declarationID, declarationJSON); err != nil {
+		return err
+	}
+
+	// CASCADE (status-transition audit §17 #4): the linked shipment moves
+	// to CUSTOMS_CLEARED, mirroring ClearDeclaration. Best-effort: the
+	// declaration is already cleared, so a missing shipment must not fail
+	// the clearance. Declarations created by SubmitDeclaration carry no
+	// ShipmentID, so the cascade cannot fire for them.
+	if declaration.ShipmentID != "" {
+		if err := c.UpdateShipmentStatus(ctx, declaration.ShipmentID, "CUSTOMS_CLEARED"); err != nil {
+			// Log but don't fail — declaration is already cleared
+			log.Printf("WARNING: Failed to update shipment status: %v", err)
+		} else {
+			fmt.Printf("ClearCustomsDeclaration: Shipment %s status updated to CUSTOMS_CLEARED\n", declaration.ShipmentID)
+		}
+	}
+
+	return nil
 }
 
 // RejectDeclaration - Customs rejects the declaration

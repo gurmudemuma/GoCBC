@@ -53,7 +53,10 @@ export interface LCStatus {
   issuingBank: string;
   amount: number;
   currency: string;
-  status: 'DRAFT' | 'SUBMITTED' | 'ISSUED' | 'FOREX_BACKED' | 'FOREX_ALLOCATED' | 'UTILIZED' | 'EXPIRED' | 'CLOSED';
+  // LC status — the chaincode machine (banking.go UpdateLCStatus) plus the
+  // PENDING Postgres default. FOREX_BACKED was invented (no machine
+  // produces it) and DRAFT/SUBMITTED/CLOSED are not LC states.
+  status: 'PENDING' | 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'ISSUED' | 'FOREX_ALLOCATED' | 'AMENDED' | 'UTILIZED' | 'PAYMENT_RELEASED' | 'SETTLED' | 'EXPIRED';
   issueDate?: string;
   expiryDate?: string;
   utilizationDate?: string;
@@ -194,7 +197,7 @@ export const loadExporterData = async (exporterId?: string): Promise<ExporterPor
       issuingBank: lc.issuingBank || '',
       amount: lc.amount || 0,
       currency: lc.currency || 'USD',
-      status: lc.status || 'DRAFT',
+      status: lc.status || 'PENDING',
       issueDate: lc.issueDate || undefined,
       expiryDate: lc.expiryDate || undefined,
       utilizationDate: lc.utilizationDate || undefined,
@@ -344,7 +347,7 @@ export const calculateExporterStats = (data: ExporterPortalData) => {
       ).length,
       allocatedForex: data.forexStatuses.filter(f => f.status === 'ALLOCATED').length,
       issuedLCs: data.lcStatuses.filter(lc => 
-        ['ISSUED', 'FOREX_BACKED', 'FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)
+        ['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)
       ).length,
       totalForexValue: data.forexStatuses.filter(f => f.status === 'ALLOCATED')
         .reduce((sum, f) => sum + f.allocatedAmount, 0),
@@ -379,10 +382,10 @@ export const calculateExporterStats = (data: ExporterPortalData) => {
     // Tab 5: LC & Payments
     lcPayments: {
       pendingLCs: data.lcStatuses.filter(lc => 
-        ['DRAFT', 'SUBMITTED'].includes(lc.status)
+        ['PENDING', 'REQUESTED'].includes(lc.status)
       ).length,
       activeLCs: data.lcStatuses.filter(lc => 
-        ['ISSUED', 'FOREX_BACKED', 'FOREX_ALLOCATED'].includes(lc.status)
+        ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)
       ).length,
       receivedPayments: data.payments.filter(p => p.status === 'COMPLETED').length,
       totalPaymentValue: data.payments.filter(p => p.status === 'COMPLETED')

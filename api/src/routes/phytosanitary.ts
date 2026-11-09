@@ -213,20 +213,49 @@ router.post('/:certificateID/issue',
 
       logger.info(`[PHYTO] Issuing certificate: ${certificateID}`);
 
+      const certResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
+      if (!certResult.success || !certResult.data) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'ISSUANCE_FAILED', message: `Certificate ${certificateID} must be requested and inspected on-chain before it can be issued: ${certResult.error || 'not found'}` },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const cert: any = certResult.data;
       const result = await fabricService.invokeChaincode('IssuePhytosanitaryCertificate', [
         certificateID,
-        certificateNumber,
+        String(cert.shipmentId || cert.shipmentID || ''),
+        String(cert.exporterId || cert.exporterID || ''),
+        String(cert.inspectorName || ''),
+        String(cert.botanicalName || cert.plantDescription || ''),
+        String(cert.treatmentApplied || ''),
+        String(cert.placeOfOrigin || ''),
+        String(cert.pointOfEntry || ''),
+        String(cert.quantity ?? ''),
+        String(cert.packagingType || ''),
+        String(cert.numberOfPackages ?? ''),
+        String(cert.distinguishMarks || ''),
+        String(cert.meansOfConveyance || ''),
         issuingAuthority,
-        validUntil,
-        additionalDeclarations || 'No additional declarations',
       ]);
 
       if (result.success) {
         logger.info(`✅ Phytosanitary certificate issued: ${certificateNumber}`);
+        // Read back the issued record for the chaincode-generated number
+        // and validity (the body values are not what the ledger stores).
+        const issuedResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
+        const issued: any = issuedResult.success ? issuedResult.data : null;
         res.json({
           success: true,
           message: 'Phytosanitary certificate issued successfully',
-          data: result.data,
+          data: {
+            certificateId: certificateID,
+            certificateNumber: issued?.certificateNumber || certificateNumber,
+            validUntil: issued?.validUntil || validUntil,
+            status: issued?.status || 'ISSUED',
+            issuingAuthority,
+            additionalDeclarations: additionalDeclarations || null,
+          },
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });

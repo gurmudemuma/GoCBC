@@ -199,9 +199,10 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
         // First, add approved contracts as "pending LC requests" - but only if no LC exists yet
         const pendingLCRequests = safeContracts
           .filter(contract => {
-            // Only show contract if NO LC exists for it yet
+            // Only APPROVED contracts with NO LC yet: a REGISTERED or
+            // REJECTED contract is not awaiting LC issuance.
             const lcExists = safeLetterOfCredits.some(lc => lc.contractId === contract.contractId);
-            return !lcExists;
+            return contract.status === 'APPROVED' && !lcExists;
           })
           .map(contract => ({
             ...contract,
@@ -210,7 +211,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             currency: contract.currency,
             exporter: contract.exporterId,
             buyerName: contract.buyerName || contract.BuyerName || '', // ✅ ADD BUYER NAME FROM CONTRACT
-            status: 'AWAITING_LC', // Custom status for contracts pending LC
+            // Keep the contract's real status (APPROVED): the old synthetic
+            // 'AWAITING_LC' status is gone — these rows are identified by
+            // isContract, not by a made-up status (TEST-STATUS-MATRIX §17 #15).
             currentStep: -1, // Not in workflow yet
             isContract: true, // Flag to identify this as a contract, not an LC
             contractData: contract, // Keep full contract data
@@ -226,7 +229,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             
             // ✅ CRITICAL: Exclude LCs with forex-related statuses
             // These statuses indicate the LC is in the forex allocation workflow
-            const forexRelatedStatuses = ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED', 'FOREX_REQUESTED'];
+            // (FOREX_BACKED and FOREX_REQUESTED were invented/dead LC states
+            // and are not matched anymore — see TEST-STATUS-MATRIX §17 #15).
+            const forexRelatedStatuses = ['ISSUED', 'FOREX_ALLOCATED'];
             if (forexRelatedStatuses.includes(lc.status)) {
               devLog(`[PAYMENT METHODS] ❌ Excluding ${lc.lcId} - status is ${lc.status} (forex-related)`);
               return false;
@@ -303,7 +308,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
           pendingLCRequests: pendingLCRequests.length,
           allLCs: safeLetterOfCredits.length,
           filteredLCs: existingLCs.length,
-          excludedByForexStatus: safeLetterOfCredits.filter(lc => ['ISSUED', 'FOREX_ALLOCATED', 'FOREX_BACKED', 'FOREX_REQUESTED'].includes(lc.status)).length,
+          excludedByForexStatus: safeLetterOfCredits.filter(lc => ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)).length,
           requestedLCs: safeLetterOfCredits.filter(lc => lc.status === 'REQUESTED').length,
           approvedLCs: safeLetterOfCredits.filter(lc => lc.status === 'APPROVED').length,
         });
@@ -360,7 +365,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
       }
       
       // Show if completed (for history/reference)
-      if (payment.status === 'PAID' || payment.status === 'SETTLED') {
+      if (payment.status === 'SETTLED') {
         return true;
       }
       
@@ -377,13 +382,11 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
   const getCurrentStep = (status: string, method: string): number => {
     const stepMappings: Record<string, Record<string, number>> = {
       LC: {
-        'AWAITING_LC': -1,        // Approved contract awaiting LC creation (not in workflow yet)
         'REQUESTED': 0,           // LC Requested - shows "Approve Request" button (step 1)
         'APPROVED': 1,            // LC Approved - shows "Issue LC" button (step 2)
         'ISSUED': 2,              // LC Issued (MT700 sent) - forex allocated, awaiting documents
         'UTILIZED': 4,            // Documents verified, LC can be used for payment
         'EXPIRED': 5,             // LC expired
-        'PAID': 5,                // Payment released (MT103 sent)
         'SETTLED': 5,             // Payment complete
       },
       CAD: {
@@ -468,7 +471,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
         </Alert>
       )}
       
-      {selectedPaymentMethod === 'LC' && payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length > 0 && (
+      {selectedPaymentMethod === 'LC' && payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_ALLOCATED')).length > 0 && (
         <Alert 
           severity="info" 
           sx={{ 
@@ -477,7 +480,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             borderLeft: `4px solid #2196f3`,
           }}
         >
-          <strong>Active LCs:</strong> {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length} issued {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_REQUESTED' || p.status === 'FOREX_ALLOCATED')).length === 1 ? 'Letter of Credit' : 'Letters of Credit'} in progress. View details below to track status and forex allocation.
+          <strong>Active LCs:</strong> {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_ALLOCATED')).length} issued {payments.filter(p => !p.isContract && (p.status === 'ISSUED' || p.status === 'FOREX_ALLOCATED')).length === 1 ? 'Letter of Credit' : 'Letters of Credit'} in progress. View details below to track status and forex allocation.
         </Alert>
       )}
 
@@ -693,9 +696,9 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                           label={payment.status}
                           size="small"
                           sx={{
-                            bgcolor: payment.status.includes('PAID') || payment.status.includes('SETTLED') ? 
+                            bgcolor: payment.status.includes('SETTLED') ? 
                               CBE_COLORS.golden : CBE_COLORS.purple,
-                            color: payment.status.includes('PAID') || payment.status.includes('SETTLED') ? 
+                            color: payment.status.includes('SETTLED') ? 
                               CBE_COLORS.black : CBE_COLORS.white,
                             fontWeight: 700,
                           }}
@@ -722,8 +725,8 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                             View Details
                           </Button>
                           
-                          {/* Special handling for AWAITING_LC status (approved contracts) */}
-                          {payment.status === 'AWAITING_LC' && payment.isContract && (
+                          {/* Special handling for approved-contract rows (not LCs yet) */}
+                          {payment.isContract && (
                             <>
                               <Button
                                 size="small"
@@ -763,9 +766,8 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                           )}
                           
                           {/* Regular action buttons for existing LCs */}
-                          {payment.status !== 'AWAITING_LC' && 
+                          {!payment.isContract && 
                            payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
-                           payment.status !== 'PAID' && 
                            payment.status !== 'SETTLED' &&
                            selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
                             <Button
@@ -787,9 +789,8 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                             </Button>
                           )}
                           {/* Show info if next step is not a bank action */}
-                          {payment.status !== 'AWAITING_LC' &&
+                          {!payment.isContract &&
                            payment.currentStep < (selectedMethodConfig?.steps.length || 0) - 1 && 
-                           payment.status !== 'PAID' && 
                            payment.status !== 'SETTLED' &&
                            !selectedMethodConfig?.bankActions?.includes(payment.currentStep + 1) && (
                             <Chip 
@@ -802,7 +803,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                               }} 
                             />
                           )}
-                          {(payment.status === 'PAID' || payment.status === 'SETTLED') && (
+                          {(payment.status === 'SETTLED') && (
                             <Chip 
                               label="✓ Complete" 
                               size="small" 

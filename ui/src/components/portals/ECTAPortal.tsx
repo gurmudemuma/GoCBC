@@ -115,9 +115,6 @@ import BlockchainSignatureVerification from '@/components/documents/BlockchainSi
 import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
 
 
-// Status types for chips
-type StatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CLEARED' | 'HELD' | 'SUBMITTED' | 'UNDER_REVIEW' | string;
-
 const contractRejectionFields = [
   'Buyer name or company',
   'Buyer country or bank',
@@ -202,8 +199,14 @@ const ECTAPortal: React.FC = () => {
   // Sub-tab state for KPI filtering
   const [subTabValue, setSubTabValue] = useState(0);
   
-  // Inspection filter state (for Quality Control tab) - 5-stage workflow
-  const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'SCHEDULED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('PENDING');
+  // Inspection filter state (for Quality Control tab). The values are the
+  // states this tab actually renders (PENDING/REQUESTED → Inspect,
+  // INSPECTED → Approve/Reject, APPROVED → Issue Permit, REJECTED and
+  // PERMIT_ISSUED → status chip). SCHEDULED belongs to the separate
+  // PreShipmentInspection entity (inspection.go) and UNDER_REVIEW is a
+  // customs state — neither ever occurs on a QualityInspection row, so
+  // they were dead filter values (TEST-STATUS-MATRIX §17 #15).
+  const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'REQUESTED' | 'INSPECTED' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('PENDING');
   
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [allExporters, setAllExporters] = useState<Exporter[]>([]);
@@ -2104,6 +2107,14 @@ The exporter can reapply once all requirements are met.`,
                             <Visibility />
                           </IconButton>
                         </Tooltip>
+                        {/* Approve/Reject only render for pending rows
+                            (TEST-STATUS-MATRIX §17 #16): the API rejects
+                            non-pending applications, so showing the buttons
+                            on every row was a dead click. The table is
+                            normally fed by the ?status=pending query, but
+                            the gate holds for any row that arrives here. */}
+                        {application.status === 'pending' ? (
+                          <>
                         <Tooltip title="Approve">
                           <IconButton
                             size="small"
@@ -2129,6 +2140,14 @@ The exporter can reapply once all requirements are met.`,
                             <Warning />
                           </IconButton>
                         </Tooltip>
+                          </>
+                        ) : (
+                          <Chip
+                            label={application.status === 'approved' ? 'Approved' : 'Rejected'}
+                            size="small"
+                            color={application.status === 'approved' ? 'success' : 'error'}
+                          />
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

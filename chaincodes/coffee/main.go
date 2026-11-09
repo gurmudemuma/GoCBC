@@ -80,6 +80,7 @@ type CoffeeShipment struct {
 	EstimatedArrival string `json:"estimatedArrival"` // ETA
 	ActualArrival    string `json:"actualArrival"`    // Actual arrival date
 	TrackingNumber   string `json:"trackingNumber"`   // GPS/Container tracking
+	CurrentLocation  string `json:"currentLocation"`  // Last reported location (set by UpdateShipmentLocation)
 	// Document Courier Tracking
 	CourierCompany        string    `json:"courierCompany"`        // FedEx, DHL, UPS
 	CourierTracking       string    `json:"courierTracking"`       // Tracking number
@@ -146,6 +147,11 @@ type SalesContract struct {
 	RegisteredByMSP       string    `json:"registeredByMsp"`  // ✅ MSP of registrar
 	ApprovedBy            string    `json:"approvedBy"`       // ✅ X.509 certificate of approver
 	RejectedBy            string    `json:"rejectedBy"`       // ✅ X.509 certificate of rejector
+	CancelledBy           string    `json:"cancelledBy"`      // ✅ X.509 certificate of canceller
+	CancellationReason    string    `json:"cancellationReason"`
+	CancellationDate      string    `json:"cancellationDate"` // ISO date when contract was cancelled
+	CompletedBy           string    `json:"completedBy"`      // ✅ X.509 certificate of completer
+	CompletionDate        string    `json:"completionDate"`   // ISO date when contract was completed
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
@@ -704,6 +710,31 @@ func (c *CoffeeContract) SalesContractExists(ctx contractapi.TransactionContextI
 	return contractJSON != nil, nil
 }
 
+// validateContractStatusTransition - the contract status machine.
+// There was no validator table for contracts (TEST-STATUS-MATRIX §1);
+// only REGISTERED, APPROVED and REJECTED were ever assigned on-chain.
+// COMPLETED and CANCELLED are now reachable via CompleteContract,
+// CancelContract and UpdateContractStatus.
+func validateContractStatusTransition(currentStatus, newStatus string) error {
+	validTransitions := map[string][]string{
+		"REGISTERED": {"APPROVED", "REJECTED", "CANCELLED"},
+		"REJECTED":   {"REGISTERED"}, // ResubmitRejectedContract
+		"APPROVED":   {"CANCELLED", "COMPLETED"},
+		"COMPLETED":  {},
+		"CANCELLED":  {},
+	}
+	allowed, ok := validTransitions[currentStatus]
+	if !ok {
+		return fmt.Errorf("invalid current contract status '%s'", currentStatus)
+	}
+	for _, next := range allowed {
+		if next == newStatus {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid contract status transition from '%s' to '%s'", currentStatus, newStatus)
+}
+
 func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContextInterface, contractID string) error {
 	// ✅ CAPTURE MSP IDENTITY of approver
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
@@ -731,6 +762,14 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	// Capture previous status for audit
 	previousStatus := contract.ContractStatus
 
+	// GUARD (status-transition audit §17 #1): only a REGISTERED contract
+	// can be approved. Without this an APPROVED or REJECTED contract
+	// could be (re-)approved on-chain; the API gate compensated, but the
+	// ledger itself must refuse it.
+	if contract.ContractStatus != "REGISTERED" {
+		return fmt.Errorf("only REGISTERED contracts can be approved, current status: %s", contract.ContractStatus)
+	}
+
 	// Get transaction timestamp
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
@@ -739,8 +778,14 @@ func (c *CoffeeContract) ApproveSalesContract(ctx contractapi.TransactionContext
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
 
 	// ✅ GENERATE ECTA REFERENCE NUMBER (format: ECTA-YYYY-NNNN)
-	// Use contract ID suffix and timestamp to create unique reference
-	ectaRef := fmt.Sprintf("ECTA-%s-%s", timestamp.Format("2006"), contractID[len(contractID)-6:])
+	// Use contract ID suffix and timestamp to create unique reference.
+	// Contract IDs shorter than 6 characters would panic on the slice
+	// below; use the whole ID in that case.
+	contractSuffix := contractID
+	if len(contractID) > 6 {
+		contractSuffix = contractID[len(contractID)-6:]
+	}
+	ectaRef := fmt.Sprintf("ECTA-%s-%s", timestamp.Format("2006"), contractSuffix)
 	log.Printf("Generated ECTA reference for contract %s: %s", contractID, ectaRef)
 
 	contract.ContractStatus = "APPROVED"
@@ -887,6 +932,250 @@ func (c *CoffeeContract) RejectSalesContract(ctx contractapi.TransactionContextI
 	}
 	eventJSON, _ := json.Marshal(event)
 	ctx.GetStub().SetEvent("ContractRejected", eventJSON)
+
+	return nil
+}
+
+// UpdateContractStatus - Generic contract status update, guarded by the
+// contract status validator (validateContractStatusTransition above).
+// Called by the post-delivery close flow
+// (api/src/services/postDeliveryWorkflowService.ts) with exactly two
+// args, (contractID, "COMPLETED") — so there is NO updatedBy parameter:
+// the actor is taken from the transaction identity and recorded in the
+// audit log. Only ECTA/Admin may move a contract; exporters resubmit a
+// rejected contract via ResubmitRejectedContract.
+func (c *CoffeeContract) UpdateContractStatus(ctx contractapi.TransactionContextInterface,
+	contractID, newStatus string) error {
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("UpdateContractStatus: failed to get MSP ID: %w", err)
+	}
+	if mspID != "ECTAMSP" && mspID != "AdminMSP" {
+		return fmt.Errorf("UpdateContractStatus: only ECTA and Admin can update contract status, got: %s", mspID)
+	}
+	actorID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		actorID = mspID // Fallback
+	}
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("UpdateContractStatus: %w", err)
+	}
+	newStatus = strings.ToUpper(strings.TrimSpace(newStatus))
+
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return fmt.Errorf("UpdateContractStatus: %w", err)
+	}
+	if err := validateContractStatusTransition(contract.ContractStatus, newStatus); err != nil {
+		return fmt.Errorf("UpdateContractStatus: %w", err)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("UpdateContractStatus: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := contract.ContractStatus
+	contract.ContractStatus = newStatus
+	contract.UpdatedAt = txTime
+	if newStatus == "COMPLETED" {
+		contract.CompletedBy = actorID
+		contract.CompletionDate = txTime.Format(time.RFC3339)
+	}
+	if newStatus == "CANCELLED" {
+		contract.CancelledBy = actorID
+		contract.CancellationDate = txTime.Format(time.RFC3339)
+	}
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON); err != nil {
+		return err
+	}
+
+	changes := []FieldChange{
+		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: newStatus, DataType: "string"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		ComplianceNote: fmt.Sprintf("Contract status updated by %s (MSP: %s)", actorID, mspID),
+	}
+	if err := c.CreateAuditLog(ctx, "UPDATE_STATUS", "CONTRACT", contractID, previousStatus, newStatus, changes,
+		fmt.Sprintf("Contract status updated to %s by %s", newStatus, actorID), compliance); err != nil {
+		return fmt.Errorf("UpdateContractStatus: failed to create audit log: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "ContractStatusUpdated",
+		"contractID": contractID,
+		"oldStatus":  previousStatus,
+		"newStatus":  newStatus,
+		"updatedBy":  mspID,
+		"timestamp":  txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractStatusUpdated", eventJSON)
+
+	return nil
+}
+
+// CancelContract - Cancel a contract. REGISTERED or APPROVED -> CANCELLED.
+// The caller-supplied cancelledBy name is recorded in the audit trail;
+// CancelledBy on the contract itself is the caller's X.509 identity
+// (same pattern as RejectSalesContract). No API route calls this yet —
+// POST /contracts/:contractId/cancel is PG-only — wiring the route to
+// this function (and a role check on that route) is API-side work.
+func (c *CoffeeContract) CancelContract(ctx contractapi.TransactionContextInterface,
+	contractID, cancelledBy, reason string) error {
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("CancelContract: failed to get MSP ID: %w", err)
+	}
+	if mspID != "ECTAMSP" && mspID != "AdminMSP" {
+		return fmt.Errorf("CancelContract: only ECTA and Admin can cancel contracts, got: %s", mspID)
+	}
+	cancellerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		cancellerID = mspID // Fallback
+	}
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("CancelContract: %w", err)
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len(reason) > MaxStringLen {
+		return fmt.Errorf("CancelContract: cancellation reason is required and cannot exceed %d characters", MaxStringLen)
+	}
+
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return fmt.Errorf("CancelContract: %w", err)
+	}
+	if contract.ContractStatus != "REGISTERED" && contract.ContractStatus != "APPROVED" {
+		return fmt.Errorf("CancelContract: only REGISTERED or APPROVED contracts can be cancelled, current status: %s", contract.ContractStatus)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("CancelContract: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := contract.ContractStatus
+	contract.ContractStatus = "CANCELLED"
+	contract.CancelledBy = cancellerID
+	contract.CancellationReason = reason
+	contract.CancellationDate = txTime.Format(time.RFC3339)
+	contract.UpdatedAt = txTime
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON); err != nil {
+		return err
+	}
+
+	changes := []FieldChange{
+		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: "CANCELLED", DataType: "string"},
+		{FieldName: "cancellationReason", OldValue: "", NewValue: reason, DataType: "string"},
+		{FieldName: "cancellationDate", OldValue: "", NewValue: contract.CancellationDate, DataType: "date"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		ComplianceNote: fmt.Sprintf("Contract cancelled by %s (MSP: %s): %s", cancelledBy, mspID, reason),
+	}
+	if err := c.CreateAuditLog(ctx, "CANCEL", "CONTRACT", contractID, previousStatus, "CANCELLED", changes,
+		fmt.Sprintf("Contract cancelled by %s: %s", cancelledBy, reason), compliance); err != nil {
+		return fmt.Errorf("CancelContract: failed to create audit log: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":          "ContractCancelled",
+		"contractID":         contractID,
+		"exporterID":         contract.ExporterID,
+		"cancellationReason": reason,
+		"timestamp":          txTime.Format(time.RFC3339),
+		"cancelledBy":        mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractCancelled", eventJSON)
+
+	return nil
+}
+
+// CompleteContract - Mark an APPROVED contract COMPLETED (post-delivery
+// close). The caller-supplied completedBy name is recorded in the audit
+// trail; CompletedBy on the contract itself is the caller's X.509
+// identity. No API route calls this yet — the close flow calls the
+// generic UpdateContractStatus with "COMPLETED" instead.
+func (c *CoffeeContract) CompleteContract(ctx contractapi.TransactionContextInterface,
+	contractID, completedBy string) error {
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("CompleteContract: failed to get MSP ID: %w", err)
+	}
+	if mspID != "ECTAMSP" && mspID != "AdminMSP" {
+		return fmt.Errorf("CompleteContract: only ECTA and Admin can complete contracts, got: %s", mspID)
+	}
+	completerID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		completerID = mspID // Fallback
+	}
+	if err := ValidateID(contractID, "contractID"); err != nil {
+		return fmt.Errorf("CompleteContract: %w", err)
+	}
+
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return fmt.Errorf("CompleteContract: %w", err)
+	}
+	if contract.ContractStatus != "APPROVED" {
+		return fmt.Errorf("CompleteContract: only APPROVED contracts can be completed, current status: %s", contract.ContractStatus)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("CompleteContract: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := contract.ContractStatus
+	contract.ContractStatus = "COMPLETED"
+	contract.CompletedBy = completerID
+	contract.CompletionDate = txTime.Format(time.RFC3339)
+	contract.UpdatedAt = txTime
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON); err != nil {
+		return err
+	}
+
+	changes := []FieldChange{
+		{FieldName: "contractStatus", OldValue: previousStatus, NewValue: "COMPLETED", DataType: "string"},
+		{FieldName: "completionDate", OldValue: "", NewValue: contract.CompletionDate, DataType: "date"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		ICOCompliance:  true,
+		ComplianceNote: fmt.Sprintf("Contract completed by %s (MSP: %s)", completedBy, mspID),
+	}
+	if err := c.CreateAuditLog(ctx, "COMPLETE", "CONTRACT", contractID, previousStatus, "COMPLETED", changes,
+		fmt.Sprintf("Contract completed by %s", completedBy), compliance); err != nil {
+		return fmt.Errorf("CompleteContract: failed to create audit log: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":   "ContractCompleted",
+		"contractID":  contractID,
+		"exporterID":  contract.ExporterID,
+		"timestamp":   txTime.Format(time.RFC3339),
+		"completedBy": mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractCompleted", eventJSON)
 
 	return nil
 }
@@ -1785,6 +2074,29 @@ func (c *CoffeeContract) ReadShipment(ctx contractapi.TransactionContextInterfac
 	return &shipment, nil
 }
 
+// validShipmentStatuses is the closed set of shipment Status values the
+// lifecycle functions, the API statusManager SHIPMENT table, and the
+// internal chaincode callers can produce. UpdateShipmentStatus and
+// UpdateShipmentLocation validate their target against it (see below).
+// CUSTOMS_DECLARED is produced by SubmitCustomsDeclaration;
+// INSPECTION_PENDING by RequestInspection (quality.go);
+// CUSTOMS_REJECTED by RejectDeclaration/RejectCustomsDeclaration.
+var validShipmentStatuses = map[string]bool{
+	"CREATED": true, "FREIGHT_BOOKED": true, "PERMIT_ISSUED": true,
+	"CUSTOMS_DECLARED": true, "CUSTOMS_CLEARED": true, "CUSTOMS_REJECTED": true,
+	"INSPECTION_PENDING": true, "LAND_TRANSPORT": true, "PORT_ARRIVED": true,
+	"CONTAINER_STUFFED": true, "VESSEL_LOADED": true, "DEPARTED": true,
+	"IN_TRANSIT": true, "DESTINATION_ARRIVED": true, "DELIVERED": true,
+	"LOADED": true, "CANCELLED": true, "ARRIVED": true,
+}
+
+func validateShipmentStatus(status string) error {
+	if !validShipmentStatuses[status] {
+		return fmt.Errorf("invalid shipment status: %s", status)
+	}
+	return nil
+}
+
 func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContextInterface,
 	shipmentID, newStatus string) error {
 
@@ -1793,6 +2105,18 @@ func (c *CoffeeContract) UpdateShipmentStatus(ctx contractapi.TransactionContext
 		return fmt.Errorf("UpdateShipmentStatus: %w", err)
 	}
 	if err := ValidateNonEmptyString(newStatus, "newStatus", MaxIDLen); err != nil {
+		return fmt.Errorf("UpdateShipmentStatus: %w", err)
+	}
+	// GUARD (status-transition audit §17): the target must be a known
+	// shipment status — this blocks typos and arbitrary strings. There
+	// is deliberately NO from-state guard here: this setter is the
+	// reconcile-status admin override (api/src/routes/shipments.ts) and
+	// the fallback the lifecycle functions use to produce PERMIT_ISSUED /
+	// CUSTOMS_DECLARED / CUSTOMS_CLEARED, so restricting the from-state
+	// would break the override and the internal callers. From-state
+	// enforcement lives in the lifecycle functions and the API
+	// statusManager gate on the generic routes.
+	if err := validateShipmentStatus(newStatus); err != nil {
 		return fmt.Errorf("UpdateShipmentStatus: %w", err)
 	}
 
@@ -2121,6 +2445,20 @@ func (c *CoffeeContract) RecordShippingDetails(ctx contractapi.TransactionContex
 func (c *CoffeeContract) UpdateShipmentLocation(ctx contractapi.TransactionContextInterface,
 	shipmentID, location, status string) error {
 
+	// GUARD (status-transition audit §17): the status argument used to be
+	// written unchecked, so a location update could rewrite the shipment
+	// to any string. The target must now be a known shipment status.
+	// There is no from-state guard — the location route is a tracking
+	// update, not a lifecycle step — but the value itself is validated.
+	// The location argument used to be silently dropped; it is now stored
+	// in CurrentLocation.
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("UpdateShipmentLocation: %w", err)
+	}
+	if err := validateShipmentStatus(status); err != nil {
+		return fmt.Errorf("UpdateShipmentLocation: %w", err)
+	}
+
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
 		return err
@@ -2133,6 +2471,7 @@ func (c *CoffeeContract) UpdateShipmentLocation(ctx contractapi.TransactionConte
 	timestamp := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
 
 	shipment.Status = status
+	shipment.CurrentLocation = location
 	shipment.UpdatedAt = timestamp
 
 	// If arrived, record actual arrival
@@ -3498,6 +3837,62 @@ func (c *CoffeeContract) CompleteDelivery(ctx contractapi.TransactionContextInte
 
 	fmt.Printf("CompleteDelivery: Shipment %s delivered successfully\n", shipmentID)
 	return nil
+}
+
+// RecordVesselLoading - Alias for LoadOnVessel, matching the duplicate
+// shipment route POST /shipments/:shipmentId/vessel/load
+// (api/src/routes/shipments.ts), which invokes RecordVesselLoading with
+// (shipmentId, timestamp, notes). The canonical function is LoadOnVessel
+// (CONTAINER_STUFFED -> VESSEL_LOADED); this alias exists only so the
+// duplicate route can succeed on-chain without being rewritten, and
+// delegates to it so the transition logic lives in one place. The
+// caller-supplied timestamp is validated but the ledger transaction time
+// remains authoritative — LoadOnVessel stamps the record from it.
+func (c *CoffeeContract) RecordVesselLoading(ctx contractapi.TransactionContextInterface,
+	shipmentID, timestamp, notes string) error {
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("RecordVesselLoading: %w", err)
+	}
+	if err := ValidateDate(timestamp); err != nil {
+		return fmt.Errorf("RecordVesselLoading: %w", err)
+	}
+	return c.LoadOnVessel(ctx, shipmentID, notes)
+}
+
+// RecordVesselDeparture - Alias for DepartFromPort, matching the duplicate
+// shipment route POST /shipments/:shipmentId/vessel/depart
+// (api/src/routes/shipments.ts), which invokes RecordVesselDeparture with
+// (shipmentId, timestamp, notes). The canonical function is DepartFromPort
+// (VESSEL_LOADED -> DEPARTED); this alias delegates to it. The
+// caller-supplied timestamp is validated but the ledger transaction time
+// remains authoritative.
+func (c *CoffeeContract) RecordVesselDeparture(ctx contractapi.TransactionContextInterface,
+	shipmentID, timestamp, notes string) error {
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("RecordVesselDeparture: %w", err)
+	}
+	if err := ValidateDate(timestamp); err != nil {
+		return fmt.Errorf("RecordVesselDeparture: %w", err)
+	}
+	return c.DepartFromPort(ctx, shipmentID, notes)
+}
+
+// RecordDestinationArrival - Alias for ArriveAtDestination, matching the
+// duplicate shipment route POST /shipments/:shipmentId/destination/arrive
+// (api/src/routes/shipments.ts), which invokes RecordDestinationArrival
+// with (shipmentId, timestamp, notes). The canonical function is
+// ArriveAtDestination (IN_TRANSIT -> DESTINATION_ARRIVED); this alias
+// delegates to it. The caller-supplied timestamp is validated but the
+// ledger transaction time remains authoritative.
+func (c *CoffeeContract) RecordDestinationArrival(ctx contractapi.TransactionContextInterface,
+	shipmentID, timestamp, notes string) error {
+	if err := ValidateID(shipmentID, "shipmentID"); err != nil {
+		return fmt.Errorf("RecordDestinationArrival: %w", err)
+	}
+	if err := ValidateDate(timestamp); err != nil {
+		return fmt.Errorf("RecordDestinationArrival: %w", err)
+	}
+	return c.ArriveAtDestination(ctx, shipmentID, notes)
 }
 
 // ==================== DATA MIGRATION FUNCTIONS ====================

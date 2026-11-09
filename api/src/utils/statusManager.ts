@@ -41,9 +41,11 @@ export const StatusTransitions = {
   // COMPLETED edges described a workflow the ledger can never reach.
   // Contract cancel is Postgres-only (contracts.ts cancel route).
   CONTRACT: {
-    REGISTERED: ['APPROVED', 'REJECTED'],
-    APPROVED: [],
+    REGISTERED: ['APPROVED', 'REJECTED', 'CANCELLED'],
+    APPROVED: ['CANCELLED', 'COMPLETED'],
     REJECTED: ['REGISTERED'], // ResubmitRejectedContract
+    CANCELLED: [],
+    COMPLETED: [],
   },
 
   // Forex Request Status Flow
@@ -52,10 +54,11 @@ export const StatusTransitions = {
   // of the NBE approve route (now writes CONFIRMED via ConfirmForex);
   // EXPIRED / SETTLED are never assigned on-chain.
   FOREX: {
-    REQUESTED: ['CONFIRMED', 'ALLOCATED'],
-    CONFIRMED: ['ALLOCATED'],
+    REQUESTED: ['CONFIRMED', 'ALLOCATED', 'REJECTED'],
+    CONFIRMED: ['ALLOCATED', 'REJECTED'],
     ALLOCATED: ['UTILIZED'],
     UTILIZED: [],
+    REJECTED: [],
   },
 
   // Letter of Credit Status Flow (matches chaincode: banking.go + forex.go)
@@ -129,7 +132,8 @@ export const StatusTransitions = {
     VERIFIED: ['SWIFT_INITIATED', 'SETTLED'],
     SWIFT_INITIATED: ['SWIFT_RECEIVED', 'SWIFT_FAILED'],
     SWIFT_RECEIVED: ['SETTLED'],
-    SETTLED: ['DOCUMENTS_RELEASED'],
+    SETTLED: ['DOCUMENTS_RELEASED', 'CONFIRMED'],
+    CONFIRMED: ['DOCUMENTS_RELEASED'],
     DOCUMENTS_RELEASED: ['COMPLETED'],
     COMPLETED: [],
     REJECTED: [],
@@ -138,13 +142,14 @@ export const StatusTransitions = {
   },
 
   // Phytosanitary Certificate Status Flow
-  // NOTE: matches chaincode (phytosanitary.go) — the only transitions that
-  // exist on-chain are ∅ → ISSUED and → REVOKED. The old table described
-  // a request/inspect workflow (REQUESTED → INSPECTION_SCHEDULED → … →
-  // VALID → EXPIRED) for which no chaincode functions exist; the routes
-  // that call them (Request/InspectPhytosanitaryCertificate) cannot
-  // succeed on-chain. EXPIRED is comment-only in chaincode.
+  // Matches chaincode (phytosanitary.go) now that the request/inspect
+  // functions exist: RequestPhytosanitaryCertificate -> PENDING,
+  // InspectPhytosanitaryCertificate PENDING -> INSPECTED,
+  // IssuePhytosanitaryCertificate INSPECTED -> ISSUED, revoke -> REVOKED.
+  // EXPIRED is comment-only in chaincode.
   PHYTOSANITARY: {
+    PENDING: ['INSPECTED'],
+    INSPECTED: ['ISSUED'],
     ISSUED: ['REVOKED'],
     REVOKED: [],
   },
@@ -207,7 +212,8 @@ export const StatusTransitions = {
 
   // SWIFT Message Status Flow (matches chaincode swift.go)
   SWIFT: {
-    DRAFT: ['APPROVED', 'REJECTED'],
+    DRAFT: ['NBE_APPROVED', 'APPROVED', 'REJECTED'],
+    NBE_APPROVED: ['APPROVED', 'REJECTED'],
     APPROVED: ['SENT', 'REJECTED'],
     SENT: ['RECEIVED', 'REJECTED'],
     RECEIVED: ['PROCESSING', 'REJECTED'],

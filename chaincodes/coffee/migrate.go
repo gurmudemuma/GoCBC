@@ -11,7 +11,14 @@ import (
 // ==================== DATA MIGRATION FUNCTIONS ====================
 
 // MigrateLCStatus - Fix invalid LC statuses from old chaincode versions
-// This function updates LCs with invalid statuses to valid ones
+// This function updates LCs with invalid statuses to valid ones.
+//
+// DELIBERATELY UNGUARDED (status-transition audit §17): this is a data
+// migration helper, not a lifecycle step — its whole purpose is to move
+// an LC out of a state the machine would otherwise never let it leave,
+// so a from-state guard would defeat it. The target status is still
+// validated against the known LC states, the LC must exist, and no API
+// route calls this function.
 func (s *CoffeeContract) MigrateLCStatus(ctx contractapi.TransactionContextInterface, lcID string, newStatus string) error {
 	fmt.Printf("=== MigrateLCStatus: Migrating LC %s to status %s ===\n", lcID, newStatus)
 

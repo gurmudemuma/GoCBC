@@ -683,30 +683,58 @@ router.post('/forex/:forexID/reject',
         });
       }
 
-      const result = await fabricService.invokeChaincode('RejectForex', [
-        forexID,
-        rejectionReason,
-        user.org,
-      ]);
-
-      if (result.success) {
-        logger.info(`Forex request rejected: ${forexID} by ${user.org}. Reason: ${rejectionReason}`);
-        res.json({
-          success: true,
-          data: result.data,
-          txId: result.txId,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'FOREX_REJECTION_FAILED',
-            message: result.error || 'Failed to reject forex request',
-          },
-          timestamp: new Date().toISOString(),
-        });
+      // Best-effort chain sync first (RejectForex: REQUESTED/CONFIRMED
+      // -> REJECTED, forex.go). The PG mirror below is authoritative
+      // off-chain, mirroring the NBE approve route (nbe.ts), which also
+      // writes CONFIRMED to PG even when the chain call fails: without
+      // the mirror a rejected allocation would keep showing in the NBE
+      // portal's pendingForexRequests (pending = status REQUESTED).
+      let blockchainSynced = false;
+      let blockchainWarning: string | undefined;
+      try {
+        const chainResult = await fabricService.invokeChaincode('RejectForex', [
+          forexID,
+          rejectionReason,
+          user.org,
+        ]);
+        if (chainResult.success) {
+          blockchainSynced = true;
+        } else {
+          blockchainWarning = `Chaincode RejectForex did not reject ${forexID}: ${chainResult.error || 'unknown error'}`;
+          logger.warn(`[BANKING] ${blockchainWarning}`);
+        }
+      } catch (chainError: any) {
+        blockchainWarning = `Could not reject ${forexID} on the ledger (no Fabric here?): ${chainError.message}`;
+        logger.warn(`[BANKING] ${blockchainWarning}`);
       }
+
+      // Mirror the rejection to Postgres (REJECTED is in
+      // chk_forex_allocations_status since migration 060). Best-effort:
+      // the allocation may exist on-chain only.
+      try {
+        await dbService.run(`
+          UPDATE forex_allocations
+          SET status = 'REJECTED',
+              updated_at = CURRENT_TIMESTAMP
+          WHERE allocation_id = $1 OR forex_id = $1 OR CAST(id AS TEXT) = $1
+        `, [forexID]);
+      } catch (pgError: any) {
+        logger.warn(`[BANKING] Forex rejection PG mirror failed for ${forexID}: ${pgError.message}`);
+      }
+
+      logger.info(`Forex request rejected: ${forexID} by ${user.org}. Reason: ${rejectionReason} (blockchainSynced: ${blockchainSynced})`);
+      res.json({
+        success: true,
+        data: {
+          forexId: forexID,
+          status: 'REJECTED',
+          rejectedBy: user.org,
+          rejectionReason,
+          blockchainSynced,
+          blockchainWarning,
+        },
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       logger.error('Error rejecting forex request:', error);
       res.status(500).json({

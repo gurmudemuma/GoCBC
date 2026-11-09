@@ -41,7 +41,7 @@ type ForexAllocation struct {
 	ScreeningDate           string    `json:"screeningDate"`           // ISO date
 	ScreeningOfficer        string    `json:"screeningOfficer"`        // NBE officer
 	ScreeningNotes          string    `json:"screeningNotes"`          // Any flags or notes
-	Status                  string    `json:"status"`                  // REQUESTED, APPROVED, ALLOCATED, UTILIZED, EXPIRED
+	Status                  string    `json:"status"`                  // REQUESTED, CONFIRMED, ALLOCATED, UTILIZED, REJECTED (APPROVED/EXPIRED are legacy values, never assigned)
 	RequestDate             time.Time `json:"requestDate"`
 	ApprovalDate            string    `json:"approvalDate"`
 	AllocationDate          string    `json:"allocationDate"`
@@ -54,6 +54,11 @@ type ForexAllocation struct {
 	VerifiedByMSP           string    `json:"verifiedByMsp"` // ✅ MSP of NBE verifier
 	NBEOfficer              string    `json:"nbeOfficer"`
 	NBEApprovalRef          string    `json:"nbeApprovalRef"` // NBE reference number
+	RejectionReason         string    `json:"rejectionReason"`
+	RejectedBy              string    `json:"rejectedBy"`    // ✅ X.509 cert of rejecter
+	RejectedByMSP           string    `json:"rejectedByMsp"` // ✅ MSP of rejecter
+	RejectedByOrg           string    `json:"rejectedByOrg"` // Bank org name supplied by the API (informational only)
+	RejectionDate           string    `json:"rejectionDate"`
 	Comments                string    `json:"comments"`
 	CreatedAt               time.Time `json:"createdAt"`
 	UpdatedAt               time.Time `json:"updatedAt"`
@@ -326,6 +331,101 @@ func (c *CoffeeContract) ConfirmForex(ctx contractapi.TransactionContextInterfac
 		return fmt.Errorf("ConfirmForex: failed to create audit log: %w", auditErr)
 	}
 
+	return nil
+}
+
+// RejectForex - Bank rejects a forex allocation request.
+// Modelled on RejectLC (banking.go): the caller must be a bank consortium
+// member, and the API-supplied org name is recorded but is never proof of
+// authority. A request can be rejected while it is REQUESTED (before NBE
+// confirmation) or CONFIRMED (confirmed by NBE but not yet allocated).
+// Once ALLOCATED the funds are committed, so rejection is no longer
+// possible; unwinding an allocation needs a cancel, not a reject.
+// Called by POST /banking/forex/:forexID/reject with
+// (forexID, rejectionReason, user.org).
+func (c *CoffeeContract) RejectForex(ctx contractapi.TransactionContextInterface,
+	forexID, rejectionReason, org string) error {
+	if err := ValidateID(forexID, "forexID"); err != nil {
+		return fmt.Errorf("RejectForex: %w", err)
+	}
+	reason := strings.TrimSpace(rejectionReason)
+	if len(reason) < 10 || len(reason) > MaxStringLen {
+		return fmt.Errorf("RejectForex: rejection reason must be between 10 and %d characters", MaxStringLen)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RejectForex: failed to get MSP ID: %w", err)
+	}
+	if !isBankMSP(mspID) {
+		return fmt.Errorf("RejectForex: unauthorized - only bank members can reject forex requests, got: %s", mspID)
+	}
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("RejectForex: failed to get client identity: %w", err)
+	}
+
+	forexJSON, err := ctx.GetStub().GetState("FOREX_" + forexID)
+	if err != nil {
+		return fmt.Errorf("RejectForex: failed to read forex %s: %w", forexID, err)
+	}
+	if forexJSON == nil {
+		return fmt.Errorf("RejectForex: forex %s does not exist", forexID)
+	}
+	var forex ForexAllocation
+	if err := json.Unmarshal(forexJSON, &forex); err != nil {
+		return fmt.Errorf("RejectForex: failed to unmarshal forex: %w", err)
+	}
+	if forex.Status != "REQUESTED" && forex.Status != "CONFIRMED" {
+		return fmt.Errorf("RejectForex: only REQUESTED or CONFIRMED forex requests can be rejected, current status: %s", forex.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("RejectForex: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	previousStatus := forex.Status
+	forex.Status = "REJECTED"
+	forex.RejectionReason = reason
+	forex.RejectedBy = clientID
+	forex.RejectedByMSP = mspID
+	forex.RejectedByOrg = strings.TrimSpace(org)
+	forex.RejectionDate = txTime.Format(time.RFC3339)
+	forex.UpdatedAt = txTime
+
+	updatedForex, err := json.Marshal(forex)
+	if err != nil {
+		return fmt.Errorf("RejectForex: failed to marshal forex: %w", err)
+	}
+	if err := ctx.GetStub().PutState("FOREX_"+forexID, updatedForex); err != nil {
+		return fmt.Errorf("RejectForex: failed to save forex: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":       "ForexRejected",
+		"forexID":         forexID,
+		"rejectedBy":      clientID,
+		"rejectedByMsp":   mspID,
+		"rejectionReason": reason,
+		"timestamp":       txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ForexRejected", eventJSON)
+
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: previousStatus, NewValue: "REJECTED", DataType: "string"},
+		{FieldName: "rejectionReason", OldValue: "", NewValue: reason, DataType: "string"},
+		{FieldName: "rejectedByMsp", OldValue: "", NewValue: mspID, DataType: "string"},
+		{FieldName: "rejectionDate", OldValue: "", NewValue: forex.RejectionDate, DataType: "date"},
+	}
+	compliance := ComplianceMetadata{
+		NBECompliance:  false,
+		ComplianceNote: "Forex request rejected by an authenticated bank consortium member.",
+	}
+	if err := c.CreateAuditLog(ctx, "REJECT", "FOREX", forexID, previousStatus, "REJECTED", changes, reason, compliance); err != nil {
+		return fmt.Errorf("RejectForex: failed to create audit log: %w", err)
+	}
 	return nil
 }
 
@@ -1422,6 +1522,14 @@ func (c *CoffeeContract) VerifyForexUtilization(ctx contractapi.TransactionConte
 	err = json.Unmarshal(forexJSON, &forex)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal forex: %v", err)
+	}
+
+	// GUARD (status-transition audit §17): VerifyForexUtilization used to
+	// set any forex to UTILIZED as long as the payment was SETTLED, which
+	// contradicts UtilizeForex (ALLOCATED-only) for the same transition.
+	// Only an ALLOCATED forex can be verified as utilized.
+	if forex.Status != "ALLOCATED" {
+		return fmt.Errorf("forex utilization can only be verified for ALLOCATED forex, current status: %s", forex.Status)
 	}
 
 	// Read payment
