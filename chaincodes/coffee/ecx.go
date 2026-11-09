@@ -247,6 +247,78 @@ func (c *CoffeeContract) GradeECXLot(ctx contractapi.TransactionContextInterface
 	return nil
 }
 
+// RejectECXLot — ECX grader rejects a warehoused lot for a cause other
+// than moisture (e.g. defects > 100 / UG, contamination, failed cupping).
+// Moisture rejections go through GradeECXLot, whose moisture > 12 branch
+// sets REJECTED itself; that branch was unreachable through the API until
+// the route stopped 400ing before the chaincode call, and there was no
+// explicit reject path at all. Guard and audit follow RejectForex.
+// Needs re-package + redeploy as chaincode v2.3/seq 22 (same as the nine
+// functions added in the portal-handoff audit).
+func (c *CoffeeContract) RejectECXLot(ctx contractapi.TransactionContextInterface,
+	lotID, rejectionReason, rejectedBy, rejectionDate string) error {
+
+	rejecterMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	rejecterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		rejecterID = rejecterMSP // Fallback
+	}
+
+	lotJSON, err := ctx.GetStub().GetState("ECXLOT_" + lotID)
+	if err != nil || lotJSON == nil {
+		return fmt.Errorf("ECX lot %s not found", lotID)
+	}
+
+	var lot ECXLot
+	if err = json.Unmarshal(lotJSON, &lot); err != nil {
+		return fmt.Errorf("failed to unmarshal lot: %v", err)
+	}
+	if lot.Status != "WAREHOUSED" {
+		return fmt.Errorf("only a WAREHOUSED lot can be rejected, current: %s", lot.Status)
+	}
+	if rejectionReason == "" {
+		return fmt.Errorf("rejectionReason is required")
+	}
+
+	lot.Status = "REJECTED"
+	lot.RejectionReason = rejectionReason
+	lot.GradingOfficer = rejectedBy
+	lot.GradingDate = rejectionDate
+	lot.GradedBy = rejecterID
+	lot.GradedByMSP = rejecterMSP
+
+	txTimestamp, _ := ctx.GetStub().GetTxTimestamp()
+	lot.UpdatedAt = time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	updated, err := json.Marshal(lot)
+	if err != nil {
+		return fmt.Errorf("failed to marshal lot: %v", err)
+	}
+	if err := ctx.GetStub().PutState("ECXLOT_"+lotID, updated); err != nil {
+		return fmt.Errorf("failed to save lot: %v", err)
+	}
+
+	changes := []FieldChange{
+		{FieldName: "status", OldValue: "WAREHOUSED", NewValue: "REJECTED", DataType: "string"},
+		{FieldName: "rejectionReason", OldValue: "", NewValue: rejectionReason, DataType: "string"},
+		{FieldName: "gradingOfficer", OldValue: "", NewValue: rejectedBy, DataType: "string"},
+	}
+	compliance := ComplianceMetadata{
+		ECTACompliance: true,
+		ComplianceNote: fmt.Sprintf("ECX lot rejected by %s: %s", rejectedBy, rejectionReason),
+	}
+	if auditErr := c.CreateAuditLog(ctx, "REJECT", "ECXLOT", lotID, "WAREHOUSED", "REJECTED", changes,
+		fmt.Sprintf("ECX lot rejected: %s", rejectionReason), compliance); auditErr != nil {
+		return fmt.Errorf("RejectECXLot: failed to create audit log: %w", auditErr)
+	}
+
+	return nil
+}
+
 // AssignECXLot — Step 3: Link graded lot to a sales contract
 func (c *CoffeeContract) AssignECXLot(ctx contractapi.TransactionContextInterface,
 	lotID, contractID, pricePerKgStr, assignmentDate string) error {

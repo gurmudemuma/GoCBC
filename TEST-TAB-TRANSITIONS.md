@@ -67,10 +67,9 @@ chain-only (500 without Fabric) — filter verified by code only, §10.
 | User Management | org-scoped user list | `GET /users` | `active`, `suspended`, `inactive`, `rejected` | MATCH | — |
 
 **Browser (seeded):** Coffee Lots 5 rows, KPI cards `Warehoused 1`, `Graded 1`, `Assigned 1`,
-`Released 1`, `Rejected 1`. Note: the REJECTED KPI/filter may stay at 0 in production until
-a lot-reject path exists — the grade route 400s on moisture > 12 before invoking
-`GradeECXLot`, whose `REJECTED` branch therefore never runs, and no lot-reject endpoint
-exists (§10).
+`Released 1`, `Rejected 1`. The REJECTED row was seeded directly in PG for this check;
+since this audit a reject path exists (§10) — grading with moisture &gt; 12% now lets
+`GradeECXLot` set REJECTED, and `POST /ecx/lots/:lotId/reject` covers other causes.
 
 ## 3. Exporter Portal — 8 tabs
 
@@ -236,10 +235,16 @@ clean, `next build` passes (20/20 routes); API restarted with `/tmp/cecbs-api.en
 
 ## 10. Remaining — not tab-filter mismatches
 
-- **REJECTED lots unreachable via the API:** the REJECTED KPI card/filter exist and are
-  correct, but no lot can reach `REJECTED` today — the grade route 400s on moisture > 12
-  before invoking `GradeECXLot`, whose `REJECTED` branch therefore never runs, and no
-  lot-reject endpoint exists. Needs a reject path, not a filter change.
+- **REJECTED lots — FIXED after this audit (run LOTREJ1, 2026-11-09):** the grade route
+  no longer 400s on moisture > 12 — it lets `GradeECXLot` set `REJECTED` on-chain and
+  mirrors `REJECTED` + the reason into `ecx_lots` (migration 062 adds
+  `rejection_reason`); a new `POST /ecx/lots/:lotId/reject` + chaincode `RejectECXLot`
+  cover non-moisture causes, and the ECX portal has a Reject button/dialog plus a
+  rejection reason in the lot detail view. Live-verified in dev mode: grading at
+  13.5% moisture reaches the chaincode call (`GRADE_FAILED`, no peers) instead of
+  `MOISTURE_EXCEEDED`, no phantom PG mirror on failure, and a `REJECTED` row with a
+  reason round-trips through `GET /ecx/lots`. Full chain proof still needs the
+  Fabric host (and the v2.3 redeploy for `RejectECXLot`).
 - **Fabric-blocked in the browser (verified by code + API where a PG path exists):**
   ECTA Pre-shipment Inspection (`GET /inspection` 500), NBE LC Monitoring / SWIFT
   Monitoring / Forex Repatriation / Exchange Rates, Banks SWIFT tab, Exporter payment
@@ -247,9 +252,9 @@ clean, `next build` passes (20/20 routes); API restarted with `/tmp/cecbs-api.en
   Their filters were fixed against the chaincode machines in the matrix; the live proof
   needs a Fabric host.
 - **Chaincode side:** the 9 functions added in the handoff audit (incl. `RejectForex`,
-  `ConfirmSettlement`, `RecordForexRepatriation`, `NBEApproveSWIFTMessage`) and the
-  payment/banking validator rewrites still need re-package + redeploy as chaincode
-  v2.3/seq 22 on the Fabric host. The `SWIFT_STATUS_PENDING_APPROVAL` constant
+  `ConfirmSettlement`, `RecordForexRepatriation`, `NBEApproveSWIFTMessage`) plus the new
+  `RejectECXLot` (lot-reject fix, 2026-11-09) and the payment/banking validator rewrites
+  still need re-package + redeploy as chaincode v2.3/seq 22 on the Fabric host. The `SWIFT_STATUS_PENDING_APPROVAL` constant
   (`swift.go:51`) is defined but never assigned — left as-is (chaincode change out of
   scope for this task).
 - **Display-only dead arms left deliberately:** `ExporterPortal` shipment label/colour

@@ -22,7 +22,7 @@ const dbService = DatabaseService.getInstance();
 // allowlisted mirror columns may be set.
 async function mirrorLotStatusPG(lotId: string, status: string, extra: Record<string, unknown> = {}): Promise<void> {
   try {
-    const allowedColumns = new Set(['grade', 'quality_score', 'contract_id']);
+    const allowedColumns = new Set(['grade', 'quality_score', 'contract_id', 'rejection_reason']);
     const sets: string[] = ['status = $1'];
     const params: unknown[] = [status];
     let idx = 2;
@@ -216,7 +216,7 @@ router.get('/grading-standards', authMiddleware, async (req: Request, res: Respo
 // show zero lots. The mirror columns are mapped onto the CoffeeLot
 // shape the ECX portal consumes verbatim (lotId/status/quantity/grade);
 // fields the mirror does not store (moistureContent, defectCount,
-// pricePerKg, grading/assignment/release dates, rejectionReason) stay
+// pricePerKg, grading/assignment/release dates) stay
 // undefined, exactly as a chaincode row without them would.
 async function getLotsFromPG(): Promise<any[]> {
   const rows = await dbService.all(`SELECT * FROM ecx_lots ORDER BY created_at DESC`);
@@ -235,6 +235,7 @@ async function getLotsFromPG(): Promise<any[]> {
     grade: r.grade,
     qualityScore: r.quality_score != null ? parseFloat(r.quality_score) : undefined,
     status: r.status,
+    rejectionReason: r.rejection_reason || undefined,
     warehouseReceiptDate: r.receipt_date,
     contractId: r.contract_id,
   }));
@@ -337,20 +338,61 @@ router.post('/lots/:lotId/grade', authMiddleware,
     try {
       const { lotId } = req.params;
       const { grade, qualityScore, moistureContent, defectCount, gradingOfficer, remarks, gradingDate } = req.body;
-      if (parseFloat(moistureContent) > 12) {
-        return res.status(400).json({ success: false, error: { code: 'MOISTURE_EXCEEDED', message: `Moisture ${moistureContent}% exceeds 12% export limit — lot cannot be exported` }, timestamp: new Date().toISOString() });
-      }
+      // No moisture pre-check here: GradeECXLot itself decides. Moisture
+      // > 12 sets the lot REJECTED on-chain (with the reason); the old
+      // 400 MOISTURE_EXCEEDED before the chaincode call meant that branch
+      // could never run and no lot was ever recorded as REJECTED anywhere.
       const result = await fabricService.invokeChaincode('GradeECXLot', [
         lotId, grade, (qualityScore || 0).toString(), moistureContent.toString(),
         defectCount.toString(), gradingOfficer, remarks || '', gradingDate || new Date().toISOString(),
       ]);
       if (result.success) {
+        if (parseFloat(moistureContent) > 12) {
+          const rejectionReason = `Moisture content ${moistureContent}% exceeds 12% export limit`;
+          await mirrorLotStatusPG(lotId, 'REJECTED', { rejection_reason: rejectionReason });
+          return res.json({ success: true, data: { lotId, status: 'REJECTED', rejectionReason, moistureContent: Number(moistureContent), defectCount: Number(defectCount) }, txId: result.txId, timestamp: new Date().toISOString() });
+        }
         await mirrorLotStatusPG(lotId, 'GRADED', { grade, quality_score: qualityScore != null ? Number(qualityScore) : null });
-        res.json({ success: true, data: { lotId, grade, qualityScore: Number(qualityScore || 0), moistureContent: Number(moistureContent), defectCount: Number(defectCount) }, txId: result.txId, timestamp: new Date().toISOString() });
+        res.json({ success: true, data: { lotId, status: 'GRADED', grade, qualityScore: Number(qualityScore || 0), moistureContent: Number(moistureContent), defectCount: Number(defectCount) }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry.' }, timestamp: new Date().toISOString() });
       } else {
         res.status(400).json({ success: false, error: { code: 'GRADE_FAILED', message: result.error }, timestamp: new Date().toISOString() });
+      }
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: err.message }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// POST /api/v1/ecx/lots/:lotId/reject — explicit lot rejection for a cause
+// other than moisture (defects/UG, contamination, failed cupping).
+// Moisture rejections flow through the grade route instead, which lets
+// GradeECXLot set REJECTED. Invokes the new RejectECXLot chaincode
+// function (v2.3/seq 22 — not yet deployed on the Fabric host, so with
+// reachable peers this returns 503 CHAINCODE_UPGRADING until the redeploy,
+// exactly like the other ECX routes when their function is missing; with
+// no peers reachable it returns 400 with the peer error, also like them).
+// On success the REJECTED status + reason are mirrored into ecx_lots so
+// the portal's REJECTED filter can show the lot. REJECTED is terminal
+// (statusManager ECX machine: WAREHOUSED -> GRADED/REJECTED, REJECTED -> []).
+router.post('/lots/:lotId/reject', authMiddleware,
+  [param('lotId').notEmpty(), body('rejectionReason').notEmpty()],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lotId } = req.params;
+      const { rejectionReason, rejectedBy, rejectionDate } = req.body;
+      const result = await fabricService.invokeChaincode('RejectECXLot', [
+        lotId, rejectionReason, rejectedBy || '', rejectionDate || new Date().toISOString(),
+      ]);
+      if (result.success) {
+        await mirrorLotStatusPG(lotId, 'REJECTED', { rejection_reason: rejectionReason });
+        res.json({ success: true, data: { lotId, status: 'REJECTED', rejectionReason }, txId: result.txId, timestamp: new Date().toISOString() });
+      } else if (isPendingDeploy(result.error)) {
+        res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry.' }, timestamp: new Date().toISOString() });
+      } else {
+        res.status(400).json({ success: false, error: { code: 'REJECT_FAILED', message: result.error }, timestamp: new Date().toISOString() });
       }
     } catch (err: any) {
       res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: err.message }, timestamp: new Date().toISOString() });

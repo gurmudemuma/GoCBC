@@ -95,6 +95,13 @@ const ECXPortal: React.FC = () => {
     gradingOfficer: '', remarks: '',
   });
 
+  // Reject dialog — explicit rejection for a cause other than moisture
+  // (defects/UG, contamination, failed cupping). Moisture rejections go
+  // through the grading dialog: recording >12% now rejects the lot
+  // on-chain instead of being blocked client-side and in the API.
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectForm, setRejectForm] = useState({ rejectionReason: '', rejectedBy: '' });
+
   // Assignment dialog (Step 3: Link lot to sales contract)
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForm, setAssignForm] = useState({ contractId: '', pricePerKg: '' });
@@ -194,10 +201,9 @@ const ECXPortal: React.FC = () => {
   const handleGrade = async () => {
     if (!selectedLot) return;
     const moisture = parseFloat(gradeForm.moistureContent);
-    if (moisture > 12) {
-      showError('Grading Rejected', `Moisture content ${moisture}% exceeds the 12% maximum. Lot cannot be exported.`);
-      return;
-    }
+    // No client-side moisture block: recording >12% is a rejection, not
+    // an input error — the API lets GradeECXLot set REJECTED and the
+    // response carries status REJECTED with the reason.
     try {
       const res = await api.post(`/ecx/lots/${selectedLot.lotId}/grade`, {
         grade: gradeForm.grade, qualityScore: parseFloat(gradeForm.qualityScore),
@@ -206,10 +212,35 @@ const ECXPortal: React.FC = () => {
         gradingDate: new Date().toISOString(),
       });
       if (res.data?.success) {
-        showSuccess('Grade Assigned', `${selectedLot.ecxLotNumber} graded as ${gradeForm.grade} (score: ${gradeForm.qualityScore})`, 'Exporter can now assign this lot to a sales contract.');
+        if (res.data?.data?.status === 'REJECTED') {
+          showSuccess('Lot Rejected', `${selectedLot.ecxLotNumber} rejected — ${res.data.data.rejectionReason}`, 'The lot is recorded as REJECTED and shows under the Rejected filter. It cannot be graded again.');
+        } else {
+          showSuccess('Grade Assigned', `${selectedLot.ecxLotNumber} graded as ${gradeForm.grade} (score: ${gradeForm.qualityScore})`, 'Exporter can now assign this lot to a sales contract.');
+        }
         setGradeOpen(false); setSelectedLot(null); loadData();
       } else {
         showError('Grading Failed', res.data?.error?.message || 'Could not record grade');
+      }
+    } catch (err: any) { showError('Error', err.message); }
+  };
+
+  // Reject a warehoused lot for a non-moisture cause (defects/UG,
+  // contamination, failed cupping). Calls POST /ecx/lots/:lotId/reject,
+  // which invokes the RejectECXLot chaincode function (v2.3 — until the
+  // redeploy on the Fabric host this reports the chaincode as upgrading).
+  const handleReject = async () => {
+    if (!selectedLot) return;
+    try {
+      const res = await api.post(`/ecx/lots/${selectedLot.lotId}/reject`, {
+        rejectionReason: rejectForm.rejectionReason,
+        rejectedBy: rejectForm.rejectedBy || undefined,
+        rejectionDate: new Date().toISOString(),
+      });
+      if (res.data?.success) {
+        showSuccess('Lot Rejected', `${selectedLot.ecxLotNumber} rejected — ${rejectForm.rejectionReason}`, 'The lot is recorded as REJECTED and shows under the Rejected filter. It cannot be graded again.');
+        setRejectOpen(false); setSelectedLot(null); loadData();
+      } else {
+        showError('Rejection Failed', res.data?.error?.message || 'Could not reject lot');
       }
     } catch (err: any) { showError('Error', err.message); }
   };
@@ -309,13 +340,12 @@ const ECXPortal: React.FC = () => {
     totalKg: lots.reduce((s, l) => s + l.quantity, 0),
   };
 
-  // NOTE: lot actions are status-gated in the table below (Grade only on
-  // WAREHOUSED, Assign only on GRADED, Release only on ASSIGNED), so a
-  // REJECTED lot is terminal in the UI with no re-entry action — the
-  // "Review required" chip is display-only. A re-grade / re-intake path
-  // for rejected lots does not exist anywhere (the API pre-empts the
-  // chaincode's REJECTED branch, matrix §11); adding one is a product
-  // decision, not a status fix.
+  // NOTE: lot actions are status-gated in the table below (Grade and
+  // Reject only on WAREHOUSED, Assign only on GRADED, Release only on
+  // ASSIGNED), so a REJECTED lot is terminal in the UI with no re-entry
+  // action — the "Review required" chip is display-only. Rejection
+  // reaches REJECTED two ways: grading with moisture > 12% (the API lets
+  // GradeECXLot set it), or the Reject button (RejectECXLot, v2.3).
 
 
   return (
@@ -480,6 +510,9 @@ const ECXPortal: React.FC = () => {
                         <Tooltip title="Details"><IconButton size="small" onClick={() => { setSelectedLot(lot); setDetailOpen(true); }}><Visibility fontSize="small" /></IconButton></Tooltip>
                         {lot.status === 'WAREHOUSED' && (
                           <Tooltip title="Record ECX inspection result"><Button size="small" variant="contained" color="warning" sx={{ fontSize: 10, px: 1 }} onClick={() => { setSelectedLot(lot); setGradeForm({ grade: '', qualityScore: '', moistureContent: '', defectCount: '', gradingOfficer: '', remarks: '' }); setGradeOpen(true); }}>Grade</Button></Tooltip>
+                        )}
+                        {lot.status === 'WAREHOUSED' && (
+                          <Tooltip title="Reject lot (defects, contamination, failed cupping)"><Button size="small" variant="outlined" color="error" sx={{ fontSize: 10, px: 1 }} onClick={() => { setSelectedLot(lot); setRejectForm({ rejectionReason: '', rejectedBy: '' }); setRejectOpen(true); }}>Reject</Button></Tooltip>
                         )}
                         {lot.status === 'GRADED' && (
                           <Tooltip title="Link to sales contract"><Button size="small" variant="contained" color="primary" sx={{ fontSize: 10, px: 1 }} onClick={() => { setSelectedLot(lot); setAssignForm({ contractId: '', pricePerKg: '' }); setAssignOpen(true); }}>Assign</Button></Tooltip>
@@ -683,7 +716,7 @@ const ECXPortal: React.FC = () => {
         <DialogTitle><Assessment sx={{ mr: 1, verticalAlign: 'middle' }} />Step 2 — ECX Grading: {selectedLot?.ecxLotNumber}</DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Moisture &gt;12% disqualifies the lot from export. Defect count determines the grade (Grade 1–5 or UG). Record results exactly as measured.
+            Moisture &gt;12% disqualifies the lot from export. Defect count determines the grade (Grade 1–5 or UG). Record results exactly as measured — recording moisture above 12% rejects the lot and records it as REJECTED.
           </Alert>
           <Grid container spacing={2} sx={{ mt: 0 }}>
             <Grid item xs={12} sm={6}>
@@ -738,6 +771,35 @@ const ECXPortal: React.FC = () => {
           <AnimatedButton variant="contained" brandColor="#ff9800" onClick={handleGrade}
             disabled={!gradeForm.grade || !gradeForm.moistureContent || !gradeForm.defectCount || !gradeForm.gradingOfficer}>
             Record Grade
+          </AnimatedButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Reject Lot Dialog (non-moisture cause) ─────────────────────────── */}
+      <Dialog open={rejectOpen} onClose={() => setRejectOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle><Cancel sx={{ mr: 1, verticalAlign: 'middle' }} />Reject Lot: {selectedLot?.ecxLotNumber}</DialogTitle>
+        <DialogContent>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Rejection is final — a REJECTED lot cannot be graded, assigned or released. Use this for defects, contamination or a failed cupping. For moisture above 12%, record the grading result instead; it rejects the lot automatically.
+          </Alert>
+          <Grid container spacing={2} sx={{ mt: 0 }}>
+            <Grid item xs={12}>
+              <TextField fullWidth required multiline rows={2} label="Rejection Reason" value={rejectForm.rejectionReason}
+                onChange={e => setRejectForm({ ...rejectForm, rejectionReason: e.target.value })}
+                placeholder="e.g. Defect count 120 per 300g — Under Grade, not export eligible" />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField fullWidth label="Rejected By" value={rejectForm.rejectedBy}
+                onChange={e => setRejectForm({ ...rejectForm, rejectedBy: e.target.value })}
+                placeholder="Grading officer name" />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRejectOpen(false)}>Cancel</Button>
+          <AnimatedButton variant="contained" brandColor="#f44336" onClick={handleReject}
+            disabled={!rejectForm.rejectionReason.trim()}>
+            Reject Lot
           </AnimatedButton>
         </DialogActions>
       </Dialog>
@@ -858,6 +920,7 @@ const ECXPortal: React.FC = () => {
               <Grid item xs={4}><Typography variant="caption" color="textSecondary">Price / kg</Typography><Typography color="primary" fontWeight={600}>{selectedLot.pricePerKg ? `$${selectedLot.pricePerKg}` : '—'}</Typography></Grid>
               <Grid item xs={4}><Typography variant="caption" color="textSecondary">Total Value</Typography><Typography color="primary" fontWeight={600}>{selectedLot.pricePerKg ? `$${(selectedLot.pricePerKg * selectedLot.quantity).toLocaleString()}` : '—'}</Typography></Grid>
               {selectedLot.contractId && <><Grid item xs={12}><Divider /></Grid><Grid item xs={12}><Typography variant="caption" color="textSecondary">Assigned Contract</Typography><Typography fontWeight={600}>{selectedLot.contractId}</Typography></Grid></>}
+              {selectedLot.status === 'REJECTED' && selectedLot.rejectionReason && <><Grid item xs={12}><Divider /></Grid><Grid item xs={12}><Typography variant="caption" color="textSecondary">Rejection Reason</Typography><Typography fontWeight={600} color="error.main">{selectedLot.rejectionReason}</Typography></Grid></>}
               <Grid item xs={12}><Divider /></Grid>
               <Grid item xs={4}><Typography variant="caption" color="textSecondary">Warehouse Receipt</Typography><Typography variant="caption">{formatDate(selectedLot.warehouseReceiptDate)}</Typography></Grid>
               {selectedLot.gradingDate && <Grid item xs={4}><Typography variant="caption" color="textSecondary">Graded</Typography><Typography variant="caption">{formatDate(selectedLot.gradingDate)}</Typography></Grid>}
