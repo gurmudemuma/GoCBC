@@ -373,8 +373,13 @@ async function getEntityHistoryViaService(fabricService: FabricService, entityTy
         historyKey = `PERMIT_${entityId}`;
         break;
       case 'QUALITY':
-      case 'INSPECTION':
         historyKey = `INSPECTION_${entityId}`;
+        break;
+      case 'INSPECTION':
+        // Pre-shipment inspection: its own namespace (PREINSPECTION_).
+        // It must NOT share the quality-inspection key, or a history
+        // lookup for one entity returns the other's history.
+        historyKey = `PREINSPECTION_${entityId}`;
         break;
       default:
         historyKey = `${entityType.toUpperCase()}_${entityId}`;

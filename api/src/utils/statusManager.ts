@@ -34,18 +34,43 @@ export const StatusTransitions = {
   },
 
   // Sales Contract Status Flow
-  // NOTE: matches chaincode (main.go) — only REGISTERED, APPROVED and
-  // REJECTED are ever assigned on-chain. EXECUTED / COMPLETED / CANCELLED
-  // are dead states: no chaincode function assigns them (there is no
-  // UpdateContractStatus function at all), so the old APPROVED→EXECUTED→
-  // COMPLETED edges described a workflow the ledger can never reach.
-  // Contract cancel is Postgres-only (contracts.ts cancel route).
+  // NOTE: matches chaincode (main.go) — REGISTERED → APPROVED/REJECTED
+  // (ApproveContract / RejectContract), APPROVED → COMPLETED
+  // (CompleteContract) and REGISTERED/APPROVED → CANCELLED
+  // (CancelContract); REJECTED → REGISTERED is ResubmitRejectedContract.
+  // UpdateContractStatus exists as the generic override (main.go).
+  // EXECUTED is a dead state: no chaincode function assigns it.
+  // Contract cancel is Postgres-only in the contracts.ts cancel route
+  // only in the sense that the route mirrors it to PG; the chaincode
+  // CancelContract is invoked best-effort alongside it.
   CONTRACT: {
     REGISTERED: ['APPROVED', 'REJECTED', 'CANCELLED'],
     APPROVED: ['CANCELLED', 'COMPLETED'],
     REJECTED: ['REGISTERED'], // ResubmitRejectedContract
     CANCELLED: [],
     COMPLETED: [],
+  },
+
+  // Exporter Licence Status Flow (matches chaincode main.go)
+  // RegisterExporter creates the licence ACTIVE; SuspendExporter sets
+  // SUSPENDED (ECTA only, reason required); RevokeExporterLicense sets
+  // REVOKED (ECTA only, reason required, already-REVOKED rejected);
+  // UpdateExporterStatus sets ACTIVE or EXPIRED (ECTA only) and refuses
+  // any change to a REVOKED licence; renew-license sets EXPIRED → ACTIVE.
+  // DECISIONS (TEST-STATUS-MATRIX §17 #16): a SUSPENDED licence CAN be
+  // re-activated to ACTIVE by ECTA via UpdateExporterStatus (the UI
+  // toggle and the API PUT /exporters/:id/status both expose it);
+  // REVOKED is terminal — the exporter must re-apply, there is no
+  // un-revoke. PENDING is the application state (APPLICATION table), not
+  // a licence state: the on-chain licence never holds PENDING.
+  // EXPIRED → SUSPENDED is deliberately absent: suspending an expired
+  // licence is meaningless (renew it, or revoke it); the chaincode
+  // SuspendExporter would permit it, the API gate does not.
+  EXPORTER: {
+    ACTIVE: ['SUSPENDED', 'EXPIRED', 'REVOKED'],
+    SUSPENDED: ['ACTIVE', 'EXPIRED', 'REVOKED'],
+    EXPIRED: ['ACTIVE', 'REVOKED'],
+    REVOKED: [],
   },
 
   // Forex Request Status Flow
@@ -101,20 +126,37 @@ export const StatusTransitions = {
     // PickupShipment CUSTOMS_CLEARED|PERMIT_ISSUED→IN_TRANSIT (bypass).
     // FREIGHT_BOOKED is set by the book-freight route; LOADED by
     // RecordShippingDetails / RecordBillOfLading (both unguarded).
-    // No chaincode function ever produces CUSTOMS_CLEARED or
-    // PERMIT_ISSUED — they are only reachable via the unguarded
-    // UpdateShipmentStatus (see TEST-STATUS-MATRIX §17).
-    CREATED: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'IN_TRANSIT', 'CANCELLED'],
-    FREIGHT_BOOKED: ['CUSTOMS_CLEARED', 'LOADED'],
-    PERMIT_ISSUED: ['IN_TRANSIT'],
+    // CUSTOMS_DECLARED is set by SubmitCustomsDeclaration, which
+    // requires PERMIT_ISSUED (customs.go); the clear cascade
+    // (ClearDeclaration / ClearCustomsDeclaration) sets CUSTOMS_CLEARED
+    // from it, and RejectDeclaration / RejectCustomsDeclaration set
+    // CUSTOMS_REJECTED — CUSTOMS_REJECTED is terminal.
+    // PERMIT_ISSUED is produced by IssueCBEExportPermit (permit.go,
+    // BanksMSP-only). INSPECTION_PENDING is set by RequestInspection
+    // (quality.go), which calls the unguarded UpdateShipmentStatus, so
+    // on-chain it can be entered from any state; the table lists the
+    // states an inspection is actually requested from (CREATED,
+    // FREIGHT_BOOKED, PERMIT_ISSUED) and the continuations after the
+    // inspection completes. ARRIVED is the Postgres-side state the
+    // booking arrive handler mirrors onto the real shipment row
+    // (shipping.ts) while the chain holds DESTINATION_ARRIVED; the
+    // table accepts both spellings so the generic status routes and
+    // the PG-mirror reads agree.
+    CREATED: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'IN_TRANSIT', 'CANCELLED', 'INSPECTION_PENDING'],
+    FREIGHT_BOOKED: ['CUSTOMS_CLEARED', 'LOADED', 'INSPECTION_PENDING'],
+    PERMIT_ISSUED: ['IN_TRANSIT', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING'],
+    CUSTOMS_DECLARED: ['CUSTOMS_CLEARED', 'CUSTOMS_REJECTED'],
+    CUSTOMS_REJECTED: [],
+    INSPECTION_PENDING: ['PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'CUSTOMS_CLEARED', 'IN_TRANSIT'],
     CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT'],
     LAND_TRANSPORT: ['PORT_ARRIVED'],
     PORT_ARRIVED: ['CONTAINER_STUFFED'],
     CONTAINER_STUFFED: ['VESSEL_LOADED'],
     VESSEL_LOADED: ['DEPARTED'],
     DEPARTED: ['IN_TRANSIT'],
-    IN_TRANSIT: ['DESTINATION_ARRIVED', 'DELIVERED'],
-    DESTINATION_ARRIVED: ['DELIVERED'],
+    IN_TRANSIT: ['DESTINATION_ARRIVED', 'DELIVERED', 'ARRIVED'],
+    DESTINATION_ARRIVED: ['DELIVERED', 'ARRIVED'],
+    ARRIVED: ['DELIVERED'],
     DELIVERED: [],
     LOADED: ['IN_TRANSIT', 'DELIVERED'],
     CANCELLED: [],
@@ -277,64 +319,6 @@ export const StatusTransitions = {
   },
 };
 
-/**
- * Related Entity Status Updates
- * When one entity changes status, these related entities should also update
- */
-export const RelatedStatusUpdates = {
-  // When contract is approved
-  CONTRACT_APPROVED: [
-    { entity: 'FOREX', field: 'contractId', statusField: 'status', newStatus: 'ELIGIBLE' },
-  ],
-
-  // When forex is allocated
-  FOREX_ALLOCATED: [
-    { entity: 'LC', field: 'contractId', statusField: 'status', newStatus: 'FOREX_ALLOCATED' },
-  ],
-
-  // When LC is issued
-  LC_ISSUED: [
-    { entity: 'CONTRACT', field: 'contractId', statusField: 'status', newStatus: 'LC_ISSUED' },
-  ],
-
-  // When shipment is created
-  SHIPMENT_CREATED: [
-    { entity: 'CONTRACT', field: 'contractId', statusField: 'shipmentStatus', newStatus: 'SHIPMENT_CREATED' },
-  ],
-
-  // When quality is approved
-  QUALITY_APPROVED: [
-    { entity: 'SHIPMENT', field: 'shipmentId', statusField: 'status', newStatus: 'QUALITY_APPROVED' },
-  ],
-
-  // When phytosanitary is issued
-  PHYTO_ISSUED: [
-    { entity: 'SHIPMENT', field: 'shipmentId', statusField: 'phytoStatus', newStatus: 'PHYTO_APPROVED' },
-  ],
-
-  // When EUDR is verified
-  EUDR_VERIFIED: [
-    { entity: 'SHIPMENT', field: 'shipmentId', statusField: 'eudrStatus', newStatus: 'EUDR_VERIFIED' },
-  ],
-
-  // When customs is cleared
-  CUSTOMS_CLEARED: [
-    { entity: 'SHIPMENT', field: 'shipmentId', statusField: 'customsStatus', newStatus: 'CLEARED' },
-  ],
-
-  // When payment is settled
-  PAYMENT_SETTLED: [
-    { entity: 'LC', field: 'lcId', statusField: 'status', newStatus: 'SETTLED' },
-    { entity: 'FOREX', field: 'forexId', statusField: 'status', newStatus: 'SETTLED' },
-    { entity: 'CONTRACT', field: 'contractId', statusField: 'paymentStatus', newStatus: 'SETTLED' },
-  ],
-
-  // When documents are received by courier
-  DOCUMENTS_RECEIVED: [
-    { entity: 'PAYMENT', field: 'paymentId', statusField: 'documentsStatus', newStatus: 'RECEIVED' },
-  ],
-};
-
 export class StatusManager {
   private fabricService: FabricService;
 
@@ -343,25 +327,35 @@ export class StatusManager {
   }
 
   /**
-   * Validate if a status transition is allowed
+   * Validate if a status transition is allowed.
+   *
+   * FAIL-CLOSED (TEST-STATUS-MATRIX §17 #12): a transition is allowed
+   * only when the entity type is known AND the current status is a key
+   * in that entity's table AND the target is listed for it. Unknown
+   * entity, unknown current status, or unlisted target all return
+   * false — the old fail-open behaviour (return true when it could not
+   * decide) let invalid transitions through silently and masked tables
+   * that did not match any real row. Callers that must accept a
+   * Postgres-only or legacy state must add that state to the table (or
+   * normalise it at the call site) instead of relying on fail-open.
    */
   validateTransition(entityType: string, currentStatus: string, newStatus: string): boolean {
     const transitions = StatusTransitions[entityType as keyof typeof StatusTransitions];
-    
+
     if (!transitions) {
-      logger.warn(`No status transitions defined for entity type: ${entityType}`);
-      return true; // Allow if not defined
+      logger.error(`No status transitions defined for entity type: ${entityType} — rejecting ${currentStatus} → ${newStatus}`);
+      return false;
     }
 
     const allowedNextStatuses = transitions[currentStatus as keyof typeof transitions] as string[] | undefined;
-    
+
     if (!allowedNextStatuses || allowedNextStatuses.length === 0) {
-      logger.warn(`Current status ${currentStatus} not found in transitions for ${entityType}`);
-      return true; // Allow if not defined
+      logger.error(`Current status ${currentStatus} is not a known state for ${entityType} — rejecting transition to ${newStatus}`);
+      return false;
     }
 
     const isAllowed = allowedNextStatuses.includes(newStatus);
-    
+
     if (!isAllowed) {
       logger.error(`Invalid status transition for ${entityType}: ${currentStatus} → ${newStatus}`);
       logger.error(`Allowed transitions: ${allowedNextStatuses.join(', ')}`);
@@ -385,24 +379,29 @@ export class StatusManager {
   }
 
   /**
-   * Convert entity type to proper chaincode function name
-   * SHIPMENT -> UpdateShipmentStatus
-   * LC -> UpdateLCStatus
-   * APPLICATION -> UpdateApplicationStatus
-   */
-  private getUpdateFunctionName(entityType: string): string {
-    // Special cases
-    if (entityType === 'LC') {
-      return 'UpdateLCStatus';
-    }
-    
-    // Convert SHIPMENT -> Shipment, CONTRACT -> Contract, etc.
-    const entityName = entityType.charAt(0).toUpperCase() + entityType.slice(1).toLowerCase();
-    return `Update${entityName}Status`;
-  }
-
-  /**
-   * Update entity status with validation
+   * Update entity status with validation.
+   *
+   * FAIL-CLOSED (TEST-STATUS-MATRIX §17 #12): an invalid transition
+   * returns { success: false } and performs nothing. NOTE — this method
+   * is a validation/audit hook only: it does NOT submit a chaincode
+   * transaction and does NOT write Postgres. The caller performs the
+   * real update (chaincode invoke + PG mirror) after the validate step,
+   * so a caller that ignores this return value is ignoring the gate —
+   * the lifecycle routes validate with validateTransition() directly
+   * and return 400 before touching the chain. The old comment claiming
+   * the chaincode update functions were "not implemented" is stale:
+   * UpdateShipmentStatus / UpdateLCStatus / UpdateContractStatus /
+   * UpdateCADStatus all exist now; this method was never wired to call
+   * them because every caller already invokes its own step function,
+   * and a second submit here would double-apply the transition.
+   *
+   * The old cascadeStatusUpdates / RelatedStatusUpdates machinery was
+   * removed with this change: the map described target states no
+   * entity can hold (ELIGIBLE, SHIPMENT_CREATED, QUALITY_APPROVED,
+   * LC_ISSUED, SETTLED on FOREX/CONTRACT) and the cascade invoked
+   * QueryBy* functions that do not exist. Real cascades live in the
+   * chaincode step functions themselves (e.g. the customs clear
+   * cascade sets the shipment CUSTOMS_CLEARED) and in the API mirrors.
    */
   async updateEntityStatus(
     entityType: string,
@@ -411,74 +410,15 @@ export class StatusManager {
     newStatus: string,
     updateData?: any
   ): Promise<{ success: boolean; error?: string }> {
-    // Validate transition
+    // Validate transition — fail closed: reject unless explicitly allowed.
     if (!this.validateTransition(entityType, currentStatus, newStatus)) {
-      logger.warn(`Current status ${currentStatus} not found in transitions for ${entityType}`);
-      // Don't block - allow status update to proceed
+      const error = `Invalid status transition for ${entityType}: ${currentStatus} → ${newStatus}`;
+      logger.error(`[STATUS] ${error} (entity ${entityId}) — update refused`);
+      return { success: false, error };
     }
 
-    try {
-      // ⚠️ DISABLED: Status update functions not implemented in chaincode
-      // Using CouchDB direct writes instead to bypass blockchain propagation delays
-      // The status is already updated in PostgreSQL by the calling service
-      
-      logger.info(`✅ ${entityType} ${entityId}: ${currentStatus} → ${newStatus} (PostgreSQL only)`);
-
-      // Skip blockchain and cascading updates
-      return { success: true };
-    } catch (error: any) {
-      logger.error(`Failed to update ${entityType} status:`, error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * Cascade status updates to related entities
-   */
-  private async cascadeStatusUpdates(
-    entityType: string,
-    entityId: string,
-    newStatus: string
-  ): Promise<void> {
-    const updateKey = `${entityType}_${newStatus}`;
-    const relatedUpdates = RelatedStatusUpdates[updateKey as keyof typeof RelatedStatusUpdates];
-
-    if (!relatedUpdates || !Array.isArray(relatedUpdates)) {
-      return; // No cascading updates needed
-    }
-
-    logger.info(`🔄 Cascading status updates for ${updateKey}`);
-
-    for (const update of relatedUpdates) {
-      try {
-        // Query related entities
-        const queryResult = await this.fabricService.queryChaincode(
-          `QueryBy${update.field.charAt(0).toUpperCase() + update.field.slice(1)}`,
-          [entityId]
-        );
-
-        if (queryResult.success && queryResult.data) {
-          const entities = Array.isArray(queryResult.data) ? queryResult.data : [queryResult.data];
-
-          for (const entity of entities) {
-            const relatedEntityId = entity[update.field];
-            
-            if (relatedEntityId) {
-              const updateFunctionName = this.getUpdateFunctionName(update.entity);
-              await this.fabricService.invokeChaincode(
-                updateFunctionName,
-                [relatedEntityId, update.newStatus]
-              );
-
-              logger.info(`  ↳ Updated ${update.entity} ${relatedEntityId}: ${update.newStatus}`);
-            }
-          }
-        }
-      } catch (error) {
-        logger.warn(`Failed to cascade update to ${update.entity}:`, error);
-        // Don't fail the main operation if cascade fails
-      }
-    }
+    logger.info(`✅ ${entityType} ${entityId}: ${currentStatus} → ${newStatus} (validated; caller performs the update)`);
+    return { success: true };
   }
 
   /**

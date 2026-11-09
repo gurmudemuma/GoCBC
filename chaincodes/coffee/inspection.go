@@ -98,6 +98,15 @@ type PreShipmentInspection struct {
 
 // ==================== INSPECTION FUNCTIONS ====================
 
+// preShipmentInspectionKey returns the ledger key for a pre-shipment
+// inspection. Quality inspections (quality.go) live under INSPECTION_;
+// pre-shipment inspections live under PREINSPECTION_, so the two
+// entities can never collide even when they share an inspection ID.
+// Callers pass the RAW inspection ID; the prefix is added here only.
+func preShipmentInspectionKey(inspectionID string) string {
+	return "PREINSPECTION_" + inspectionID
+}
+
 // RequestPreShipmentInspection - Exporter requests inspection before shipment
 // TRIGGER: After lot allocation, before shipment documentation
 func (c *CoffeeContract) RequestPreShipmentInspection(ctx contractapi.TransactionContextInterface,
@@ -160,7 +169,7 @@ func (c *CoffeeContract) RequestPreShipmentInspection(ctx contractapi.Transactio
 		return fmt.Errorf("RequestPreShipmentInspection: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("RequestPreShipmentInspection: failed to put state: %w", err)
 	}
@@ -179,7 +188,7 @@ func (c *CoffeeContract) ScheduleInspection(ctx contractapi.TransactionContextIn
 	}
 
 	// Get existing inspection
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return fmt.Errorf("ScheduleInspection: failed to read inspection: %w", err)
 	}
@@ -222,7 +231,7 @@ func (c *CoffeeContract) ScheduleInspection(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("ScheduleInspection: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("ScheduleInspection: failed to update state: %w", err)
 	}
@@ -246,7 +255,7 @@ func (c *CoffeeContract) RecordInspectionResults(ctx contractapi.TransactionCont
 	fmt.Printf("=== RecordInspectionResults called: inspectionID=%s ===\n", inspectionID)
 
 	// Get existing inspection
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return fmt.Errorf("RecordInspectionResults: failed to read inspection: %w", err)
 	}
@@ -319,7 +328,7 @@ func (c *CoffeeContract) RecordInspectionResults(ctx contractapi.TransactionCont
 		return fmt.Errorf("RecordInspectionResults: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("RecordInspectionResults: failed to update state: %w", err)
 	}
@@ -338,7 +347,7 @@ func (c *CoffeeContract) IssueCertificate(ctx contractapi.TransactionContextInte
 	}
 
 	// Get existing inspection
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return fmt.Errorf("IssueCertificate: failed to read inspection: %w", err)
 	}
@@ -364,7 +373,7 @@ func (c *CoffeeContract) IssueCertificate(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("IssueCertificate: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("IssueCertificate: failed to update state: %w", err)
 	}
@@ -384,7 +393,7 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 	}
 
 	// Get existing inspection
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return fmt.Errorf("ApproveInspection: failed to read inspection: %w", err)
 	}
@@ -429,7 +438,7 @@ func (c *CoffeeContract) ApproveInspection(ctx contractapi.TransactionContextInt
 		return fmt.Errorf("ApproveInspection: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("ApproveInspection: failed to update state: %w", err)
 	}
@@ -448,7 +457,7 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 	}
 
 	// Get existing inspection
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return fmt.Errorf("RejectInspection: failed to read inspection: %w", err)
 	}
@@ -493,7 +502,7 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("RejectInspection: failed to marshal: %w", err)
 	}
 
-	err = ctx.GetStub().PutState(inspectionID, inspectionJSON)
+	err = ctx.GetStub().PutState(preShipmentInspectionKey(inspectionID), inspectionJSON)
 	if err != nil {
 		return fmt.Errorf("RejectInspection: failed to update state: %w", err)
 	}
@@ -507,7 +516,7 @@ func (c *CoffeeContract) RejectInspection(ctx contractapi.TransactionContextInte
 func (c *CoffeeContract) ReadInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID string) (*PreShipmentInspection, error) {
 
-	inspectionJSON, err := ctx.GetStub().GetState(inspectionID)
+	inspectionJSON, err := ctx.GetStub().GetState(preShipmentInspectionKey(inspectionID))
 	if err != nil {
 		return nil, fmt.Errorf("ReadInspection: failed to read: %w", err)
 	}
@@ -528,7 +537,10 @@ func (c *CoffeeContract) ReadInspection(ctx contractapi.TransactionContextInterf
 func (c *CoffeeContract) QueryInspectionsByShipment(ctx contractapi.TransactionContextInterface,
 	shipmentID string) ([]*PreShipmentInspection, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"shipmentId":"%s"}}`, shipmentID)
+	// inspectionAgency exists only on PreShipmentInspection (the
+	// QualityInspection struct has no such field), so this selector
+	// can never return a quality inspection for the same shipment.
+	queryString := fmt.Sprintf(`{"selector":{"shipmentId":"%s","inspectionAgency":{"$exists":true}}}`, shipmentID)
 	return c.queryInspections(ctx, queryString)
 }
 
@@ -536,14 +548,18 @@ func (c *CoffeeContract) QueryInspectionsByShipment(ctx contractapi.TransactionC
 func (c *CoffeeContract) QueryInspectionsByStatus(ctx contractapi.TransactionContextInterface,
 	status string) ([]*PreShipmentInspection, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"status":"%s"}}`, status)
+	// See QueryInspectionsByShipment: the inspectionAgency clause
+	// keeps quality inspections (same status values) out of results.
+	queryString := fmt.Sprintf(`{"selector":{"status":"%s","inspectionAgency":{"$exists":true}}}`, status)
 	return c.queryInspections(ctx, queryString)
 }
 
 // QueryAllInspections - Get all inspections
 func (c *CoffeeContract) QueryAllInspections(ctx contractapi.TransactionContextInterface) ([]*PreShipmentInspection, error) {
 
-	queryString := `{"selector":{"inspectionId":{"$exists":true}}}`
+	// Must NOT select on inspectionId: QualityInspection records
+	// carry that field too. inspectionAgency is pre-shipment-only.
+	queryString := `{"selector":{"inspectionAgency":{"$exists":true}}}`
 	return c.queryInspections(ctx, queryString)
 }
 

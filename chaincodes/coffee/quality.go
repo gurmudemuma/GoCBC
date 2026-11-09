@@ -377,8 +377,10 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 // ApproveQualityInspection - ECTA approves a performed quality inspection
 // (TEST-STATUS-MATRIX §17 #6: the API quality approve was PG-only because no
 // chaincode function existed for this entity. Mirrors ApproveInspection on
-// the PreShipmentInspection entity, but keyed INSPECTION_ + inspectionID
-// and guarded INSPECTED -> APPROVED.)
+// the PreShipmentInspection entity, but operates on the QualityInspection
+// entity, keyed INSPECTION_ + inspectionID — NOT on PreShipmentInspection,
+// which lives under PREINSPECTION_ (inspection.go) — and guarded
+// INSPECTED -> APPROVED.)
 func (c *CoffeeContract) ApproveQualityInspection(ctx contractapi.TransactionContextInterface,
 	inspectionID, approvedBy string) error {
 	ledgerNow, err := ledgerTransactionTime(ctx)

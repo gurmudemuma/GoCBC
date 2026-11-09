@@ -151,8 +151,7 @@ export class ForexService {
       }
 
       // From-state guard: only a requested or confirmed allocation can be
-      // allocated. The old handler wrote ALLOCATED from any state (and
-      // statusManager.updateEntityStatus below never blocks), so an
+      // allocated. The old handler wrote ALLOCATED from any state, so an
       // already-allocated or utilized allocation could be allocated again.
       // APPROVED is a legacy value the old NBE approve route wrote.
       if (!['REQUESTED', 'CONFIRMED', 'APPROVED'].includes(currentStatus)) {
@@ -244,7 +243,12 @@ export class ForexService {
 
       // currentStatus is the PG value, or the chaincode value when the row
       // only exists on the ledger (forex is undefined in that case).
-      await statusManager.updateEntityStatus('FOREX', forexId, currentStatus, 'ALLOCATED');
+      // 'APPROVED' is a legacy PG value the old NBE approve route wrote;
+      // the FOREX table is chain-pure (REQUESTED/CONFIRMED → ALLOCATED),
+      // so normalise it to CONFIRMED here rather than adding a legacy
+      // edge to the table (TEST-STATUS-MATRIX §17 #12).
+      const validatedStatus = currentStatus === 'APPROVED' ? 'CONFIRMED' : currentStatus;
+      await statusManager.updateEntityStatus('FOREX', forexId, validatedStatus, 'ALLOCATED');
 
       // Update LC status to FOREX_ALLOCATED in PostgreSQL
       // Note: CouchDB already updated, this is just for PostgreSQL sync

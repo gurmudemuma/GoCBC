@@ -44,6 +44,87 @@ async function syncQualityDecisionBestEffort(
 }
 
 /**
+ * Shared approve/reject core (TEST-STATUS-MATRIX §17 #14): the POST and
+ * PUT approve routes — and the POST and PUT reject routes — duplicated
+ * this logic with diverging writes. The POST approve wrote CouchDB
+ * first and signed documents, the PUT approve wrote remarks; the POST
+ * reject wrote remarks + cleared blockchain_tx_id, the PUT reject wrote
+ * notes and never cleared it. One core now does the guard (the
+ * inspection must exist and be INSPECTED), the Postgres decision write,
+ * and the best-effort chaincode sync (ApproveQualityInspection /
+ * RejectQualityInspection). The routes add only their own extras — the
+ * POST approve's CouchDB write and document signing — and their own
+ * response shape (POST: certificateNo + customsAutoTriggered; PUT:
+ * certificateNumber + grade).
+ */
+async function decideQualityInspection(
+  inspectionID: string,
+  decision: 'APPROVED' | 'REJECTED',
+  opts: { certificateNumber?: string; grade?: string; remarks?: string; reason?: string; approvedBy?: string }
+): Promise<
+  | { ok: true; chainSync: { blockchainSynced: boolean; blockchainWarning: string | null; blockchain_tx_id: string | null }; certificateNumber: string; grade: string }
+  | { ok: false; status: number; error: { code: string; message: string } }
+> {
+  const inspection = await postgresDb.get(
+    'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
+    [inspectionID]
+  );
+
+  if (!inspection) {
+    return { ok: false, status: 404, error: { code: 'NOT_FOUND', message: 'Inspection not found' } };
+  }
+
+  const verb = decision === 'APPROVED' ? 'approve' : 'reject';
+  if (inspection.status !== 'INSPECTED') {
+    return { ok: false, status: 400, error: { code: 'INVALID_STATUS', message: `Cannot ${verb} inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.` } };
+  }
+
+  const certificateNumber = opts.certificateNumber || `CERT-${inspectionID}`;
+  const grade = opts.grade || 'Grade 1';
+
+  if (decision === 'APPROVED') {
+    await postgresDb.run(
+      `UPDATE quality_inspections SET
+        status = 'APPROVED',
+        passed = true,
+        certification_number = $2,
+        grade = COALESCE($3, grade, 'Grade 1'),
+        remarks = COALESCE($4, remarks),
+        blockchain_tx_id = NULL,
+        updated_at = NOW()
+       WHERE inspection_id = $1`,
+      [inspectionID, certificateNumber, opts.grade || null, opts.remarks || null]
+    );
+  } else {
+    await postgresDb.run(
+      `UPDATE quality_inspections SET
+        status = 'REJECTED',
+        passed = false,
+        remarks = $2,
+        notes = $2,
+        blockchain_tx_id = NULL,
+        updated_at = NOW()
+       WHERE inspection_id = $1`,
+      [inspectionID, `REJECTED: ${opts.reason || ''}`]
+    );
+  }
+
+  const chainFn = decision === 'APPROVED' ? 'ApproveQualityInspection' : 'RejectQualityInspection';
+  const chainArgs = decision === 'APPROVED'
+    ? [inspectionID, opts.approvedBy || 'ECTA Quality Director']
+    : [inspectionID, opts.reason || ''];
+  const chainSync = await syncQualityDecisionBestEffort(chainFn, chainArgs);
+  if (chainSync.blockchainSynced) {
+    await postgresDb.run(
+      `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
+      [inspectionID, chainSync.blockchain_tx_id]
+    );
+  }
+
+  return { ok: true, chainSync, certificateNumber, grade };
+}
+
+/**
  * @route GET /api/v1/quality/inspections
  * @route GET /api/v1/quality-inspections
  * @desc Get all quality inspections (with optional filters)
@@ -671,34 +752,25 @@ router.post('/inspections/:inspectionID/approve',
       const { inspectionID } = req.params;
       const { approvedBy, certificateNo } = req.body;
 
-      // Check inspection exists and is in correct status
-      const inspection = await postgresDb.get(
-        'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
-        [inspectionID]
-      );
-
-      if (!inspection) {
-        return res.status(404).json({
+      // Shared approve core (TEST-STATUS-MATRIX §17 #14): guard +
+      // Postgres write + best-effort chaincode sync. The CouchDB write
+      // and document signing below are this route's own extras.
+      const decision = await decideQualityInspection(inspectionID, 'APPROVED', {
+        certificateNumber: certificateNo,
+        approvedBy,
+      });
+      if (!decision.ok) {
+        return res.status(decision.status).json({
           success: false,
-          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          error: decision.error,
           timestamp: new Date().toISOString()
         });
       }
-
-      if (inspection.status !== 'INSPECTED') {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_STATUS',
-            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
+      const { chainSync, certificateNumber } = decision;
 
       // ⚠️ UPDATE COUCHDB DIRECTLY to bypass blockchain propagation delays
       logger.info(`[INSPECTION] Approving inspection ${inspectionID} in CouchDB`);
-      
+
       try {
         // Get existing doc to preserve _rev
         const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
@@ -712,7 +784,7 @@ router.post('/inspections/:inspectionID/approve',
           status: 'APPROVED',
           passed: true,
           approvedBy: approvedBy || 'ECTA Quality Director',
-          certificateNo: certificateNo || `CERT${inspectionID}`,
+          certificateNo: certificateNumber,
           approvalDate: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -730,34 +802,7 @@ router.post('/inspections/:inspectionID/approve',
         logger.error(`❌ [INSPECTION] Failed to update CouchDB:`, couchError.message);
       }
 
-      // Now approve inspection in PostgreSQL database
-      await postgresDb.run(
-        `UPDATE quality_inspections SET
-          status = 'APPROVED',
-          passed = true,
-          certification_number = $2,
-          grade = COALESCE(grade, 'Grade 1'),
-          blockchain_tx_id = NULL,
-          updated_at = NOW()
-        WHERE inspection_id = $1`,
-        [inspectionID, certificateNo || `CERT${inspectionID}`]
-      );
-
-      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6): the
-      // QualityInspection approve was PG-only. A chain failure must not
-      // fail the approval — the Postgres record is what the portals read.
-      const chainSync = await syncQualityDecisionBestEffort('ApproveQualityInspection', [
-        inspectionID,
-        approvedBy || 'ECTA Quality Director',
-      ]);
-      if (chainSync.blockchainSynced) {
-        await postgresDb.run(
-          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
-          [inspectionID, chainSync.blockchain_tx_id]
-        );
-      }
-
-      logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNo}`);
+      logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNumber}`);
 
       // ✅ SIGN INSPECTION DOCUMENTS - Add cryptographic signature with approver's identity
       const user = (req as any).user;
@@ -908,7 +953,7 @@ router.post('/inspections/:inspectionID/approve',
         data: { 
           inspectionID, 
           status: 'APPROVED', 
-          certificateNo, 
+          certificateNo: certificateNumber,
           blockchain_tx_id: chainSync.blockchain_tx_id,
           blockchainSynced: chainSync.blockchainSynced,
           blockchainWarning: chainSync.blockchainWarning,
@@ -941,60 +986,22 @@ router.put('/inspections/:inspectionID/approve',
       const { certificateNumber, grade, remarks, approvedBy } = req.body;
       const user = (req as any).user;
 
-      // The inspection must exist and be awaiting approval. This
-      // handler previously UPDATE'd unconditionally and returned a
-      // fabricated certificate number for an inspection that did not
-      // exist (0 rows updated, 200 returned) — the same existence +
-      // status check the POST approve/reject handlers already do.
-      const inspection = await postgresDb.get(
-        'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
-        [inspectionID]
-      );
-
-      if (!inspection) {
-        return res.status(404).json({
+      // Shared approve core (TEST-STATUS-MATRIX §17 #14) — same guard,
+      // Postgres write and chaincode sync as the POST approve route.
+      const decision = await decideQualityInspection(inspectionID, 'APPROVED', {
+        certificateNumber,
+        grade,
+        remarks,
+        approvedBy,
+      });
+      if (!decision.ok) {
+        return res.status(decision.status).json({
           success: false,
-          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          error: decision.error,
           timestamp: new Date().toISOString()
         });
       }
-
-      if (inspection.status !== 'INSPECTED') {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_STATUS',
-            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Update inspection to approved status
-      await postgresDb.run(
-        `UPDATE quality_inspections SET
-          status = 'APPROVED',
-          passed = true,
-          certification_number = $1,
-          grade = $2,
-          remarks = $3,
-          updated_at = NOW()
-         WHERE inspection_id = $4`,
-        [certificateNumber || `CERT-${inspectionID}`, grade || 'Grade 1', remarks || 'Approved', inspectionID]
-      );
-
-      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6, same as the
-      // POST approve route above): never fails the PG approval.
-      const chainSync = await syncQualityDecisionBestEffort('ApproveQualityInspection', [
-        inspectionID,
-        approvedBy || 'ECTA Quality Director',
-      ]);
-      if (chainSync.blockchainSynced) {
-        await postgresDb.run(
-          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
-          [inspectionID, chainSync.blockchain_tx_id]
-        );
-      }
+      const { chainSync, certificateNumber: effectiveCert, grade: effectiveGrade } = decision;
 
       logger.info(`Inspection ${inspectionID} approved via PUT by ${user.username}`);
 
@@ -1003,8 +1010,8 @@ router.put('/inspections/:inspectionID/approve',
         data: {
           inspectionID,
           status: 'APPROVED',
-          certificateNumber: certificateNumber || `CERT-${inspectionID}`,
-          grade: grade || 'Grade 1',
+          certificateNumber: effectiveCert,
+          grade: effectiveGrade,
           blockchain_tx_id: chainSync.blockchain_tx_id,
           blockchainSynced: chainSync.blockchainSynced,
           blockchainWarning: chainSync.blockchainWarning
@@ -1039,65 +1046,27 @@ router.post('/inspections/:inspectionID/reject',
       const { inspectionID } = req.params;
       const { reason, rejectedBy } = req.body;
 
-      // Check inspection exists and is in correct status
-      const inspection = await postgresDb.get(
-        'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
-        [inspectionID]
-      );
-
-      if (!inspection) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      if (inspection.status !== 'INSPECTED') {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_STATUS',
-            message: `Cannot reject inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Reject inspection in the database first, then best-effort sync to
-      // the chain (TEST-STATUS-MATRIX §17 #6). The old handler called
-      // RejectInspection blockchain-first — but that function belongs to
-      // the *other* inspection entity (PreShipmentInspection,
-      // inspection.go) and takes 2 args, not the 3 passed here, so the
-      // chain call could throw and the PG rejection never happened. The
-      // QualityInspection reject is now RejectQualityInspection, called
-      // best-effort after the PG update (NBE forex approve pattern).
-      await postgresDb.run(
-        `UPDATE quality_inspections SET
-          status = 'REJECTED',
-          passed = false,
-          remarks = $2,
-          blockchain_tx_id = NULL,
-          updated_at = NOW()
-        WHERE inspection_id = $1`,
-        [inspectionID, `REJECTED: ${reason}`]
-      );
-
-      // NOTE: `rejectedBy` is accepted from the caller but not passed to
-      // the chaincode — RejectInspection sets RejectedBy from the client
-      // identity, and the new function is expected to do the same. If the
-      // implemented RejectQualityInspection takes a rejecter arg, add it
-      // here as the 3rd arg.
-      const chainSync = await syncQualityDecisionBestEffort('RejectQualityInspection', [
-        inspectionID,
+      // Shared reject core (TEST-STATUS-MATRIX §17 #14): guard + PG
+      // write + best-effort chaincode sync, same as the PUT reject
+      // route. NOTE: `rejectedBy` is accepted from the caller but not
+      // passed to the chaincode — RejectQualityInspection sets
+      // RejectedBy from the client identity.
+      // (The old handler called RejectInspection blockchain-first —
+      // but that function belongs to the *other* inspection entity
+      // (PreShipmentInspection, inspection.go) and takes 2 args, not
+      // the 3 passed here, so the chain call could throw and the PG
+      // rejection never happened.)
+      const decision = await decideQualityInspection(inspectionID, 'REJECTED', {
         reason,
-      ]);
-      if (chainSync.blockchainSynced) {
-        await postgresDb.run(
-          `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
-          [inspectionID, chainSync.blockchain_tx_id]
-        );
+      });
+      if (!decision.ok) {
+        return res.status(decision.status).json({
+          success: false,
+          error: decision.error,
+          timestamp: new Date().toISOString()
+        });
       }
+      const { chainSync } = decision;
       const blockchain_tx_id = chainSync.blockchain_tx_id;
       logger.info(`✅ Inspection rejection recorded: ${inspectionID}, TX: ${blockchain_tx_id}`);
 
@@ -1844,49 +1813,21 @@ router.put('/inspections/:inspectionID/reject',
       const { rejectionReason } = req.body;
       const user = (req as any).user;
 
-      // Check if inspection exists
-      const inspection = await postgresDb.get(
-        'SELECT * FROM quality_inspections WHERE inspection_id = $1',
-        [inspectionID]
-      );
-
-      if (!inspection) {
-        return res.status(404).json({
+      // Shared reject core (TEST-STATUS-MATRIX §17 #14) — same guard,
+      // Postgres write and chaincode sync as the POST reject route.
+      // (The old handler rejected from any state and wrote notes only;
+      // the core also sets passed=false, remarks and clears the tx id.)
+      const decision = await decideQualityInspection(inspectionID, 'REJECTED', {
+        reason: rejectionReason,
+      });
+      if (!decision.ok) {
+        return res.status(decision.status).json({
           success: false,
-          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          error: decision.error,
           timestamp: new Date().toISOString()
         });
       }
-
-      // Only an inspected inspection can be rejected (same guard as the
-      // POST reject route). The old handler rejected from any state.
-      if (inspection.status !== 'INSPECTED') {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_STATUS',
-            message: `Cannot reject inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Update inspection status to rejected
-      await postgresDb.run(
-        `UPDATE quality_inspections SET
-          status = 'REJECTED',
-          notes = $1,
-          updated_at = NOW()
-         WHERE inspection_id = $2`,
-        [rejectionReason, inspectionID]
-      );
-
-      // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #6, same as the
-      // POST reject route above): never fails the PG rejection.
-      const chainSync = await syncQualityDecisionBestEffort('RejectQualityInspection', [
-        inspectionID,
-        rejectionReason,
-      ]);
+      const { chainSync } = decision;
 
       logger.info(`Inspection ${inspectionID} rejected by ${user.username}: ${rejectionReason}`);
 

@@ -4,7 +4,6 @@
 import { FabricService } from './fabricService';
 import { DatabaseService } from './databaseService';
 import { AuditService } from './auditService';
-import { statusManager } from '../utils/statusManager';
 import { logger } from '../utils/logger';
 
 export class CustomsService {
@@ -96,14 +95,12 @@ export class CustomsService {
         ]
       );
 
-      // Update shipment status
-      await statusManager.updateEntityStatus(
-        'SHIPMENT',
-        declarationData.shipmentID,
-        'QUALITY_PASSED', // currentStatus
-        'CUSTOMS_PENDING',
-        { reason: 'Customs declaration submitted', updatedBy: declarationData.userId }
-      );
+      // The shipment status is set on-chain by SubmitCustomsDeclaration
+      // (PERMIT_ISSUED → CUSTOMS_DECLARED, customs.go); the old
+      // updateEntityStatus call here passed QUALITY_PASSED →
+      // CUSTOMS_PENDING, states no SHIPMENT row ever held, and is
+      // removed with the fail-closed validator (TEST-STATUS-MATRIX
+      // §17 #12) — it validated nothing and updated nothing.
 
       // Audit log
       await this.auditService.log({
@@ -344,14 +341,11 @@ export class CustomsService {
         ]
       );
 
-      // 🔥 WORKFLOW TRIGGER: Update shipment to CUSTOMS_CLEARED (ready for freight booking)
-      await statusManager.updateEntityStatus(
-        'SHIPMENT',
-        declaration.shipment_id,
-        'CUSTOMS_PENDING', // currentStatus
-        'CUSTOMS_CLEARED',
-        { reason: `Customs cleared with permit ${clearanceData.clearanceNumber}`, updatedBy: clearanceData.userId }
-      );
+      // The shipment status is set on-chain by the ClearCustomsDeclaration
+      // cascade (→ CUSTOMS_CLEARED, customs.go); the old
+      // updateEntityStatus call here passed CUSTOMS_PENDING, a state no
+      // SHIPMENT row ever held, and is removed with the fail-closed
+      // validator (TEST-STATUS-MATRIX §17 #12).
 
       // Audit log
       await this.auditService.log({
@@ -432,14 +426,11 @@ export class CustomsService {
         ['REJECTED', rejectData.rejectedBy, rejectData.rejectionReason, new Date().toISOString(), rejectData.declarationID]
       );
 
-      // Update shipment status to blocked
-      await statusManager.updateEntityStatus(
-        'SHIPMENT',
-        declaration.shipment_id,
-        'CUSTOMS_PENDING', // currentStatus
-        'CUSTOMS_REJECTED',
-        { reason: rejectData.rejectionReason, updatedBy: rejectData.userId }
-      );
+      // The shipment status is set on-chain by the RejectDeclaration
+      // cascade (→ CUSTOMS_REJECTED, customs.go); the old
+      // updateEntityStatus call here passed CUSTOMS_PENDING, a state no
+      // SHIPMENT row ever held, and is removed with the fail-closed
+      // validator (TEST-STATUS-MATRIX §17 #12).
 
       // Audit log
       await this.auditService.log({

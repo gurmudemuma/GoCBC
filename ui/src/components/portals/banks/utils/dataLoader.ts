@@ -70,6 +70,10 @@ export interface Payment {
   amount: number;
   currency: string;
   status: 'PENDING' | 'APPROVED' | 'PROCESSING' | 'RELEASED' | 'COMPLETED' | 'FAILED';
+  // NBE retention machine (TEST-STATUS-MATRIX §17 #8): the settlement
+  // status above no longer carries it. A released payment reads
+  // status 'SETTLED' + retention_status 'RELEASED'.
+  retention_status?: 'RECEIVED' | 'SPLIT' | 'RETENTION_CONVERTED' | 'RELEASED';
   paymentDate?: string;
   releaseDate?: string;
   paymentMethod: string;
@@ -207,6 +211,7 @@ export const loadBanksData = async (): Promise<BanksPortalData> => {
       amount: payment.amount || 0,
       currency: payment.currency || 'USD',
       status: payment.status || 'PENDING',
+      retention_status: payment.retention_status || undefined,
       paymentDate: payment.paymentDate || undefined,
       releaseDate: payment.releaseDate || undefined,
       paymentMethod: payment.paymentMethod || 'LC',
@@ -319,7 +324,7 @@ export const calculateBanksStats = (data: BanksPortalData) => {
     paymentRelease: {
       readyForRelease: data.payments.filter(p => p.status === 'APPROVED').length,
       processing: data.payments.filter(p => p.status === 'PROCESSING').length,
-      released: data.payments.filter(p => p.status === 'RELEASED' || p.status === 'COMPLETED').length,
+      released: data.payments.filter(p => p.retention_status === 'RELEASED' || p.status === 'COMPLETED').length,
       total: data.payments.length,
     },
 

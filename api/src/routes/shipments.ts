@@ -1000,80 +1000,110 @@ router.get('/:shipmentID',
  *       500:
  *         description: Internal server error
  */
+/**
+ * Shared shipment-status update (TEST-STATUS-MATRIX §17 #14): the PUT
+ * and POST /:shipmentID/status routes duplicated this logic with
+ * diverging behaviour. The PUT route (used by the UI) had no
+ * authMiddleware, called the chain wrapper, and never wrote the status
+ * history; the POST route had auth, invoked the chaincode directly,
+ * and wrote the history row. One handler now does: chain-read +
+ * validateTransition, the chain update, the history insert, and the
+ * Postgres mirror. Both routes are registered on it, both behind auth.
+ * (fabricService.updateShipmentStatus is just invokeChaincode
+ * ('UpdateShipmentStatus', …) — the two chain paths were identical.)
+ */
+async function updateShipmentStatusHandler(req: Request, res: Response) {
+  try {
+    const { shipmentID } = req.params;
+    const { status, location, updatedBy } = req.body;
+    const user = (req as any).user;
+
+    // Get current shipment status for validation
+    const shipmentData = await fabricService.getShipment(shipmentID);
+    if (!shipmentData.success) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Shipment not found' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
+
+    // Validate status transition
+    const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_TRANSITION',
+          message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
+          allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = await fabricService.updateShipmentStatus(shipmentID, status);
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'UPDATE_FAILED',
+          message: result.error || 'Failed to update shipment status',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Update status with cascading effects
+    await statusManager.updateEntityStatus('SHIPMENT', shipmentID, currentStatus, status);
+
+    // Record status history (the POST route's contribution — the PUT
+    // route never wrote it, so UI-driven status changes left no trail).
+    try {
+      await postgresDb.run(
+        `INSERT INTO shipment_status_history (
+          shipment_id, status, location, updated_by, blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [shipmentID, status, location || null, updatedBy || user?.username || 'system', result.txId || null]
+      );
+    } catch (historyError: any) {
+      logger.warn(`[SHIPMENTS] Could not record status history for ${shipmentID}:`, historyError.message);
+    }
+
+    // Mirror into Postgres (the old PUT handler only updated the chain)
+    await mirrorShipmentStatusPG(shipmentID, status);
+
+    logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
+    return res.json({
+      success: true,
+      data: { shipmentID, status, blockchain_tx_id: result.txId || null },
+      txId: result.txId,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.error('Error updating shipment status:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 router.put('/:shipmentID/status',
+  authMiddleware,
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('status').notEmpty().withMessage('Status is required'),
   ],
   validateRequest,
-  async (req, res) => {
-    try {
-      const { shipmentID } = req.params;
-      const { status } = req.body;
-
-      // Get current shipment status for validation
-      const shipmentData = await fabricService.getShipment(shipmentID);
-      if (!shipmentData.success) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
-          timestamp: new Date().toISOString(),
-        });
-      }
-      
-      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
-      
-      // Validate status transition
-      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
-      if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_TRANSITION',
-            message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
-            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      const result = await fabricService.updateShipmentStatus(shipmentID, status);
-
-      if (result.success) {
-        // Update status with cascading effects
-        await statusManager.updateEntityStatus('SHIPMENT', shipmentID, currentStatus, status);
-        // Mirror into Postgres (the old handler only updated the chain)
-        await mirrorShipmentStatusPG(shipmentID, status);
-        
-        logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
-        res.json({
-          success: true,
-          data: result.data,
-          txId: result.txId,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'UPDATE_FAILED',
-            message: result.error || 'Failed to update shipment status',
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (error) {
-      logger.error('Error updating shipment status:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: 'Internal server error',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }
+  updateShipmentStatusHandler
 );
 
 /**
@@ -2552,75 +2582,16 @@ router.post('/:shipmentID/delivery/complete',
 );
 
 // POST /shipments/:shipmentID/status - Update shipment status
+// POST form of the same status update (TEST-STATUS-MATRIX §17 #14):
+// delegates to the shared handler above — the old POST handler
+// duplicated the validation and chain call and never called
+// updateEntityStatus. Kept registered because external clients may
+// use POST; the behaviour is now identical to PUT.
 router.post('/:shipmentID/status',
   authMiddleware,
   [body('status').notEmpty()],
   validateRequest,
-  async (req: Request, res: Response) => {
-    try {
-      const { shipmentID } = req.params;
-      const { status, location, updatedBy } = req.body;
-      const user = (req as any).user;
-
-      // Validate the transition the same way the PUT route does — the old
-      // handler called the unguarded UpdateShipmentStatus with any string.
-      const shipmentData = await fabricService.getShipment(shipmentID);
-      if (!shipmentData.success) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
-          timestamp: new Date().toISOString(),
-        });
-      }
-      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
-      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
-      if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_TRANSITION',
-            message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
-            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      // ✅ BLOCKCHAIN-FIRST: Call UpdateShipmentStatus chaincode BEFORE DB write
-      const blockchainResult = await fabricService.invokeChaincode(
-        'UpdateShipmentStatus',
-        [shipmentID, status]
-      );
-      
-      const blockchain_tx_id = blockchainResult?.txId || null;
-      logger.info(`✅ Shipment status updated on blockchain: ${shipmentID}, Status: ${status}, TX: ${blockchain_tx_id}`);
-
-      // Now record status history in database with blockchain TX ID
-      await postgresDb.run(
-        `INSERT INTO shipment_status_history (
-          shipment_id, status, location, updated_by, blockchain_tx_id
-        ) VALUES ($1, $2, $3, $4, $5)`,
-        [shipmentID, status, location || null, updatedBy || user.username, blockchain_tx_id]
-      );
-
-      // Mirror the current status on the shipment row itself (the old
-      // handler only wrote the history table).
-      await mirrorShipmentStatusPG(shipmentID, status);
-
-      res.json({
-        success: true,
-        data: { shipmentID, status, blockchain_tx_id },
-        timestamp: new Date().toISOString()
-      });
-    } catch (error: any) {
-      logger.error('Shipment status update error:', error);
-      res.status(500).json({
-        success: false,
-        error: { code: 'SERVER_ERROR', message: error.message },
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
+  updateShipmentStatusHandler
 );
 
 // POST /shipments/:shipmentID/reject-action - record a rejected proposed step on the ledger.

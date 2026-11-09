@@ -11,19 +11,16 @@ const router = Router();
 const dbService = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
 
-// A freight booking is stored as its own shipments row (shipment_id =
-// bookingID, contract_id = the real shipmentID, status BOOKED). The
-// lifecycle handlers below update that booking row, but the real
-// shipment row — the one every other portal reads — stayed
-// FREIGHT_BOOKED forever: the load/depart/arrive/deliver statuses never
-// landed on the shipment, so the freight -> delivery handoff (H9) was
-// broken at the Postgres layer and the delivery status was invisible
-// outside the Shipping portal. Mirror each lifecycle status onto the
-// real shipment row (resolved via the booking row's contract_id) and
-// best-effort sync it on-chain the same way booking-create mirrors
-// FREIGHT_BOOKED. Never fails the request: a booking with no linked
-// shipment simply has nothing to mirror. Column names in `extras` are
-// hardcoded by the callers below, never user input.
+// A freight booking lives in its own shipping_bookings row
+// (booking_id = 'BOOK-<timestamp>', shipment_id = the real shipment).
+// The lifecycle handlers below update that booking row, but the real
+// shipment row — the one every other portal reads — must advance too:
+// mirror each lifecycle status onto the real shipment row (resolved
+// via the booking row's shipment_id) and best-effort sync it on-chain
+// the same way booking-create mirrors FREIGHT_BOOKED. Never fails the
+// request: a booking with no linked shipment simply has nothing to
+// mirror. Column names in `extras` are hardcoded by the callers below,
+// never user input.
 async function mirrorBookingStatusToShipment(
   bookingId: string,
   status: string,
@@ -31,10 +28,10 @@ async function mirrorBookingStatusToShipment(
 ): Promise<void> {
   try {
     const booking = await dbService.get(
-      'SELECT contract_id FROM shipments WHERE shipment_id = $1',
+      'SELECT shipment_id FROM shipping_bookings WHERE booking_id = $1',
       [bookingId],
     );
-    const shipmentID = (booking as any)?.contract_id as string | undefined;
+    const shipmentID = (booking as any)?.shipment_id as string | undefined;
     if (!shipmentID) {
       logger.warn(`[SHIPPING] Booking ${bookingId} has no linked shipment; status ${status} mirrored to the booking row only`);
       return;
@@ -230,26 +227,36 @@ router.get('/bookings', authMiddleware, async (req: Request, res: Response) => {
   try {
     logger.info('[SHIPPING] Fetching shipping bookings...');
 
+    // Bookings live in shipping_bookings; join the real shipment row
+    // (and its contract) for the display fields. Response shape is
+    // unchanged: bookingId is the BOOK- id, shipmentId is now the REAL
+    // shipment (previously it was the phantom row's id), contractId /
+    // exporterId / buyerId come from the real shipment's contract.
+    // Previously this selected every shipments row with no filter, so
+    // every shipment was mislabelled as a booking (and real bookings
+    // came back with a doubled 'BOOK-BOOK-...' bookingId).
     const bookings = await dbService.all(`
       SELECT 
-        s.shipment_id,
+        b.booking_id,
+        b.shipment_id,
+        b.carrier,
+        b.origin,
+        b.destination,
+        b.estimated_departure,
+        b.estimated_arrival,
+        b.status,
+        b.created_at,
         s.contract_id,
-        s.carrier,
-        s.origin,
-        s.destination,
-        s.estimated_departure,
-        s.estimated_arrival,
-        s.status,
-        s.created_at,
         c.exporter_id,
         c.buyer_id
-      FROM shipments s
+      FROM shipping_bookings b
+      LEFT JOIN shipments s ON s.shipment_id = b.shipment_id
       LEFT JOIN contracts c ON s.contract_id = c.contract_id
-      ORDER BY s.created_at DESC
+      ORDER BY b.created_at DESC
     `);
 
     const normalizedBookings = bookings.map((booking: any) => ({
-      bookingId: `BOOK-${booking.shipment_id}`,
+      bookingId: booking.booking_id,
       shipmentId: booking.shipment_id,
       contractId: booking.contract_id,
       exporterId: booking.exporter_id,
@@ -260,6 +267,11 @@ router.get('/bookings', authMiddleware, async (req: Request, res: Response) => {
       estimatedDeparture: booking.estimated_departure,
       estimatedArrival: booking.estimated_arrival,
       bookingStatus: booking.status === 'CUSTOMS_CLEARED' ? 'CONFIRMED' : 'PENDING',
+      // Raw lifecycle status from shipping_bookings (BOOKED/LOADED/IN_TRANSIT/
+      // ARRIVED/DELIVERED). bookingStatus above is a two-value display label
+      // only; without this field a consumer could not tell a BOOKED booking
+      // from a DELIVERED one (matrix §16 #43 follow-up, found live in REM7).
+      status: booking.status,
       createdAt: booking.created_at
     }));
 
@@ -401,16 +413,26 @@ router.post('/bookings', authMiddleware, async (req: Request, res: Response) => 
     
     logger.info(`[SHIPPING] Creating booking: ${bookingID} for shipment: ${shipmentID}`);
 
-    // Insert booking record (using shipments table for now)
+    // Insert the booking into shipping_bookings (not shipments — the
+    // old phantom-row shape). The request fields the old INSERT silently
+    // dropped (exporterID, vesselName, voyageNumber, containerType,
+    // numberOfContainers) are now persisted. Response shape unchanged.
     await dbService.run(`
-      INSERT INTO shipments (
-        shipment_id, contract_id, carrier, origin, destination,
-        estimated_departure, estimated_arrival, status, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      INSERT INTO shipping_bookings (
+        booking_id, shipment_id, exporter_id, carrier, vessel_name,
+        voyage_number, container_type, number_of_containers, origin,
+        destination, estimated_departure, estimated_arrival, status,
+        created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
     `, [
       bookingID,
       shipmentID || null,
+      exporterID || null,
       shippingLine || 'Maersk Line',
+      vesselName || null,
+      voyageNumber || null,
+      containerType || null,
+      numberOfContainers || null,
       portOfLoading || 'Djibouti',
       portOfDischarge || 'New York',
       estimatedDepartureDate || null,
@@ -420,7 +442,7 @@ router.post('/bookings', authMiddleware, async (req: Request, res: Response) => 
 
     logger.info(`[SHIPPING] ✅ Booking created: ${bookingID}`);
 
-    // The booking is stored as its own shipments row (status BOOKED), but
+    // The booking is stored in shipping_bookings (status BOOKED), but
     // the shipping portal's freightBookings list reads shipments WHERE
     // status = 'FREIGHT_BOOKED' — and nothing ever moved the real shipment
     // there, so bookings were invisible in the portal. Move the booked
@@ -501,20 +523,31 @@ router.post('/bookings/:bookingId/load', authMiddleware, async (req: Request, re
 
     logger.info(`[SHIPPING] Recording cargo loading for booking: ${bookingId}`);
 
-    // Update shipment status to LOADED
-    await dbService.run(`
-      UPDATE shipments
+    // Update the booking row's status to LOADED
+    const updated = await dbService.run(`
+      UPDATE shipping_bookings
       SET status = $1,
           container_number = $2,
           seal_number = $3,
           updated_at = NOW()
-      WHERE shipment_id = $4
+      WHERE booking_id = $4
     `, [
       'LOADED',
       Array.isArray(containerNumbers) ? containerNumbers.join(',') : containerNumbers,
       Array.isArray(sealNumbers) ? sealNumbers.join(',') : sealNumbers,
       bookingId
     ]);
+
+    if ((updated as any)?.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Booking not found'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
     await mirrorBookingStatusToShipment(bookingId, 'LOADED', [
@@ -560,18 +593,29 @@ router.post('/bookings/:bookingId/depart', authMiddleware, async (req: Request, 
 
     logger.info(`[SHIPPING] Recording vessel departure for booking: ${bookingId}`);
 
-    // Update shipment status to IN_TRANSIT
-    await dbService.run(`
-      UPDATE shipments
+    // Update the booking row's status to IN_TRANSIT
+    const updated = await dbService.run(`
+      UPDATE shipping_bookings
       SET status = $1,
           actual_departure = $2,
           updated_at = NOW()
-      WHERE shipment_id = $3
+      WHERE booking_id = $3
     `, [
       'IN_TRANSIT',
       departureDate || new Date().toISOString().split('T')[0],
       bookingId
     ]);
+
+    if ((updated as any)?.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Booking not found'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
     await mirrorBookingStatusToShipment(bookingId, 'IN_TRANSIT', [
@@ -615,18 +659,29 @@ router.post('/bookings/:bookingId/arrive', authMiddleware, async (req: Request, 
 
     logger.info(`[SHIPPING] Recording vessel arrival for booking: ${bookingId}`);
 
-    // Update shipment status to ARRIVED
-    await dbService.run(`
-      UPDATE shipments
+    // Update the booking row's status to ARRIVED
+    const updated = await dbService.run(`
+      UPDATE shipping_bookings
       SET status = $1,
           actual_arrival = $2,
           updated_at = NOW()
-      WHERE shipment_id = $3
+      WHERE booking_id = $3
     `, [
       'ARRIVED',
       arrivalDate || new Date().toISOString().split('T')[0],
       bookingId
     ]);
+
+    if ((updated as any)?.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Booking not found'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
     await mirrorBookingStatusToShipment(bookingId, 'ARRIVED', [
@@ -670,18 +725,29 @@ router.post('/bookings/:bookingId/deliver', authMiddleware, async (req: Request,
 
     logger.info(`[SHIPPING] Recording cargo delivery for booking: ${bookingId}`);
 
-    // Update shipment status to DELIVERED
-    await dbService.run(`
-      UPDATE shipments
+    // Update the booking row's status to DELIVERED
+    const updated = await dbService.run(`
+      UPDATE shipping_bookings
       SET status = $1,
           delivery_date = $2,
           updated_at = NOW()
-      WHERE shipment_id = $3
+      WHERE booking_id = $3
     `, [
       'DELIVERED',
       deliveryDate || new Date().toISOString().split('T')[0],
       bookingId
     ]);
+
+    if ((updated as any)?.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Booking not found'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // Mirror onto the real shipment row (see mirrorBookingStatusToShipment).
     await mirrorBookingStatusToShipment(bookingId, 'DELIVERED', [

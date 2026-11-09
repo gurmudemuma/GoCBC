@@ -1933,6 +1933,21 @@ func (c *CoffeeContract) UpdateCADStatus(ctx contractapi.TransactionContextInter
 func (c *CoffeeContract) RecordCADPayment(ctx contractapi.TransactionContextInterface,
 	collectionID, paymentReference, amountReceivedStr string) error {
 
+	// GUARD (status-transition audit §17 #17): only the collecting bank
+	// records a CAD payment, and only from a presented or accepted
+	// collection — the same PAID edge UpdateCADStatus enforces
+	// (PRESENTED → PAID, ACCEPTED → PAID). The old function set PAID
+	// from any state for any caller, so a SENT collection (never
+	// presented) or an already-PAID / REJECTED one could be marked
+	// paid, and a second payment could overwrite the first.
+	collectorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+	if collectorMSP != "BanksMSP" {
+		return fmt.Errorf("unauthorized: only Banks can record a CAD payment (caller: %s)", collectorMSP)
+	}
+
 	collectionJSON, err := ctx.GetStub().GetState("CAD_" + collectionID)
 	if err != nil {
 		return fmt.Errorf("failed to read collection: %v", err)
@@ -1945,6 +1960,10 @@ func (c *CoffeeContract) RecordCADPayment(ctx contractapi.TransactionContextInte
 	err = json.Unmarshal(collectionJSON, &collection)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal collection: %v", err)
+	}
+
+	if collection.Status != "PRESENTED" && collection.Status != "ACCEPTED" {
+		return fmt.Errorf("RecordCADPayment: invalid transition from %s to PAID (payment can only be recorded for a PRESENTED or ACCEPTED collection)", collection.Status)
 	}
 
 	amountReceived, err := strconv.ParseFloat(amountReceivedStr, 64)

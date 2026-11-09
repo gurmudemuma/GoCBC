@@ -1187,93 +1187,13 @@ router.post('/declaration/:declarationId/inspect', authMiddleware, param('declar
  * POST /api/v1/customs/declarations/:id/clear
  * Clear customs declaration and move to CLEARED status
  */
-router.post('/declarations/:id/clear',
-  authMiddleware,
-  param('id').notEmpty(),
-  async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const user = (req as any).user;
-
-      logger.info(`[CUSTOMS] Clearing declaration ${id} by ${user.username}`);
-
-      // Check if declaration exists
-      const declaration = await postgresDb.get(
-        `SELECT declaration_number, status FROM customs_declarations WHERE declaration_number = $1`,
-        [id]
-      );
-
-      if (!declaration) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: `Declaration ${id} not found` },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Update status to CLEARED
-      await postgresDb.run(
-        `UPDATE customs_declarations 
-         SET status = $1, clearance_date = NOW(), updated_at = NOW() 
-         WHERE declaration_number = $2`,
-        ['CLEARED', id]
-      );
-
-      // Also update CouchDB
-      try {
-        const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
-        const axios = require('axios');
-        
-        // Get current document
-        const getResp = await axios.get(
-          `${couchDbUrl}/coffeechannel_coffee/customs:${id}`,
-          { auth: { username: 'admin', password: 'adminpw' } }
-        );
-        
-        const doc = getResp.data;
-        doc.status = 'CLEARED';
-        doc.clearedBy = user.username;
-        doc.clearanceDate = new Date().toISOString();
-        doc.updatedAt = new Date().toISOString();
-        
-        // Update document
-        await axios.put(
-          `${couchDbUrl}/coffeechannel_coffee/customs:${id}`,
-          doc,
-          {
-            auth: { username: 'admin', password: 'adminpw' },
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-        logger.info(`✅ [CUSTOMS] Declaration ${id} updated in CouchDB: status=CLEARED`);
-      } catch (couchError: any) {
-        logger.warn(`[CUSTOMS] CouchDB update failed (non-critical):`, couchError.message);
-      }
-
-      logger.info(`[CUSTOMS] ✅ Declaration ${id} cleared: status=CLEARED`);
-
-      res.json({
-        success: true,
-        data: {
-          declarationId: id,
-          status: 'CLEARED',
-          clearedBy: user.username,
-          clearanceDate: new Date().toISOString(),
-          message: 'Customs clearance completed successfully'
-        },
-        timestamp: new Date().toISOString()
-      });
-    } catch (error: any) {
-      logger.error('[CUSTOMS] Error clearing declaration:', error);
-      res.status(500).json({
-        success: false,
-        error: { code: 'SERVER_ERROR', message: error.message },
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-);
-
+// NOTE (TEST-STATUS-MATRIX §17 #14): the duplicate
+// POST /declarations/:id/clear route was removed here. It had no
+// callers (UI + tests use the singular /declaration/:id/clear below),
+// cleared from any status with no guard, never called the chaincode,
+// and wrote directly to CouchDB. The singular route below is the
+// canonical clear: it goes through customsService.clearDeclaration
+// (ClearCustomsDeclaration on-chain + PG update).
 /**
  * Complete inspection and move declaration to UNDER_REVIEW status
  */
@@ -1478,22 +1398,14 @@ router.post('/declaration/:declarationId/clear',
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully`);
 
-      // Update shipment status on blockchain if shipment exists
-      if (declaration.shipment_id) {
-        try {
-          // Connect as CustomsMSP to have authority to update shipment status
-          await fabricService.connectAsOrg('CustomsMSP');
-          logger.info(`[CUSTOMS] Connected as CustomsMSP`);
-          
-          // ⚠️ SKIP BLOCKCHAIN READ/WRITE - UpdateShipmentStatus doesn't exist in chaincode
-          // Shipment status already updated in PostgreSQL by CustomsService
-          logger.info(`[CUSTOMS] ✅ Shipment ${declaration.shipment_id} status CUSTOMS_CLEARED (PostgreSQL only)`);
-        } catch (shipmentError: any) {
-          logger.error(`[CUSTOMS] ❌ Exception updating shipment status:`, shipmentError);
-          // Continue even if blockchain update fails - clearance is recorded in DB
-        }
-      } else {
-        logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId}`);
+      // The linked shipment moves to CUSTOMS_CLEARED on-chain via the
+      // ClearCustomsDeclaration cascade itself (customs.go) — there is
+      // no separate shipment update to do here. (The old comment
+      // claimed UpdateShipmentStatus did not exist in the chaincode;
+      // it does — main.go — but the cascade already covers it, and the
+      // shipment update must not be attempted twice.)
+      if (!declaration.shipment_id) {
+        logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId} — no shipment cascade to run`);
       }
 
       res.json({

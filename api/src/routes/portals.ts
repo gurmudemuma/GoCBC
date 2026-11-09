@@ -316,8 +316,13 @@ async function getNBEDashboard(req: Request, res: Response) {
       ),
       
       db.all(
-        `SELECT * FROM payments 
-         WHERE status = $1 
+        // Retention conversions: payments whose 40% retention has been
+        // received and is awaiting conversion. Reads the RETENTION
+        // machine (retention_status), not the settlement status —
+        // the old query read status = 'RECEIVED', which the record
+        // flow no longer writes there (§17 #8).
+        `SELECT * FROM payments
+         WHERE retention_status = $1
          ORDER BY created_at DESC LIMIT 10`,
         ['RECEIVED']
       ),

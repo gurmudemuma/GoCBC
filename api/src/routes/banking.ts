@@ -2779,6 +2779,7 @@ router.put('/cad/:collectionID/status',
  */
 router.post('/cad/:collectionID/payment',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']), // Only the collecting bank records a CAD payment (chaincode enforces BanksMSP too)
   [
     param('collectionID').notEmpty().withMessage('Collection ID is required'),
     body('amountReceived').isFloat({ min: 0 }).withMessage('Amount must be positive'),

@@ -1222,108 +1222,12 @@ router.get('/:contractID',
     }
   }
 );
-/**
- * @swagger
- * /api/v1/contracts/approve:
- *   post:
- *     summary: Approve a sales contract (body data)
- *     tags: [Contracts]
- */
-router.post('/approve',
-  authMiddleware,
-  async (req, res) => {
-    try {
-      const { contractId } = req.body;
-      const user = (req as any).user;
-      const userOrg = String(user?.org || '').toUpperCase();
-      const userRole = String(user?.role || '').toUpperCase();
-      
-      if (!contractId) {
-        return res.status(400).json({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'contractId is required' },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA' && userRole !== 'ECTA_ADMIN') {
-        return res.status(403).json({
-          success: false,
-          error: { code: 'FORBIDDEN', message: 'Only ECTA users can approve sales contracts' },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      logger.info('[CONTRACTS] Approving contract:', { contractId, userId: user?.sub, userOrg, userRole });
-
-      // Validate the transition the same way the :contractID/approve route
-      // does: the chaincode ApproveSalesContract itself has no from-state
-      // guard, so without this check an APPROVED or REJECTED contract
-      // could be (re-)approved through this endpoint.
-      const contractData = await fabricService.getSalesContract(contractId);
-      if (!contractData.success) {
-        return res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Contract not found' },
-          timestamp: new Date().toISOString(),
-        });
-      }
-      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
-      const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'APPROVED');
-      if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'INVALID_TRANSITION',
-            message: `Cannot approve contract: Invalid status transition from ${currentStatus} to APPROVED`,
-            allowedStatuses: statusManager.getNextStatuses('CONTRACT', currentStatus),
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      await fabricService.connectAsOrg('ECTAMSP');
-      const result = await fabricService.approveSalesContract(contractId);
-
-      if (!result.success) {
-        return res.status(409).json({
-          success: false,
-          error: { code: 'APPROVAL_REJECTED', message: result.error || 'Fabric rejected the contract approval' },
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Mirror the approval into Postgres (the sibling route does this via
-      // the service; this route previously wrote nothing).
-      try {
-        const { DatabaseService } = await import('../services/databaseService');
-        const db = DatabaseService.getInstance();
-        await db.run(
-          `UPDATE contracts SET status = 'APPROVED', updated_at = CURRENT_TIMESTAMP WHERE contract_id = $1`,
-          [contractId]
-        );
-      } catch (syncError) {
-        logger.warn(`Could not sync approved contract ${contractId} to PostgreSQL:`, syncError);
-      }
-
-      logger.info('[CONTRACTS] Contract approval committed:', { contractId, txId: result.txId });
-      
-      res.json({
-        success: true,
-        message: 'Contract approved successfully',
-        data: { contractId, txId: result.txId },
-        timestamp: new Date().toISOString()
-      });
-    } catch (error: any) {
-      logger.error('[CONTRACTS] Error approving contract:', error);
-      res.status(500).json({
-        success: false,
-        error: { code: 'APPROVAL_FAILED', message: error.message || 'Failed to approve contract' },
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-);
+// NOTE (TEST-STATUS-MATRIX §17 #14): the duplicate POST /contracts/approve
+// (body contractId) route was removed here. It had no callers — the UI and
+// all four test scripts use POST /contracts/:contractID/approve — and it
+// diverged from the canonical route: it skipped the production document
+// gate and the LC handoff, so an approval through it left the contract
+// without its LC request. POST /:contractID/approve is the only approve.
 /**
  * @swagger
  * /api/v1/contracts/{contractID}/approve:
@@ -1981,7 +1885,8 @@ router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Res
     logger.info(`[CONTRACTS] Cancelling contract: ${contractId}`);
     
     // Best-effort chaincode sync (TEST-STATUS-MATRIX §17 #7): the cancel
-    // was PG-only — CancelContract is being added by the chaincode agent.
+    // was PG-only — CancelContract exists in the chaincode now and is
+    // invoked best-effort below.
     // A chain failure must not fail the cancellation; the Postgres row is
     // what the portals read. NOTE: no PG existence check here — contract
     // creation writes no PG row (chain-only by design), so a missing row

@@ -4,7 +4,6 @@
 import { FabricService } from './fabricService';
 import { DatabaseService } from './databaseService';
 import { AuditService } from './auditService';
-import { statusManager } from '../utils/statusManager';
 import { logger } from '../utils/logger';
 
 /**
@@ -102,14 +101,19 @@ export class PaymentService {
 
 
 
-      // Store in database
+      // Store in database. status carries the SETTLEMENT machine only
+      // (the chain has just verified the documents, so VERIFIED);
+      // the NBE retention machine lives on retention_status
+      // (TEST-STATUS-MATRIX §17 #8) — the old code wrote 'RECEIVED'
+      // into status, so the settle mirror later overwrote it with
+      // SETTLED and the retention state was lost.
       await this.dbService.run(
         `INSERT INTO payments (
           payment_id, contract_id, shipment_id, exporter_id, lc_id, forex_id,
           amount_usd, currency, retention_rate, retention_amount, release_amount,
           swift_reference, payment_date, payer_name, payer_bank,
-          status, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP)`,
+          status, retention_status, blockchain_tx_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)`,
         [
           paymentData.paymentID,
           paymentData.contractID,
@@ -126,25 +130,26 @@ export class PaymentService {
           paymentData.paymentDate,
           paymentData.payerName,
           paymentData.payerBank,
-          'RECEIVED',  // Payment received (will auto-split to 40% NBE, 60% Exporter)
+          'VERIFIED',  // Settlement machine: documents verified on-chain
+          'RECEIVED',  // Retention machine: payment received (will auto-split to 40% NBE, 60% Exporter)
           typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
         ]
       );
 
-      // Immediately split payment (40% NBE, 60% Exporter)
+      // Immediately split payment (40% NBE, 60% Exporter) — retention
+      // machine only; the settlement status stays VERIFIED.
       await this.dbService.run(
-        `UPDATE payments SET status = $1 WHERE payment_id = $2`,
+        `UPDATE payments SET retention_status = $1 WHERE payment_id = $2`,
         ['SPLIT', paymentData.paymentID]
       );
 
-      // Update contract status
-      await statusManager.updateEntityStatus(
-        'CONTRACT',
-        paymentData.contractID,
-        'ACTIVE', // currentStatus - need to get from contract
-        'PAYMENT_RECEIVED',
-        { reason: 'Payment received from buyer', updatedBy: paymentData.userId }
-      );
+      // The contract status is NOT advanced here: 'ACTIVE' →
+      // 'PAYMENT_RECEIVED' was never a CONTRACT transition (no such
+      // states in the CONTRACT table or on-chain), and the chaincode
+      // has no payment-received contract step. The contract reaches
+      // COMPLETED via CompleteContract (contracts close route), not via
+      // payment recording. Removed with the fail-closed validator
+      // (TEST-STATUS-MATRIX §17 #12).
 
       // Audit log
       await this.auditService.log({
@@ -154,9 +159,10 @@ export class PaymentService {
         performedBy: paymentData.userId,
         organization: paymentData.userOrg,
         performedByOrg: paymentData.userOrg,
-        newValue: 'RECEIVED',
+        newValue: 'VERIFIED',
         metadata: {
-          status: 'RECEIVED',
+          status: 'VERIFIED',
+          retentionStatus: 'SPLIT',
           amount: totalAmount,
           retention: retentionAmount,
           release: releaseAmount,
@@ -169,7 +175,8 @@ export class PaymentService {
       return {
         success: true,
         paymentID: paymentData.paymentID,
-        status: 'RECEIVED',
+        status: 'VERIFIED',
+        retentionStatus: 'SPLIT',
         totalAmount,
         retentionAmount,
         releaseAmount,
@@ -210,7 +217,7 @@ export class PaymentService {
         throw new Error(`Payment not found: ${conversionData.paymentID}`);
       }
 
-      if (payment.status === 'RETENTION_CONVERTED') {
+      if (payment.retention_status === 'RETENTION_CONVERTED') {
         throw new Error(`Retention already converted for payment: ${conversionData.paymentID}`);
       }
 
@@ -228,10 +235,11 @@ export class PaymentService {
         conversionData.conversionDate
       );
 
-      // Update database
+      // Update database — retention machine only (status stays VERIFIED;
+      // the settlement machine does not move on a retention conversion).
       await this.dbService.run(
         `UPDATE payments 
-         SET status = $1, exchange_rate = $2, amount_birr = $3, 
+         SET retention_status = $1, exchange_rate = $2, amount_birr = $3, 
              converted_by = $4, conversion_ref = $5, conversion_date = $6,
              updated_at = CURRENT_TIMESTAMP
          WHERE payment_id = $7`,
@@ -256,7 +264,7 @@ export class PaymentService {
         performedByOrg: conversionData.userOrg,
         newValue: 'RETENTION_CONVERTED',
         metadata: {
-          status: 'RETENTION_CONVERTED',
+          retentionStatus: 'RETENTION_CONVERTED',
           exchangeRate: conversionData.exchangeRate,
           amountBirr: conversionData.amountBirr,
           retentionUSD: payment.retention_amount,
@@ -269,7 +277,8 @@ export class PaymentService {
       return {
         success: true,
         paymentID: conversionData.paymentID,
-        status: 'RETENTION_CONVERTED',
+        status: payment.status || 'VERIFIED',
+        retentionStatus: 'RETENTION_CONVERTED',
         retentionUSD: payment.retention_amount,
         amountBirr: conversionData.amountBirr,
         exchangeRate: conversionData.exchangeRate
@@ -279,6 +288,36 @@ export class PaymentService {
       logger.error(`[PaymentService] Failed to convert retention:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Canonical SettlePayment invocation (TEST-STATUS-MATRIX §17 #14):
+   * the settle route (payments.ts) and releasePayment below both
+   * submitted SettlePayment with the same 7-arg order — paymentID,
+   * exchangeRate, retentionRate, payingBank, payingBankBIC,
+   * swiftReference, nbeApprovalRef — from two places, a divergence
+   * risk if the order ever changes. Both now go through here. Returns
+   * the raw chain result; the caller decides the failure mode (the
+   * settle route returns 400, releasePayment throws).
+   */
+  async settleOnChain(params: {
+    paymentID: string;
+    exchangeRate: string;
+    retentionRate: string;
+    payingBank: string;
+    payingBankBIC: string;
+    swiftReference: string;
+    nbeApprovalRef: string;
+  }) {
+    return this.fabricService.invokeChaincode('SettlePayment', [
+      params.paymentID,
+      params.exchangeRate,
+      params.retentionRate,
+      params.payingBank,
+      params.payingBankBIC,
+      params.swiftReference,
+      params.nbeApprovalRef,
+    ]);
   }
 
   /**
@@ -307,45 +346,53 @@ export class PaymentService {
         throw new Error(`Payment not found: ${releaseData.paymentID}`);
       }
 
-      if (payment.status === 'RELEASED') {
+      if (payment.retention_status === 'RELEASED') {
         throw new Error(`Payment already released: ${releaseData.paymentID}`);
       }
 
       // Connect as Banks MSP
       await this.fabricService.connectAsOrg('BanksMSP');
 
-      // Submit settlement to blockchain using SettlePayment
-      // Parameters: paymentID, exchangeRate, retentionRate, payingBank, payingBankBIC, swiftReference, nbeApprovalRef
-      const blockchainResult = await this.fabricService.submitTransaction(
-        'SettlePayment',
-        releaseData.paymentID,
-        '120.5',  // Exchange rate (USD to Birr)
-        '40',     // NBE retention rate (40%)
-        'Commercial Bank of Ethiopia',
-        'CBETETAA',
-        releaseData.releaseRef,  // SWIFT reference
-        `NBE-APPROVAL-${releaseData.paymentID}`  // NBE approval reference
-      );
+      // Submit settlement to blockchain using SettlePayment, via the
+      // canonical helper (§17 #14) — same 7 args the settle route uses.
+      // settleOnChain returns the raw result (unlike submitTransaction,
+      // it does not throw), so a rejection is turned into an error here
+      // to preserve the old throw-on-failure behaviour.
+      const blockchainResult = await this.settleOnChain({
+        paymentID: releaseData.paymentID,
+        exchangeRate: '120.5',  // Exchange rate (USD to Birr)
+        retentionRate: '40',     // NBE retention rate (40%)
+        payingBank: 'Commercial Bank of Ethiopia',
+        payingBankBIC: 'CBETETAA',
+        swiftReference: releaseData.releaseRef,
+        nbeApprovalRef: `NBE-APPROVAL-${releaseData.paymentID}`,
+      });
+      if (!blockchainResult.success) {
+        throw new Error(blockchainResult.error || 'Fabric rejected transaction SettlePayment');
+      }
 
-      // Update database - only update status (other columns may not exist)
+      // Update database — SettlePayment settles the payment on-chain, so
+      // status becomes SETTLED (settlement machine) and the retention
+      // machine advances to RELEASED. The old code wrote status
+      // 'RELEASED', which both hid the settlement and failed the
+      // settlement CHECK once the machines split (§17 #8).
       await this.dbService.run(
         `UPDATE payments 
-         SET status = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE payment_id = $2`,
+         SET status = $1, retention_status = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE payment_id = $3`,
         [
+          'SETTLED',
           'RELEASED',
           releaseData.paymentID
         ]
       );
 
-      // Update contract to COMPLETED
-      await statusManager.updateEntityStatus(
-        'CONTRACT',
-        payment.contract_id,
-        'PAYMENT_RECEIVED', // currentStatus
-        'COMPLETED',
-        { reason: 'Payment released to exporter', updatedBy: releaseData.userId }
-      );
+      // The contract status is NOT advanced here: 'PAYMENT_RECEIVED'
+      // was never a CONTRACT state, so PAYMENT_RECEIVED → COMPLETED
+      // validated nothing and updated nothing. The contract reaches
+      // COMPLETED via CompleteContract (contracts close route), not via
+      // payment release. Removed with the fail-closed validator
+      // (TEST-STATUS-MATRIX §17 #12).
 
       // Audit log
       await this.auditService.log({
@@ -355,9 +402,10 @@ export class PaymentService {
         performedBy: releaseData.userId,
         organization: releaseData.userOrg,
         performedByOrg: releaseData.userOrg,
-        newValue: 'RELEASED',
+        newValue: 'SETTLED',
         metadata: {
-          status: 'RELEASED',
+          status: 'SETTLED',
+          retentionStatus: 'RELEASED',
           releaseAmount: payment.release_amount,
           exporterAccount: releaseData.exporterAccount,
           blockchainTxId: typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
@@ -369,7 +417,8 @@ export class PaymentService {
       return {
         success: true,
         paymentID: releaseData.paymentID,
-        status: 'RELEASED',
+        status: 'SETTLED',
+        retentionStatus: 'RELEASED',
         releaseAmount: payment.release_amount,
         totalAmount: payment.amount_usd,
         retentionAmount: payment.retention_amount
@@ -462,9 +511,9 @@ export class PaymentService {
         totalBirrReceived: payments.reduce((sum, p) => sum + (p.amount_birr || 0), 0),
         retentionRate: NBE_RETENTION_RATE,
         statusBreakdown: {
-          received: payments.filter(p => p.status === 'RECEIVED').length,
-          retentionConverted: payments.filter(p => p.status === 'RETENTION_CONVERTED').length,
-          released: payments.filter(p => p.status === 'RELEASED').length,
+          received: payments.filter(p => p.retention_status === 'RECEIVED').length,
+          retentionConverted: payments.filter(p => p.retention_status === 'RETENTION_CONVERTED').length,
+          released: payments.filter(p => p.retention_status === 'RELEASED').length,
         },
         payments: payments
       };

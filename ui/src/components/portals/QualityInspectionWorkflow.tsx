@@ -149,7 +149,11 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
 
     setLoading(true);
     try {
-      const inspectionId = `INSPECTION_${shipment.shipmentId}_${Date.now()}`;
+      // Raw ID only — the chaincode adds the INSPECTION_ key prefix.
+      // Prefixing here double-prefixes the ledger key
+      // (INSPECTION_INSPECTION_...) and the inspection becomes
+      // unreachable by the perform/approve/reject routes.
+      const inspectionId = `${shipment.shipmentId}_${Date.now()}`;
 
       // Create inspection request first
       await api.post('/quality/inspections', {

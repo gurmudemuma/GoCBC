@@ -1990,7 +1990,11 @@ func (c *CoffeeContract) CreateShipment(ctx contractapi.TransactionContextInterf
 
 	// AUTO-TRIGGER: Request ECTA quality inspection
 	// AUTO-MAPS: Shipment ID, Contract ID, Exporter ID
-	inspectionID := "INSPECTION_" + shipmentID
+	// NB: raw ID only — the INSPECTION_ key prefix is added by the
+	// PutState below. Prefixing here double-prefixes the key
+	// (INSPECTION_INSPECTION_<shipmentID>) and the auto-created
+	// inspection becomes unreachable by every quality function.
+	inspectionID := shipmentID
 
 	inspection := QualityInspection{
 		InspectionID: inspectionID,

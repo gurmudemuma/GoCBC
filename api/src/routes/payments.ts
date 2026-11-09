@@ -296,6 +296,7 @@ router.post('/record',
         data: {
           paymentID: result.paymentID,
           status: result.status,
+          retentionStatus: result.retentionStatus,
           totalAmount: result.totalAmount,
           retentionAmount: result.retentionAmount,
           releaseAmount: result.releaseAmount,
@@ -797,15 +798,17 @@ router.post('/:paymentID/settle',
 
       await fabricService.connectAsOrg('BanksMSP'); // Banks settle payments
 
-      const result = await fabricService.invokeChaincode('SettlePayment', [
+      // Settle on-chain via the canonical helper (TEST-STATUS-MATRIX
+      // §17 #14) — the same SettlePayment call releasePayment makes.
+      const result = await paymentService.settleOnChain({
         paymentID,
-        exchangeRate.toString(),
-        retentionRate.toString(),
+        exchangeRate: exchangeRate.toString(),
+        retentionRate: retentionRate.toString(),
         payingBank,
         payingBankBIC,
         swiftReference,
         nbeApprovalRef,
-      ]);
+      });
 
       if (result.success) {
         // Update status with cascading effects (LC, Forex, Contract statuses)
@@ -1752,8 +1755,12 @@ router.post('/:paymentID/release',
         });
       }
 
-      // Check if payment is in correct status
-      if (payment.status === 'RELEASED') {
+      // Check if payment is in correct status — the release guard reads
+      // the RETENTION machine (retention_status), not the settlement
+      // status: a settled payment whose retention was never released is
+      // releasable, and a released one stays released even after the
+      // settle mirror writes SETTLED (TEST-STATUS-MATRIX §17 #8).
+      if (payment.retention_status === 'RELEASED') {
         return res.status(400).json({
           success: false,
           error: {
@@ -1784,6 +1791,7 @@ router.post('/:paymentID/release',
           paymentID: result.paymentID,
           exporterID,
           status: result.status,
+          retentionStatus: result.retentionStatus,
           totalAmount: result.totalAmount,
           releaseAmount: result.releaseAmount,
           retentionAmount: result.retentionAmount,

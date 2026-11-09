@@ -4,7 +4,7 @@
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { body, param } from 'express-validator';
 import { validateRequest } from '../middleware/validation';
@@ -377,6 +377,7 @@ router.post('/lots/:lotId/grade', authMiddleware,
 // the portal's REJECTED filter can show the lot. REJECTED is terminal
 // (statusManager ECX machine: WAREHOUSED -> GRADED/REJECTED, REJECTED -> []).
 router.post('/lots/:lotId/reject', authMiddleware,
+  requireRole('ECX', 'ECX_ADMIN'), // Only ECX rejects lots (the grade route is still auth-only — see TEST-STATUS-MATRIX §17 #14 note)
   [param('lotId').notEmpty(), body('rejectionReason').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {

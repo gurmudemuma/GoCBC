@@ -24,7 +24,7 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
 | Chaincode | No chaincode entity for applications (PG-only by design) | — | n/a |
-| API | `POST /exporter-applications/:id/approve` → `approved` (lowercase, `exporter_applications.status`) | Contract create takes `exporterID` (no status read); ECTA portal lists `approved` | ✅ |
+| API | `POST /exporter-applications/:id/approve` → `approved` (lowercase, `exporter_applications.status`); licence status changes via `PUT /exporters/:exporterID/status` now validate against the EXPORTER table (SUSPENDED → ACTIVE reactivation allowed for ECTA, REVOKED terminal — matrix §16 #40) | Contract create takes `exporterID` (no status read); ECTA portal lists `approved` | ✅ |
 | Postgres | `exporter_applications.status = 'approved'`; CHECK `chk_license_status` now includes `REVOKED` (migration 059) | Same column read by check-by-email + portal | ✅ |
 | UI | ECTA Approve/Reject buttons render only for `status === 'pending'`; approved rows show an Approved chip | Exporter portal reads the licence as `ACTIVE` once issued | ✅ |
 | Live (HANDOFF1447) | App submit 201, check-by-email 200, reject 200, resubmit 200/403 (wrong app), no-token resubmit 401. Approve itself 400 `BLOCKCHAIN_ERROR` — the route is chain-authoritative by design (on-chain registration is step 1, marked CRITICAL), so in dev mode no application can be approved and it stays `pending` (ECTA portal still lists it pending). Not a status mismatch: the PG state is consistent with the chain step not having happened. | | BLOCKED (needs Fabric) |
@@ -53,9 +53,9 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
-| Chaincode | LC `UTILIZED → PAYMENT_RELEASED` (banking.go UTILIZED row now `{PAYMENT_RELEASED, EXPIRED}`); payment `VERIFIED → SETTLED` accepted by `SettlePayment`; `ConfirmSettlement` (new) SETTLED → CONFIRMED | `SettlePayment` accepts VERIFIED and SWIFT_RECEIVED; `ReleaseDocumentsToBuyer` now also accepts CONFIRMED | ✅ |
-| API | statusManager PAYMENT: `VERIFIED → SWIFT_INITIATED/SETTLED`, `SETTLED → DOCUMENTS_RELEASED/CONFIRMED`, `CONFIRMED → DOCUMENTS_RELEASED`; settle mirrors PG `SETTLED`; release re-runs settlement only on non-SETTLED (see §17 #14 note) | Payment initiate/record/settle/confirm routes validate via statusManager | ✅ |
-| Postgres | `letters_of_credit.status` LC machine; `payments.status` carries BOTH machines (settlement + retention `RECEIVED/SPLIT/RETENTION_CONVERTED/RELEASED`) — CHECK (059) constrains the column to the union; settle mirror can clobber a retention state (known limitation, matrix §17 #8) | Retention flow reads `payments.status` for RECEIVED; settle flow reads VERIFIED | ⚠️ known limitation |
+| Chaincode | LC `UTILIZED → PAYMENT_RELEASED` (banking.go UTILIZED row now `{PAYMENT_RELEASED, EXPIRED}`); payment `VERIFIED → SETTLED` accepted by `SettlePayment`; `ConfirmSettlement` (new) SETTLED → CONFIRMED; `RecordCADPayment` now BanksMSP-only and PRESENTED/ACCEPTED → PAID only (was unguarded — matrix §16 #41) | `SettlePayment` accepts VERIFIED and SWIFT_RECEIVED; `ReleaseDocumentsToBuyer` now also accepts CONFIRMED | ✅ |
+| API | statusManager PAYMENT: `VERIFIED → SWIFT_INITIATED/SETTLED`, `SETTLED → DOCUMENTS_RELEASED/CONFIRMED`, `CONFIRMED → DOCUMENTS_RELEASED`; settle mirrors PG `SETTLED`; settle route + NBE release now share one canonical `settleOnChain` (matrix §16 #39); CAD payment route now requires BANKS/BANK_ADMIN (was auth-only) | Payment initiate/record/settle/confirm routes validate via statusManager | ✅ |
+| Postgres | `letters_of_credit.status` LC machine; `payments.status` is now the settlement machine ONLY — migration 063 split the retention machine into `retention_status` (RECEIVED/SPLIT/RETENTION_CONVERTED/RELEASED) with a backfill, so the settle mirror can no longer clobber a retention state (matrix §16 #37 — the §17 #8 split is done) | Retention flow reads `retention_status` for RECEIVED; settle flow reads `status` VERIFIED | ✅ |
 | UI | LC unions now the real set incl. `PAYMENT_RELEASED/SETTLED`; PaymentStatusBadge + `VERIFIED`; `PAID` → `SETTLED` everywhere | Banks/NBE payment views filter on SETTLED/CONFIRMED | ✅ |
 | Live (HANDOFF1447) | LC issue 500, examine 400, release-payment 400, forex-request 400 (all Fabric); payment initiate 400, record 500, settle 404, release-NBE 404 (cascades — no LC/payment exists on-chain); status-payment table 200 (`VERIFIED → SWIFT_INITIATED/SETTLED`, `SETTLED → DOCUMENTS_RELEASED/CONFIRMED`). No step in this handoff can run without a peer. | | BLOCKED |
 
@@ -63,8 +63,8 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
-| Chaincode | `ApproveQualityInspection` (new, quality.go) INSPECTED → APPROVED; `RejectQualityInspection` (new) INSPECTED → REJECTED; `PerformInspection` PENDING → INSPECTED | Permit issue reads the inspection certificate (`certificateID`); `SubmitCustomsDeclaration` sets shipment PERMIT_ISSUED → CUSTOMS_DECLARED | ✅ |
-| API | All four quality approve/reject handlers best-effort call the new chaincode functions after the PG update, report `blockchainSynced`; PG `APPROVED` (uppercase) | Permit issue mirrors PG `ISSUED`; customs permit-ready query now uppercase `PERMIT_ISSUED` (was lowercase, always 0 rows) | ✅ |
+| Chaincode | `ApproveQualityInspection` (new, quality.go) INSPECTED → APPROVED; `RejectQualityInspection` (new) INSPECTED → REJECTED; `PerformInspection` PENDING → INSPECTED. Key namespaces separated (matrix §16 #42): quality inspections keep `INSPECTION_`, pre-shipment inspections now live under `PREINSPECTION_` (new helper + rich-query filter on `inspectionAgency`), so the two entities can never collide | Permit issue reads the inspection certificate (`certificateID`); `SubmitCustomsDeclaration` sets shipment PERMIT_ISSUED → CUSTOMS_DECLARED | ✅ |
+| API | All four quality approve/reject handlers now share one core, `decideQualityInspection` (guard + PG write + best-effort chain sync — matrix §16 #39); POST approve keeps its CouchDB write + document signing, PUT approve keeps its response shape; PG `APPROVED` (uppercase) | Permit issue mirrors PG `ISSUED`; customs permit-ready query now uppercase `PERMIT_ISSUED` (was lowercase, always 0 rows) | ✅ |
 | Postgres | `quality_inspections.status = 'APPROVED'`; CHECK (059) | `export_permits` + customs queries read `APPROVED`/`PERMIT_ISSUED` | ✅ |
 | UI | ECTA inspection filter + `PERMIT_ISSUED`, lowercase comparisons uppercased; dead `SCHEDULED`/`UNDER_REVIEW` filter values removed | Permit tab shows approved inspections as permit-ready | ✅ |
 | Live (HANDOFF1447 + RETEST1508) | HANDOFF: create 500 `socket hang up` — the route wrote to CouchDB first and threw on failure, so no PG row existed (step 18 approve-real 404 cascade); seeded INSPECTED approve 200 `APPROVED`, re-approve 400 `INVALID_STATUS`. Fixed this audit: the CouchDB write is now best-effort (like the perform route and shipment-create) and the PG insert always runs. RETEST: create 200 `PENDING` (`couchdbSynced:false` + warning), perform 200 `INSPECTED`, approve 200 `APPROVED` — the full chain runs in dev mode. | | ✅ LIVE |
@@ -91,7 +91,7 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
-| Chaincode | `CreateShipment` → CREATED; `SubmitCustomsDeclaration` now reads the shipment under the `SHIPMENT_` prefix (was bare key, guard never fired) and sets PERMIT_ISSUED → CUSTOMS_DECLARED | Customs declaration requires the shipment to exist; `ClearCustomsDeclaration` cascades the linked shipment → CUSTOMS_CLEARED | ✅ |
+| Chaincode | `CreateShipment` → CREATED (the auto-created pre-shipment inspection now uses the raw shipment ID — was double-prefixed `INSPECTION_INSPECTION_…`, matrix §16 #42); `SubmitCustomsDeclaration` now reads the shipment under the `SHIPMENT_` prefix (was bare key, guard never fired) and sets PERMIT_ISSUED → CUSTOMS_DECLARED | Customs declaration requires the shipment to exist; `ClearCustomsDeclaration` cascades the linked shipment → CUSTOMS_CLEARED | ✅ |
 | API | Shipment create writes PG `CREATED` (was lowercase `pending`); `mirrorShipmentStatusPG` on all 13 lifecycle handlers | Customs submit writes PG `SUBMITTED`; review → `UNDER_INSPECTION`; inspect → `UNDER_INSPECTION`; complete → `UNDER_REVIEW`; clear takes 4 args (was 7 vs a 4-arg function) | ✅ |
 | Postgres | `shipments.status = 'CREATED'`; CHECK (059) incl. legacy `BOOKED`/`REGISTERED` with comments | `customs_declarations.status` CHECK (059); portal reads SUBMITTED/UNDER_INSPECTION/UNDER_REVIEW/CLEARED | ✅ |
 | UI | Shipment unions widened (+FREIGHT_BOOKED, LAND_TRANSPORT, PORT_ARRIVED, CONTAINER_STUFFED, VESSEL_LOADED, DESTINATION_ARRIVED, INSPECTION_PENDING, CUSTOMS_REJECTED) | Customs portal filters on the same values | ✅ |
@@ -102,7 +102,7 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
 | Chaincode | `ClearCustomsDeclaration` → declaration CLEARED + cascades linked shipment → CUSTOMS_CLEARED; `ClearDeclaration` (duplicate) same cascade | Book-freight requires shipment CUSTOMS_CLEARED as from-state; `PickupShipment` requires CUSTOMS_CLEARED or PERMIT_ISSUED | ✅ |
-| API | Customs clear mirrors PG `CLEARED` (duplicate `/declarations/:id/clear` fixed from lowercase `'cleared'` in the CouchDB doc); booking sets shipment PG `FREIGHT_BOOKED` + best-effort chain `UpdateShipmentStatus` | Shipping portal `freightBookings` = shipments WHERE status `FREIGHT_BOOKED` | ✅ |
+| API | Customs clear mirrors PG `CLEARED` (duplicate `/declarations/:id/clear` fixed from lowercase `'cleared'` in the CouchDB doc); the plural clear route was removed entirely in the remaining-7 pass (no callers, no chaincode call, no from-state guard — matrix §16 #39), so the singular `/declaration/:declarationId/clear` is the only clear; booking sets shipment PG `FREIGHT_BOOKED` + best-effort chain `UpdateShipmentStatus` | Shipping portal `freightBookings` = shipments WHERE status `FREIGHT_BOOKED` | ✅ |
 | Postgres | `customs_declarations.status = 'CLEARED'`; `shipments.status = 'FREIGHT_BOOKED'` after booking; CHECKs (059) | Portal queries read both | ✅ |
 | UI | Customs `DRAFT` kept as UI-only pre-submit state (no route writes it); `HELD` removed (no transition produces it) | Shipping portal shows FREIGHT_BOOKED shipments | ✅ |
 | Live (HANDOFF1447) | Customs clear 200 `CLEARED` (step 42); booking create 200 `BOOKED` and the Shipping portal shows it in `freightBookings` (4); book-freight 404 (reads the shipment on-chain — needs Fabric). The PG side of the handoff works; the chain side needs a peer. | | ✅ LIVE (PG) / BLOCKED (chain) |
@@ -112,10 +112,10 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 | Layer | Producer output | Consumer expects | Match? |
 |---|---|---|---|
 | Chaincode | `StuffContainer` (PORT_ARRIVED → CONTAINER_STUFFED) — the API's `RecordContainerStuffing` call now targets it with the 6-arg form; `LoadOnVessel` CONTAINER_STUFFED → VESSEL_LOADED; `DepartFromPort` VESSEL_LOADED → DEPARTED; `ArriveAtDestination` IN_TRANSIT → DESTINATION_ARRIVED; `RecordVesselLoading/Departure/DestinationArrival` (new) delegate to those three | Each step guards its from-state; `CompleteDelivery` from the arrival state | ✅ |
-| API | Book-freight → FREIGHT_BOOKED; load/depart/arrive/deliver handlers mirror PG on every step — **fixed this audit:** the booking is stored as its own `shipments` row (`shipment_id` = bookingID, `contract_id` = real shipmentID) and the four handlers only updated that booking row, so the real shipment row stayed `FREIGHT_BOOKED` forever and the delivery was invisible outside Shipping. All four now also mirror the status (+ dates/container/seal) onto the real shipment row via the booking row's `contract_id`, with a best-effort `UpdateShipmentStatus` chain sync, the same pattern booking-create uses for FREIGHT_BOOKED. | Shipment status route validates via statusManager | ✅ |
-| Postgres | `shipments.status` follows the lifecycle on the REAL row (FREIGHT_BOOKED → LOADED → IN_TRANSIT → ARRIVED → DELIVERED); CHECK (059 + 060 adds `ARRIVED` + `CUSTOMS_DECLARED`) | Delivery/arrival queries read the same column | ✅ |
+| API | Book-freight → FREIGHT_BOOKED; load/depart/arrive/deliver handlers mirror PG on every step — **fixed in the remaining-7 pass (matrix §16 #43):** bookings now live in their own `shipping_bookings` table (migration 064) instead of a second `shipments` row; create persists the carrier/vessel/voyage/container fields it used to drop, `GET /bookings` reads the new table (was returning every shipment, mislabelled, with doubled `BOOK-BOOK-…` ids), and lifecycle calls 404 when the booking does not exist (was a phantom 200). All four handlers still mirror the status (+ dates/container/seal) onto the real shipment row, with a best-effort `UpdateShipmentStatus` chain sync, the same pattern booking-create uses for FREIGHT_BOOKED. | Shipment status route validates via statusManager | ✅ |
+| Postgres | `shipping_bookings` (migration 064: booking_id PK, shipment_id NOT NULL, carrier/vessel/voyage/container fields, status CHECK BOOKED/LOADED/IN_TRANSIT/ARRIVED/DELIVERED) + the existing `BOOK-%` rows moved out of `shipments` on apply; `shipments.status` follows the lifecycle on the REAL row (FREIGHT_BOOKED → LOADED → IN_TRANSIT → ARRIVED → DELIVERED); CHECK (059 + 060 adds `ARRIVED` + `CUSTOMS_DECLARED`) | Delivery/arrival queries read the same column | ✅ |
 | UI | ShippingPortal + SHIPPED/LOADED/BOOKED/CREATED/ARRIVED/CONFIRMED | Exporter shipment tracking reads the same values | ✅ |
-| Live (HANDOFF1447 + RETEST1508) | HANDOFF: booking create 200, load 200 `LOADED`, depart 200 `IN_TRANSIT`, arrive 500 `chk_shipments_status` (migration 060 omitted `ARRIVED` — the only FAIL in the run), deliver 200. RETEST: load/depart/arrive/deliver all 200, and the REAL shipment row now reads `ARRIVED` after arrive and `DELIVERED` after deliver (was stuck at `FREIGHT_BOOKED`). Stuff-container 400 (Fabric — the route now calls `StuffContainer` with 6 args). | | ✅ LIVE |
+| Live (HANDOFF1447 + RETEST1508 + REM71730) | HANDOFF: booking create 200, load 200 `LOADED`, depart 200 `IN_TRANSIT`, arrive 500 `chk_shipments_status` (migration 060 omitted `ARRIVED` — the only FAIL in the run), deliver 200. RETEST: load/depart/arrive/deliver all 200, and the REAL shipment row now reads `ARRIVED` after arrive and `DELIVERED` after deliver (was stuck at `FREIGHT_BOOKED`). Stuff-container 400 (Fabric — the route now calls `StuffContainer` with 6 args). REM71730 (new table): migration 064 applied at startup; create 200 with all five fields persisted in `shipping_bookings`; full lifecycle load → depart → arrive → deliver all 200 with the booking row AND the real shipment row advancing in lockstep; `GET /bookings` returns only bookings (bare `BOOK-…` ids) and now also exposes the raw `status` (follow-up fix — the response had hidden the lifecycle status behind a two-value display label); lifecycle on `BOOK-0000` → 404; booking without `shipmentID` → 500 NOT NULL. Final DB check: 0 `BOOK-%` rows in `shipments`. | | ✅ LIVE |
 
 ## H10 — Delivery (Shipping) → post-delivery / payment settlement (Banks, NBE)
 
@@ -133,7 +133,7 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 |---|---|---|---|
 | Chaincode | `ConfirmSettlement` (new) SETTLED → CONFIRMED, confirmationType ∈ {BANK_VERIFICATION, NBE_APPROVAL, FOREX_REPATRIATION}; `RecordForexRepatriation` (new) from SETTLED/CONFIRMED; `InitiateRepatriation` + `RecordRepatriation` (existing, now guarded — cannot resurrect COMPLIED) | Repatriation verify/penalty guards apply the same OVERDUE derivation the read path uses, so stored and read status agree | ✅ |
 | API | NBE repatriation handler best-effort syncs Initiate → Record via BanksMSP, never fails the request, reports `blockchainSynced`; payments repatriation route passes the new function's args | NBE portal counts real repatriations via `GET /repatriation/` (test fixed — was counting `retentionConversions`) | ✅ |
-| Postgres | `forex_repatriations` row (migration 057); `payments.status` CONFIRMED where applicable; CHECKs (059 + 060 adds `CONFIRMED` to payments) | NBE portal retention/repatriation queries | ✅ |
+| Postgres | `forex_repatriations` row (migration 057); `payments.status` CONFIRMED where applicable (settlement machine); `payments.retention_status` is the retention machine (migration 063 — the NBE retention/repatriation queries read `retention_status`, not `status`); CHECKs (059 + 060 adds `CONFIRMED` to payments) | NBE portal retention/repatriation queries | ✅ |
 | UI | Repatriation tab reads the repatriation list; NBE SWIFT flow DRAFT → NBE_APPROVED → APPROVED | — | ✅ |
 | Live (HANDOFF1447) | NBE forex approve 200 `CONFIRMED`, repatriation 200 `COMPLETED` (PG path, `blockchainSynced:false`); NBE portal 200 (totalAllocations 4). The on-chain `RecordForexRepatriation` / `Initiate → Record` sync needs a peer. | | ✅ LIVE (PG) / STATIC-ONLY (chain) |
 
@@ -169,17 +169,18 @@ re-verified live in RETEST1508 (see the per-handoff Live rows).
 
 ## Known remaining gaps (not handoff-blocking, recorded in the matrix)
 
-- Freight bookings are still stored as a second `shipments` row keyed by the
-  booking ID (`shipment_id` = BOOK-…, `contract_id` = real shipment ID).
-  The lifecycle handlers now mirror every status onto the real shipment row,
-  so the handoff works, but the dual-row shape remains: a proper fix is a
-  separate `shipping_bookings` table (schema + route change, not done here).
-- `payments.status` carries two machines (settlement + retention); the settle mirror can clobber a retention state (matrix §17 #8 — needs a schema split, a bigger change).
-- `UpdateExporterStatus` can silently reactivate a SUSPENDED licence; ECX REJECTED lots have no re-entry; Customs `DRAFT` is UI-only (matrix §17 #16 — product decisions).
-- `statusManager.validateTransition` is fail-open and `cascadeStatusUpdates` is never called (matrix §17 #12 — needs a per-call-site audit of ~46 route files).
-- Two inspection entities share the `INSPECTION_` key space (matrix §17 #18 — data-model decision).
-- Duplicate handlers are aligned on status values but not merged (matrix §17 #14).
-- `RecordCADPayment` is still unguarded (same PAID edge as `UpdateCADStatus`, which is now guarded).
+Resolved in the remaining-7 pass (2026-11-09, matrix §16 #37–#43 — re-verify live after the API restart; the chaincode parts are STATIC-ONLY until v2.3/seq 22 redeploy):
+
+- ~~Freight bookings stored as a second `shipments` row~~ — now a `shipping_bookings` table (migration 064; §16 #43).
+- ~~`payments.status` carries two machines~~ — split into `status` (settlement) + `retention_status` (migration 063; §16 #37).
+- ~~Licence reactivation / REJECTED lots / DRAFT undecided~~ — decisions recorded and implemented: SUSPENDED → ACTIVE allowed (ECTA), REVOKED terminal, REJECTED lots terminal, DRAFT UI-only (§16 #40).
+- ~~`statusManager.validateTransition` fail-open~~ — now fail-closed, bogus call sites removed, dead cascade removed (§16 #38).
+- ~~Two inspection entities share the `INSPECTION_` key space~~ — pre-shipment now under `PREINSPECTION_` (§16 #42).
+- ~~Duplicate handlers unmerged~~ — contracts body-approve + customs plural clear removed; quality, shipments and payments share one canonical handler each (§16 #39).
+- ~~`RecordCADPayment` unguarded~~ — now BanksMSP-only, PRESENTED/ACCEPTED → PAID only (§16 #41).
+
+Still open (deliberate or out of scope):
+
 - `MigrateLCStatus` deliberately unguarded (migration helper, no API route calls it).
 - `UpdateShipmentStatus` / `UpdateShipmentLocation` validate the target value only, no from-state guard — the reconcile-status admin override force-sets any status through `UpdateShipmentStatus`, so a from-state guard would break it.
 - Dead `PENDING_APPROVAL` still exists in five other SWIFT files (`SWIFTDashboard.tsx`, `SWIFTMessageDetail.tsx`, `SWIFTNotifications.tsx`, `SWIFTStatistics.tsx`, `nbe/SWIFTMonitoring.tsx`).

@@ -11,6 +11,7 @@ import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { dedupeById, isValidContract, isValidForex, isValidLC, isValidShipment } from '../utils/dataFilters';
 import { body, param, query } from 'express-validator';
+import { statusManager } from '../utils/statusManager';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -1818,6 +1819,36 @@ router.put('/:exporterID/status',
         return res.status(400).json({
           success: false,
           error: { code: 'MISSING_REASON', message: 'A reason is required to suspend an exporter license' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Validate the licence transition against the EXPORTER table
+      // (TEST-STATUS-MATRIX §17 #16): SUSPENDED → ACTIVE reactivation
+      // is allowed (ECTA only); REVOKED is terminal (re-apply instead);
+      // EXPIRED → SUSPENDED is rejected as meaningless. The current
+      // status is read from the ledger (ReadExporter); the chaincode
+      // enforces the same rules (UpdateExporterStatus refuses REVOKED,
+      // SuspendExporter refuses REVOKED), this rejects early with a
+      // clear error instead of a chain failure.
+      const current = await fabricService.getExporter(exporterID);
+      if (!current.success || !current.data) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: current.error || `Exporter not found: ${exporterID}` },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const currentStatus = String(current.data.licenseStatus || current.data.LicenseStatus || '').toUpperCase();
+      const isValid = statusManager.validateTransition('EXPORTER', currentStatus, status);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot change exporter license: Invalid status transition from ${currentStatus || 'UNKNOWN'} to ${status}`,
+            allowedStatuses: statusManager.getNextStatuses('EXPORTER', currentStatus),
+          },
           timestamp: new Date().toISOString(),
         });
       }
