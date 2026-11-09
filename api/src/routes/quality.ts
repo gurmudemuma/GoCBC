@@ -883,6 +883,35 @@ router.put('/inspections/:inspectionID/approve',
       const { certificateNumber, grade, remarks, approvedBy } = req.body;
       const user = (req as any).user;
 
+      // The inspection must exist and be awaiting approval. This
+      // handler previously UPDATE'd unconditionally and returned a
+      // fabricated certificate number for an inspection that did not
+      // exist (0 rows updated, 200 returned) — the same existence +
+      // status check the POST approve/reject handlers already do.
+      const inspection = await postgresDb.get(
+        'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
+        [inspectionID]
+      );
+
+      if (!inspection) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Inspection not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (inspection.status !== 'inspected') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_STATUS',
+            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'inspected' first.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Update inspection to approved status
       await postgresDb.run(
         `UPDATE quality_inspections SET

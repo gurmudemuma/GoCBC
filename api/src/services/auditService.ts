@@ -56,8 +56,12 @@ export class AuditService {
   /**
    * Log an audit trail entry - TRUE BLOCKCHAIN IMPLEMENTATION
    * Writes to Hyperledger Fabric blockchain FIRST, then caches in PostgreSQL
+   * Returns the blockchain transaction id when the entry reached the
+   * ledger, or null when it was only persisted in PostgreSQL (e.g.
+   * Fabric not connected). Audit logging never throws: a failure to
+   * record an audit entry must not break the operation being audited.
    */
-  async log(entry: AuditLogEntry): Promise<void> {
+  async log(entry: AuditLogEntry): Promise<string | null> {
     let blockchainTxId: string | undefined;
     let blockchainVerified = false;
     let ledgerTransaction: Awaited<ReturnType<FabricService['getTransactionDetails']>> = null;
@@ -170,6 +174,41 @@ export class AuditService {
       logger.error('❌ Failed to create audit log:', error);
       // Don't throw - audit logging should never break the main operation
     }
+
+    return blockchainTxId ?? null;
+  }
+
+  /**
+   * Legacy audit-recording shape used by older call sites
+   * (exporter application reject, post-delivery workflow). The method
+   * previously called here, `recordAudit`, never existed on this class,
+   * so every caller 500'd with "recordAudit is not a function" — the
+   * exporter reject endpoint could never succeed. This adapter maps
+   * the legacy field names onto AuditLogEntry and delegates to log(),
+   * which writes to Fabric first when connected and always caches in
+   * PostgreSQL. Returns the blockchain transaction id, if any.
+   */
+  async recordAudit(record: {
+    entityType: string;
+    entityId: string;
+    actionType: string;
+    actionBy: string;
+    organizationMSP: string;
+    details?: any;
+    reason?: string;
+    timestamp?: Date | string;
+  }): Promise<{ txId: string | null }> {
+    const txId = await this.log({
+      entityType: record.entityType,
+      entityId: record.entityId,
+      action: record.actionType,
+      performedBy: record.actionBy,
+      organization: record.organizationMSP,
+      performedByOrg: record.organizationMSP,
+      reason: record.reason,
+      metadata: record.details,
+    });
+    return { txId };
   }
 
   /**

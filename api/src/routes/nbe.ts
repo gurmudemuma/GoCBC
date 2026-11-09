@@ -70,6 +70,36 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
     // Get user_id for approved_by (it's an INTEGER column)
     const userRecord = await db.get('SELECT id FROM users WHERE username = $1', [user?.username || 'nbe_admin']);
     const userId = userRecord?.id || null;
+
+    // The allocation must exist. This handler previously UPDATE'd
+    // unconditionally and returned 200 APPROVED for a forexId with no
+    // matching row (0 rows updated, phantom success).
+    // Callers pass whichever identifier they hold: the allocation_id,
+    // the forex_id, or the numeric row id. allocation_id and forex_id
+    // are both UNIQUE on forex_allocations, so matching all three
+    // cannot match two different rows.
+    const allocation = await db.get(
+      `SELECT id, status FROM forex_allocations
+       WHERE allocation_id = $1 OR forex_id = $1 OR CAST(id AS TEXT) = $1`,
+      [forexId]
+    );
+    if (!allocation) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Forex allocation not found' },
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (['APPROVED', 'REPATRIATED'].includes(String(allocation.status).toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot approve forex allocation. Current status: ${allocation.status}.`
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
     
     // Update forex allocation status to approved
     await db.run(`
@@ -78,7 +108,7 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
           approved_by = $1,
           approval_date = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
-      WHERE allocation_id = $2 OR CAST(id AS TEXT) = $2
+      WHERE allocation_id = $2 OR forex_id = $2 OR CAST(id AS TEXT) = $2
     `, [userId, forexId]);
     
     logger.info(`[NBE] ✅ Forex allocation approved: ${forexId}`);
@@ -121,6 +151,22 @@ router.post('/forex/:forexId/repatriation', authMiddleware, requireRole('NBE'), 
     // Get database instance
     const { DatabaseService } = await import('../services/databaseService');
     const db = DatabaseService.getInstance();
+
+    // The allocation must exist: without this check the handler
+    // returned 200 COMPLETED for a forexId with no matching row
+    // (phantom success, same class as the approve handler above).
+    const allocation = await db.get(
+      `SELECT id, status FROM forex_allocations
+       WHERE allocation_id = $1 OR forex_id = $1 OR CAST(id AS TEXT) = $1`,
+      [forexId]
+    );
+    if (!allocation) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Forex allocation not found' },
+        timestamp: new Date().toISOString()
+      });
+    }
     
     // Check if forex_repatriations table exists, if not use forex_allocations
     try {
@@ -147,7 +193,7 @@ router.post('/forex/:forexId/repatriation', authMiddleware, requireRole('NBE'), 
               repatriation_date = $1,
               repatriation_amount = $2,
               updated_at = CURRENT_TIMESTAMP
-          WHERE allocation_id = $3 OR CAST(id AS TEXT) = $3
+          WHERE allocation_id = $3 OR forex_id = $3 OR CAST(id AS TEXT) = $3
         `, [
           repatriationDate || new Date().toISOString().split('T')[0],
           repatriationAmount,
@@ -195,7 +241,7 @@ router.get('/lc-monitoring', authMiddleware, async (req: Request, res: Response)
     logger.info('[NBE] Fetching LC monitoring data');
     
     const lcs = await postgresDb.all(`
-      SELECT * FROM letter_of_credits
+      SELECT * FROM letters_of_credit
       ORDER BY created_at DESC
     `);
     

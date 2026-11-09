@@ -794,7 +794,7 @@ router.get('/banks/active-lcs',
   async (req: Request, res: Response) => {
     try {
       const lcs = await db.all(
-        `SELECT * FROM letter_of_credits 
+        `SELECT * FROM letters_of_credit 
          WHERE status IN ('ISSUED', 'ACTIVE', 'CONFIRMED') 
          ORDER BY issued_at DESC`
       );

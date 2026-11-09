@@ -48,6 +48,13 @@ export interface AuthenticatedRequest extends Request {
     userId?: string;
     username?: string;
     exporterId?: string;
+    // Applicant tokens (issued by /auth/applicant/login) carry the
+    // numeric id of the exporter application they belong to. This must
+    // be carried through to req.user: the resubmit guard in
+    // routes/exporters.ts matches it against the application being
+    // resubmitted, and without it the applicant branch could never
+    // pass (every applicant resubmit 403'd).
+    applicationId?: string | number;
   };
 }
 
@@ -323,6 +330,7 @@ export const authMiddleware = async (
       userId: String(userId),
       username: decoded.username,
       exporterId: decoded.exporterId || decoded.username || decoded.sub,
+      applicationId: decoded.applicationId,
     };
 
     logger.info(`✅ User authenticated: ${req.user.username} (${req.user.role}) - ${req.user.org}`, {

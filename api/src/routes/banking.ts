@@ -3718,7 +3718,7 @@ router.post('/lc/:lcId/examine', authMiddleware, async (req: Request, res: Respo
     const db = DatabaseService.getInstance();
     
     await db.run(`
-      UPDATE letter_of_credits
+      UPDATE letters_of_credit
       SET status = 'DOCUMENTS_EXAMINED', updated_at = CURRENT_TIMESTAMP
       WHERE lc_number = $1 OR lc_id = $1
     `, [req.params.lcId]);
