@@ -111,3 +111,6 @@ Thumbs.db
 !.vscode/launch.json
 .idea/
 
+
+# TypeScript incremental build info
+ui/tsconfig.tsbuildinfo
