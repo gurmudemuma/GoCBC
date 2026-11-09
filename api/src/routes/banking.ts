@@ -2088,6 +2088,7 @@ router.get('/forex', async (req, res) => {
  */
 router.post('/payment/:paymentID/submit-documents',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('documents').isArray().withMessage('Documents array is required'),
@@ -2138,6 +2139,7 @@ router.post('/payment/:paymentID/submit-documents',
  */
 router.post('/payment/:paymentID/verify-documents',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('verifiedBy').notEmpty().withMessage('Verified by is required'),
@@ -2198,6 +2200,7 @@ router.post('/payment/:paymentID/verify-documents',
  */
 router.post('/payment/initiate',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     body('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -2318,6 +2321,7 @@ router.post('/payment/initiate',
  */
 router.post('/payment/:paymentID/release-documents',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
   ],
@@ -2367,6 +2371,7 @@ router.post('/payment/:paymentID/release-documents',
  */
 router.post('/payment/:paymentID/receive-advance',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('advancePercentage').isFloat({ min: 0, max: 100 })
@@ -2425,6 +2430,7 @@ router.post('/payment/:paymentID/receive-advance',
  */
 router.post('/payment/:paymentID/receive-balance',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('amountReceived').isFloat({ min: 0 })
@@ -2480,6 +2486,7 @@ router.post('/payment/:paymentID/receive-balance',
  */
 router.put('/payment/:paymentID/status',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('status').notEmpty().withMessage('New status is required'),
@@ -2580,6 +2587,7 @@ router.get('/payment/by-method/:method',
  */
 router.post('/payment/:paymentID/settle',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('exchangeRate').isFloat({ min: 0 }).withMessage('Exchange rate must be positive'),
@@ -2653,6 +2661,7 @@ router.post('/payment/:paymentID/settle',
  */
 router.post('/cad',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     body('collectionID').notEmpty().withMessage('Collection ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -2725,6 +2734,7 @@ router.post('/cad',
  */
 router.put('/cad/:collectionID/status',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('collectionID').notEmpty().withMessage('Collection ID is required'),
     body('status').isIn(['SENT', 'FORWARDED', 'PRESENTED', 'ACCEPTED', 'PAID', 'REJECTED'])
@@ -2936,6 +2946,7 @@ router.get('/cad/:collectionID',
  */
 router.post('/consignment/register',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     body('consignmentID').notEmpty().withMessage('Consignment ID is required'),
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
@@ -3001,6 +3012,7 @@ router.post('/consignment/register',
  */
 router.put('/consignment/:consignmentID/status',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('consignmentID').notEmpty().withMessage('Consignment ID is required'),
     body('status').isIn(['PERMITTED', 'SHIPPED', 'SOLD', 'SETTLED', 'OUTSTANDING'])
@@ -3055,6 +3067,7 @@ router.put('/consignment/:consignmentID/status',
  */
 router.post('/consignment/:consignmentID/payment',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('consignmentID').notEmpty().withMessage('Consignment ID is required'),
     body('amountReceived').isFloat({ min: 0 }).withMessage('Amount must be positive'),
@@ -3254,6 +3267,7 @@ function getRiskProfile(paymentMethod: string): string {
  */
 router.post('/lc/:lcID/examine-documents',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('lcID').notEmpty().withMessage('LC ID is required'),
     body('compliant').isBoolean().withMessage('Compliance status is required'),
@@ -3339,6 +3353,7 @@ router.post('/lc/:lcID/examine-documents',
  */
 router.post('/lc/:lcID/release-payment',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('lcID').notEmpty().withMessage('LC ID is required'),
     body('amount').notEmpty().withMessage('Payment amount is required'),
@@ -3772,7 +3787,8 @@ router.get('/lc/discrepancies/pending', authMiddleware, async (req: Request, res
 
 
 // Simplified endpoints for testing - map to the full endpoints above
-router.post('/lc/:lcId/examine', authMiddleware, async (req: Request, res: Response) => {
+router.post('/lc/:lcId/examine', authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']), async (req: Request, res: Response) => {
   // Redirect to examine-documents
   req.params.lcID = req.params.lcId;
   req.body.compliant = req.body.examinationResult === 'COMPLIANT';

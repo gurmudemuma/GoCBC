@@ -65,7 +65,10 @@ export const PhytosanitaryCertificates: React.FC = () => {
     packagingType: 'Jute bags',
     numberOfPackages: 0,
     distinguishingMarks: '',
-    meansOfConveyance: ''
+    meansOfConveyance: '',
+    pestsDetected: false,
+    diseaseDetected: false,
+    inspectionNotes: 'No pests or disease detected'
   });
 
   useEffect(() => {
@@ -91,34 +94,71 @@ export const PhytosanitaryCertificates: React.FC = () => {
     }
   };
 
+  // Issue runs the real three-step chain (TEST-WORKFLOW-MAP §5 + slice-6
+  // re-check): request → inspect → issue. The old handler POSTed to
+  // /api/v1/phytosanitary/issue, which does not exist — the issue route is
+  // POST /api/v1/phytosanitary/:certificateID/issue and requires the
+  // certificate to already be requested and inspected on-chain.
   const handleIssue = async () => {
     try {
       setLoading(true);
-      
+
       // Generate certificate ID
       const certificateID = `PHYTO-${Date.now()}`;
-      
-      const response = await api.post('/api/v1/phytosanitary/issue', {
+      const certificateNumber = `CERT-${Date.now()}`;
+      const inspectionDate = new Date().toISOString().split('T')[0];
+      const validUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      // Step 1 — request the certificate on-chain (PENDING)
+      const requestResponse = await api.post('/api/v1/phytosanitary/request', {
         certificateID,
-        ...formData,
-        issuedBy: 'Ministry of Agriculture Officer' // This should come from auth context
+        shipmentID: formData.shipmentID,
+        exporterID: formData.exporterID,
+        plantDescription: formData.botanicalName,
+        quantity: formData.quantity,
+        treatmentApplied: formData.treatment,
+      });
+      if (!requestResponse.data?.success) {
+        throw new Error(requestResponse.data?.error?.message || 'Failed to request phytosanitary certificate');
+      }
+
+      // Step 2 — inspect it (PENDING → INSPECTED). Pests/disease mark the
+      // inspection FAILED on-chain, so a failed inspection cannot be issued.
+      const inspectResponse = await api.post(`/api/v1/phytosanitary/${certificateID}/inspect`, {
+        inspectorName: formData.inspectorName,
+        inspectionDate,
+        pestsDetected: formData.pestsDetected,
+        diseaseDetected: formData.diseaseDetected,
+        inspectionNotes: formData.inspectionNotes,
+      });
+      if (!inspectResponse.data?.success) {
+        throw new Error(inspectResponse.data?.error?.message || 'Phytosanitary inspection failed');
+      }
+
+      // Step 3 — issue the inspected certificate (INSPECTED → ISSUED)
+      const response = await api.post(`/api/v1/phytosanitary/${certificateID}/issue`, {
+        certificateNumber,
+        issuingAuthority: 'Ministry of Agriculture',
+        validUntil,
       });
 
       if (response.data.success) {
         setNotification({
           open: true,
           type: 'success',
-          message: `Phytosanitary certificate ${response.data.data.certificateId} issued successfully!`
+          message: `Phytosanitary certificate ${response.data.data?.certificateNumber || certificateNumber} issued successfully!`
         });
         setIssueDialogOpen(false);
         resetForm();
         loadCertificates();
+      } else {
+        throw new Error(response.data?.error?.message || 'Failed to issue certificate');
       }
     } catch (error: any) {
       setNotification({
         open: true,
         type: 'error',
-        message: error.response?.data?.error?.message || 'Failed to issue certificate'
+        message: error.response?.data?.error?.message || error.message || 'Failed to issue certificate'
       });
     } finally {
       setLoading(false);
@@ -157,8 +197,12 @@ export const PhytosanitaryCertificates: React.FC = () => {
       const reason = prompt('Please enter revocation reason:');
       if (!reason) return;
 
+      // The revoke route requires { reason, revokedBy } (both notEmpty) —
+      // the old { revocationReason } body failed validation with 400.
+      const revokedBy = JSON.parse(localStorage.getItem('user') || '{}').username || 'ECTA Officer';
       const response = await api.post(`/api/v1/phytosanitary/${certificateId}/revoke`, {
-        revocationReason: reason
+        reason,
+        revokedBy
       });
 
       if (response.data.success) {
@@ -191,7 +235,10 @@ export const PhytosanitaryCertificates: React.FC = () => {
       packagingType: 'Jute bags',
       numberOfPackages: 0,
       distinguishingMarks: '',
-      meansOfConveyance: ''
+      meansOfConveyance: '',
+      pestsDetected: false,
+      diseaseDetected: false,
+      inspectionNotes: 'No pests or disease detected'
     });
   };
 
@@ -431,6 +478,43 @@ export const PhytosanitaryCertificates: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, meansOfConveyance: e.target.value })}
                 fullWidth
                 placeholder="MSC MARIA - Container MSCU1234567"
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel>Pests Detected</InputLabel>
+                <Select
+                  value={formData.pestsDetected ? 'yes' : 'no'}
+                  onChange={(e) => setFormData({ ...formData, pestsDetected: e.target.value === 'yes' })}
+                  label="Pests Detected"
+                >
+                  <MenuItem value="no">No</MenuItem>
+                  <MenuItem value="yes">Yes</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel>Disease Detected</InputLabel>
+                <Select
+                  value={formData.diseaseDetected ? 'yes' : 'no'}
+                  onChange={(e) => setFormData({ ...formData, diseaseDetected: e.target.value === 'yes' })}
+                  label="Disease Detected"
+                >
+                  <MenuItem value="no">No</MenuItem>
+                  <MenuItem value="yes">Yes</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                label="Inspection Notes"
+                value={formData.inspectionNotes}
+                onChange={(e) => setFormData({ ...formData, inspectionNotes: e.target.value })}
+                fullWidth
+                multiline
+                rows={2}
+                placeholder="Inspection findings"
               />
             </Grid>
           </Grid>

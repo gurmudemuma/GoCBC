@@ -32,10 +32,14 @@ ui/logs/
 .env.production.local
 .env.*.local
 # Blockchain env files carry live credentials — never commit them.
-# (api/.env.blockchain and api/.env.blockchain.fixed are already tracked
-# from before this rule; they are referenced as env_file by
-# docker-compose-fabric.yml, so removing them needs a coordinated
-# deployment change. Rotate their secrets.)
+# (api/.env.blockchain and api/.env.blockchain.fixed were tracked before
+# this rule and were untracked with `git rm --cached` (files kept on disk).
+# They are loaded from disk as env_file by docker-compose-fabric.yml, so
+# untracking them does not change runtime behaviour — but the secrets in
+# them were once committed, so they must still be rotated. See the
+# rotation procedure in the secrets-hygiene handoff. On the Docker host,
+# back up both files OUTSIDE the repo BEFORE pulling this change: git
+# will delete the clean tracked copies on pull; restore them afterwards.)
 api/.env.blockchain
 api/.env.blockchain.fixed
 

@@ -6,7 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { ContractService } from '../services/contractService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { dedupeById, hasText, isValidContract } from '../utils/dataFilters';
 import { statusManager } from '../utils/statusManager';
@@ -1821,6 +1821,7 @@ router.post('/:contractID/reject',
  */
 router.post('/:contractID/nbe-approve',
   authMiddleware,
+  requireRole('NBE', 'NBE_ADMIN'),
   [
     param('contractID').notEmpty().withMessage('Contract ID is required'),
     body('approvedBy').notEmpty().withMessage('Approving officer is required'),

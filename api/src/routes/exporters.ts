@@ -1241,7 +1241,8 @@ router.get('/me/profile', authMiddleware, async (req, res) => {
  *         description: Internal server error
  */
 router.post('/',
-  authMiddleware, // Protected route
+  authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), // Protected route
   [
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
     body('companyName').notEmpty().withMessage('Company name is required'),
@@ -1755,7 +1756,8 @@ router.get('/:exporterID',
  *         description: Internal server error
  */
 router.put('/:exporterID/laboratory',
-  authMiddleware, // Protected route
+  authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), // Protected route
   [
     param('exporterID').notEmpty().withMessage('Exporter ID is required'),
     body('certified').isBoolean().withMessage('Certified must be a boolean value'),

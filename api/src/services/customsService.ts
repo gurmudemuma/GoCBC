@@ -306,29 +306,53 @@ export class CustomsService {
         throw new Error(`Declaration not found: ${clearanceData.declarationID}`);
       }
 
-      // Connect as Customs MSP
-      await this.fabricService.connectAsOrg('CustomsMSP');
+      // Chaincode sync is best-effort (cf. submit/review/complete in
+      // customs.ts and quality.ts syncQualityDecisionBestEffort): the
+      // Postgres CLEARED row is the record of the clearance. A failed
+      // chain call must never produce a fabricated blockchain_tx_id, must
+      // never be logged as recorded on-chain, and must not block the
+      // workflow in dev mode — otherwise no dev-mode path to CLEARED
+      // exists at all (the old plural PG-only route was removed).
+      // submitTransaction throws on failure and returns {txId,
+      // transactionId} on success.
+      let blockchainTxId: string | null = null;
+      let blockchainError: string | null = null;
+      try {
+        // Connect as Customs MSP
+        await this.fabricService.connectAsOrg('CustomsMSP');
 
-      // Submit clearance to blockchain
-      // NOTE: ClearCustomsDeclaration takes 4 args (declarationID,
-      // clearedBy, clearanceNumber, dutiesAmountStr — customs.go:682).
-      // The old call passed 7 (adding taxes, clearanceNotes and a date),
-      // which the chaincode dispatcher rejects.
-      const blockchainResult = await this.fabricService.submitTransaction(
-        'ClearCustomsDeclaration',
-        clearanceData.declarationID,
-        clearanceData.clearedBy,
-        clearanceData.clearanceNumber,
-        (clearanceData.duties || 0).toString()
-      );
+        // Submit clearance to blockchain
+        // NOTE: ClearCustomsDeclaration takes 4 args (declarationID,
+        // clearedBy, clearanceNumber, dutiesAmountStr — customs.go:682).
+        // The old call passed 7 (adding taxes, clearanceNotes and a date),
+        // which the chaincode dispatcher rejects.
+        const blockchainResult = await this.fabricService.submitTransaction(
+          'ClearCustomsDeclaration',
+          clearanceData.declarationID,
+          clearanceData.clearedBy,
+          clearanceData.clearanceNumber,
+          (clearanceData.duties || 0).toString()
+        );
+        blockchainTxId = (blockchainResult as any)?.transactionId || (blockchainResult as any)?.txId || null;
+      } catch (chainError: any) {
+        blockchainError = chainError?.message || 'Chaincode call failed';
+      }
+      const blockchainSynced = !blockchainError && !!blockchainTxId;
+      if (blockchainSynced) {
+        logger.info(`[CustomsService] ✅ Declaration cleared on blockchain: ${clearanceData.declarationID}, TX: ${blockchainTxId}`);
+      } else {
+        logger.warn(`[CustomsService] Declaration ${clearanceData.declarationID} NOT recorded on blockchain (PG CLEARED row kept): ${blockchainError}`);
+      }
 
-      // Update database
+      // Update database (blockchain_tx_id is the ledger-confirmed txId,
+      // or NULL when the chain call did not sync — never a fabricated id)
       await this.dbService.run(
         `UPDATE customs_declarations 
          SET status = $1, cleared_by = $2, clearance_number = $3, 
              duties = $4, taxes = $5, clearance_notes = $6, 
-             clearance_date = $7, updated_at = CURRENT_TIMESTAMP
-         WHERE declaration_id = $8`,
+             clearance_date = $7, blockchain_tx_id = $8,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE declaration_id = $9`,
         [
           'CLEARED',
           clearanceData.clearedBy,
@@ -337,6 +361,7 @@ export class CustomsService {
           clearanceData.taxes,
           clearanceData.clearanceNotes,
           new Date().toISOString(),
+          blockchainTxId,
           clearanceData.declarationID
         ]
       );
@@ -360,11 +385,15 @@ export class CustomsService {
           status: 'CLEARED', 
           clearedBy: clearanceData.clearedBy,
           clearanceNumber: clearanceData.clearanceNumber,
-          blockchainTxId: typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
+          blockchainTxId
         }
       });
 
-      logger.info(`[CustomsService] ✅ Declaration cleared: ${clearanceData.declarationID}, Shipment ${declaration.shipment_id} ready for freight`);
+      if (blockchainSynced) {
+        logger.info(`[CustomsService] ✅ Declaration cleared: ${clearanceData.declarationID}, Shipment ${declaration.shipment_id} ready for freight`);
+      } else {
+        logger.info(`[CustomsService] Declaration cleared in PG only (chain not synced): ${clearanceData.declarationID}, Shipment ${declaration.shipment_id} ready for freight`);
+      }
 
       return {
         success: true,
@@ -372,6 +401,9 @@ export class CustomsService {
         shipmentID: declaration.shipment_id,
         status: 'CLEARED',
         clearanceNumber: clearanceData.clearanceNumber,
+        blockchainSynced,
+        blockchainError,
+        blockchainTxId,
         message: 'Customs cleared. Shipment ready for freight booking.'
       };
 

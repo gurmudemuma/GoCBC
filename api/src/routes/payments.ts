@@ -73,6 +73,7 @@ const paymentService = PaymentService.getInstance();
  *         description: Internal server error
  */
 router.post('/initiate',
+  requireRole(['EXPORTER', 'BANKS', 'BANK_ADMIN']),
   [
     body('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -252,6 +253,7 @@ router.post('/initiate',
  */
 router.post('/record',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     body('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -354,6 +356,7 @@ router.post('/record',
  *         description: Internal server error
  */
 router.post('/:paymentID/documents',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('documents').isArray().withMessage('Documents must be an array'),
@@ -447,6 +450,7 @@ router.post('/:paymentID/documents',
  *         description: Internal server error
  */
 router.post('/:paymentID/verify',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('verifiedBy').notEmpty().withMessage('Verified by is required'),
@@ -554,6 +558,7 @@ router.post('/:paymentID/verify',
  *         description: Internal server error
  */
 router.post('/:paymentID/swift/initiate',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('swiftReference').notEmpty().withMessage('SWIFT reference is required'),
@@ -652,6 +657,7 @@ router.post('/:paymentID/swift/initiate',
  *         description: Internal server error
  */
 router.post('/:paymentID/swift/confirm',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('receivedBy').notEmpty().withMessage('Received by is required'),
@@ -753,6 +759,7 @@ router.post('/:paymentID/swift/confirm',
  *         description: Internal server error
  */
 router.post('/:paymentID/settle',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('exchangeRate').notEmpty().withMessage('Exchange rate is required'),
@@ -900,6 +907,7 @@ router.post('/:paymentID/settle',
  *         description: Internal server error
  */
 router.put('/:paymentID/confirm',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('confirmedBy').notEmpty().withMessage('Confirmed by is required'),
@@ -1348,6 +1356,7 @@ router.get('/:paymentID',
  *         description: Internal server error
  */
 router.post('/:paymentID/forex-repatriation',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('repatriationAmount').isNumeric().withMessage('Repatriation amount must be a number'),
@@ -1424,6 +1433,7 @@ router.post('/:paymentID/forex-repatriation',
  *     tags: [Payments]
  */
 router.post('/:paymentID/advance',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('advancePercentage').notEmpty().withMessage('Advance percentage is required'),
@@ -1487,6 +1497,7 @@ router.post('/:paymentID/advance',
  *     tags: [Payments]
  */
 router.post('/:paymentID/balance',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('amountReceived').notEmpty().withMessage('Amount received is required'),
@@ -1548,6 +1559,7 @@ router.post('/:paymentID/balance',
  *     tags: [Payments]
  */
 router.post('/:paymentID/status',
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('status').notEmpty().withMessage('Status is required'),
@@ -1604,6 +1616,7 @@ router.post('/:paymentID/status',
 // POST /payments - Record payment
 router.post('/',
   authMiddleware,
+  requireRole(['EXPORTER', 'BANKS', 'BANK_ADMIN']),
   [
     body('paymentID').notEmpty(),
     body('amount').isNumeric(),
@@ -1855,6 +1868,7 @@ export default router;
  */
 router.put('/:paymentID/tracking-status',
   authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('trackingStatus')

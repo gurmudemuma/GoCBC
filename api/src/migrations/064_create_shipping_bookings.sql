@@ -15,7 +15,12 @@
 -- NOTE on the number: this was drafted as 062, but 062 is already the
 -- ecx lots rejection_reason migration (committed and applied); the
 -- payments split took 063, so this is 064. The runner tracks by full
--- filename, so the rename is safe — this file was never applied.
+-- filename, so the rename is safe — but note the content WAS already
+-- applied on databases built before the rename, under the old filename
+-- 062_create_shipping_bookings (that row exists in _schema_migrations).
+-- Re-applying as 064 is safe because every statement below is
+-- idempotent (CREATE TABLE/INDEX IF NOT EXISTS, INSERT ... ON CONFLICT
+-- DO NOTHING, DELETE of already-moved phantom rows is a no-op).
 --
 -- Columns mirror the shipments columns the old code wrote, with the
 -- same types, plus the POST /bookings request fields the old INSERT

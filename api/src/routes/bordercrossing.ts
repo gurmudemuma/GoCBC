@@ -4,7 +4,7 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
@@ -145,7 +145,8 @@ router.get('/status/:status', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/initiate — Initiate border crossing
-router.post('/initiate', authMiddleware, async (req, res) => {
+router.post('/initiate', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const {
       crossingId,
@@ -215,7 +216,8 @@ router.post('/initiate', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/clear — Clear shipment for crossing
-router.post('/:id/clear', authMiddleware, async (req, res) => {
+router.post('/:id/clear', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { clearanceOfficer, certificateNumber } = req.body;
@@ -255,7 +257,8 @@ router.post('/:id/clear', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/detain — Detain shipment
-router.post('/:id/detain', authMiddleware, async (req, res) => {
+router.post('/:id/detain', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { clearanceOfficer, detentionReason, nextSteps } = req.body;
@@ -296,7 +299,8 @@ router.post('/:id/detain', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/clear-exit — Clear for exit
-router.post('/:id/clear-exit', authMiddleware, async (req, res) => {
+router.post('/:id/clear-exit', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { customsOfficer, clearanceRef } = req.body;
@@ -334,7 +338,8 @@ router.post('/:id/clear-exit', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/departure — Record departure
-router.post('/:id/departure', authMiddleware, async (req, res) => {
+router.post('/:id/departure', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { departureDate } = req.body;
@@ -371,7 +376,8 @@ router.post('/:id/departure', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/crossing — Record border crossing
-router.post('/:id/crossing', authMiddleware, async (req, res) => {
+router.post('/:id/crossing', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -416,7 +422,8 @@ router.post('/:id/crossing', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/location — Update location
-router.post('/:id/location', authMiddleware, async (req, res) => {
+router.post('/:id/location', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { location, checkpoint } = req.body;
@@ -454,7 +461,8 @@ router.post('/:id/location', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/delay — Report delay
-router.post('/:id/delay', authMiddleware, async (req, res) => {
+router.post('/:id/delay', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { delayReason, delayDuration } = req.body;
@@ -492,7 +500,8 @@ router.post('/:id/delay', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/bordercrossing/:id/arrival — Record arrival
-router.post('/:id/arrival', authMiddleware, async (req, res) => {
+router.post('/:id/arrival', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { arrivalDate, arrivalLocation } = req.body;
@@ -535,6 +544,7 @@ router.post('/:id/arrival', authMiddleware, async (req, res) => {
  */
 router.post('/:id/inspect',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -596,7 +606,8 @@ router.post('/:id/inspect',
  * POST /api/v1/bordercrossing/:id/verify
  * Verify compliance
  */
-router.post('/:id/verify', authMiddleware, async (req, res) => {
+router.post('/:id/verify', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { complianceStatus, complianceNotes } = req.body;

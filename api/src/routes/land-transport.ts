@@ -5,7 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -49,6 +49,7 @@ router.get('/',
  */
 router.post('/:shipmentID/start',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('transportCompany').notEmpty().withMessage('Transport company is required'),
@@ -115,6 +116,7 @@ router.post('/:shipmentID/start',
  */
 router.post('/:shipmentID/border-crossing',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN', 'CUSTOMS', 'CUSTOMS_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('crossingTime').notEmpty().withMessage('Border crossing time is required'),
@@ -198,6 +200,7 @@ router.post('/:shipmentID/border-crossing',
  */
 router.post('/:shipmentID/arrive',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('arrivalTime').notEmpty().withMessage('Arrival time is required'),

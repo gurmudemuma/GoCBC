@@ -160,6 +160,43 @@ export class ForexService {
         );
       }
 
+      // Best-effort on-chain allocation (step 8). AllocateForex
+      // (forex.go:435) takes (forexID, lcID, amount, exchangeRate,
+      // retentionRate, officer, approvalRef, expiryDate). This was never
+      // called — allocation only wrote CouchDB + PG — so the ledger never
+      // saw the allocation. NOT chain-authoritative: the CouchDB/PG writes
+      // below still run when the chain call fails, so dev-mode allocation
+      // keeps working without peers (mirrors the RejectForex best-effort
+      // sync in banking.ts). NOTE: the chain call only succeeds on a live
+      // peer if retentionRate matches the active NBE COFFEE policy and
+      // approvalRef/officer are non-empty (chaincode validates both).
+      let blockchainSynced = false;
+      let blockchainWarning: string | undefined;
+      let blockchainTxId: string | null = null;
+      try {
+        const chainResult = await this.fabricService.invokeChaincode('AllocateForex', [
+          forexId,
+          lcId,
+          String(allocationData.amount),
+          String(allocationData.exchangeRate),
+          String(allocationData.retentionRate),
+          allocationData.officer,
+          allocationData.approvalRef,
+          allocationData.expiryDate || '',
+        ]);
+        if (chainResult.success) {
+          blockchainSynced = true;
+          blockchainTxId = chainResult.txId || null;
+          logger.info(`✅ [ForexService] Forex ${forexId} allocated on-chain, tx ${blockchainTxId}`);
+        } else {
+          blockchainWarning = `Chaincode AllocateForex did not allocate ${forexId}: ${chainResult.error || 'unknown error'}`;
+          logger.warn(`[ForexService] ${blockchainWarning}`);
+        }
+      } catch (chainError: any) {
+        blockchainWarning = `Could not allocate ${forexId} on the ledger (no Fabric here?): ${chainError.message}`;
+        logger.warn(`[ForexService] ${blockchainWarning}`);
+      }
+
       // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
       // Blockchain consensus causes 10-30s state propagation delays across 6 peers
       logger.info(`[ForexService] Writing forex allocation directly to CouchDB: ${forexId}`);
@@ -282,7 +319,7 @@ export class ForexService {
           allocationData.officer,
           allocationData.approvalRef,
           allocationData.expiryDate,
-          result.txId,
+          blockchainTxId || result.txId,
           forexId,
         ]
       );
@@ -310,7 +347,7 @@ export class ForexService {
       });
 
       logger.info(`✅ [ForexService] Forex allocated: ${forexId} (Retention: ${retentionAmount} ${forex.currency})`);
-      return { success: true, forexId: forexId, txId: result.txId, retentionAmount, releaseAmount };
+      return { success: true, forexId: forexId, txId: blockchainTxId || result.txId, retentionAmount, releaseAmount, blockchainSynced, blockchainWarning };
     } catch (error: any) {
       logger.error(`❌ [ForexService] Allocation failed: ${error.message}`);
       throw error;

@@ -42,6 +42,7 @@ const postgresDb = DatabaseService.getInstance();
  */
 router.post('/request',
   authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'),
   [
     body('certificateID').notEmpty().withMessage('Certificate ID is required'),
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
@@ -445,12 +446,16 @@ router.post('/:certificateId/revoke',
         });
       }
       
-      const result = await fabricService.invokeChaincode('RevokePhytosanitaryCertificate', [
+      // RevokePhytosanitaryCertificate (phytosanitary.go:448) takes
+      // (certificateID, revokedBy, reason) — 3 args, reason last, no
+      // timestamp. The old call passed 4 args in the wrong order
+      // (certificateId, reason, revokedBy, date). Use the wrapper, which
+      // already passes the correct 3 args in the right order.
+      const result = await fabricService.revokePhytosanitaryCertificate(
         certificateId,
-        reason,
         revokedBy,
-        new Date().toISOString()
-      ]);
+        reason
+      );
       
       if (result.success) {
         // Mirror into Postgres: the old handler was chaincode-only, so the

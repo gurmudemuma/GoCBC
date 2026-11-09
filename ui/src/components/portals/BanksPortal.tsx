@@ -269,6 +269,18 @@ const BanksPortal: React.FC = () => {
   const [lcAmendmentOpen, setLcAmendmentOpen] = useState(false);
   const [forexDetailsOpen, setForexDetailsOpen] = useState(false);
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false);
+  // Settle Payment dialog state (slice-6 fix: POST /payments/:id/settle
+  // had no UI caller anywhere in the app)
+  const [settleDialogOpen, setSettleDialogOpen] = useState(false);
+  const [settling, setSettling] = useState(false);
+  const [settleForm, setSettleForm] = useState({
+    exchangeRate: '',
+    retentionRate: '40',
+    payingBank: 'Commercial Bank of Ethiopia',
+    payingBankBIC: 'CBETETAA',
+    swiftReference: '',
+    nbeApprovalRef: '',
+  });
   const [selectedForex, setSelectedForex] = useState<ForexAllocation | null>(null);
   const [selectedPaymentForDetails, setSelectedPaymentForDetails] = useState<any | null>(null);
   const [allocationDialogOpen, setAllocationDialogOpen] = useState(false);
@@ -1828,6 +1840,48 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  // Settle Payment — POST /payments/:paymentID/settle (slice-6 fix: the
+  // settle step VERIFIED/SWIFT_RECEIVED → SETTLED had no UI caller
+  // anywhere; payments could only be settled via curl). The route
+  // validates all six fields and reads the payment on-chain first, so
+  // without a Fabric peer it returns 404 and the error is shown honestly.
+  const handleSettlePayment = async () => {
+    const token = localStorage.getItem('authToken');
+    const paymentId = selectedPaymentForDetails?.paymentId || selectedPaymentForDetails?.id;
+    if (!paymentId) return;
+
+    try {
+      setSettling(true);
+      const response = await apiFetch(`/payments/${paymentId}/settle`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          exchangeRate: Number(settleForm.exchangeRate),
+          retentionRate: Number(settleForm.retentionRate),
+          payingBank: settleForm.payingBank,
+          payingBankBIC: settleForm.payingBankBIC,
+          swiftReference: settleForm.swiftReference,
+          nbeApprovalRef: settleForm.nbeApprovalRef,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Payment Settled', `Payment ${paymentId} settled successfully.`);
+        setSettleDialogOpen(false);
+        setPaymentDetailsOpen(false);
+        setSelectedPaymentForDetails(null);
+        loadBankingData();
+      } else {
+        showError('Settlement Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    } finally {
+      setSettling(false);
+    }
+  };
+
   // LC Document Examination - Bank verifies shipping documents against LC terms
   const handleExamineLCDocuments = async (lcId: string, documentsCompliant: boolean, discrepancies: string = '') => {
     const token = localStorage.getItem('authToken');
@@ -1967,6 +2021,42 @@ const BanksPortal: React.FC = () => {
         loadBankingData();
       } else {
         showError('Payment Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message);
+    }
+  };
+
+  // Issue Export Permit — POST /permits (slice-6 fix: the permit step had
+  // no UI caller anywhere in the app; API_ENDPOINTS.permits existed but
+  // was never used). The route only requires permitID + shipmentID and
+  // defaults the rest; the caller supplies contract/exporter/LC when known.
+  const handleIssueExportPermit = async (shipment: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    const shipmentId = shipment.shipmentId || shipment.shipmentID;
+    const contractId = shipment.contractId || shipment.contractID || '';
+    const lc = letterOfCredits.find((l: any) => l.contractId === contractId);
+
+    try {
+      const response = await apiFetch('/permits', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shipmentID: shipmentId,
+          contractID: contractId,
+          exporterID: shipment.exporterId || shipment.exporterID || lc?.exporterId || '',
+          lcID: lc?.lcId || '',
+          paymentMethod: 'LC',
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Export Permit Issued', `Permit ${result.data?.permitId || ''} issued for shipment ${shipmentId}.`);
+        loadBankingData();
+      } else {
+        showError('Permit Issue Failed', result.error?.message || 'Unknown error');
       }
     } catch (error: any) {
       showError('Network Error', error.message);
@@ -4484,6 +4574,104 @@ const BanksPortal: React.FC = () => {
             View Audit Trail
           </Button>
           <Button onClick={() => setPaymentDetailsOpen(false)}>Close</Button>
+          {selectedPaymentForDetails && ['VERIFIED', 'SWIFT_RECEIVED'].includes(String(selectedPaymentForDetails.status || '').toUpperCase()) && (
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={() => {
+                setSettleForm({
+                  exchangeRate: selectedPaymentForDetails.exchangeRate ? String(selectedPaymentForDetails.exchangeRate) : '',
+                  retentionRate: '40',
+                  payingBank: selectedPaymentForDetails.payingBank || 'Commercial Bank of Ethiopia',
+                  payingBankBIC: selectedPaymentForDetails.payingBankBIC || 'CBETETAA',
+                  swiftReference: selectedPaymentForDetails.swiftReference || '',
+                  nbeApprovalRef: '',
+                });
+                setSettleDialogOpen(true);
+              }}
+              sx={{ textTransform: 'none' }}
+            >
+              Settle Payment
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Settle Payment Dialog — slice-6 fix: the settle step had no UI */}
+      <Dialog open={settleDialogOpen} onClose={() => setSettleDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Settle Payment {selectedPaymentForDetails?.paymentId ? `— ${selectedPaymentForDetails.paymentId}` : ''}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Exchange Rate (ETB/USD) *"
+                  type="number"
+                  value={settleForm.exchangeRate}
+                  onChange={(e) => setSettleForm({ ...settleForm, exchangeRate: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Retention Rate (%) *"
+                  type="number"
+                  value={settleForm.retentionRate}
+                  onChange={(e) => setSettleForm({ ...settleForm, retentionRate: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Paying Bank *"
+                  value={settleForm.payingBank}
+                  onChange={(e) => setSettleForm({ ...settleForm, payingBank: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Paying Bank BIC *"
+                  value={settleForm.payingBankBIC}
+                  onChange={(e) => setSettleForm({ ...settleForm, payingBankBIC: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="SWIFT Reference *"
+                  value={settleForm.swiftReference}
+                  onChange={(e) => setSettleForm({ ...settleForm, swiftReference: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="NBE Approval Reference *"
+                  value={settleForm.nbeApprovalRef}
+                  onChange={(e) => setSettleForm({ ...settleForm, nbeApprovalRef: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSettleDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleSettlePayment}
+            disabled={settling || !settleForm.exchangeRate || !settleForm.retentionRate || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
+          >
+            {settling ? 'Settling...' : 'Settle Payment'}
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -6167,11 +6355,22 @@ const BanksPortal: React.FC = () => {
                               Contract: {contractId} {lc && `| LC: ${lc.lcId}`}
                             </Typography>
                           </Box>
-                          <Chip 
-                            label="Delivered" 
-                            color="success" 
-                            icon={<CheckCircle />}
-                          />
+                          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<Description />}
+                              onClick={() => handleIssueExportPermit(shipment)}
+                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', textTransform: 'none', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
+                            >
+                              Issue Export Permit
+                            </Button>
+                            <Chip
+                              label="Delivered"
+                              color="success"
+                              icon={<CheckCircle />}
+                            />
+                          </Box>
                         </Box>
                         
                         <Divider sx={{ my: 2 }} />

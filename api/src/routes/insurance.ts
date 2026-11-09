@@ -5,7 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -31,6 +31,7 @@ const fabricService = FabricService.getInstance();
  */
 router.post('/register',
   authMiddleware,
+  requireRole('EXPORTER', 'BANKS', 'BANK_ADMIN'),
   [
     body('policyNumber').notEmpty().withMessage('Policy number is required'),
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
@@ -150,6 +151,7 @@ router.get('/:policyNumber',
  */
 router.post('/:policyNumber/claim',
   authMiddleware,
+  requireRole('EXPORTER', 'BANKS', 'BANK_ADMIN'),
   [
     param('policyNumber').notEmpty(),
     body('claimAmount').isNumeric().withMessage('Claim amount must be numeric'),

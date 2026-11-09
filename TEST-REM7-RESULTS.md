@@ -4,6 +4,7 @@ Run `REM71730` (2026-11-09 ~17:30 EAT) against the rebuilt local environment:
 PostgreSQL 16.15 (fresh `cecbs` DB, 54 migrations applied incl. new 063 + 064),
 API on port 3001 (`/health` 200, database:true, blockchain:true — gateway
 initialises, chain calls fail honestly with peer errors), UI on port 3000 (200).
+Note: the 54-row count in `_schema_migrations` includes a stale `062_create_shipping_bookings` row applied pre-rename; a fresh clone + clean build applies 53 migrations.
 Fresh test users `test_<role>_TMW977G36` (all 8 roles + suspended; password only
 in `/tmp/cecbs-test-users.txt`). No Fabric network here, so every chaincode-only
 step is marked STATIC-ONLY and was never claimed as proven on-chain.

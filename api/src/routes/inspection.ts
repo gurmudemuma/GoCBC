@@ -14,7 +14,8 @@ const postgresDb = DatabaseService.getInstance();
 // ==================== PRE-SHIPMENT INSPECTION ROUTES ====================
 
 // POST /api/v1/inspection — Create inspection (wrapper for /request endpoint)
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const {
       inspectionID,
@@ -230,7 +231,8 @@ router.get('/status/:status', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/request — Request new inspection
-router.post('/request', authMiddleware, async (req, res) => {
+router.post('/request', authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const {
       inspectionId,
@@ -286,7 +288,8 @@ router.post('/request', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/:id/schedule — Schedule inspection
-router.post('/:id/schedule', authMiddleware, async (req, res) => {
+router.post('/:id/schedule', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -329,7 +332,8 @@ router.post('/:id/schedule', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/:id/results — Record inspection results
-router.post('/:id/results', authMiddleware, async (req, res) => {
+router.post('/:id/results', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -386,7 +390,8 @@ router.post('/:id/results', authMiddleware, async (req, res) => {
 });
 
 // POST /api/v1/inspection/:id/certificate — Issue certificate
-router.post('/:id/certificate', authMiddleware, async (req, res) => {
+router.post('/:id/certificate', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { certificateNumber, certificateURL } = req.body;

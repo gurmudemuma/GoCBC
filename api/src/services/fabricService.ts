@@ -735,7 +735,11 @@ export class FabricService {
             },
           };
         }
-        const payloadText = result.toString();
+        // RegisterECXLot returns error only, so submit() can resolve with
+        // an empty/undefined payload. Never call .toString() on it
+        // unguarded: an undefined payload used to throw a TypeError here
+        // that the catch below then reported as a Fabric verdict.
+        const payloadText = result ? result.toString() : '';
         let responseData: any = null;
         if (payloadText) {
           try {
@@ -777,6 +781,15 @@ export class FabricService {
       } catch (error) {
         lastError = error;
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        // A TypeError here is an API-side failure (e.g. an undefined submit
+        // argument — fabric-common calls args[i].toString() while building
+        // the proposal), not a Fabric verdict. Log the stack so the throw
+        // site can be identified, and never surface JS internals to the
+        // caller as if Fabric had rejected the transaction.
+        const isInternalError = error instanceof TypeError;
+        if (isInternalError) {
+          logger.error(`Internal error invoking ${functionName}:`, (error as Error).stack);
+        }
         logger.error(`Failed to invoke chaincode function ${functionName} (attempt ${attempt}/${maxRetries}): ${errorMessage}`);
         
         const committedDetails = attemptTxId
@@ -834,7 +847,9 @@ export class FabricService {
           : 'Fabric rejected the proposal before ordering; no ledger transaction was created.';
         return {
           success: false,
-          error: `${errorMessage}. ${outcomeMessage}`,
+          error: isInternalError
+            ? `Chaincode call failed before a usable response was received. ${outcomeMessage}`
+            : `${errorMessage}. ${outcomeMessage}`,
           txId: attemptTxId,
           transactionId: attemptTxId,
           consensus: {
@@ -847,10 +862,13 @@ export class FabricService {
       }
     }
     
-    // All retries failed
+    // All retries failed — never surface a JS internal (e.g. a TypeError
+    // from proposal building) as if it were a Fabric verdict.
     return {
       success: false,
-      error: lastError instanceof Error ? lastError.message : 'Unknown error',
+      error: lastError instanceof TypeError
+        ? 'Chaincode call failed before a usable response was received. Transaction outcome is unknown; check before resubmitting.'
+        : lastError instanceof Error ? lastError.message : 'Unknown error',
     };
   }
 
@@ -2258,30 +2276,6 @@ export class FabricService {
       inspectionId,
       approvedBy,
       certificateNo,
-    ]);
-  }
-
-  public async issueExportPermit(
-    inspectionId: string,
-    exportPermitNo: string,
-    issuedBy: string
-  ): Promise<ChaincodeResponse> {
-    return this.invokeChaincode('IssueExportPermit', [
-      inspectionId,
-      exportPermitNo,
-      issuedBy,
-    ]);
-  }
-
-  public async rejectInspection(
-    inspectionId: string,
-    rejectedBy: string,
-    rejectionReason: string
-  ): Promise<ChaincodeResponse> {
-    return this.invokeChaincode('RejectInspection', [
-      inspectionId,
-      rejectedBy,
-      rejectionReason,
     ]);
   }
 

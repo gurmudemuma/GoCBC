@@ -2,7 +2,7 @@
 // Shipping Management Routes - Complete shipping lifecycle tracking
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
@@ -393,7 +393,8 @@ router.get('/tracking', authMiddleware, async (req: Request, res: Response) => {
  * POST /api/v1/shipping/bookings
  * Create a new shipping booking
  */
-router.post('/bookings', authMiddleware, async (req: Request, res: Response) => {
+router.post('/bookings', authMiddleware,
+  requireRole('EXPORTER', 'SHIPPING', 'SHIPPING_ADMIN', 'ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
   try {
     const {
       shipmentID,
@@ -516,7 +517,8 @@ router.post('/bookings', authMiddleware, async (req: Request, res: Response) => 
  * POST /api/v1/shipping/bookings/:bookingId/load
  * Record cargo loading
  */
-router.post('/bookings/:bookingId/load', authMiddleware, async (req: Request, res: Response) => {
+router.post('/bookings/:bookingId/load', authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { bookingId } = req.params;
     const { loadingDate, containerNumbers, sealNumbers, loadedBy } = req.body;
@@ -586,7 +588,8 @@ router.post('/bookings/:bookingId/load', authMiddleware, async (req: Request, re
  * POST /api/v1/shipping/bookings/:bookingId/depart
  * Record vessel departure
  */
-router.post('/bookings/:bookingId/depart', authMiddleware, async (req: Request, res: Response) => {
+router.post('/bookings/:bookingId/depart', authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { bookingId } = req.params;
     const { departureDate, actualDepartureTime } = req.body;
@@ -652,7 +655,8 @@ router.post('/bookings/:bookingId/depart', authMiddleware, async (req: Request, 
  * POST /api/v1/shipping/bookings/:bookingId/arrive
  * Record vessel arrival
  */
-router.post('/bookings/:bookingId/arrive', authMiddleware, async (req: Request, res: Response) => {
+router.post('/bookings/:bookingId/arrive', authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { bookingId } = req.params;
     const { arrivalDate, actualArrivalTime } = req.body;
@@ -718,7 +722,8 @@ router.post('/bookings/:bookingId/arrive', authMiddleware, async (req: Request, 
  * POST /api/v1/shipping/bookings/:bookingId/deliver
  * Record cargo delivery
  */
-router.post('/bookings/:bookingId/deliver', authMiddleware, async (req: Request, res: Response) => {
+router.post('/bookings/:bookingId/deliver', authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { bookingId } = req.params;
     const { deliveryDate, receivedBy, deliveryNotes } = req.body;

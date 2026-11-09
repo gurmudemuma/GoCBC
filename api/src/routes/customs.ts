@@ -28,6 +28,7 @@ const validateRequest = (req: Request, res: Response, next: any) => {
  */
 router.post('/',
   authMiddleware,
+  requireRole('EXPORTER', 'CUSTOMS', 'CUSTOMS_ADMIN', 'ECTA', 'ECTA_ADMIN'),
   async (req: Request, res: Response) => {
     try {
       const {
@@ -233,6 +234,7 @@ router.get('/declarations',
 
 router.post('/risk-assessment',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   [
     body('shipmentID').notEmpty(),
     body('exporterID').notEmpty(),
@@ -275,6 +277,7 @@ router.post('/risk-assessment',
 
 router.post('/clearance',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   [body('shipmentID').notEmpty(), body('clearanceNumber').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -672,6 +675,7 @@ router.get('/declarations',
  */
 router.post('/declaration/submit',
   authMiddleware,
+  requireRole('EXPORTER', 'CUSTOMS', 'CUSTOMS_ADMIN', 'ECTA', 'ECTA_ADMIN'),
   [
     body('declarationID').notEmpty(),
     body('shipmentID').notEmpty(),
@@ -717,26 +721,45 @@ router.post('/declaration/submit',
         });
       }
 
-      // ✅ BLOCKCHAIN-FIRST: Submit declaration to chaincode BEFORE DB write
-      const blockchainResult = await fabricService.invokeChaincode(
-        'SubmitCustomsDeclaration',
-        [
-          declarationID,
-          shipmentID,
-          exporterID,
-          declarationType || 'STANDARD',
-          hsCode || '090111',
-          String(quantity || 0),
-          String(value || 0),
-          currency || 'USD',
-          destination || 'Unknown',
-          portOfExit || 'Djibouti Port',
-          String(eudrCompliant || false)
-        ]
-      );
-      
-      const blockchain_tx_id = blockchainResult?.txId || null;
-      logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
+      // Chaincode sync is best-effort (cf. quality.ts syncQualityDecisionBestEffort):
+      // the Postgres SUBMITTED row is the record of the declaration. A failed
+      // chain call must never produce a fabricated blockchain_tx_id, and must
+      // never be logged as recorded on-chain.
+      let blockchainResult: any = null;
+      let blockchainError: string | null = null;
+      try {
+        blockchainResult = await fabricService.invokeChaincode(
+          'SubmitCustomsDeclaration',
+          [
+            declarationID,
+            shipmentID,
+            exporterID,
+            declarationType || 'STANDARD',
+            hsCode || '090111',
+            String(quantity || 0),
+            String(value || 0),
+            currency || 'USD',
+            destination || 'Unknown',
+            portOfExit || 'Djibouti Port',
+            String(eudrCompliant || false)
+          ]
+        );
+        if (!blockchainResult?.success) {
+          blockchainError = blockchainResult?.error || 'Chaincode call did not succeed';
+        }
+      } catch (chainError: any) {
+        blockchainError = chainError?.message || 'Chaincode call failed';
+        blockchainResult = null;
+      }
+      const blockchainSynced = !blockchainError && blockchainResult?.success === true;
+      // Only a ledger-confirmed txId may be stored or returned. A txId the
+      // client generated for a proposal that was never endorsed is not one.
+      const blockchain_tx_id = blockchainSynced ? (blockchainResult?.txId || null) : null;
+      if (blockchainSynced) {
+        logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
+      } else {
+        logger.warn(`[CUSTOMS] Declaration ${declarationID} NOT recorded on blockchain (PG SUBMITTED row kept): ${blockchainError}`);
+      }
 
       // Now persist to database with blockchain TX ID
       await postgresDb.run(
@@ -775,6 +798,8 @@ router.post('/declaration/submit',
           shipmentID,
           status: 'SUBMITTED',
           blockchain_tx_id,
+          blockchainSynced,
+          blockchainError,
           message: 'Declaration submitted successfully and ready for customs officer review'
         },
         timestamp: new Date().toISOString()
@@ -796,6 +821,7 @@ router.post('/declaration/submit',
  */
 router.post('/test-shipment-update/:shipmentId',
   authMiddleware,
+  requireRole('ADMIN'),
   async (req: Request, res: Response) => {
     try {
       const { shipmentId } = req.params;
@@ -1031,6 +1057,7 @@ export default router;
  */
 router.post('/declaration/:declarationId/review',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   param('declarationId').notEmpty(),
   async (req: Request, res: Response) => {
     try {
@@ -1043,27 +1070,67 @@ router.post('/declaration/:declarationId/review',
       // Use the assigned inspector's username directly (no more mapping)
       const officerName = assignedInspector || user.username || 'Customs Officer';
 
-      // ✅ BLOCKCHAIN-FIRST: Call ReviewCustomsDeclaration chaincode BEFORE DB update
-      const blockchainResult = await fabricService.invokeChaincode(
-        'ReviewCustomsDeclaration',
-        [
-          declarationId,
-          officerName,
-          inspectionType || 'STANDARD',
-          inspectorNotes || 'Inspection scheduled'
-        ]
+      // The declaration must exist: the UPDATE below would otherwise
+      // silently affect 0 rows and still return 200 for a phantom review.
+      const existingDeclaration = await postgresDb.get(
+        `SELECT declaration_number, status FROM customs_declarations WHERE declaration_number = $1`,
+        [declarationId]
       );
-      
-      const blockchain_tx_id = blockchainResult?.txId || null;
-      logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+      if (!existingDeclaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Declaration ${declarationId} not found` },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Chaincode sync is best-effort (see submit above): the Postgres
+      // UNDER_INSPECTION progression is recorded either way, but a failed
+      // chain call never yields a fabricated txId or a "recorded on
+      // blockchain" log line, and never overwrites a stored txId with null.
+      let blockchainResult: any = null;
+      let blockchainError: string | null = null;
+      try {
+        blockchainResult = await fabricService.invokeChaincode(
+          'ReviewCustomsDeclaration',
+          [
+            declarationId,
+            officerName,
+            inspectionType || 'STANDARD',
+            inspectorNotes || 'Inspection scheduled'
+          ]
+        );
+        if (!blockchainResult?.success) {
+          blockchainError = blockchainResult?.error || 'Chaincode call did not succeed';
+        }
+      } catch (chainError: any) {
+        blockchainError = chainError?.message || 'Chaincode call failed';
+        blockchainResult = null;
+      }
+      const blockchainSynced = !blockchainError && blockchainResult?.success === true;
+      const blockchain_tx_id = blockchainSynced ? (blockchainResult?.txId || null) : null;
+      if (blockchainSynced) {
+        logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+      } else {
+        logger.warn(`[CUSTOMS] Declaration ${declarationId} review NOT recorded on blockchain (PG UNDER_INSPECTION kept): ${blockchainError}`);
+      }
 
       // Now update declaration with assigned officer and status
-      await postgresDb.run(
-        `UPDATE customs_declarations 
-         SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW() 
-         WHERE declaration_number = $4`,
-        [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
-      );
+      if (blockchainSynced) {
+        await postgresDb.run(
+          `UPDATE customs_declarations
+           SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW()
+           WHERE declaration_number = $4`,
+          [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
+        );
+      } else {
+        await postgresDb.run(
+          `UPDATE customs_declarations
+           SET customs_officer = $1, status = $2, updated_at = NOW()
+           WHERE declaration_number = $3`,
+          [officerName, 'UNDER_INSPECTION', declarationId]
+        );
+      }
 
       logger.info(`[CUSTOMS] Declaration ${declarationId} updated: officer=${officerName}, status=UNDER_INSPECTION`);
 
@@ -1074,6 +1141,8 @@ router.post('/declaration/:declarationId/review',
           status: 'UNDER_INSPECTION',
           assignedOfficer: officerName,
           blockchain_tx_id,
+          blockchainSynced,
+          blockchainError,
           message: 'Inspection scheduled successfully'
         },
         timestamp: new Date().toISOString()
@@ -1180,8 +1249,10 @@ const inspectHandler = async (req: Request, res: Response) => {
 };
 
 // Register both plural and singular routes
-router.post('/declarations/:id/inspect', authMiddleware, param('id').notEmpty(), inspectHandler);
-router.post('/declaration/:declarationId/inspect', authMiddleware, param('declarationId').notEmpty(), inspectHandler);
+router.post('/declarations/:id/inspect', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), param('id').notEmpty(), inspectHandler);
+router.post('/declaration/:declarationId/inspect', authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), param('declarationId').notEmpty(), inspectHandler);
 
 /**
  * POST /api/v1/customs/declarations/:id/clear
@@ -1199,6 +1270,7 @@ router.post('/declaration/:declarationId/inspect', authMiddleware, param('declar
  */
 router.post('/declaration/:declarationId/complete-inspection',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   param('declarationId').notEmpty(),
   async (req: Request, res: Response) => {
     try {
@@ -1208,25 +1280,65 @@ router.post('/declaration/:declarationId/complete-inspection',
 
       logger.info(`[CUSTOMS] Completing inspection for declaration ${declarationId} by ${user.username}`);
 
-      // ✅ BLOCKCHAIN-FIRST: Call CompleteInspection chaincode BEFORE DB update
-      const blockchainResult = await fabricService.invokeChaincode(
-        'CompleteInspection',
-        [
-          declarationId,
-          inspectorComments || 'Inspection completed'
-        ]
+      // The declaration must exist: the UPDATE below would otherwise
+      // silently affect 0 rows and still return 200 for a phantom completion.
+      const existingForCompletion = await postgresDb.get(
+        `SELECT declaration_number, status FROM customs_declarations WHERE declaration_number = $1`,
+        [declarationId]
       );
-      
-      const blockchain_tx_id = blockchainResult?.txId || null;
-      logger.info(`✅ Inspection completion recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+      if (!existingForCompletion) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Declaration ${declarationId} not found` },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Chaincode sync is best-effort (see submit above): the Postgres
+      // UNDER_REVIEW progression is recorded either way, but a failed chain
+      // call never yields a fabricated txId or a "recorded on blockchain"
+      // log line, and never overwrites a stored txId with null.
+      let blockchainResult: any = null;
+      let blockchainError: string | null = null;
+      try {
+        blockchainResult = await fabricService.invokeChaincode(
+          'CompleteInspection',
+          [
+            declarationId,
+            inspectorComments || 'Inspection completed'
+          ]
+        );
+        if (!blockchainResult?.success) {
+          blockchainError = blockchainResult?.error || 'Chaincode call did not succeed';
+        }
+      } catch (chainError: any) {
+        blockchainError = chainError?.message || 'Chaincode call failed';
+        blockchainResult = null;
+      }
+      const blockchainSynced = !blockchainError && blockchainResult?.success === true;
+      const blockchain_tx_id = blockchainSynced ? (blockchainResult?.txId || null) : null;
+      if (blockchainSynced) {
+        logger.info(`✅ Inspection completion recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
+      } else {
+        logger.warn(`[CUSTOMS] Declaration ${declarationId} inspection completion NOT recorded on blockchain (PG UNDER_REVIEW kept): ${blockchainError}`);
+      }
 
       // Now update declaration status to UNDER_REVIEW after inspection
-      await postgresDb.run(
-        `UPDATE customs_declarations 
-         SET status = $1, blockchain_tx_id = $2, updated_at = NOW() 
-         WHERE declaration_number = $3`,
-        ['UNDER_REVIEW', blockchain_tx_id, declarationId]
-      );
+      if (blockchainSynced) {
+        await postgresDb.run(
+          `UPDATE customs_declarations
+           SET status = $1, blockchain_tx_id = $2, updated_at = NOW()
+           WHERE declaration_number = $3`,
+          ['UNDER_REVIEW', blockchain_tx_id, declarationId]
+        );
+      } else {
+        await postgresDb.run(
+          `UPDATE customs_declarations
+           SET status = $1, updated_at = NOW()
+           WHERE declaration_number = $2`,
+          ['UNDER_REVIEW', declarationId]
+        );
+      }
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} inspection completed: status=UNDER_REVIEW`);
 
@@ -1236,6 +1348,9 @@ router.post('/declaration/:declarationId/complete-inspection',
           declarationId,
           status: 'UNDER_REVIEW',
           inspectionResult: inspectionResult || 'PASSED',
+          blockchain_tx_id,
+          blockchainSynced,
+          blockchainError,
           message: 'Inspection completed successfully. Declaration moved to UNDER_REVIEW for final clearance.'
         },
         timestamp: new Date().toISOString()
@@ -1340,6 +1455,7 @@ router.post('/declaration/:declarationId/reject',
  */
 router.post('/declaration/:declarationId/clear',
   authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   param('declarationId').notEmpty(),
   async (req: Request, res: Response) => {
     try {
@@ -1396,7 +1512,11 @@ router.post('/declaration/:declarationId/clear',
         userOrg: user.org || 'CustomsMSP'
       });
 
-      logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully`);
+      if (result.blockchainSynced) {
+        logger.info(`[CUSTOMS] ✅ Declaration ${declarationId} cleared successfully (on-chain TX: ${result.blockchainTxId})`);
+      } else {
+        logger.warn(`[CUSTOMS] Declaration ${declarationId} cleared in PG only (chain not synced): ${result.blockchainError}`);
+      }
 
       // The linked shipment moves to CUSTOMS_CLEARED on-chain via the
       // ClearCustomsDeclaration cascade itself (customs.go) — there is
@@ -1416,6 +1536,9 @@ router.post('/declaration/:declarationId/clear',
           shipmentID: declaration.shipment_id,
           status: 'CLEARED',
           clearedBy: clearedBy || user.username,
+          blockchain_tx_id: result.blockchainTxId || null,
+          blockchainSynced: result.blockchainSynced,
+          blockchainError: result.blockchainError,
           message: 'Declaration cleared successfully',
           debug: {
             shipmentIdFound: !!declaration.shipment_id,

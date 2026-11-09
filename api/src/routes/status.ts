@@ -237,14 +237,45 @@ router.get('/workflow/:entityId',
   }
 );
 
+// Chaincode function names, verified against chaincodes/coffee/*.go.
+// The old code built `Read${entityType}` and `QueryBy${fieldName}` — no
+// such functions exist, so every lookup silently fell through to
+// NOT_FOUND / [] with HTTP 200. Only names in these maps are ever called;
+// an unmapped combination returns NOT_FOUND / [] without a chaincode call
+// (EUDR / LANDTRANSPORT / CUSTOMS / COURIER have no ByShipment query on
+// the ledger, so there is nothing correct to call for them).
+const ENTITY_READ_FUNCTION: Record<string, string> = {
+  CONTRACT: 'ReadSalesContract', // main.go:681
+  SHIPMENT: 'ReadShipment', // main.go:2053
+  PAYMENT: 'ReadPayment', // payment.go:1070
+};
+
+const RELATED_QUERY_FUNCTION: Record<string, string> = {
+  'FOREX:contractId': 'QueryForexByContract', // forex.go:974
+  'LC:contractId': 'QueryLCsByContract', // banking.go:1554
+  'SHIPMENT:contractId': 'QueryShipmentsByContract', // main.go:2834
+  'PAYMENT:contractId': 'QueryPaymentsByContract', // payment.go:1168
+  'QUALITY:shipmentId': 'QueryInspectionsByShipment', // inspection.go:537
+  'PHYTOSANITARY:shipmentId': 'QueryPhytosanitaryCertificatesByShipment', // phytosanitary.go:509
+  'BORDERCROSSING:shipmentId': 'QueryBorderCrossingsByShipment', // bordercrossing.go:873
+  'INSURANCE:shipmentId': 'QueryInsuranceCertificatesByShipment', // insurance.go:268
+  'SWIFT:paymentId': 'QuerySWIFTMessagesByPayment', // swift.go:1165
+  'DOCUMENTS:paymentId': 'QueryDocumentsByEntity', // documents.go:244 (takes entityID)
+};
+
 // Helper functions
 async function getEntityStatus(entityType: string, entityId: string) {
   try {
+    const readFunction = ENTITY_READ_FUNCTION[entityType];
+    if (!readFunction) {
+      logger.warn(`No chaincode read function mapped for entity type ${entityType}`);
+      return { id: entityId, status: 'NOT_FOUND', lastUpdated: null };
+    }
     const { FabricService } = await import('../services/fabricService');
     const fabricService = FabricService.getInstance();
-    
-    const result = await fabricService.queryChaincode(`Read${entityType}`, [entityId]);
-    
+
+    const result = await fabricService.queryChaincode(readFunction, [entityId]);
+
     if (result.success && result.data) {
       return {
         id: entityId,
@@ -255,17 +286,22 @@ async function getEntityStatus(entityType: string, entityId: string) {
   } catch (error) {
     logger.warn(`Could not get status for ${entityType} ${entityId}`);
   }
-  
+
   return { id: entityId, status: 'NOT_FOUND', lastUpdated: null };
 }
 
 async function getRelatedStatus(entityType: string, fieldName: string, fieldValue: string) {
   try {
+    const queryFunction = RELATED_QUERY_FUNCTION[`${entityType}:${fieldName}`];
+    if (!queryFunction) {
+      logger.warn(`No chaincode query function mapped for ${entityType} by ${fieldName}; returning []`);
+      return [];
+    }
     const { FabricService } = await import('../services/fabricService');
     const fabricService = FabricService.getInstance();
-    
+
     const result = await fabricService.queryChaincode(
-      `QueryBy${fieldName.charAt(0).toUpperCase() + fieldName.slice(1)}`,
+      queryFunction,
       [fieldValue]
     );
     

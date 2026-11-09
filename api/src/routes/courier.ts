@@ -5,7 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -29,6 +29,7 @@ const fabricService = FabricService.getInstance();
  */
 router.post('/:shipmentID/send',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('courierCompany').notEmpty().withMessage('Courier company is required'),
@@ -96,6 +97,7 @@ router.post('/:shipmentID/send',
  */
 router.post('/:shipmentID/receive',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('receivedDate').notEmpty().withMessage('Received date is required'),
@@ -206,6 +208,7 @@ router.get('/:shipmentID/status',
  */
 router.put('/:shipmentID/update-status',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty(),
     body('status').notEmpty().withMessage('Status is required'),

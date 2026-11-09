@@ -5,7 +5,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 
 const router = express.Router();
@@ -30,6 +30,7 @@ const fabricService = FabricService.getInstance();
  */
 router.post('/due-diligence',
   authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'),
   [
     body('dueDiligenceID').notEmpty().withMessage('Due diligence ID is required'),
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),

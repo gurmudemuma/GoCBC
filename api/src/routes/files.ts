@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
+import { requireRole } from '../middleware/auth';
 
 const router = express.Router();
 const uploadDir = path.resolve(__dirname, '../../uploads');
@@ -72,7 +73,8 @@ const upload = multer({
  *       500:
  *         description: Internal server error
  */
-router.post('/upload', upload.single('file'), (req, res) => {
+router.post('/upload',
+  requireRole('ADMIN'), upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -133,7 +135,8 @@ router.post('/upload', upload.single('file'), (req, res) => {
  *       404:
  *         description: File not found
  */
-router.get('/:filename', (req, res) => {
+router.get('/:filename',
+  requireRole('ADMIN'), (req, res) => {
   const { filename } = req.params;
   const filePath = path.resolve(uploadDir, filename);
   const uploadDirPrefix = `${uploadDir}${path.sep}`;

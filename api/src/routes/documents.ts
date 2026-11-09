@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { DigitalSignatureService } from '../services/digitalSignatureService';
 import { CertificateManager } from '../utils/certificateManager';
@@ -67,8 +67,67 @@ const validateRequest = (req: Request, res: Response, next: any) => {
   next();
 };
 
+// Ownership / org scoping for document access (RBAC slices 4+5, Task B).
+// Reviewer orgs take part in the workflow and must keep seeing applicant
+// documents: ECTA, ECX, Banks, NBE, Customs, Shipping (+ ADMIN) may access
+// any document. EXPORTER and APPLICANT callers may access only documents
+// they own: exporter_id == their exporterId, uploaded_by == their user id
+// or username, or (for application documents) entity_id == their
+// applicationId. Anything else is denied with 403 (never a leak via 404
+// differences: the doc-exists check runs first, so a 403 means "exists
+// but not yours").
+const DOCUMENT_REVIEWER_ROLES = new Set([
+  'ADMIN', 'ECTA', 'ECTA_ADMIN', 'ECX', 'ECX_ADMIN', 'BANKS', 'BANK_ADMIN',
+  'NBE', 'NBE_ADMIN', 'CUSTOMS', 'CUSTOMS_ADMIN', 'SHIPPING', 'SHIPPING_ADMIN',
+]);
+
+function documentCallerIds(user: any): Set<string> {
+  const ids = new Set<string>();
+  for (const v of [user?.exporterId, user?.username, user?.userId, user?.sub, user?.applicationId]) {
+    if (v !== undefined && v !== null && String(v) !== '') ids.add(String(v));
+  }
+  return ids;
+}
+
+function canAccessDocument(user: any, doc: any): boolean {
+  if (!user || !doc) return false;
+  if (DOCUMENT_REVIEWER_ROLES.has(String(user.role))) return true;
+  const ids = documentCallerIds(user);
+  if (ids.size === 0) return false;
+  if (doc.exporter_id !== undefined && doc.exporter_id !== null && ids.has(String(doc.exporter_id))) return true;
+  if (doc.uploaded_by !== undefined && doc.uploaded_by !== null && ids.has(String(doc.uploaded_by))) return true;
+  if (doc.entity_type && String(doc.entity_type).toUpperCase() === 'APPLICATION'
+      && doc.entity_id !== undefined && doc.entity_id !== null && ids.has(String(doc.entity_id))) return true;
+  if (doc.entity_type && String(doc.entity_type).toUpperCase() === 'EXPORTER_APPLICATION'
+      && doc.entity_id !== undefined && doc.entity_id !== null && ids.has(String(doc.entity_id))) return true;
+  return false;
+}
+
+function documentAccessDenied(res: Response) {
+  return res.status(403).json({
+    success: false,
+    error: { code: 'FORBIDDEN', message: 'You do not have access to this document' },
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// An applicant (or exporter acting on an application) may only attach
+// documents to their own application. Shipment/contract linkage is NOT
+// enforced here: those entities are chain-first and may have no Postgres
+// row to check against (residual, reported in the RBAC audit).
+function assertOwnApplication(user: any, entityType: string | undefined, entityId: string | undefined): string | null {
+  if (!user || (user.role !== 'APPLICANT' && user.role !== 'EXPORTER')) return null;
+  if (!entityType || !entityId) return null;
+  const t = String(entityType).toUpperCase();
+  if (t !== 'APPLICATION' && t !== 'EXPORTER_APPLICATION') return null;
+  const ids = documentCallerIds(user);
+  if (ids.has(String(entityId))) return null;
+  return 'Documents can only be attached to your own application';
+}
+
 router.post('/',
   authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN', 'ECX', 'ECX_ADMIN', 'BANKS', 'BANK_ADMIN', 'NBE', 'NBE_ADMIN', 'CUSTOMS', 'CUSTOMS_ADMIN', 'SHIPPING', 'SHIPPING_ADMIN', 'APPLICANT'),
   [
     body('documentID').notEmpty(),
     body('documentType').notEmpty(),
@@ -83,6 +142,15 @@ router.post('/',
       const exporterID = user.exporterId || user.username;
       const documentEntityId = entityId || shipmentID || contractID || documentID;
       const documentEntityType = entityType || (shipmentID ? 'SHIPMENT' : contractID ? 'CONTRACT' : 'DOCUMENT');
+
+      const ownApplicationError = assertOwnApplication(user, documentEntityType, documentEntityId);
+      if (ownApplicationError) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: ownApplicationError },
+          timestamp: new Date().toISOString()
+        });
+      }
 
       // ✅ BLOCKCHAIN FIRST: Register document hash on blockchain
       logger.info(`Registering document ${documentID} on blockchain...`);
@@ -163,6 +231,7 @@ router.post('/',
 
 router.post('/:documentID/verify',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN', 'BANKS', 'BANK_ADMIN'),
   [body('verified').isBoolean()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -345,8 +414,10 @@ router.get('/',
 
       query += ' ORDER BY uploaded_at DESC';
       const documents = await postgresDb.all(query, params);
+      const user = (req as any).user;
+      const visibleDocuments = documents.filter((d: any) => canAccessDocument(user, d));
 
-      res.json({ success: true, data: { documents }, timestamp: new Date().toISOString() });
+      res.json({ success: true, data: { documents: visibleDocuments }, timestamp: new Date().toISOString() });
     } catch (error: any) {
       res.status(500).json({
         success: false,
@@ -362,7 +433,7 @@ router.get('/',
  * Get document verification queue for ECTA portal
  * IMPORTANT: Must be before /:documentId route to avoid matching conflict
  */
-router.get('/verification', authMiddleware, async (req: Request, res: Response) => {
+router.get('/verification', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN', 'BANKS', 'BANK_ADMIN'), async (req: Request, res: Response) => {
   try {
     logger.info('[DOCUMENTS] Fetching verification queue...');
 
@@ -425,6 +496,7 @@ router.get('/verification', authMiddleware, async (req: Request, res: Response) 
 // ✅ FIX: Add general upload endpoint with authentication
 router.post('/upload',
   authMiddleware,
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN', 'ECX', 'ECX_ADMIN', 'BANKS', 'BANK_ADMIN', 'NBE', 'NBE_ADMIN', 'CUSTOMS', 'CUSTOMS_ADMIN', 'SHIPPING', 'SHIPPING_ADMIN', 'APPLICANT'),
   upload.single('file'),
   async (req: Request, res: Response) => {
     try {
@@ -449,6 +521,16 @@ router.post('/upload',
       const documentID = `DOC-${Date.now()}${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
       const finalEntityType = entityType || 'CONTRACT';
       const finalEntityId = entityId || documentID;
+
+      const ownApplicationError = assertOwnApplication(user, finalEntityType, finalEntityId);
+      if (ownApplicationError) {
+        if (file) fs.unlinkSync(file.path);
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: ownApplicationError },
+          timestamp: new Date().toISOString()
+        });
+      }
       
       // ✅ AUTOMATIC TYPE CORRECTION: Convert SALES_CONTRACT to CONTRACT_SIGNED for contracts
       let finalDocType = documentType || 'OTHER';
@@ -562,7 +644,7 @@ router.post('/upload',
           user.userId || user.sub || user.username,
           'active',
           description || null,
-          blockchainResult.txId,
+          blockchainResult.success ? blockchainResult.txId : null,
           visualSignatureAdded ? 'signed' : 'pending'
         ]
       );
@@ -829,6 +911,11 @@ router.get('/:documentId/download',
           timestamp: new Date().toISOString()
         });
       }
+
+      if (!canAccessDocument((req as any).user, doc)) {
+        logger.warn(`Document access denied: ${documentId} for ${(req as any).user?.username} (${(req as any).user?.role})`);
+        return documentAccessDenied(res);
+      }
       
       logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
       
@@ -960,6 +1047,11 @@ router.get('/:documentId/view',
           timestamp: new Date().toISOString()
         });
       }
+
+      if (!canAccessDocument((req as any).user, doc)) {
+        logger.warn(`Document view denied: ${documentId} for ${(req as any).user?.username} (${(req as any).user?.role})`);
+        return documentAccessDenied(res);
+      }
       
       logger.info(`Document found: ${doc.file_name}, path: ${doc.file_path}`);
       
@@ -1068,10 +1160,10 @@ router.get('/:documentId',
       
       // Get document info only (metadata)
       const doc = await postgresDb.get(
-        'SELECT document_id, entity_type, entity_id, document_type, file_name, file_hash, mime_type, file_size, uploaded_by, status, uploaded_at FROM documents WHERE document_id = $1',
+        'SELECT document_id, entity_type, entity_id, exporter_id, document_type, file_name, file_hash, mime_type, file_size, uploaded_by, status, uploaded_at FROM documents WHERE document_id = $1',
         [documentId]
       );
-      
+
       if (!doc) {
         return res.status(404).json({
           success: false,
@@ -1079,7 +1171,11 @@ router.get('/:documentId',
           timestamp: new Date().toISOString()
         });
       }
-      
+
+      if (!canAccessDocument((req as any).user, doc)) {
+        return documentAccessDenied(res);
+      }
+
       res.json({
         success: true,
         data: doc,
@@ -1203,7 +1299,12 @@ router.get('/entity/:entityType/:entityId',
       
       // Replace with deduplicated list
       allDocuments = Array.from(seen.values());
-      
+
+      // Ownership scoping: exporters/applicants see only their own documents
+      // in the list; reviewers see everything (see canAccessDocument).
+      const user = (req as any).user;
+      allDocuments = allDocuments.filter((d: any) => canAccessDocument(user, d));
+
       logger.info(`Total: Found ${allDocuments.length} unique documents for ${entityType}/${entityId} (after deduplication)`);
       
       res.json({
@@ -1267,6 +1368,10 @@ router.post('/:documentId/sign',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument(user, doc)) {
+        return documentAccessDenied(res);
       }
 
       // ✅ 2. MULTI-PARTY APPROVAL: Validate approval for APPROVE signature type
@@ -1849,7 +1954,7 @@ router.get('/:documentId/signatures',
 
       // Get document info
       const doc = await postgresDb.get(
-        'SELECT document_id, file_name, status FROM documents WHERE document_id = $1',
+        'SELECT document_id, exporter_id, uploaded_by, entity_type, entity_id, file_name, status FROM documents WHERE document_id = $1',
         [documentId]
       );
 
@@ -1859,6 +1964,10 @@ router.get('/:documentId/signatures',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument((req as any).user, doc)) {
+        return documentAccessDenied(res);
       }
 
       // Get all signatures
@@ -1910,6 +2019,21 @@ router.get('/:documentId/verify-signatures',
       const { documentId } = req.params;
 
       logger.info(`[BLOCKCHAIN VERIFY] Verifying signatures for document: ${documentId}`);
+
+      const doc = await postgresDb.get(
+        'SELECT document_id, exporter_id, uploaded_by, entity_type, entity_id FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!canAccessDocument((req as any).user, doc)) {
+        return documentAccessDenied(res);
+      }
 
       // Get all signatures from database
       const signatures = await postgresDb.all(
@@ -2148,6 +2272,21 @@ router.get('/:documentId/signature-history',
 
       logger.info(`Fetching signature history for document: ${documentId}`);
 
+      const doc = await postgresDb.get(
+        'SELECT document_id, exporter_id, uploaded_by, entity_type, entity_id FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!canAccessDocument((req as any).user, doc)) {
+        return documentAccessDenied(res);
+      }
+
       // Get signatures
       const signatures = await postgresDb.all(
         `SELECT * FROM document_signatures WHERE document_id = $1 ORDER BY signed_at ASC`,
@@ -2196,7 +2335,7 @@ router.get('/:documentId/signature-status',
 
       // Get document info
       const document = await postgresDb.get(
-        'SELECT document_id, file_name, entity_type, entity_id FROM documents WHERE document_id = $1',
+        'SELECT document_id, exporter_id, uploaded_by, file_name, entity_type, entity_id FROM documents WHERE document_id = $1',
         [documentId]
       );
 
@@ -2206,6 +2345,10 @@ router.get('/:documentId/signature-status',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument((req as any).user, document)) {
+        return documentAccessDenied(res);
       }
 
       // Get signature count and latest signature
@@ -2383,7 +2526,7 @@ router.get('/:documentId/approval-status',
 
       // Get document info
       const doc = await postgresDb.get(
-        'SELECT document_id, document_type, entity_type, status FROM documents WHERE document_id = $1',
+        'SELECT document_id, exporter_id, uploaded_by, entity_id, document_type, entity_type, status FROM documents WHERE document_id = $1',
         [documentId]
       );
 
@@ -2393,6 +2536,10 @@ router.get('/:documentId/approval-status',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument(user, doc)) {
+        return documentAccessDenied(res);
       }
 
       // Get approval requirements and workflow state
@@ -2506,6 +2653,10 @@ router.get('/:documentId/verify-signatures',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument((req as any).user, doc)) {
+        return documentAccessDenied(res);
       }
 
       // 2. Get all signatures from database
@@ -2773,6 +2924,10 @@ router.post('/:documentId/add-certificate-page',
           error: { code: 'NOT_FOUND', message: 'Document not found' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      if (!canAccessDocument(user, doc)) {
+        return documentAccessDenied(res);
       }
 
       // 2. Get all signatures

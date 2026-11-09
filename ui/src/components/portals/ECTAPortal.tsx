@@ -78,6 +78,7 @@ import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 import { useForm, Controller } from 'react-hook-form';
 import { InspectionManagement } from './InspectionManagement';
 import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
+import { PhytosanitaryCertificates } from './PhytosanitaryCertificates';
 
 // NEW: Pre-shipment Inspection Tab
 import { InspectionRequestsTab } from '@/components/inspection';
@@ -447,6 +448,7 @@ const ECTAPortal: React.FC = () => {
       { index: 7, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'ECTA', 'ECTA Portal Administrator'] },
       { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer', 'License Officer', 'Quality Inspector', 'Lab Analyst', 'Permit Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
       { index: 9, label: 'Post-Delivery Audits', icon: <CheckCircle sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'ECTA Officer'] },
+      { index: 10, label: 'Phytosanitary Certificates', icon: <Science sx={{ fontSize: 20 }} />, roles: ['ECTA', 'ADMIN', 'Quality Inspector', 'Lab Analyst', 'ECTA Officer', 'ECTA_SUPERVISOR', 'ECTA_INSPECTOR'] },
     ];
     
     // Super Admin sees all tabs
@@ -3283,6 +3285,20 @@ The exporter can reapply once all requirements are met.`,
                 })}
               </Grid>
             )}
+          </Box>
+        </TabPanel>
+        <TabPanel value={tabValue} index={10}>
+          {/* Phytosanitary Certificates Tab — slice-6 fix: the component
+              existed but was never mounted in any portal, so the phyto
+              step (request → inspect → issue) had no UI path. */}
+          <Box>
+            <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>
+              🌿 Phytosanitary Certificates
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Request, inspect and issue phytosanitary certificates for shipments.
+            </Typography>
+            <PhytosanitaryCertificates />
           </Box>
         </TabPanel>
       </Box>

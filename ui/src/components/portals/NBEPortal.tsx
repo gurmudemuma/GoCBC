@@ -117,7 +117,7 @@ interface ForexAllocation {
   retentionRate: number;
   retentionStatus?: string;
   transportMode?: TransportMode;
-  status: 'REQUESTED' | 'CONFIRMED' | 'ALLOCATED' | 'UTILIZED';
+  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED'; // APPROVED is the legacy value the pre-fix NBE approve route wrote (042b8b7); allocateForex treats it as CONFIRMED
   requestDate: string;
   approvalDate?: string | null;
   allocationDate?: string | null;
@@ -241,6 +241,18 @@ const NBEPortal: React.FC = () => {
     expiryDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
   });
 
+  // Record Retention dialog state (slice-6 fix: POST
+  // /retention/:forexId/retention had no UI caller anywhere; ALLOCATED /
+  // UTILIZED allocations showed a retention status but it could never be
+  // recorded from the portal)
+  const [retentionDialogOpen, setRetentionDialogOpen] = useState(false);
+  const [recordingRetention, setRecordingRetention] = useState(false);
+  const [retentionForm, setRetentionForm] = useState({
+    forexId: '',
+    fcyAccountNumber: '',
+    retentionPercentage: '',
+  });
+
   // Pagination State
   const [currentPage, setCurrentPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -315,7 +327,7 @@ const NBEPortal: React.FC = () => {
         setAllForexAllocations(forexData);
         console.log(`[NBE] 📊 Forex by status:`, {
           REQUESTED: forexData.filter((f: any) => f.status === 'REQUESTED').length,
-          CONFIRMED: forexData.filter((f: any) => f.status === 'CONFIRMED').length,
+          CONFIRMED: forexData.filter((f: any) => f.status === 'CONFIRMED' || f.status === 'APPROVED').length, // APPROVED is legacy CONFIRMED (pre-fix approve route)
           ALLOCATED: forexData.filter((f: any) => f.status === 'ALLOCATED').length,
         });
       } catch (error) {
@@ -688,6 +700,47 @@ const NBEPortal: React.FC = () => {
     }
   };
 
+  // Record Retention — POST /retention/:forexId/retention (slice-6 fix).
+  // The route reads the allocation on-chain first (ReadForex), so without
+  // a Fabric peer it returns 404 and the error is shown honestly.
+  const handleRecordRetention = async () => {
+    try {
+      setRecordingRetention(true);
+      const response = await apiFetch(`/retention/${retentionForm.forexId}/retention`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fcyAccountNumber: retentionForm.fcyAccountNumber,
+          retentionPercentage: Number(retentionForm.retentionPercentage),
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setApprovalNotification({
+          open: true,
+          success: true,
+          message: `Retention recorded for ${retentionForm.forexId}: ${retentionForm.retentionPercentage}% (status ${result.data?.status || 'PENDING'})`
+        });
+        setRetentionDialogOpen(false);
+        await loadData();
+      } else {
+        setApprovalNotification({
+          open: true,
+          success: false,
+          message: result.error?.message || 'Failed to record retention'
+        });
+      }
+    } catch (error: any) {
+      setApprovalNotification({
+        open: true,
+        success: false,
+        message: error.message || 'Failed to record retention'
+      });
+    } finally {
+      setRecordingRetention(false);
+    }
+  };
+
   const handleAllocateForex = async () => {
     if (!selectedForex) return;
 
@@ -1051,7 +1104,8 @@ const NBEPortal: React.FC = () => {
               </IconButton>
             </Tooltip>
           )}
-          {params.row.status === 'CONFIRMED' && (
+          {/* Allocate: CONFIRMED, or legacy APPROVED (pre-fix NBE approve wrote APPROVED; allocateForex accepts it as CONFIRMED). APPROVED rows otherwise have no next action in the portal. */}
+          {['CONFIRMED', 'APPROVED'].includes(params.row.status) && (
             <Tooltip title="Allocate Forex">
               <IconButton 
                 size="small"
@@ -1070,6 +1124,27 @@ const NBEPortal: React.FC = () => {
                 }}
               >
                 <CheckCircle />
+              </IconButton>
+            </Tooltip>
+          )}
+          {/* Record Retention — slice-6 fix: ALLOCATED/UTILIZED rows had no
+              way to record retention (POST /retention/:forexId/retention). */}
+          {['ALLOCATED', 'UTILIZED'].includes(params.row.status) && (
+            <Tooltip title="Record Retention">
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRetentionForm({
+                    forexId: params.row.forexId,
+                    fcyAccountNumber: '',
+                    retentionPercentage: coffeeRetentionPolicy ? String(coffeeRetentionPolicy.retentionRate) : '40',
+                  });
+                  setRetentionDialogOpen(true);
+                }}
+              >
+                <Assignment />
               </IconButton>
             </Tooltip>
           )}
@@ -2484,6 +2559,51 @@ const NBEPortal: React.FC = () => {
             onClick={handleAllocateForex}
           >
             Allocate Forex
+          </Button>
+        </DialogActions>
+      </Dialog>
+      {/* Record Retention Dialog — slice-6 fix: the retention step had no UI */}
+      <Dialog open={retentionDialogOpen} onClose={() => setRetentionDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Record Forex Retention {retentionForm.forexId ? `— ${retentionForm.forexId}` : ''}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <TextField
+                  label="FCY Account Number *"
+                  value={retentionForm.fcyAccountNumber}
+                  onChange={(e) => setRetentionForm({ ...retentionForm, fcyAccountNumber: e.target.value })}
+                  fullWidth
+                  required
+                  placeholder="e.g. 1000123456789"
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Retention Percentage (%) *"
+                  type="number"
+                  value={retentionForm.retentionPercentage}
+                  onChange={(e) => setRetentionForm({ ...retentionForm, retentionPercentage: e.target.value })}
+                  fullWidth
+                  required
+                  inputProps={{ min: 0, max: 100, step: '0.1' }}
+                  helperText={coffeeRetentionPolicy ? `Active NBE policy rate: ${coffeeRetentionPolicy.retentionRate}%` : 'NBE retention policy rate'}
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRetentionDialogOpen(false)} variant="outlined" sx={{ borderColor: CBE_PURPLE, color: CBE_PURPLE }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            disabled={recordingRetention || !retentionForm.fcyAccountNumber || !retentionForm.retentionPercentage}
+            sx={{ bgcolor: CBE_PURPLE, color: CBE_WHITE, fontWeight: 600, '&:hover': { bgcolor: '#7a2692' }, '&:disabled': { bgcolor: '#cccccc' } }}
+            onClick={handleRecordRetention}
+          >
+            {recordingRetention ? 'Recording...' : 'Record Retention'}
           </Button>
         </DialogActions>
       </Dialog>

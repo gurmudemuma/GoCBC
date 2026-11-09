@@ -21,7 +21,8 @@ const auditService = AuditService.getInstance();
 // ================================
 
 // POST /audit/log - Record a workflow rejection or other explicit audit event.
-router.post('/log', authMiddleware, async (req: Request, res: Response) => {
+router.post('/log', authMiddleware,
+  requireRole('ECTA_ADMIN'), async (req: Request, res: Response) => {
   const { entity_type: entityType, entity_id: entityId, action, status, reason, timestamp } = req.body || {};
   if (!entityType || !entityId || !action || !reason) {
     return res.status(400).json({

@@ -13,6 +13,26 @@ import { statusManager } from '../utils/statusManager';
 import { authMiddleware, requireRole } from '../middleware/auth';
 
 const router = express.Router();
+
+// Document ownership scoping (RBAC slices 4+5, Task B) — mirrors
+// canAccessDocument in routes/documents.ts. Reviewer orgs (ECTA/ECX/
+// Banks/NBE/Customs/Shipping + ADMIN) see any shipment's documents;
+// EXPORTER/APPLICANT callers see only documents they own.
+const SHIPMENT_DOCUMENT_REVIEWER_ROLES = new Set([
+  'ADMIN', 'ECTA', 'ECTA_ADMIN', 'ECX', 'ECX_ADMIN', 'BANKS', 'BANK_ADMIN',
+  'NBE', 'NBE_ADMIN', 'CUSTOMS', 'CUSTOMS_ADMIN', 'SHIPPING', 'SHIPPING_ADMIN',
+]);
+function canAccessShipmentDocument(user: any, doc: any): boolean {
+  if (!user || !doc) return false;
+  if (SHIPMENT_DOCUMENT_REVIEWER_ROLES.has(String(user.role))) return true;
+  const ids = new Set<string>();
+  for (const v of [user?.exporterId, user?.username, user?.userId, user?.sub, user?.applicationId]) {
+    if (v !== undefined && v !== null && String(v) !== '') ids.add(String(v));
+  }
+  if (doc.exporter_id !== undefined && doc.exporter_id !== null && ids.has(String(doc.exporter_id))) return true;
+  if (doc.uploaded_by !== undefined && doc.uploaded_by !== null && ids.has(String(doc.uploaded_by))) return true;
+  return false;
+}
 const fabricService = FabricService.getInstance();
 const shipmentService = ShipmentService.getInstance();
 const postgresDb = DatabaseService.getInstance();
@@ -128,6 +148,7 @@ async function verifyShipmentOnBlockchain(
  *         description: Internal server error
  */
 router.post('/',
+  requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'),
   [
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('contractID').notEmpty().withMessage('Contract ID is required'),
@@ -776,13 +797,17 @@ router.get('/:shipmentID/documents',
       const db = DatabaseService.getInstance();
       
       // Get all documents for this shipment (PostgreSQL uses $1 placeholders; entity_type casing varies)
-      const documents = await db.all(
-        `SELECT * FROM documents 
+      const allDocuments = await db.all(
+        `SELECT * FROM documents
          WHERE LOWER(entity_type) = 'shipment' AND entity_id = $1 AND status != 'deleted'
          ORDER BY uploaded_at DESC`,
         [shipmentID]
       );
-      
+
+      // Ownership scoping: exporters/applicants see only their own documents
+      // for this shipment; reviewers see everything (see canAccessShipmentDocument).
+      const documents = allDocuments.filter((d: any) => canAccessShipmentDocument((req as any).user, d));
+
       // Parse metadata
       documents.forEach((doc: any) => {
         try {
@@ -1098,6 +1123,7 @@ async function updateShipmentStatusHandler(req: Request, res: Response) {
 
 router.put('/:shipmentID/status',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN', 'EXPORTER', 'CUSTOMS', 'CUSTOMS_ADMIN', 'ECTA', 'ECTA_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('status').notEmpty().withMessage('Status is required'),
@@ -1142,6 +1168,7 @@ router.put('/:shipmentID/status',
  *         description: Internal server error
  */
 router.patch('/:shipmentID/buyer',
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('buyerId').notEmpty().withMessage('Buyer ID is required'),
@@ -1228,6 +1255,7 @@ router.patch('/:shipmentID/buyer',
  *         description: Internal server error
  */
 router.post('/:shipmentID/reconcile-status',
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('targetStatus').notEmpty().withMessage('Target status is required'),
@@ -1469,6 +1497,7 @@ router.get('/:shipmentID/traceability',
  *         description: Internal server error
  */
 router.post('/:shipmentID/bill-of-lading',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('billOfLadingNo').notEmpty().withMessage('B/L number is required'),
@@ -1601,6 +1630,7 @@ router.post('/:shipmentID/bill-of-lading',
  *         description: Internal server error
  */
 router.put('/:shipmentID/shipping-status',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('status').notEmpty().withMessage('Status is required'),
@@ -1746,6 +1776,7 @@ router.put('/:shipmentID/shipping-status',
  *         description: Internal server error
  */
 router.post('/:shipmentID/book-freight',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('freightForwarder').notEmpty().withMessage('Freight forwarder is required'),
@@ -1842,6 +1873,7 @@ router.post('/:shipmentID/book-freight',
 );
 
 router.post('/:shipmentID/pickup',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('pickupBy').notEmpty().withMessage('Pickup by (shipping company) is required'),
@@ -1949,6 +1981,7 @@ router.post('/:shipmentID/pickup',
  *         description: Internal server error
  */
 router.post('/:shipmentID/delivery',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
   ],
@@ -2043,6 +2076,7 @@ router.post('/:shipmentID/delivery',
  *         description: Internal server error
  */
 router.post('/:shipmentID/lc-documents',
+  requireRole('EXPORTER'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('lcID').notEmpty().withMessage('LC ID is required'),
@@ -2104,6 +2138,7 @@ router.post('/:shipmentID/lc-documents',
  * Start land transport from Addis to Djibouti (CUSTOMS_CLEARED → LAND_TRANSPORT)
  */
 router.post('/:shipmentID/land-transport/start',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('transportCompany').notEmpty().withMessage('Transport company is required'),
@@ -2167,6 +2202,7 @@ router.post('/:shipmentID/land-transport/start',
  * Record arrival at Djibouti Port (LAND_TRANSPORT → PORT_ARRIVED)
  */
 router.post('/:shipmentID/port/arrive',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2223,6 +2259,7 @@ router.post('/:shipmentID/port/arrive',
  * Record container stuffing (PORT_ARRIVED → CONTAINER_STUFFED)
  */
 router.post('/:shipmentID/container/stuff',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('containerNumber').notEmpty().withMessage('Container number is required'),
@@ -2287,6 +2324,7 @@ router.post('/:shipmentID/container/stuff',
  * Record container loaded on vessel (CONTAINER_STUFFED → VESSEL_LOADED)
  */
 router.post('/:shipmentID/vessel/load',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2343,6 +2381,7 @@ router.post('/:shipmentID/vessel/load',
  * Record vessel departure (VESSEL_LOADED → DEPARTED)
  */
 router.post('/:shipmentID/vessel/depart',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2399,6 +2438,7 @@ router.post('/:shipmentID/vessel/depart',
  * Update to in-transit status (DEPARTED → IN_TRANSIT)
  */
 router.post('/:shipmentID/in-transit/update',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2455,6 +2495,7 @@ router.post('/:shipmentID/in-transit/update',
  * Record arrival at destination port (IN_TRANSIT → DESTINATION_ARRIVED)
  */
 router.post('/:shipmentID/destination/arrive',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2511,6 +2552,7 @@ router.post('/:shipmentID/destination/arrive',
  * Complete final delivery (DESTINATION_ARRIVED → DELIVERED)
  */
 router.post('/:shipmentID/delivery/complete',
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [param('shipmentID').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req, res) => {
@@ -2589,6 +2631,7 @@ router.post('/:shipmentID/delivery/complete',
 // use POST; the behaviour is now identical to PUT.
 router.post('/:shipmentID/status',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN', 'EXPORTER', 'CUSTOMS', 'CUSTOMS_ADMIN', 'ECTA', 'ECTA_ADMIN'),
   [body('status').notEmpty()],
   validateRequest,
   updateShipmentStatusHandler
@@ -2651,6 +2694,7 @@ router.post('/:shipmentID/reject-action',
  */
 router.post('/:shipmentID/shipping-document',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('transportMode').isIn(['SEA', 'AIR']).withMessage('Transport mode must be SEA or AIR'),
@@ -2746,6 +2790,7 @@ router.post('/:shipmentID/shipping-document',
  */
 router.post('/:shipmentId/container/stuff',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   async (req, res) => {
     try {
       const { shipmentId } = req.params;
@@ -2807,6 +2852,7 @@ router.post('/:shipmentId/container/stuff',
  */
 router.post('/:shipmentId/vessel/load',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   async (req, res) => {
     try {
       const { shipmentId } = req.params;
@@ -2852,6 +2898,7 @@ router.post('/:shipmentId/vessel/load',
  */
 router.post('/:shipmentId/vessel/depart',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   async (req, res) => {
     try {
       const { shipmentId } = req.params;
@@ -2897,6 +2944,7 @@ router.post('/:shipmentId/vessel/depart',
  */
 router.post('/:shipmentId/in-transit/update',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   async (req, res) => {
     try {
       const { shipmentId } = req.params;
@@ -2942,6 +2990,7 @@ router.post('/:shipmentId/in-transit/update',
  */
 router.post('/:shipmentId/destination/arrive',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   async (req, res) => {
     try {
       const { shipmentId } = req.params;
@@ -2981,54 +3030,6 @@ router.post('/:shipmentId/destination/arrive',
     }
   }
 );
-
-/**
- * Complete final delivery
- */
-router.post('/:shipmentId/delivery/complete',
-  authMiddleware,
-  async (req, res) => {
-    try {
-      const { shipmentId } = req.params;
-      const { deliveryNotes } = req.body;
-
-      logger.info(`[SHIPPING] Completing delivery for: ${shipmentId}`);
-
-      const result = await fabricService.invokeChaincode('CompleteDelivery', [
-        shipmentId,
-        new Date().toISOString(),
-        deliveryNotes || 'Delivery completed successfully'
-      ]);
-
-      if (result.success) {
-        await mirrorShipmentStatusPG(shipmentId, 'DELIVERED');
-        logger.info(`✅ Delivery completed: ${shipmentId}`);
-        res.json({
-          success: true,
-          message: 'Delivery completed successfully',
-          data: result.data,
-          txId: result.txId,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(400).json({
-          success: false,
-          error: { code: 'COMPLETION_FAILED', message: result.error },
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (error: any) {
-      logger.error('[SHIPPING] Error completing delivery:', error);
-      res.status(500).json({
-        success: false,
-        error: { code: 'INTERNAL_ERROR', message: error.message },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }
-);
-
-
 
 /**
  * @swagger
@@ -3071,6 +3072,7 @@ router.post('/:shipmentId/delivery/complete',
  */
 router.put('/:shipmentID/logistics-status',
   authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
   [
     param('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('logisticsStatus')

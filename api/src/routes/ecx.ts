@@ -278,8 +278,16 @@ router.post('/lots', authMiddleware,
     try {
       const { ecxLotNumber, exporterId, exporterName, warehouseId, origin, subRegion, quantity, bags, processingMethod, harvestSeason } = req.body;
       const lotId = `LOT_${Date.now()}`;
+      // ecxLotNumber must never reach the chaincode call as undefined:
+      // fabric-common's proposal builder calls args[i].toString() on every
+      // arg, so an omitted lot number threw a JS TypeError inside submit()
+      // that surfaced as INTAKE_FAILED "Cannot read properties of
+      // undefined (reading 'toString')". Default to the generated lot ID
+      // (the ECX portal always sends its own ECX-… number, so this only
+      // fires for callers that omit it).
+      const lotNumber = ecxLotNumber || lotId;
       const result = await fabricService.invokeChaincode('RegisterECXLot', [
-        lotId, ecxLotNumber, exporterId, exporterName || '', warehouseId || 'WH-ADDIS-01',
+        lotId, lotNumber, exporterId, exporterName || '', warehouseId || 'WH-ADDIS-01',
         origin, subRegion || '', quantity.toString(),
         (bags || Math.ceil(quantity / 60)).toString(),
         processingMethod, harvestSeason || '2025/2026',
@@ -302,7 +310,7 @@ router.post('/lots', authMiddleware,
              ON CONFLICT (lot_id) DO NOTHING`,
             [
               lotId,
-              ecxLotNumber || null,
+              lotNumber,
               exporterId,
               exporterName || null,
               warehouseId || 'WH-ADDIS-01',
@@ -317,7 +325,7 @@ router.post('/lots', authMiddleware,
         } catch (mirrorError: any) {
           logger.warn(`ECX lot ${lotId} intake succeeded on-chain but the PostgreSQL mirror failed:`, mirrorError.message);
         }
-        res.status(201).json({ success: true, data: { lotId, ecxLotNumber }, txId: result.txId, timestamp: new Date().toISOString() });
+        res.status(201).json({ success: true, data: { lotId, ecxLotNumber: lotNumber }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry in a few minutes.' }, timestamp: new Date().toISOString() });
       } else {

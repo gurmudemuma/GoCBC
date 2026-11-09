@@ -363,6 +363,7 @@ const validateRequest = (req: Request, res: Response, next: any) => {
  */
 router.post('/inspections',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     body('inspectionID').notEmpty().withMessage('Inspection ID is required'),
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
@@ -507,6 +508,7 @@ router.post('/inspections',
  */
 router.post('/inspections/:inspectionID/perform',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
   ],
@@ -1036,6 +1038,7 @@ router.put('/inspections/:inspectionID/approve',
  */
 router.post('/inspections/:inspectionID/reject',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
     body('reason').notEmpty().withMessage('Rejection reason is required'),
@@ -1095,6 +1098,7 @@ router.post('/inspections/:inspectionID/reject',
  */
 router.post('/issue',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   async (req: Request, res: Response) => {
     try {
       const { certificateID, shipmentID, inspectionID, qualityGrade, status } = req.body;
@@ -1130,15 +1134,27 @@ router.post('/issue',
         });
       }
 
-      // ✅ BLOCKCHAIN-FIRST: Call IssueCertificate chaincode
+      // ✅ BLOCKCHAIN-FIRST: Call IssueCertificate chaincode.
+      // IssueCertificate (inspection.go:342) takes exactly
+      // (inspectionID, certificateNumber, certificateURL) — the old call
+      // passed 5 args (cert, inspection, shipment, grade, date), which the
+      // contract API rejects as a wrong-arity call.
+      // NOTE: it reads a PRE-SHIPMENT inspection (preShipmentInspectionKey),
+      // so a quality-entity inspectionId that was never a pre-shipment
+      // inspection 404s on-chain. Kept as a direct call (rather than
+      // routing through POST /inspection/:id/certificate, inspection.ts,
+      // which passes the same 3 args) so the quality_inspections PG mirror
+      // below (certification_number / CERTIFICATE_ISSUED) stays in this
+      // handler. invokeChaincode returns {success:false} instead of
+      // throwing when Fabric is unreachable, so a chain miss does not
+      // block the PG certificate record.
+      const certificateURL = (req.body as any).certificateURL || '';
       const blockchainResult = await fabricService.invokeChaincode(
         'IssueCertificate',
         [
-          certId,
           inspectionId,
-          shipmentId || inspection.shipment_id || '',
-          qualityGrade || inspection.grade || 'Grade 2',
-          new Date().toISOString().split('T')[0]
+          certId,
+          certificateURL
         ]
       );
       
@@ -1188,6 +1204,7 @@ router.post('/issue',
  */
 router.post('/inspections/:inspectionID/issue-permit',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
   ],
@@ -1286,6 +1303,7 @@ router.post('/inspections/:inspectionID/issue-permit',
  */
 router.post('/inspections/:inspectionID/complete',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
     body('grade').notEmpty().withMessage('Grade is required'),
@@ -1646,6 +1664,7 @@ router.get('/inspections/:inspectionID',
  */
 router.post('/inspections/:inspectionID/collect-sample',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
     body('sampleWeight').isNumeric().withMessage('Sample weight must be numeric'),
@@ -1714,6 +1733,7 @@ router.post('/inspections/:inspectionID/collect-sample',
  */
 router.post('/inspections/:inspectionID/lab-results',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
     body('moistureContent').isNumeric().withMessage('Moisture content must be numeric'),
@@ -1802,6 +1822,7 @@ router.post('/inspections/:inspectionID/lab-results',
  */
 router.put('/inspections/:inspectionID/reject',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('inspectionID').notEmpty(),
     body('rejectionReason').notEmpty().withMessage('Rejection reason is required'),

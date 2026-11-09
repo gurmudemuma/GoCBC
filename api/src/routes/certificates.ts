@@ -2,7 +2,7 @@
 // Certificate Management Routes - Phytosanitary and Certificate of Origin
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 
@@ -156,7 +156,8 @@ router.get('/origin', authMiddleware, async (req: Request, res: Response) => {
  * POST /api/v1/certificates/phyto
  * Create phytosanitary certificate
  */
-router.post('/phyto', authMiddleware, async (req: Request, res: Response) => {
+router.post('/phyto', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { certificateId, contractId, status, treatmentType, inspectionResult } = req.body;
 
@@ -201,7 +202,8 @@ router.post('/phyto', authMiddleware, async (req: Request, res: Response) => {
  * POST /api/v1/certificates/origin
  * Create certificate of origin
  */
-router.post('/origin', authMiddleware, async (req: Request, res: Response) => {
+router.post('/origin', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
   try {
     const { certificateId, contractId, status, origin, certifyingAuthority } = req.body;
 

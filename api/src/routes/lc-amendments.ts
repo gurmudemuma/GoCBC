@@ -3,7 +3,7 @@ import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
 import { validateRequest } from '../middleware/validation';
 
@@ -13,6 +13,7 @@ const fabricService = FabricService.getInstance();
 // Request LC amendment
 router.post('/:lcId/amendments',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     param('lcId').notEmpty(),
     body('reason').notEmpty(),
@@ -59,6 +60,7 @@ router.post('/:lcId/amendments',
 // Report LC discrepancy
 router.post('/:lcId/discrepancies',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     param('lcId').notEmpty(),
     body('document').notEmpty(),

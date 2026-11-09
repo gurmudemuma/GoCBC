@@ -7,6 +7,8 @@ import { ForexService } from '../services/forexService';
 import { DatabaseService } from '../services/databaseService';
 import { authMiddleware } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { body, param } from 'express-validator';
+import { validateRequest } from '../middleware/validation';
 import { logger } from '../utils/logger';
 import { dedupeById, isValidForex } from '../utils/dataFilters';
 import { BlockchainSignatureService } from '../services/blockchainSignatureService';
@@ -708,10 +710,13 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
 });
 
 // POST /api/v1/forex/:forexId/confirm — NBE confirms forex request (REQUESTED → CONFIRMED)
-router.post('/:forexId/confirm', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
+router.post('/:forexId/confirm', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), [
+  param('forexId').notEmpty().withMessage('forexId is required'),
+  body('comments').optional().isString().withMessage('comments must be a string'),
+], validateRequest, async (req, res) => {
   try {
     const { forexId } = req.params;
-    const { confirmedBy } = req.body;
+    const { confirmedBy, comments } = req.body;
 
     if (!forexId) {
       return res.status(400).json({ 
@@ -725,11 +730,15 @@ router.post('/:forexId/confirm', authMiddleware, requireRole(['NBE', 'NBE_ADMIN'
     // Connect as NBE to confirm the request
     await fabricService.connectAsOrg('NBEMSP');
 
-    // Update forex status to CONFIRMED
+    // Update forex status to CONFIRMED.
+    // ConfirmForex (forex.go:231) takes (forexID, officer, comments) — the
+    // old call passed new Date().toISOString() as the third arg, so the
+    // ledger stored a timestamp where the officer's comment belongs.
+    // Pass the caller's comments (or ''), never a timestamp.
     const result = await fabricService.invokeChaincode('ConfirmForex', [
       forexId,
       confirmedBy || 'NBE Officer',
-      new Date().toISOString()
+      comments || ''
     ]);
 
     if (result.success) {
@@ -804,7 +813,7 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
       lcID: lcId,
       amount: amount ? Number(amount) : 0,
       exchangeRate: exchangeRate ? Number(exchangeRate) : 1,
-      retentionRate: retentionRate ? Number(retentionRate) : 0.4, // Defaults to 40%
+      retentionRate: retentionRate ? Number(retentionRate) : 40, // Defaults to 40% (percent units — must match the active NBE COFFEE policy, forex.go AllocateForex)
       officer: officer || user?.username || user?.sub || '',
       approvalRef: approvalRef || '',
       expiryDate: expiryDate || null, // Pass null instead of empty string
@@ -823,7 +832,9 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
           lcID: lcId,
           retentionAmount: result.retentionAmount,
           releaseAmount: result.releaseAmount,
-          txId: result.txId
+          txId: result.txId,
+          blockchainSynced: (result as any).blockchainSynced ?? false,
+          blockchainWarning: (result as any).blockchainWarning
         },
         timestamp: new Date().toISOString()
       });

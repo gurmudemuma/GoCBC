@@ -5,7 +5,7 @@ import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param, query } from 'express-validator';
 
 const router = express.Router();
@@ -59,6 +59,7 @@ const fabricService = FabricService.getInstance();
 
 router.post('/messages',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty().withMessage('Message ID is required'),
     body('messageType').notEmpty().isIn(['MT103', 'MT700', 'MT707', 'MT750', 'MT752', 'MT710', 'MT730', 'MT910'])
@@ -262,6 +263,7 @@ router.post('/messages',
  */
 router.post('/messages/mt700',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty(),
     body('lcID').notEmpty(),
@@ -324,6 +326,7 @@ router.post('/messages/mt700',
  */
 router.post('/messages/mt707',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty(),
     body('lcID').notEmpty(),
@@ -375,6 +378,7 @@ router.post('/messages/mt707',
  */
 router.post('/messages/mt103',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty(),
     body('swiftReference').notEmpty(),
@@ -427,6 +431,7 @@ router.post('/messages/mt103',
  */
 router.post('/messages/mt750',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty(),
     body('lcID').notEmpty(),
@@ -477,6 +482,7 @@ router.post('/messages/mt750',
  */
 router.post('/messages/mt752',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     body('messageID').notEmpty(),
     body('lcID').notEmpty(),
@@ -526,6 +532,7 @@ router.post('/messages/mt752',
  */
 router.post('/messages/:messageID/approve',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -652,6 +659,7 @@ router.post('/messages/:messageID/nbe-approve',
  */
 router.post('/messages/:messageID/send',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -696,6 +704,7 @@ router.post('/messages/:messageID/send',
  */
 router.post('/messages/:messageID/receive',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -740,6 +749,7 @@ router.post('/messages/:messageID/receive',
  */
 router.post('/messages/:messageID/process',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -782,6 +792,7 @@ router.post('/messages/:messageID/process',
  */
 router.post('/messages/:messageID/settle',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -819,6 +830,7 @@ router.post('/messages/:messageID/settle',
  */
 router.post('/messages/:messageID/reject',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     param('messageID').notEmpty(),
     body('reason').notEmpty().withMessage('Rejection reason is required'),
@@ -1055,6 +1067,7 @@ router.get('/statistics',
  */
 router.post('/messages/:messageID/validate',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {

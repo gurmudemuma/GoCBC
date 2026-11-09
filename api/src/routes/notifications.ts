@@ -252,6 +252,7 @@ router.post('/compliance/repatriation',
  */
 router.post('/sms/test',
   authMiddleware,
+  requireRole(['ADMIN']),
   [
     body('phone').isMobilePhone('any'),
     body('message').notEmpty(),
@@ -289,6 +290,7 @@ router.post('/sms/test',
  */
 router.post('/webhooks/register',
   authMiddleware,
+  requireRole(['ADMIN', 'ECTA_ADMIN']),
   [
     body('name').notEmpty(),
     body('url').isURL(),
@@ -338,6 +340,7 @@ router.post('/webhooks/register',
  */
 router.post('/webhooks/test',
   authMiddleware,
+  requireRole(['ADMIN', 'ECTA_ADMIN']),
   [
     body('event').notEmpty(),
     body('data').optional().isObject(),

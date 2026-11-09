@@ -22,7 +22,7 @@ export interface ForexAllocation {
   exchangeRate: number;
   officialRate: number;
   retentionRate: number;
-  status: 'REQUESTED' | 'CONFIRMED' | 'ALLOCATED' | 'EXPIRED' | 'REJECTED';
+  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'EXPIRED' | 'REJECTED'; // APPROVED is the legacy value the pre-fix NBE approve route wrote; allocate treats it as CONFIRMED
   requestDate: string;
   approvalDate?: string | null;
   allocationDate?: string | null;
@@ -265,7 +265,7 @@ export const calculateNBEStats = (data: NBEPortalData) => {
     // Tab 0: Forex Monitoring
     forexMonitoring: {
       pending: data.forexAllocations.filter(f => f.status === 'REQUESTED').length,
-      confirmed: data.forexAllocations.filter(f => f.status === 'CONFIRMED').length,
+      confirmed: data.forexAllocations.filter(f => f.status === 'CONFIRMED' || f.status === 'APPROVED').length, // APPROVED is legacy CONFIRMED
       allocated: data.forexAllocations.filter(f => f.status === 'ALLOCATED').length,
       total: data.forexAllocations.length,
     },

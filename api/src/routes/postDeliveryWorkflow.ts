@@ -6,7 +6,7 @@
 import express, { Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import PostDeliveryWorkflowService from '../services/postDeliveryWorkflowService';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
@@ -127,6 +127,7 @@ router.get('/:shipmentId/status',
  */
 router.post('/:shipmentId/payment',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     param('shipmentId').notEmpty().withMessage('Shipment ID is required'),
     body('paymentAmount').isNumeric().withMessage('Payment amount must be a number'),
@@ -188,6 +189,7 @@ router.post('/:shipmentId/payment',
  */
 router.post('/:shipmentId/forex',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN', 'NBE', 'NBE_ADMIN'),
   [
     param('shipmentId').notEmpty().withMessage('Shipment ID is required'),
     body('forexAmount').isNumeric().withMessage('Forex amount must be a number'),
@@ -247,6 +249,7 @@ router.post('/:shipmentId/forex',
  */
 router.post('/:shipmentId/lc-settlement',
   authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
   [
     param('shipmentId').notEmpty().withMessage('Shipment ID is required'),
     body('lcReference').notEmpty().withMessage('LC reference is required')
@@ -304,6 +307,7 @@ router.post('/:shipmentId/lc-settlement',
  */
 router.post('/:shipmentId/ecta-audit',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('shipmentId').notEmpty().withMessage('Shipment ID is required'),
     body('auditResult').isIn(['PASSED', 'FAILED']).withMessage('Audit result must be PASSED or FAILED'),
@@ -363,6 +367,7 @@ router.post('/:shipmentId/ecta-audit',
  */
 router.post('/:shipmentId/close-contract',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [param('shipmentId').notEmpty().withMessage('Shipment ID is required')],
   validateRequest,
   async (req: Request, res: Response) => {
