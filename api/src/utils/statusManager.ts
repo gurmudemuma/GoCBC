@@ -84,10 +84,15 @@ export const StatusTransitions = {
   },
 
   // Payment Status Flow
+  // NOTE: VERIFIED -> SETTLED is valid here because the chaincode
+  // SettlePayment accepts VERIFIED (and SWIFT_RECEIVED) payments, and
+  // ReleaseLCPayment creates payments in VERIFIED status — without this
+  // the API settle route rejected every released payment even though the
+  // chaincode would accept it.
   PAYMENT: {
     PENDING: ['DOCUMENTS_SUBMITTED', 'CANCELLED'],
     DOCUMENTS_SUBMITTED: ['VERIFIED', 'REJECTED'],
-    VERIFIED: ['SWIFT_INITIATED'],
+    VERIFIED: ['SWIFT_INITIATED', 'SETTLED'],
     SWIFT_INITIATED: ['SWIFT_RECEIVED', 'SWIFT_FAILED'],
     SWIFT_RECEIVED: ['SETTLED'],
     SETTLED: ['DOCUMENTS_RELEASED'],

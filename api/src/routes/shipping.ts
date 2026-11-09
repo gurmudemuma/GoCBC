@@ -4,10 +4,12 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
+import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
 
 const router = Router();
 const dbService = DatabaseService.getInstance();
+const fabricService = FabricService.getInstance();
 
 /**
  * GET /api/v1/shipping/shipments
@@ -365,6 +367,46 @@ router.post('/bookings', authMiddleware, async (req: Request, res: Response) => 
 
     logger.info(`[SHIPPING] ✅ Booking created: ${bookingID}`);
 
+    // The booking is stored as its own shipments row (status BOOKED), but
+    // the shipping portal's freightBookings list reads shipments WHERE
+    // status = 'FREIGHT_BOOKED' — and nothing ever moved the real shipment
+    // there, so bookings were invisible in the portal. Move the booked
+    // shipment to FREIGHT_BOOKED, and best-effort mirror the status on
+    // the chain. A chain failure must not fail the booking: the Postgres
+    // status is what the portal reads.
+    let blockchainSynced = false;
+    let blockchainWarning: string | null = null;
+    if (shipmentID) {
+      try {
+        const updated = await dbService.run(
+          `UPDATE shipments
+           SET status = 'FREIGHT_BOOKED', updated_at = NOW()
+           WHERE shipment_id = $1`,
+          [shipmentID]
+        );
+        if ((updated as any)?.rowCount === 0) {
+          blockchainWarning = `Shipment ${shipmentID} was not found in PostgreSQL, so its status could not be moved to FREIGHT_BOOKED`;
+          logger.warn(`[SHIPPING] ${blockchainWarning}`);
+        }
+      } catch (statusError: any) {
+        blockchainWarning = `Failed to move shipment ${shipmentID} to FREIGHT_BOOKED: ${statusError.message}`;
+        logger.warn(`[SHIPPING] ${blockchainWarning}`);
+      }
+      try {
+        const chainResult = await fabricService.updateShipmentStatus(shipmentID, 'FREIGHT_BOOKED');
+        blockchainSynced = !!chainResult?.success;
+        if (!blockchainSynced) {
+          blockchainWarning = `Chaincode status update did not succeed: ${chainResult?.error || 'unknown error'}`;
+          logger.warn(`[SHIPPING] ${blockchainWarning}`);
+        }
+      } catch (chainError: any) {
+        blockchainWarning = `Fabric unavailable, shipment status mirrored in PostgreSQL only: ${chainError.message}`;
+        logger.warn(`[SHIPPING] ${blockchainWarning}`);
+      }
+    } else {
+      blockchainWarning = 'No shipmentID was supplied, so no shipment status was updated';
+    }
+
     res.json({
       success: true,
       data: {
@@ -375,7 +417,9 @@ router.post('/bookings', authMiddleware, async (req: Request, res: Response) => 
         vesselName,
         voyageNumber,
         portOfLoading,
-        portOfDischarge
+        portOfDischarge,
+        blockchainSynced,
+        ...(blockchainWarning ? { blockchainWarning } : {})
       },
       timestamp: new Date().toISOString()
     });

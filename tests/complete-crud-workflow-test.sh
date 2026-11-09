@@ -391,16 +391,47 @@ else
     log_fail "Contract creation failed" "$CONTRACT_RESPONSE"
 fi
 
-# 3.2 VERIFY Contract appears in ECX Portal
-log_info "Verifying contract appears in ECX Portal..."
+# 3.1b CREATE ECX Lot for the contract (warehouse intake)
+# Contracts never create ECX lots on their own — lots only come from
+# POST /ecx/lots — so create one here before checking the portal.
+log_info "Creating ECX lot for the contract (warehouse intake)..."
+if [ -n "$CONTRACT_ID" ]; then
+    ECX_LOT_NUMBER="ECX-LOT-${CONTRACT_TIMESTAMP}"
+    LOT_RESPONSE=$(curl -s -X POST "$BASE_URL/ecx/lots" \
+        -H "Authorization: Bearer $ECX_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "exporterId": "'${EXPORTER_ID}'",
+            "origin": "Sidama",
+            "quantity": 20000,
+            "processingMethod": "Washed",
+            "ecxLotNumber": "'${ECX_LOT_NUMBER}'",
+            "contractId": "'${CONTRACT_ID}'",
+            "warehouseId": "WH-ADDIS-01",
+            "harvestSeason": "2025/2026",
+            "grade": "Grade 1"
+        }')
+
+    LOT_SUCCESS=$(echo "$LOT_RESPONSE" | jq -r '.success // false')
+    if [ "$LOT_SUCCESS" = "true" ]; then
+        log_pass "ECX lot created: $ECX_LOT_NUMBER"
+    else
+        log_fail "ECX lot creation failed" "$LOT_RESPONSE"
+    fi
+else
+    log_warn "No CONTRACT_ID available, skipping ECX lot creation"
+fi
+
+# 3.2 VERIFY ECX Lot appears in ECX Portal
+log_info "Verifying ECX lot appears in ECX Portal..."
 ECX_PORTAL=$(curl -s -X GET "$BASE_URL/portals/ecx" \
     -H "Authorization: Bearer $ECX_TOKEN")
 
-REGISTERED_CONTRACTS=$(echo "$ECX_PORTAL" | jq -r '.data.availableLots // [] | length')
-if [ "$REGISTERED_CONTRACTS" -gt 0 ]; then
-    log_pass "ECX Portal shows $REGISTERED_CONTRACTS registered contract(s)"
+AVAILABLE_LOTS=$(echo "$ECX_PORTAL" | jq -r '.data.availableLots // [] | length')
+if [ "$AVAILABLE_LOTS" -gt 0 ]; then
+    log_pass "ECX Portal shows $AVAILABLE_LOTS available lot(s)"
 else
-    log_warn "ECX Portal shows no registered contracts (expected - contracts may not create ECX lots immediately)" "$ECX_PORTAL"
+    log_warn "ECX Portal shows no available lots" "$ECX_PORTAL"
 fi
 
 # 3.3 APPROVE Contract (ECTA role required)
@@ -787,11 +818,15 @@ log_info "Verifying forex appears in NBE Portal..."
 NBE_PORTAL=$(curl -s -X GET "$BASE_URL/portals/nbe" \
     -H "Authorization: Bearer $NBE_TOKEN")
 
-ACTIVE_FOREX=$(echo "$NBE_PORTAL" | jq -r '.data.pendingForexRequests // [] | length')
+# pendingForexRequests only counts allocations still in REQUESTED status,
+# but the LC issue in Phase 5 already created this allocation (and it was
+# approved in Phase 5.5), so that count is 0 by design. Count all
+# allocations created in the last 30 days instead.
+ACTIVE_FOREX=$(echo "$NBE_PORTAL" | jq -r '.data.forexStatistics.totalAllocations // 0')
 if [ "$ACTIVE_FOREX" -gt 0 ]; then
-    log_pass "NBE Portal shows $ACTIVE_FOREX active forex allocation(s)"
+    log_pass "NBE Portal shows $ACTIVE_FOREX forex allocation(s)"
 else
-    log_warn "NBE Portal shows no forex in pendingForexRequests (forex may be approved/allocated already)" "$NBE_PORTAL"
+    log_warn "NBE Portal shows no forex allocations" "$NBE_PORTAL"
 fi
 
 #############################################################################
@@ -922,10 +957,19 @@ REJECT_SHIPMENT_RESPONSE=$(curl -s -X POST "$BASE_URL/shipments" \
     -H "Authorization: Bearer $ECTA_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{
+        "shipmentID": "SHP-REJECT-'${TIMESTAMP}'",
         "exporterID": "'${EXPORTER_ID}'",
         "contractID": "'${CONTRACT_ID}'",
+        "buyerID": "BUY'${CONTRACT_TIMESTAMP}'",
+        "grade": "Grade 1",
         "quantity": 500,
         "unit": "kg",
+        "icoNumber": "ICO-REJECT-'${TIMESTAMP}'",
+        "origin": "Sidama",
+        "channel": "ECX",
+        "forexRate": 55.5,
+        "valueUSD": 4250,
+        "eudrCompliant": true,
         "destinationCountry": "USA",
         "destinationPort": "Los Angeles",
         "estimatedDepartureDate": "2024-07-01",
@@ -1100,6 +1144,35 @@ fi
 
 log_section "PHASE 8: NBE PORTAL - Forex Monitoring & Repatriation"
 
+# 8.0 SETTLE Payment (prerequisite for repatriation)
+# ReleaseLCPayment creates the on-chain payment PAY_<LC_ID> in VERIFIED
+# status, and InitiateRepatriation requires a SETTLED payment — so settle
+# it first. The API status table now allows VERIFIED -> SETTLED to match
+# the chaincode (SettlePayment accepts VERIFIED and SWIFT_RECEIVED).
+log_info "Settling payment before repatriation..."
+if [ -z "$LC_ID" ]; then
+    log_warn "No LC_ID available, skipping payment settlement test"
+else
+    SETTLE_RESPONSE=$(curl -s -X POST "$BASE_URL/payments/PAY-$LC_ID/settle" \
+        -H "Authorization: Bearer $BANK_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "exchangeRate": 55.5,
+            "retentionRate": 40,
+            "payingBank": "Commercial Bank of Ethiopia",
+            "payingBankBIC": "CBETETAA",
+            "swiftReference": "SWIFT-SETTLE-'${TIMESTAMP}'",
+            "nbeApprovalRef": "NBE-SETTLE-'${TIMESTAMP}'"
+        }')
+
+    SETTLE_SUCCESS=$(echo "$SETTLE_RESPONSE" | jq -r '.success // false')
+    if [ "$SETTLE_SUCCESS" = "true" ]; then
+        log_pass "Payment settled successfully (PAY-$LC_ID)"
+    else
+        log_fail "Payment settlement failed" "$SETTLE_RESPONSE"
+    fi
+fi
+
 # 8.1 APPROVE Forex Allocation
 log_info "Approving forex allocation as NBE officer..."
 if [ -z "$FOREX_ID" ]; then
@@ -1139,6 +1212,12 @@ else
     REPATRIATION_SUCCESS=$(echo "$REPATRIATION_RESPONSE" | jq -r '.success // false')
     if [ "$REPATRIATION_SUCCESS" = "true" ]; then
         log_pass "Forex repatriation recorded successfully"
+        CHAIN_SYNCED=$(echo "$REPATRIATION_RESPONSE" | jq -r '.data.blockchainSynced // false')
+        if [ "$CHAIN_SYNCED" = "true" ]; then
+            log_pass "Repatriation synced to the ledger"
+        else
+            log_warn "Repatriation recorded in Postgres only (not on-chain)" "$(echo "$REPATRIATION_RESPONSE" | jq -r '.data.blockchainWarning // empty')"
+        fi
     else
         log_fail "Forex repatriation recording failed" "$REPATRIATION_RESPONSE"
     fi
@@ -1146,14 +1225,17 @@ fi
 
 # 8.3 VERIFY Repatriation appears in NBE Portal
 log_info "Verifying repatriation appears in NBE Portal..."
-NBE_PORTAL_FINAL=$(curl -s -X GET "$BASE_URL/portals/nbe" \
+# retentionConversions is a different entity (forex retention conversions),
+# not repatriations. GET /repatriation/ reads the ledger, where the
+# repatriation record endpoint now mirrors the record.
+REPATRIATION_LIST=$(curl -s -X GET "$BASE_URL/repatriation/" \
     -H "Authorization: Bearer $NBE_TOKEN")
 
-REPATRIATIONS=$(echo "$NBE_PORTAL_FINAL" | jq -r '.data.retentionConversions // [] | length')
+REPATRIATIONS=$(echo "$REPATRIATION_LIST" | jq -r '.data // [] | length')
 if [ "$REPATRIATIONS" -gt 0 ]; then
     log_pass "NBE Portal shows $REPATRIATIONS repatriation(s)"
 else
-    log_warn "NBE Portal shows no repatriations (expected - repatriation test may have failed due to missing columns)" "$NBE_PORTAL_FINAL"
+    log_warn "NBE Portal shows no repatriations" "$REPATRIATION_LIST"
 fi
 
 #############################################################################

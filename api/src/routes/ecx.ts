@@ -3,6 +3,7 @@
 
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { body, param } from 'express-validator';
@@ -10,6 +11,7 @@ import { validateRequest } from '../middleware/validation';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const dbService = DatabaseService.getInstance();
 
 // GET /api/v1/ecx — ECX status/info (root endpoint)
 router.get('/', authMiddleware, async (req: Request, res: Response) => {
@@ -214,6 +216,36 @@ router.post('/lots', authMiddleware,
       ]);
       if (result.success) {
         logger.info(`ECX lot intake: ${ecxLotNumber} for exporter ${exporterId}`);
+        // Mirror the lot into PostgreSQL: the ECX portal dashboard reads
+        // available lots from ecx_lots, and nothing else ever writes that
+        // table, so without this the portal always showed zero lots.
+        // The mirror is best-effort — the chaincode intake already
+        // succeeded, so a mirror failure must not fail the request.
+        try {
+          await dbService.run(
+            `INSERT INTO ecx_lots (
+               lot_id, lot_number, exporter_id, exporter_name, warehouse_id,
+               origin, sub_region, quantity, bags, processing_method,
+               harvest_season, status, receipt_date, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'AVAILABLE', NOW(), NOW(), NOW())
+             ON CONFLICT (lot_id) DO NOTHING`,
+            [
+              lotId,
+              ecxLotNumber || null,
+              exporterId,
+              exporterName || null,
+              warehouseId || 'WH-ADDIS-01',
+              origin,
+              subRegion || null,
+              quantity,
+              bags || Math.ceil(Number(quantity) / 60),
+              processingMethod,
+              harvestSeason || '2025/2026',
+            ]
+          );
+        } catch (mirrorError: any) {
+          logger.warn(`ECX lot ${lotId} intake succeeded on-chain but the PostgreSQL mirror failed:`, mirrorError.message);
+        }
         res.status(201).json({ success: true, data: { lotId, ecxLotNumber }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry in a few minutes.' }, timestamp: new Date().toISOString() });

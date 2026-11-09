@@ -714,7 +714,7 @@ async function getECXDashboard(req: Request, res: Response) {
           COUNT(*) as total_lots,
           COUNT(CASE WHEN status = 'AVAILABLE' THEN 1 END) as available_lots,
           COUNT(CASE WHEN status = 'RELEASED' THEN 1 END) as released_lots,
-          SUM(quantity_kg) as total_quantity
+          SUM(quantity) as total_quantity
         FROM ecx_lots
         WHERE created_at > NOW() - INTERVAL '30 days'
       `)
