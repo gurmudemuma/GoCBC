@@ -692,13 +692,13 @@ async function getECXDashboard(req: Request, res: Response) {
     ] = await Promise.all([
       db.all(
         `SELECT * FROM ecx_lots 
-         WHERE status = 'AVAILABLE' 
+         WHERE status = 'WAREHOUSED' 
          ORDER BY created_at DESC LIMIT 10`
       ),
       
       db.all(
         `SELECT * FROM ecx_lots 
-         WHERE status = 'PENDING_RELEASE' 
+         WHERE status = 'ASSIGNED' 
          ORDER BY created_at DESC LIMIT 10`
       ),
       
@@ -712,7 +712,7 @@ async function getECXDashboard(req: Request, res: Response) {
       db.get(`
         SELECT 
           COUNT(*) as total_lots,
-          COUNT(CASE WHEN status = 'AVAILABLE' THEN 1 END) as available_lots,
+          COUNT(CASE WHEN status = 'WAREHOUSED' THEN 1 END) as available_lots,
           COUNT(CASE WHEN status = 'RELEASED' THEN 1 END) as released_lots,
           SUM(quantity) as total_quantity
         FROM ecx_lots

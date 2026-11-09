@@ -98,7 +98,15 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
         timestamp: new Date().toISOString()
       });
     }
-    if (['APPROVED', 'REPATRIATED'].includes(String(allocation.status).toUpperCase())) {
+    // The chaincode state machine (forex.go) has no APPROVED state: a
+    // forex request is confirmed by NBE (REQUESTED → CONFIRMED via
+    // ConfirmForex) and then allocated. The old handler wrote a Postgres-
+    // only 'APPROVED' that the chaincode, the statusManager FOREX table
+    // and the confirm route never produce, so the same allocation read
+    // as APPROVED in Postgres and REQUESTED on the ledger. Reject if it
+    // is already past the confirm step (CONFIRMED/ALLOCATED/UTILIZED/
+    // REPATRIATED, plus APPROVED rows written by the old handler).
+    if (['CONFIRMED', 'ALLOCATED', 'UTILIZED', 'REPATRIATED', 'APPROVED'].includes(String(allocation.status).toUpperCase())) {
       return res.status(400).json({
         success: false,
         error: {
@@ -108,26 +116,50 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
         timestamp: new Date().toISOString()
       });
     }
+
+    // Best-effort chain confirmation: ConfirmForex (REQUESTED → CONFIRMED,
+    // NBE only). A chain failure must not fail the approval — the Postgres
+    // record is what the portal reads — but it is reported honestly.
+    let blockchainSynced = false;
+    let blockchainWarning: string | null = null;
+    try {
+      const chainResult = await fabricService.invokeChaincode('ConfirmForex', [
+        forexId,
+        user?.username || 'NBE Officer',
+        new Date().toISOString()
+      ]);
+      if (chainResult.success) {
+        blockchainSynced = true;
+      } else {
+        blockchainWarning = `Chaincode ConfirmForex did not confirm ${forexId}: ${chainResult.error || 'unknown error'}`;
+        logger.warn(`[NBE] ${blockchainWarning}`);
+      }
+    } catch (chainError: any) {
+      blockchainWarning = `Could not confirm ${forexId} on the ledger (no Fabric here?): ${chainError.message}`;
+      logger.warn(`[NBE] ${blockchainWarning}`);
+    }
     
-    // Update forex allocation status to approved
+    // Update forex allocation status to confirmed (the chaincode state)
     await db.run(`
       UPDATE forex_allocations
-      SET status = 'APPROVED',
+      SET status = 'CONFIRMED',
           approved_by = $1,
           approval_date = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
       WHERE allocation_id = $2 OR forex_id = $2 OR CAST(id AS TEXT) = $2
     `, [userId, forexId]);
     
-    logger.info(`[NBE] ✅ Forex allocation approved: ${forexId}`);
+    logger.info(`[NBE] ✅ Forex allocation confirmed: ${forexId} (blockchainSynced: ${blockchainSynced})`);
     
     res.json({
       success: true,
       data: {
         forexId,
-        status: 'APPROVED',
+        status: 'CONFIRMED',
         approvedBy: user?.username || 'NBE Officer',
-        approvalNotes
+        approvalNotes,
+        blockchainSynced,
+        blockchainWarning
       },
       timestamp: new Date().toISOString()
     });

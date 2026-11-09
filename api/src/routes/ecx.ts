@@ -12,6 +12,22 @@ import { validateRequest } from '../middleware/validation';
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 const dbService = DatabaseService.getInstance();
+// Mirror an ECX lot status change into Postgres. The grade/assign/release
+// routes only wrote the chain, so the ecx_lots mirror row (created at
+// intake) kept its intake status forever and the portal dashboards that
+// read ecx_lots showed stale counts. Best-effort: a mirror failure must
+// never fail a committed chaincode transaction.
+async function mirrorLotStatusPG(lotId: string, status: string): Promise<void> {
+  try {
+    await dbService.run(
+      `UPDATE ecx_lots SET status = $1, updated_at = NOW() WHERE lot_id = $2`,
+      [status, lotId]
+    );
+  } catch (err: any) {
+    logger.warn(`[ECX] Could not mirror lot ${lotId} status ${status} to Postgres:`, err.message);
+  }
+}
+
 
 // GET /api/v1/ecx — ECX status/info (root endpoint)
 router.get('/', authMiddleware, async (req: Request, res: Response) => {
@@ -227,7 +243,7 @@ router.post('/lots', authMiddleware,
                lot_id, lot_number, exporter_id, exporter_name, warehouse_id,
                origin, sub_region, quantity, bags, processing_method,
                harvest_season, status, receipt_date, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'AVAILABLE', NOW(), NOW(), NOW())
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'WAREHOUSED', NOW(), NOW(), NOW())
              ON CONFLICT (lot_id) DO NOTHING`,
             [
               lotId,
@@ -275,6 +291,7 @@ router.post('/lots/:lotId/grade', authMiddleware,
         defectCount.toString(), gradingOfficer, remarks || '', gradingDate || new Date().toISOString(),
       ]);
       if (result.success) {
+        await mirrorLotStatusPG(lotId, 'GRADED');
         res.json({ success: true, data: { lotId, grade, qualityScore: Number(qualityScore || 0), moistureContent: Number(moistureContent), defectCount: Number(defectCount) }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry.' }, timestamp: new Date().toISOString() });
@@ -302,6 +319,7 @@ router.post('/lots/:lotId/assign', authMiddleware,
         lotId, contractId, pricePerKg.toString(), assignmentDate || new Date().toISOString(),
       ]);
       if (result.success) {
+        await mirrorLotStatusPG(lotId, 'ASSIGNED');
         res.json({ success: true, data: { lotId, contractId }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry.' }, timestamp: new Date().toISOString() });
@@ -326,6 +344,7 @@ router.post('/lots/:lotId/release', authMiddleware,
         lotId, releaseDate || new Date().toISOString(), note || '',
       ]);
       if (result.success) {
+        await mirrorLotStatusPG(lotId, 'RELEASED');
         res.json({ success: true, data: { lotId }, txId: result.txId, timestamp: new Date().toISOString() });
       } else if (isPendingDeploy(result.error)) {
         res.status(503).json({ success: false, error: { code: 'CHAINCODE_UPGRADING', message: 'ECX chaincode functions are being deployed. Run scripts/run-upgrade-seq2.bat and retry.' }, timestamp: new Date().toISOString() });
@@ -380,6 +399,7 @@ router.post('/lots/:lotId/auto-release', authMiddleware,
         });
       }
 
+      await mirrorLotStatusPG(lotId, 'RELEASED');
       return res.json({
         success: true,
         data: { lotId, ecxLotNumber, shipmentID },

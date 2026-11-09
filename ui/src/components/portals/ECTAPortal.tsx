@@ -203,7 +203,7 @@ const ECTAPortal: React.FC = () => {
   const [subTabValue, setSubTabValue] = useState(0);
   
   // Inspection filter state (for Quality Control tab) - 5-stage workflow
-  const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'SCHEDULED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED'>('PENDING');
+  const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'SCHEDULED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('PENDING');
   
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [allExporters, setAllExporters] = useState<Exporter[]>([]);
@@ -2842,7 +2842,7 @@ The exporter can reapply once all requirements are met.`,
                         }
                         
                         // If inspection is completed but no score, show grade instead
-                        if (item.status === 'inspected' || item.status === 'approved' || item.status === 'permit_issued') {
+                        if (item.status === 'INSPECTED' || item.status === 'APPROVED' || item.status === 'PERMIT_ISSUED') {
                           return item.grade || 'N/A';
                         }
                         

@@ -76,7 +76,7 @@ router.post('/',
         currency: currency || 'USD',
         destination: destination || 'Germany',
         submissionDate: new Date().toISOString().split('T')[0],
-        status: 'submitted',
+        status: 'SUBMITTED',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -110,14 +110,14 @@ router.post('/',
         ON CONFLICT (declaration_id) DO NOTHING`,
         [declarationNumber, declarationNumber, shipmentId, contractId, exporterId,
          hsCode || '0901.21', quantity || 10000, value || 85000, currency || 'USD',
-         destination || 'Germany', new Date().toISOString().split('T')[0], 'submitted']
+         destination || 'Germany', new Date().toISOString().split('T')[0], 'SUBMITTED']
       );
 
       logger.info(`✅ [CUSTOMS] Declaration submitted: ${declarationNumber}`);
       res.status(201).json({
         success: true,
         message: 'Customs declaration submitted successfully',
-        data: { customsID: declarationNumber, declarationNumber, status: 'submitted' },
+        data: { customsID: declarationNumber, declarationNumber, status: 'SUBMITTED' },
         txId: null,
         timestamp: new Date().toISOString()
       });
@@ -1091,7 +1091,7 @@ router.post('/declaration/:declarationId/review',
 
 /**
  * POST /api/v1/customs/declarations/:id/inspect
- * Start customs inspection and move declaration to INSPECTING status
+ * Start customs inspection and move declaration to UNDER_INSPECTION status
  */
 const inspectHandler = async (req: Request, res: Response) => {
     try {
@@ -1119,12 +1119,12 @@ const inspectHandler = async (req: Request, res: Response) => {
         });
       }
 
-      // Update status to INSPECTING
+      // Update status to UNDER_INSPECTION (the chaincode review state; INSPECTING exists in no state machine)
       await db.run(
         `UPDATE customs_declarations 
          SET status = $1, customs_officer = $2, updated_at = CURRENT_TIMESTAMP 
          WHERE declaration_number = $3`,
-        ['INSPECTING', user.username, declId]
+        ['UNDER_INSPECTION', user.username, declId]
       );
 
       // Also update CouchDB
@@ -1139,7 +1139,7 @@ const inspectHandler = async (req: Request, res: Response) => {
         );
         
         const doc = getResp.data;
-        doc.status = 'inspecting';
+        doc.status = 'UNDER_INSPECTION';
         doc.customsOfficer = user.username;
         doc.updatedAt = new Date().toISOString();
         
@@ -1157,13 +1157,13 @@ const inspectHandler = async (req: Request, res: Response) => {
         logger.warn(`[CUSTOMS] CouchDB update failed (non-critical):`, couchError.message);
       }
 
-      logger.info(`[CUSTOMS] ✅ Declaration ${declId} inspection started: status=INSPECTING`);
+      logger.info(`[CUSTOMS] ✅ Declaration ${declId} inspection started: status=UNDER_INSPECTION`);
 
       res.json({
         success: true,
         data: {
           declarationId: declId,
-          status: 'INSPECTING',
+          status: 'UNDER_INSPECTION',
           customsOfficer: user.username,
           message: 'Inspection started successfully'
         },

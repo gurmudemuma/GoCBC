@@ -3,6 +3,7 @@
 
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
@@ -10,6 +11,7 @@ import { body, param } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const postgresDb = DatabaseService.getInstance();
 
 /**
  * @swagger
@@ -422,6 +424,16 @@ router.post('/:certificateId/revoke',
       ]);
       
       if (result.success) {
+        // Mirror into Postgres: the old handler was chaincode-only, so the
+        // phytosanitary_certificates row kept status ISSUED after revocation.
+        try {
+          await postgresDb.run(
+            `UPDATE phytosanitary_certificates SET status = 'REVOKED', updated_at = CURRENT_TIMESTAMP WHERE certificate_id = $1`,
+            [certificateId]
+          );
+        } catch (mirrorErr) {
+          logger.warn(`[PHYTO] Could not mirror revocation of ${certificateId} to Postgres:`, mirrorErr);
+        }
         logger.info(`[PHYTO] ✅ Certificate revoked: ${certificateId}`);
         res.json({
           success: true,

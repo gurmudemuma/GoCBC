@@ -6,6 +6,25 @@ import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const dbService = DatabaseService.getInstance();
+
+// Mirror an issued permit into Postgres. Both issue handlers only wrote
+// the chain, so the export_permits table (which the portals read) was
+// never populated. Chaincode IssueCBEExportPermit sets ISSUED (permit.go).
+// Best-effort: a mirror failure must never fail a committed issuance.
+async function mirrorPermitPG(permitId: string, contractId: string, approvedBy: string): Promise<void> {
+  try {
+    await dbService.run(
+      `INSERT INTO export_permits (permit_id, contract_id, status, approved_by)
+       VALUES ($1, $2, 'ISSUED', $3)
+       ON CONFLICT (permit_id) DO NOTHING`,
+      [permitId, contractId || null, approvedBy || null]
+    );
+  } catch (err) {
+    logger.warn(`[PERMITS] Could not mirror permit ${permitId} to Postgres:`, err);
+  }
+}
+
 
 // POST /api/v1/permits — Issue permit (wrapper for /issue endpoint)
 router.post('/', async (req, res) => {
@@ -69,11 +88,12 @@ router.post('/', async (req, res) => {
     );
 
     if (result.success) {
+      await mirrorPermitPG(permitId, contractId, approvedBy);
       logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
       res.status(201).json({ 
         success: true, 
         message: 'Export permit issued successfully',
-        data: { permitID: permitId, permitId, status: 'issued' },
+        data: { permitID: permitId, permitId, status: 'ISSUED' },
         txId: result.txId,
         timestamp: new Date().toISOString()
       });
@@ -137,6 +157,7 @@ router.post('/issue', async (req, res) => {
     );
 
     if (result.success) {
+      await mirrorPermitPG(permitId, contractId, approvedBy);
       res.json({ 
         success: true, 
         message: 'Export permit issued successfully',

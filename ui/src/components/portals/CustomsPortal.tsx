@@ -1929,6 +1929,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
     // A declaration in CLEARED has passed through all previous stages
     
     const statusHierarchy: Record<string, number> = {
+      'DRAFT': 0,
       'SUBMITTED': 1,
       'UNDER_INSPECTION': 2,
       'UNDER_REVIEW': 3,

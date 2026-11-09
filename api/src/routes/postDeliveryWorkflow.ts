@@ -29,6 +29,14 @@ const validateRequest = (req: Request, res: Response, next: Function) => {
   next();
 };
 
+// Map a service failure to its HTTP status: 'Post-delivery record not
+// found' (no tracking row for this shipment) is a 404; any other failure
+// (e.g. close refused for incomplete steps) stays a 400.
+function failureResponse(result: { error?: string }, fallbackCode: string): { status: number; code: string } {
+  if (result.error === 'Post-delivery record not found') return { status: 404, code: 'NOT_FOUND' };
+  return { status: 400, code: fallbackCode };
+}
+
 /**
  * @swagger
  * /api/v1/post-delivery/{shipmentId}/status:
@@ -147,10 +155,11 @@ router.post('/:shipmentId/payment',
           timestamp: new Date().toISOString()
         });
       } else {
-        res.status(400).json({
+        const failure = failureResponse(result, 'PAYMENT_RECORD_FAILED');
+        res.status(failure.status).json({
           success: false,
           error: {
-            code: 'PAYMENT_RECORD_FAILED',
+            code: failure.code,
             message: result.error || 'Failed to record payment'
           },
           timestamp: new Date().toISOString()
@@ -205,10 +214,11 @@ router.post('/:shipmentId/forex',
           timestamp: new Date().toISOString()
         });
       } else {
-        res.status(400).json({
+        const failure = failureResponse(result, 'FOREX_RECORD_FAILED');
+        res.status(failure.status).json({
           success: false,
           error: {
-            code: 'FOREX_RECORD_FAILED',
+            code: failure.code,
             message: result.error || 'Failed to record forex repatriation'
           },
           timestamp: new Date().toISOString()
@@ -261,10 +271,11 @@ router.post('/:shipmentId/lc-settlement',
           timestamp: new Date().toISOString()
         });
       } else {
-        res.status(400).json({
+        const failure = failureResponse(result, 'LC_SETTLEMENT_FAILED');
+        res.status(failure.status).json({
           success: false,
           error: {
-            code: 'LC_SETTLEMENT_FAILED',
+            code: failure.code,
             message: result.error || 'Failed to record LC settlement'
           },
           timestamp: new Date().toISOString()
@@ -319,10 +330,11 @@ router.post('/:shipmentId/ecta-audit',
           timestamp: new Date().toISOString()
         });
       } else {
-        res.status(400).json({
+        const failure = failureResponse(result, 'AUDIT_RECORD_FAILED');
+        res.status(failure.status).json({
           success: false,
           error: {
-            code: 'AUDIT_RECORD_FAILED',
+            code: failure.code,
             message: result.error || 'Failed to record ECTA audit'
           },
           timestamp: new Date().toISOString()
@@ -367,10 +379,11 @@ router.post('/:shipmentId/close-contract',
           timestamp: new Date().toISOString()
         });
       } else {
-        res.status(400).json({
+        const failure = failureResponse(result, 'CONTRACT_CLOSURE_FAILED');
+        res.status(failure.status).json({
           success: false,
           error: {
-            code: 'CONTRACT_CLOSURE_FAILED',
+            code: failure.code,
             message: result.error || 'Failed to close contract'
           },
           timestamp: new Date().toISOString()

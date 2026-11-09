@@ -6,13 +6,23 @@ import { FabricService } from '../services/fabricService';
 
 /**
  * Status Transition Rules for Each Entity
+ *
+ * Source of truth: the chaincode (chaincodes/coffee/*.go). Where the API
+ * used to describe states the ledger can never reach, the tables below
+ * were corrected in the status-transition audit (TEST-STATUS-MATRIX.md).
+ * States that exist only in Postgres or only in the UI are called out
+ * in the per-table notes.
  */
 export const StatusTransitions = {
   // Exporter Application Status Flow
+  // NOTE: lowercase — the routes and Postgres store applications as
+  // 'pending'/'approved'/'rejected' (exporters.ts), and there is no
+  // chaincode application entity. The previous UPPERCASE table never
+  // matched a real row (and the fail-open validator masked it).
   APPLICATION: {
-    PENDING: ['APPROVED', 'REJECTED'],
-    APPROVED: [],
-    REJECTED: ['PENDING'], // Can resubmit
+    pending: ['approved', 'rejected'],
+    approved: [],
+    rejected: ['pending'], // Can resubmit
   },
 
   // User Account Status Flow
@@ -24,23 +34,28 @@ export const StatusTransitions = {
   },
 
   // Sales Contract Status Flow
+  // NOTE: matches chaincode (main.go) — only REGISTERED, APPROVED and
+  // REJECTED are ever assigned on-chain. EXECUTED / COMPLETED / CANCELLED
+  // are dead states: no chaincode function assigns them (there is no
+  // UpdateContractStatus function at all), so the old APPROVED→EXECUTED→
+  // COMPLETED edges described a workflow the ledger can never reach.
+  // Contract cancel is Postgres-only (contracts.ts cancel route).
   CONTRACT: {
     REGISTERED: ['APPROVED', 'REJECTED'],
-    APPROVED: ['EXECUTED', 'CANCELLED'],
-    REJECTED: [],
-    EXECUTED: ['COMPLETED'],
-    CANCELLED: [],
-    COMPLETED: [],
+    APPROVED: [],
+    REJECTED: ['REGISTERED'], // ResubmitRejectedContract
   },
 
   // Forex Request Status Flow
+  // NOTE: matches chaincode (forex.go) — RequestForex → ConfirmForex →
+  // AllocateForex → UtilizeForex. APPROVED was a Postgres-only invention
+  // of the NBE approve route (now writes CONFIRMED via ConfirmForex);
+  // EXPIRED / SETTLED are never assigned on-chain.
   FOREX: {
-    REQUESTED: ['ALLOCATED', 'REJECTED'],
-    ALLOCATED: ['UTILIZED', 'EXPIRED'],
-    REJECTED: [],
-    UTILIZED: ['SETTLED'],
-    EXPIRED: [],
-    SETTLED: [],
+    REQUESTED: ['CONFIRMED', 'ALLOCATED'],
+    CONFIRMED: ['ALLOCATED'],
+    ALLOCATED: ['UTILIZED'],
+    UTILIZED: [],
   },
 
   // Letter of Credit Status Flow (matches chaincode: banking.go + forex.go)
@@ -51,7 +66,7 @@ export const StatusTransitions = {
     ISSUED: ['FOREX_ALLOCATED', 'UTILIZED', 'AMENDED', 'EXPIRED'], // UTILIZED = examine without forex path
     FOREX_ALLOCATED: ['UTILIZED', 'EXPIRED'],                      // UTILIZED set by ExamineLCDocuments
     AMENDED: ['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED', 'EXPIRED'],
-    UTILIZED: ['PAYMENT_RELEASED'],                                // set by ReleaseLCPayment
+    UTILIZED: ['PAYMENT_RELEASED', 'EXPIRED'],                     // EXPIRED set by RejectLCDocuments (banking.go:1913); the UpdateLCStatus table previously allowed PAYMENT_RELEASED only
     PAYMENT_RELEASED: ['SETTLED'],                                 // set by final settlement
     SETTLED: [],
     REJECTED: [],
@@ -59,27 +74,46 @@ export const StatusTransitions = {
   },
 
   // Shipment Status Flow
+  // NOTE: matches the guarded chaincode path (main.go) — CreateShipment →
+  // customs clearance → land transport → port → vessel → in-transit →
+  // destination → delivered. The old table invented an inspection chain
+  // (QUALITY_INSPECTION → QUALITY_APPROVED → PHYTO_INSPECTION → … →
+  // CUSTOMS_DECLARED) whose states no chaincode function assigns; the
+  // quality/phyto/EUDR/insurance steps live on the shipment's sub-status
+  // fields and on the quality_inspections rows, not on CoffeeShipment.Status.
+  // The Postgres `shipments.status` workflow vocabulary (REGISTERED,
+  // QUALITY_PENDING, QUALITY_APPROVED, QUALITY_REJECTED, CUSTOMS_CLEARED,
+  // COMPLETED — see ExporterPortal) is a separate UI-facing phase field;
+  // this table governs the chaincode Status via the generic status routes.
   SHIPMENT: {
-    CREATED: ['QUALITY_INSPECTION', 'CANCELLED'],
-    QUALITY_INSPECTION: ['QUALITY_APPROVED', 'QUALITY_REJECTED'],
-    QUALITY_APPROVED: ['PHYTO_INSPECTION'],
-    PHYTO_INSPECTION: ['PHYTO_APPROVED'],
-    PHYTO_APPROVED: ['EUDR_VERIFICATION'],
-    EUDR_VERIFICATION: ['EUDR_APPROVED'],
-    EUDR_APPROVED: ['INSURANCE_REGISTERED'],
-    INSURANCE_REGISTERED: ['LAND_TRANSPORT_STARTED'],
-    LAND_TRANSPORT_STARTED: ['BORDER_CROSSING'],
-    BORDER_CROSSING: ['PORT_ARRIVED'],
-    PORT_ARRIVED: ['CUSTOMS_DECLARED'],
-    CUSTOMS_DECLARED: ['CUSTOMS_CLEARED', 'CUSTOMS_REJECTED'],
-    CUSTOMS_CLEARED: ['CONTAINER_STUFFED'],
+    // NOTE: the chaincode lifecycle functions guard these edges
+    // (main.go): StartLandTransport CUSTOMS_CLEARED→LAND_TRANSPORT,
+    // ArriveAtPort LAND_TRANSPORT→PORT_ARRIVED, StuffContainer
+    // PORT_ARRIVED→CONTAINER_STUFFED, LoadOnVessel
+    // CONTAINER_STUFFED→VESSEL_LOADED, DepartFromPort
+    // VESSEL_LOADED→DEPARTED, UpdateToInTransit DEPARTED→IN_TRANSIT,
+    // ArriveAtDestination IN_TRANSIT→DESTINATION_ARRIVED,
+    // CompleteDelivery DESTINATION_ARRIVED→DELIVERED,
+    // ConfirmDelivery IN_TRANSIT→DELIVERED (second path to DELIVERED),
+    // PickupShipment CUSTOMS_CLEARED|PERMIT_ISSUED→IN_TRANSIT (bypass).
+    // FREIGHT_BOOKED is set by the book-freight route; LOADED by
+    // RecordShippingDetails / RecordBillOfLading (both unguarded).
+    // No chaincode function ever produces CUSTOMS_CLEARED or
+    // PERMIT_ISSUED — they are only reachable via the unguarded
+    // UpdateShipmentStatus (see TEST-STATUS-MATRIX §17).
+    CREATED: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'IN_TRANSIT', 'CANCELLED'],
+    FREIGHT_BOOKED: ['CUSTOMS_CLEARED', 'LOADED'],
+    PERMIT_ISSUED: ['IN_TRANSIT'],
+    CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT'],
+    LAND_TRANSPORT: ['PORT_ARRIVED'],
+    PORT_ARRIVED: ['CONTAINER_STUFFED'],
     CONTAINER_STUFFED: ['VESSEL_LOADED'],
-    VESSEL_LOADED: ['IN_TRANSIT'],
-    IN_TRANSIT: ['ARRIVED_DESTINATION'],
-    ARRIVED_DESTINATION: ['DELIVERED'],
+    VESSEL_LOADED: ['DEPARTED'],
+    DEPARTED: ['IN_TRANSIT'],
+    IN_TRANSIT: ['DESTINATION_ARRIVED', 'DELIVERED'],
+    DESTINATION_ARRIVED: ['DELIVERED'],
     DELIVERED: [],
-    QUALITY_REJECTED: [],
-    CUSTOMS_REJECTED: [],
+    LOADED: ['IN_TRANSIT', 'DELIVERED'],
     CANCELLED: [],
   },
 
@@ -104,14 +138,15 @@ export const StatusTransitions = {
   },
 
   // Phytosanitary Certificate Status Flow
+  // NOTE: matches chaincode (phytosanitary.go) — the only transitions that
+  // exist on-chain are ∅ → ISSUED and → REVOKED. The old table described
+  // a request/inspect workflow (REQUESTED → INSPECTION_SCHEDULED → … →
+  // VALID → EXPIRED) for which no chaincode functions exist; the routes
+  // that call them (Request/InspectPhytosanitaryCertificate) cannot
+  // succeed on-chain. EXPIRED is comment-only in chaincode.
   PHYTOSANITARY: {
-    REQUESTED: ['INSPECTION_SCHEDULED'],
-    INSPECTION_SCHEDULED: ['INSPECTION_COMPLETED'],
-    INSPECTION_COMPLETED: ['ISSUED', 'REJECTED'],
-    ISSUED: ['VALID', 'EXPIRED'],
-    VALID: ['EXPIRED'],
-    REJECTED: [],
-    EXPIRED: [],
+    ISSUED: ['REVOKED'],
+    REVOKED: [],
   },
 
   // EUDR Due Diligence Status Flow
@@ -137,17 +172,102 @@ export const StatusTransitions = {
   },
 
   // Customs Declaration Status Flow
+  // NOTE: matches chaincode (customs.go) — SUBMITTED → UNDER_INSPECTION →
+  // UNDER_REVIEW → CLEARED, plus REJECTED from any non-CLEARED state.
+  // The old table put UNDER_REVIEW before inspection and invented
+  // INSPECTION_REQUIRED / INSPECTION_SCHEDULED / INSPECTION_IN_PROGRESS /
+  // INSPECTION_PASSED / PRE_CLEARED / RELEASED, none of which the
+  // chaincode or any route assigns; its CLEARED → RELEASED edge is dead
+  // (no function sets RELEASED).
   CUSTOMS: {
-    SUBMITTED: ['UNDER_REVIEW'],
-    UNDER_REVIEW: ['INSPECTION_REQUIRED', 'PRE_CLEARED'],
-    INSPECTION_REQUIRED: ['INSPECTION_SCHEDULED'],
-    INSPECTION_SCHEDULED: ['INSPECTION_IN_PROGRESS'],
-    INSPECTION_IN_PROGRESS: ['INSPECTION_PASSED', 'INSPECTION_FAILED'],
-    INSPECTION_PASSED: ['CLEARED'],
-    PRE_CLEARED: ['CLEARED'],
-    CLEARED: ['RELEASED'],
+    SUBMITTED: ['UNDER_INSPECTION', 'REJECTED'],
+    UNDER_INSPECTION: ['UNDER_REVIEW', 'REJECTED'],
+    UNDER_REVIEW: ['CLEARED', 'REJECTED'],
+    CLEARED: [],
+    REJECTED: [],
+  },
+
+  // Quality Inspection Status Flow (API route machine, quality.ts)
+  // NOTE: this is the Postgres route machine (PENDING → INSPECTED →
+  // APPROVED/REJECTED), NOT the chaincode QualityInspection machine,
+  // which only goes PENDING → INSPECTED and has no approve/reject
+  // function — the API approve/reject steps are Postgres-only. The
+  // qualityService UPPERCASE machine (SCHEDULED/COMPLETED/…) belongs to
+  // the separate PreShipmentInspection entity (inspection.go).
+  QUALITY: {
+    PENDING: ['INSPECTED', 'SAMPLE_COLLECTED'],
+    SAMPLE_COLLECTED: ['INSPECTED'],
+    INSPECTED: ['APPROVED', 'REJECTED'],
+    APPROVED: ['PERMIT_ISSUED', 'CERTIFICATE_ISSUED', 'COMPLETED'],
+    REJECTED: [],
+    PERMIT_ISSUED: [],
+    CERTIFICATE_ISSUED: [],
+    COMPLETED: [],
+  },
+
+  // SWIFT Message Status Flow (matches chaincode swift.go)
+  SWIFT: {
+    DRAFT: ['APPROVED', 'REJECTED'],
+    APPROVED: ['SENT', 'REJECTED'],
+    SENT: ['RECEIVED', 'REJECTED'],
+    RECEIVED: ['PROCESSING', 'REJECTED'],
+    PROCESSING: ['SETTLED', 'REJECTED'],
+    SETTLED: [],
+    REJECTED: [],
+  },
+
+  // ECX Lot Status Flow (matches chaincode ecx.go)
+  ECX: {
+    WAREHOUSED: ['GRADED', 'REJECTED'],
+    GRADED: ['ASSIGNED'],
+    ASSIGNED: ['RELEASED'],
     RELEASED: [],
-    INSPECTION_FAILED: ['INSPECTION_SCHEDULED'], // Can reschedule
+    REJECTED: [],
+  },
+
+  // Export Permit Status Flow (matches chaincode permit.go — the
+  // bank-issued CBE export permit, not the shipment PERMIT_ISSUED string)
+  PERMIT: {
+    ISSUED: ['UTILIZED'],
+    UTILIZED: ['SETTLED'],
+    SETTLED: [],
+  },
+
+  // Repatriation Status Flow (matches chaincode repatriation.go)
+  REPATRIATION: {
+    PENDING: ['PARTIAL'],
+    PARTIAL: ['READY_FOR_VERIFICATION', 'OVERDUE'],
+    READY_FOR_VERIFICATION: ['COMPLIED', 'NON_COMPLIANT'],
+    OVERDUE: ['COMPLIED', 'NON_COMPLIANT'],
+    NON_COMPLIANT: ['NON_COMPLIANT', 'WAIVED'],
+    COMPLIED: [],
+    WAIVED: [],
+  },
+
+  // Border Crossing Status Flow (intended order from chaincode
+  // bordercrossing.go comments — the chaincode functions themselves carry
+  // no from-state guards, so this table is the documented intent, not an
+  // on-chain enforcement)
+  BORDER: {
+    PENDING: ['CLEARED_EXIT', 'IN_TRANSIT', 'DETAINED', 'INSPECTED'],
+    CLEARED_EXIT: ['IN_TRANSIT'],
+    IN_TRANSIT: ['CROSSED'],
+    CROSSED: ['ARRIVED', 'CLEARED'],
+    ARRIVED: ['CLEARED'],
+    INSPECTED: ['CLEARED', 'DETAINED'],
+    INSPECTION_FAILED: ['DETAINED', 'INSPECTED'],
+    CLEARED: [],
+    DETAINED: [],
+  },
+
+  // Post-Delivery Workflow Status Flow (overall_status, Postgres-only —
+  // there is no chaincode post-delivery entity)
+  POST_DELIVERY: {
+    PENDING: ['IN_PROGRESS', 'COMPLETED'],
+    IN_PROGRESS: ['COMPLETED', 'DELAYED', 'ISSUE'],
+    DELAYED: ['IN_PROGRESS'],
+    ISSUE: ['IN_PROGRESS'],
+    COMPLETED: [],
   },
 };
 

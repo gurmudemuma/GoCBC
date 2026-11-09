@@ -129,6 +129,7 @@ export class ForexService {
       );
 
       let contractId = forex?.contract_id;
+      let currentStatus = String(forex?.status || '').toUpperCase();
       
       // If not in PostgreSQL, try to get from blockchain
       if (!forex) {
@@ -138,7 +139,8 @@ export class ForexService {
           if (blockchainResult.success && blockchainResult.data) {
             const forexData = blockchainResult.data;
             contractId = forexData.ContractID || forexData.contractId;
-            logger.info(`[ForexService] Found forex on blockchain: contract=${contractId}`);
+            currentStatus = String(forexData.Status || forexData.status || '').toUpperCase();
+            logger.info(`[ForexService] Found forex on blockchain: contract=${contractId} status=${currentStatus}`);
           } else {
             throw new Error('Forex request not found in PostgreSQL or blockchain');
           }
@@ -146,6 +148,17 @@ export class ForexService {
           logger.error(`[ForexService] Failed to query blockchain: ${bcErr.message}`);
           throw new Error('Forex request not found');
         }
+      }
+
+      // From-state guard: only a requested or confirmed allocation can be
+      // allocated. The old handler wrote ALLOCATED from any state (and
+      // statusManager.updateEntityStatus below never blocks), so an
+      // already-allocated or utilized allocation could be allocated again.
+      // APPROVED is a legacy value the old NBE approve route wrote.
+      if (!['REQUESTED', 'CONFIRMED', 'APPROVED'].includes(currentStatus)) {
+        throw new Error(
+          `Cannot allocate forex: invalid status transition from ${currentStatus || 'UNKNOWN'} to ALLOCATED (allowed from REQUESTED, CONFIRMED)`
+        );
       }
 
       // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
@@ -229,7 +242,9 @@ export class ForexService {
       
       const result = { success: true, txId: null }; // CouchDB direct write, no blockchain txId
 
-      await statusManager.updateEntityStatus('FOREX', forexId, forex.status, 'ALLOCATED');
+      // currentStatus is the PG value, or the chaincode value when the row
+      // only exists on the ledger (forex is undefined in that case).
+      await statusManager.updateEntityStatus('FOREX', forexId, currentStatus, 'ALLOCATED');
 
       // Update LC status to FOREX_ALLOCATED in PostgreSQL
       // Note: CouchDB already updated, this is just for PostgreSQL sync

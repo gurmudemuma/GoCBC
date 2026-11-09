@@ -810,6 +810,18 @@ router.post('/:paymentID/settle',
       if (result.success) {
         // Update status with cascading effects (LC, Forex, Contract statuses)
         await statusManager.updateEntityStatus('PAYMENT', paymentID, currentStatus, 'SETTLED');
+
+        // Mirror into Postgres: the old handler only updated the chain, so
+        // the payments row kept its pre-settlement status. Best-effort —
+        // the settlement already committed on-chain.
+        try {
+          await postgresDb.run(
+            `UPDATE payments SET status = 'SETTLED' WHERE payment_id = $1`,
+            [paymentID]
+          );
+        } catch (mirrorErr) {
+          logger.warn(`[PAYMENT] Could not mirror settlement of ${paymentID} to Postgres:`, mirrorErr);
+        }
         
         logger.info(`✅ [PAYMENT] Payment settled: ${paymentID} (${currentStatus} → SETTLED)`);
         res.json({
@@ -1163,11 +1175,11 @@ router.get('/pending-release', authMiddleware, async (req: Request, res: Respons
 
     let payments = result.data || [];
     
-    // Filter for pending release status
-    payments = payments.filter((p: any) => 
-      (p.status || p.Status) === 'PENDING_RELEASE' ||
-      (p.status || p.Status) === 'VERIFIED' ||
-      (p.status || p.Status) === 'AWAITING_RELEASE'
+    // Filter for pending release status: VERIFIED is the only state in
+    // the implemented chaincode payment machine that is awaiting release.
+    // PENDING_RELEASE / AWAITING_RELEASE exist in no state machine.
+    payments = payments.filter((p: any) =>
+      (p.status || p.Status) === 'VERIFIED'
     );
 
     // Apply exporter filter if provided

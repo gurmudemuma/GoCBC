@@ -115,7 +115,7 @@ interface ExporterProfile {
   exporterId: string;
   companyName: string;
   ectaLicenseNumber: string;
-  licenseStatus: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  licenseStatus: 'ACTIVE' | 'SUSPENDED' | 'REVOKED' | 'EXPIRED' | 'PENDING';
   licenseExpiryDate: string;
   bankName?: string;
   bankBranch?: string;
@@ -270,7 +270,7 @@ interface ForexStatus {
   currency: string;
   exchangeRate: number;
   retentionRate: number;
-  status: 'REQUESTED' | 'ALLOCATED' | 'UTILIZED';
+  status: 'REQUESTED' | 'ALLOCATED' | 'UTILIZED' | 'CONFIRMED';
   expiryDate: string;
   allocationDate?: string;
   requestDate?: Date;
@@ -283,7 +283,7 @@ interface LCStatus {
   currency: string;
   issuingBank: string;
   advisingBank: string;
-  status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'UTILIZED';
+  status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'UTILIZED' | 'FOREX_ALLOCATED' | 'PAYMENT_RELEASED' | 'SETTLED' | 'REJECTED' | 'EXPIRED';
   expiryDate: string;
   messages?: any[]; // Optional: SWIFT messages related to this LC
 }
@@ -301,7 +301,7 @@ interface ShipmentStatus {
   // plus the lifecycle values the shipment endpoints actually return
   // (CREATED, BOOKED, LOADED, DEPARTED, IN_TRANSIT, SHIPPED, ARRIVED,
   // DELIVERED, CONFIRMED — see api/src/routes/shipments.ts).
-  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'SHIPPED' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED';
+  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'SHIPPED' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DESTINATION_ARRIVED' | 'INSPECTION_PENDING' | 'CUSTOMS_REJECTED';
   // Logistics tracking status: PENDING, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED, CONFIRMED
   logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'CREATED' | 'SHIPPED';
   transportMode?: TransportMode;
@@ -320,7 +320,7 @@ interface PaymentStatus {
   convertedAmount: number;
   amountBirr: number;
   // Backend status values: PENDING, RECEIVED, SPLIT, RETENTION_CONVERTED, RELEASED, COMPLETED
-  status: 'PENDING' | 'RECEIVED' | 'SPLIT' | 'RETENTION_CONVERTED' | 'RELEASED' | 'COMPLETED';
+  status: 'PENDING' | 'RECEIVED' | 'SPLIT' | 'RETENTION_CONVERTED' | 'RELEASED' | 'COMPLETED' | 'SETTLED';
   // Document tracking (optional): PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED
   paymentTrackingStatus?: 'PENDING' | 'DOCUMENTS_SUBMITTED' | 'VERIFIED' | 'SWIFT_INITIATED' | 'SWIFT_RECEIVED' | 'SETTLED';
   swiftReference?: string;

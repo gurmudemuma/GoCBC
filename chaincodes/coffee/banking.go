@@ -770,7 +770,7 @@ func (c *CoffeeContract) UpdateLCStatus(ctx contractapi.TransactionContextInterf
 		"ISSUED":           {"FOREX_ALLOCATED": true, "UTILIZED": true, "EXPIRED": true},
 		"FOREX_ALLOCATED":  {"UTILIZED": true, "EXPIRED": true},
 		"AMENDED":          {"ISSUED": true, "FOREX_ALLOCATED": true, "UTILIZED": true, "EXPIRED": true},
-		"UTILIZED":         {"PAYMENT_RELEASED": true},
+		"UTILIZED":         {"PAYMENT_RELEASED": true, "EXPIRED": true}, // EXPIRED: RejectLCDocuments performs UTILIZED -> EXPIRED (banking.go:1913); the table previously rejected it
 		"PAYMENT_RELEASED": {"SETTLED": true},
 	}
 	if !allowedTransitions[previousStatus][newStatus] {

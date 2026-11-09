@@ -817,7 +817,7 @@ router.get('/', async (req, res) => {
         if (pgContract && String(pgContract.status || '').toUpperCase() !== 'APPROVED') {
           try {
             await db.run(
-              `UPDATE contracts SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE contract_id = $1`,
+              `UPDATE contracts SET status = 'APPROVED', updated_at = CURRENT_TIMESTAMP WHERE contract_id = $1`,
               [chainId]
             );
           } catch (syncError) {
@@ -1256,6 +1256,32 @@ router.post('/approve',
 
       logger.info('[CONTRACTS] Approving contract:', { contractId, userId: user?.sub, userOrg, userRole });
 
+      // Validate the transition the same way the :contractID/approve route
+      // does: the chaincode ApproveSalesContract itself has no from-state
+      // guard, so without this check an APPROVED or REJECTED contract
+      // could be (re-)approved through this endpoint.
+      const contractData = await fabricService.getSalesContract(contractId);
+      if (!contractData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Contract not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
+      const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'APPROVED');
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot approve contract: Invalid status transition from ${currentStatus} to APPROVED`,
+            allowedStatuses: statusManager.getNextStatuses('CONTRACT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       await fabricService.connectAsOrg('ECTAMSP');
       const result = await fabricService.approveSalesContract(contractId);
 
@@ -1265,6 +1291,19 @@ router.post('/approve',
           error: { code: 'APPROVAL_REJECTED', message: result.error || 'Fabric rejected the contract approval' },
           timestamp: new Date().toISOString()
         });
+      }
+
+      // Mirror the approval into Postgres (the sibling route does this via
+      // the service; this route previously wrote nothing).
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        await db.run(
+          `UPDATE contracts SET status = 'APPROVED', updated_at = CURRENT_TIMESTAMP WHERE contract_id = $1`,
+          [contractId]
+        );
+      } catch (syncError) {
+        logger.warn(`Could not sync approved contract ${contractId} to PostgreSQL:`, syncError);
       }
 
       logger.info('[CONTRACTS] Contract approval committed:', { contractId, txId: result.txId });

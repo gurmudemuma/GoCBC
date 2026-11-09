@@ -99,7 +99,7 @@ interface ShippingRecord {
   estimatedArrival: string;
   actualDeparture?: string;
   actualArrival?: string;
-  status: 'CUSTOMS_CLEARED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED';
+  status: 'CUSTOMS_CLEARED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'SHIPPED' | 'LOADED' | 'BOOKED' | 'CREATED' | 'ARRIVED' | 'CONFIRMED';
   trackingNumber: string;
   billOfLading?: string; // Sea freight B/L number
   containerType?: 'DRY' | 'REEFER' | 'OPEN_TOP'; // Sea freight only

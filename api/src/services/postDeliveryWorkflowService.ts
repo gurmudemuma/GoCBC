@@ -286,6 +286,7 @@ export class PostDeliveryWorkflowService {
         SET 
           payment_received = true,
           payment_received_date = NOW(),
+          overall_status = CASE WHEN overall_status = 'PENDING' THEN 'IN_PROGRESS' ELSE overall_status END,
           payment_amount = $2,
           payment_currency = $3,
           swift_reference = $4,
@@ -294,13 +295,16 @@ export class PostDeliveryWorkflowService {
         WHERE shipment_id = $1
       `;
 
-      await this.db.query(query, [
+      const paymentUpdate = await this.db.query(query, [
         shipmentId,
         paymentAmount,
         paymentCurrency,
         swiftReference,
         userId
       ]);
+      if (!paymentUpdate.rowCount) {
+        return { success: false, error: 'Post-delivery record not found' };
+      }
 
       // Update checklist
       await this.updateChecklistItem(shipmentId, 'PAYMENT_RECEIVED');
@@ -337,6 +341,7 @@ export class PostDeliveryWorkflowService {
         SET 
           forex_repatriated = true,
           forex_repatriation_date = NOW(),
+          overall_status = CASE WHEN overall_status = 'PENDING' THEN 'IN_PROGRESS' ELSE overall_status END,
           forex_amount = $2,
           forex_rate = $3,
           updated_by = $4,
@@ -344,7 +349,10 @@ export class PostDeliveryWorkflowService {
         WHERE shipment_id = $1
       `;
 
-      await this.db.query(query, [shipmentId, forexAmount, forexRate, userId]);
+      const forexUpdate = await this.db.query(query, [shipmentId, forexAmount, forexRate, userId]);
+      if (!forexUpdate.rowCount) {
+        return { success: false, error: 'Post-delivery record not found' };
+      }
 
       // Update checklist
       await this.updateChecklistItem(shipmentId, 'FOREX_REPATRIATED');
@@ -422,13 +430,17 @@ export class PostDeliveryWorkflowService {
         SET 
           lc_settled = true,
           lc_settlement_date = NOW(),
+          overall_status = CASE WHEN overall_status = 'PENDING' THEN 'IN_PROGRESS' ELSE overall_status END,
           lc_reference = $2,
           updated_by = $3,
           updated_at = NOW()
         WHERE shipment_id = $1
       `;
 
-      await this.db.query(query, [shipmentId, lcReference, userId]);
+      const lcUpdate = await this.db.query(query, [shipmentId, lcReference, userId]);
+      if (!lcUpdate.rowCount) {
+        return { success: false, error: 'Post-delivery record not found' };
+      }
 
       // Update checklist
       await this.updateChecklistItem(shipmentId, 'LC_SETTLED');
@@ -461,6 +473,7 @@ export class PostDeliveryWorkflowService {
         SET 
           ecta_audit_completed = true,
           ecta_audit_date = NOW(),
+          overall_status = CASE WHEN overall_status = 'PENDING' THEN 'IN_PROGRESS' ELSE overall_status END,
           ecta_audit_result = $2,
           ecta_audit_notes = $3,
           updated_by = $4,
@@ -468,7 +481,10 @@ export class PostDeliveryWorkflowService {
         WHERE shipment_id = $1
       `;
 
-      await this.db.query(query, [shipmentId, auditResult, auditNotes, userId]);
+      const auditUpdate = await this.db.query(query, [shipmentId, auditResult, auditNotes, userId]);
+      if (!auditUpdate.rowCount) {
+        return { success: false, error: 'Post-delivery record not found' };
+      }
 
       // Update checklist
       await this.updateChecklistItem(shipmentId, 'ECTA_AUDIT_COMPLETED');
@@ -500,11 +516,40 @@ export class PostDeliveryWorkflowService {
         return { success: false, error: 'Post-delivery record not found' };
       }
 
-      // Update contract status on blockchain
-      await this.fabricService.invokeChaincode('UpdateContractStatus', [
+      // Verify every required step before closing. The old code set
+      // COMPLETED + 100% unconditionally, so a contract could be closed
+      // with payment, repatriation, LC settlement or the ECTA audit still
+      // outstanding. LC settlement is only required when an LC was used.
+      const missingSteps: string[] = [];
+      if (!statusResult.paymentReceived) missingSteps.push('payment');
+      if (!statusResult.forexRepatriated) missingSteps.push('forex repatriation');
+      if (statusResult.lcUsed && !statusResult.lcSettled) missingSteps.push('LC settlement');
+      if (!statusResult.ectaAuditCompleted) missingSteps.push('ECTA audit');
+      if (missingSteps.length > 0) {
+        await this.db.query(
+          `UPDATE post_delivery_tracking
+           SET overall_status = 'ISSUE', updated_at = NOW()
+           WHERE shipment_id = $1`,
+          [shipmentId]
+        );
+        logger.warn(`📋 Cannot close contract for ${shipmentId}: incomplete steps: ${missingSteps.join(', ')}`);
+        return {
+          success: false,
+          error: `Cannot close contract: incomplete steps: ${missingSteps.join(', ')}`,
+        };
+      }
+
+      // Update contract status on blockchain. NOTE: UpdateContractStatus
+      // does not exist in chaincodes/coffee/ (see TEST-STATUS-MATRIX §17),
+      // so this is best-effort — a failure is logged, not fatal, until the
+      // chaincode function is implemented.
+      const chainResult = await this.fabricService.invokeChaincode('UpdateContractStatus', [
         statusResult.contractId,
         'COMPLETED'
       ]);
+      if (!chainResult.success) {
+        logger.warn(`📋 Chaincode UpdateContractStatus failed for ${statusResult.contractId} (function not implemented yet):`, chainResult.error);
+      }
 
       // Update post-delivery tracking
       const query = `

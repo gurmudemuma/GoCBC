@@ -16,6 +16,21 @@ const router = express.Router();
 const fabricService = FabricService.getInstance();
 const shipmentService = ShipmentService.getInstance();
 const postgresDb = DatabaseService.getInstance();
+// Mirror a shipment status change into Postgres. The lifecycle routes
+// write status on the chaincode but never updated the Postgres row, so
+// every portal query against the DB showed a stale status. Best-effort:
+// a Postgres failure must never fail a committed chaincode transaction.
+async function mirrorShipmentStatusPG(shipmentID: string, status: string): Promise<void> {
+  try {
+    await postgresDb.run(
+      `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $2`,
+      [status, shipmentID]
+    );
+  } catch (err) {
+    logger.warn(`[SHIPMENTS] Could not mirror status ${status} for ${shipmentID} to Postgres:`, err);
+  }
+}
+
 
 /**
  * ✅ EXPERT FIX: Verify shipment exists on blockchain across all peers
@@ -338,7 +353,7 @@ router.post('/',
           ForexRate: forexRate,
           ValueUSD: finalValueUSD,
           EUDRCompliant: eudrCompliant,
-          Status: 'pending',
+          Status: 'CREATED',
           Documents: documentIDs,
           CreatedAt: new Date().toISOString(),
           UpdatedAt: new Date().toISOString()
@@ -379,7 +394,7 @@ router.post('/',
             forexRate,
             finalValueUSD,
             eudrCompliant,
-            'pending', // Initial status
+            'CREATED', // Initial status (matches chaincode CreateShipment)
             result.txId || null,
             blockchainWriteSuccessful,
           ]
@@ -426,7 +441,7 @@ router.post('/',
         
         res.status(201).json({
           success: true,
-          data: { shipmentID, status: 'pending', blockchainSynced: true },
+          data: { shipmentID, status: 'CREATED', blockchainSynced: true },
           autoMapped: {
             exporterID: finalExporterID,
             buyerID: finalBuyerID,
@@ -445,7 +460,7 @@ router.post('/',
         res.status(202).json({
           success: true,
           warning: 'Shipment saved but blockchain sync pending',
-          data: { shipmentID, status: 'pending', blockchainSynced: false },
+          data: { shipmentID, status: 'CREATED', blockchainSynced: false },
           autoMapped: {
             exporterID: finalExporterID,
             buyerID: finalBuyerID,
@@ -1027,6 +1042,8 @@ router.put('/:shipmentID/status',
       if (result.success) {
         // Update status with cascading effects
         await statusManager.updateEntityStatus('SHIPMENT', shipmentID, currentStatus, status);
+        // Mirror into Postgres (the old handler only updated the chain)
+        await mirrorShipmentStatusPG(shipmentID, status);
         
         logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
         res.json({
@@ -1215,6 +1232,7 @@ router.post('/:shipmentID/reconcile-status',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, targetStatus);
         logger.info(`✅ Status reconciled: ${shipmentID} ${currentStatus} → ${targetStatus}`);
         res.json({
           success: true,
@@ -1468,10 +1486,13 @@ router.post('/:shipmentID/bill-of-lading',
         shipmentDoc.DestinationPort = destinationPort;
         shipmentDoc.EstimatedArrival = estimatedArrival;
         shipmentDoc.TrackingNumber = trackingNumber || '';
-        shipmentDoc.Status = 'in_transit';
+        shipmentDoc.Status = 'LOADED';
         shipmentDoc.UpdatedAt = new Date().toISOString();
         
         await db.insert(shipmentDoc);
+
+        // Mirror into Postgres (chaincode RecordBillOfLading sets LOADED).
+        await mirrorShipmentStatusPG(shipmentID, 'LOADED');
         
         logger.info(`✅ [SHIPPING] B/L recorded successfully in CouchDB: ${billOfLadingNo}`);
         
@@ -1482,7 +1503,7 @@ router.post('/:shipmentID/bill-of-lading',
             shipmentID,
             billOfLadingNo,
             vesselName,
-            status: 'in_transit'
+            status: 'LOADED'
           },
           txId: null, // CouchDB direct write
           timestamp: new Date().toISOString(),
@@ -1760,6 +1781,9 @@ router.post('/:shipmentID/book-freight',
       const statusUpdate = await fabricService.updateShipmentStatus(shipmentID, 'FREIGHT_BOOKED');
       
       if (statusUpdate.success) {
+        // Mirror FREIGHT_BOOKED into Postgres (the old handler only
+        // updated the chain, so the portal query found no bookings).
+        await mirrorShipmentStatusPG(shipmentID, 'FREIGHT_BOOKED');
         logger.info(`✅ [SHIPPING] Freight booked for ${shipmentID} via ${freightForwarder}`);
         
         res.json({
@@ -1821,6 +1845,7 @@ router.post('/:shipmentID/pickup',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'IN_TRANSIT');
         logger.info(`✅ [SHIPPING] Shipment picked up: ${shipmentID} by ${pickupBy}`);
         res.json({
           success: true,
@@ -1916,6 +1941,7 @@ router.post('/:shipmentID/delivery',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'DELIVERED');
         logger.info(`✅ [SHIPPING] Shipment delivered: ${shipmentID} to ${deliveredTo || 'buyer'}`);
         res.json({
           success: true,
@@ -2072,6 +2098,7 @@ router.post('/:shipmentID/land-transport/start',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'LAND_TRANSPORT');
         logger.info(`✅ [SHIPPING] Land transport started: ${shipmentID}`);
         res.json({
           success: true,
@@ -2127,6 +2154,7 @@ router.post('/:shipmentID/port/arrive',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'PORT_ARRIVED');
         logger.info(`✅ [SHIPPING] Port arrival recorded: ${shipmentID}`);
         res.json({
           success: true,
@@ -2190,6 +2218,7 @@ router.post('/:shipmentID/container/stuff',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'CONTAINER_STUFFED');
         logger.info(`✅ [SHIPPING] Container stuffed: ${shipmentID} → ${containerNumber}`);
         res.json({
           success: true,
@@ -2245,6 +2274,7 @@ router.post('/:shipmentID/vessel/load',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'VESSEL_LOADED');
         logger.info(`✅ [SHIPPING] Vessel loaded: ${shipmentID}`);
         res.json({
           success: true,
@@ -2300,6 +2330,7 @@ router.post('/:shipmentID/vessel/depart',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'DEPARTED');
         logger.info(`✅ [SHIPPING] Vessel departed: ${shipmentID}`);
         res.json({
           success: true,
@@ -2355,6 +2386,7 @@ router.post('/:shipmentID/in-transit/update',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'IN_TRANSIT');
         logger.info(`✅ [SHIPPING] In-transit updated: ${shipmentID}`);
         res.json({
           success: true,
@@ -2410,6 +2442,7 @@ router.post('/:shipmentID/destination/arrive',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'DESTINATION_ARRIVED');
         logger.info(`✅ [SHIPPING] Destination arrival recorded: ${shipmentID}`);
         res.json({
           success: true,
@@ -2465,6 +2498,7 @@ router.post('/:shipmentID/delivery/complete',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'DELIVERED');
         logger.info(`✅ [SHIPPING] Delivery completed: ${shipmentID}`);
         
         // Initialize post-delivery workflow
@@ -2528,6 +2562,30 @@ router.post('/:shipmentID/status',
       const { status, location, updatedBy } = req.body;
       const user = (req as any).user;
 
+      // Validate the transition the same way the PUT route does — the old
+      // handler called the unguarded UpdateShipmentStatus with any string.
+      const shipmentData = await fabricService.getShipment(shipmentID);
+      if (!shipmentData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Shipment not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const currentStatus = shipmentData.data?.status || shipmentData.data?.Status || 'CREATED';
+      const isValid = statusManager.validateTransition('SHIPMENT', currentStatus, status);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot update shipment: Invalid status transition from ${currentStatus} to ${status}`,
+            allowedStatuses: statusManager.getNextStatuses('SHIPMENT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // ✅ BLOCKCHAIN-FIRST: Call UpdateShipmentStatus chaincode BEFORE DB write
       const blockchainResult = await fabricService.invokeChaincode(
         'UpdateShipmentStatus',
@@ -2544,6 +2602,10 @@ router.post('/:shipmentID/status',
         ) VALUES ($1, $2, $3, $4, $5)`,
         [shipmentID, status, location || null, updatedBy || user.username, blockchain_tx_id]
       );
+
+      // Mirror the current status on the shipment row itself (the old
+      // handler only wrote the history table).
+      await mirrorShipmentStatusPG(shipmentID, status);
 
       res.json({
         success: true,
@@ -2669,6 +2731,7 @@ router.post('/:shipmentID/shipping-document',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentID, 'LOADED');
         const docType = transportMode === 'SEA' ? 'Bill of Lading' : 'Airway Bill';
         logger.info(`✅ [SHIPPING] ${docType} recorded successfully: ${documentNo}`);
         res.json({
@@ -2873,6 +2936,7 @@ router.post('/:shipmentId/in-transit/update',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentId, 'IN_TRANSIT');
         logger.info(`✅ In-transit status updated: ${shipmentId}`);
         res.json({
           success: true,
@@ -2963,6 +3027,7 @@ router.post('/:shipmentId/delivery/complete',
       ]);
 
       if (result.success) {
+        await mirrorShipmentStatusPG(shipmentId, 'DELIVERED');
         logger.info(`✅ Delivery completed: ${shipmentId}`);
         res.json({
           success: true,

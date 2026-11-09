@@ -2506,23 +2506,6 @@ const BanksPortal: React.FC = () => {
                 debug: `SWIFT Array Length: ${swiftMessages.length}, Has Data: ${swiftMessages.length > 0 ? 'YES' : 'NO'}`
               },
               { 
-                icon: <AccessTime />, 
-                label: 'Pending Approval', 
-                value: swiftMessages.filter((msg: any) => msg.status === 'PENDING_APPROVAL').length, 
-                color: '#ff9800',
-                subtitle: 'Awaiting Review',
-                description: 'Messages waiting for approval and dispatch.',
-                clickable: true,
-                selected: filterStatus === 'PENDING_APPROVAL',
-                onClick: () => {
-                  setSearchTerm('');
-                  setFilterStatus('PENDING_APPROVAL');
-                  setAmountMin('');
-                  setAmountMax('');
-                  setCurrentPage(0);
-                }
-              },
-              { 
                 icon: <SendOutlined />, 
                 label: 'Sent', 
                 value: swiftMessages.filter((msg: any) => msg.status === 'SENT').length, 
@@ -5406,7 +5389,6 @@ const BanksPortal: React.FC = () => {
             >
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="DRAFT">Draft</MenuItem>
-              <MenuItem value="PENDING_APPROVAL">Pending Approval</MenuItem>
               <MenuItem value="SENT">Sent</MenuItem>
               <MenuItem value="RECEIVED">Received</MenuItem>
               <MenuItem value="SETTLED">Settled</MenuItem>

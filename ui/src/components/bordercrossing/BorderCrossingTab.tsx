@@ -23,7 +23,7 @@ interface BorderCrossing {
   vehicleNumber: string;
   driverName: string;
   borderPost: string;
-  status: 'INITIATED' | 'DOCUMENTS_VERIFIED' | 'PHYSICAL_INSPECTION' | 'CLEARED' | 'DETAINED';
+  status: 'PENDING' | 'INSPECTED' | 'INSPECTION_FAILED' | 'CLEARED' | 'DETAINED';
   arrivalTime: string;
   clearanceTime?: string;
   customsOfficer?: string;
@@ -82,13 +82,13 @@ const BorderCrossingTab: React.FC = () => {
 
   const getStatusChip = (status: string) => {
     const cfg: Record<string, any> = {
-      INITIATED: { color: '#1976d2', label: 'Initiated', icon: <LocalShipping /> },
-      DOCUMENTS_VERIFIED: { color: '#0288d1', label: 'Docs Verified', icon: <VerifiedUser /> },
-      PHYSICAL_INSPECTION: { color: '#ff9800', label: 'Inspecting', icon: <Assessment /> },
+      PENDING: { color: '#1976d2', label: 'Pending', icon: <LocalShipping /> },
+      INSPECTED: { color: '#0288d1', label: 'Inspected', icon: <VerifiedUser /> },
+      INSPECTION_FAILED: { color: '#ff9800', label: 'Inspection Failed', icon: <Assessment /> },
       CLEARED: { color: CUSTOMS_COLORS.success, label: 'Cleared', icon: <CheckCircle /> },
       DETAINED: { color: CUSTOMS_COLORS.error, label: 'Detained', icon: <Cancel /> },
     };
-    const c = cfg[status] || cfg.INITIATED;
+    const c = cfg[status] || cfg.PENDING;
     return <Chip label={c.label} size="small" icon={c.icon} sx={{ backgroundColor: c.color, color: 'white', fontWeight: 600, '& .MuiChip-icon': { color: 'white' } }} />;
   };
 
@@ -111,10 +111,10 @@ const BorderCrossingTab: React.FC = () => {
     { field: 'arrivalTime', headerName: 'Arrival', width: 140, valueFormatter: (p: any) => new Date(p.value).toLocaleString() },
     { field: 'actions', headerName: 'Actions', width: 150, sortable: false, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
-        {p.row.status === 'DOCUMENTS_VERIFIED' && (
+        {p.row.status === 'PENDING' && (
           <Tooltip title="Physical Inspection"><IconButton size="small" onClick={() => { setSelected(p.row); setInspectionDialogOpen(true); }} sx={{ color: CUSTOMS_COLORS.navy }}><Assessment fontSize="small" /></IconButton></Tooltip>
         )}
-        {p.row.status === 'PHYSICAL_INSPECTION' && (
+        {(p.row.status === 'INSPECTED' || p.row.status === 'INSPECTION_FAILED') && (
           <Tooltip title="Clear/Detain"><IconButton size="small" onClick={() => { setSelected(p.row); setClearanceDialogOpen(true); }} sx={{ color: CUSTOMS_COLORS.success }}><CheckCircle fontSize="small" /></IconButton></Tooltip>
         )}
         <Tooltip title="View Details"><IconButton size="small" onClick={() => setSelected(p.row)} sx={{ color: CUSTOMS_COLORS.navy }}><Visibility fontSize="small" /></IconButton></Tooltip>
@@ -140,9 +140,9 @@ const BorderCrossingTab: React.FC = () => {
             <Grid item xs={12} sm={6} md={3}>
               <TextField fullWidth select size="small" label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <MenuItem value="ALL">All Statuses</MenuItem>
-                <MenuItem value="INITIATED">Initiated</MenuItem>
-                <MenuItem value="DOCUMENTS_VERIFIED">Docs Verified</MenuItem>
-                <MenuItem value="PHYSICAL_INSPECTION">Inspecting</MenuItem>
+                <MenuItem value="PENDING">Pending</MenuItem>
+                <MenuItem value="INSPECTED">Inspected</MenuItem>
+                <MenuItem value="INSPECTION_FAILED">Inspection Failed</MenuItem>
                 <MenuItem value="CLEARED">Cleared</MenuItem>
                 <MenuItem value="DETAINED">Detained</MenuItem>
               </TextField>

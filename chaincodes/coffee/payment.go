@@ -106,13 +106,21 @@ func validatePaymentMethod(method string) error {
 // validateStatusTransition - Validate if status transition is allowed for payment method
 func validateStatusTransition(currentStatus, newStatus, paymentMethod string) error {
 	// Define valid transitions per payment method
+	//
+	// NOTE (status-transition audit): the LC table used to route through
+	// UNDER_VERIFICATION -> VERIFICATION_PASSED -> PAYMENT_AUTHORIZED,
+	// states no transaction function ever assigns. The implemented
+	// chaincode path is PENDING -> DOCUMENTS_SUBMITTED -> VERIFIED ->
+	// SWIFT_INITIATED -> SWIFT_RECEIVED -> SETTLED (VerifyPaymentDocuments
+	// sets VERIFIED; SettlePayment accepts VERIFIED and SWIFT_RECEIVED),
+	// so UpdatePaymentStatus could never set VERIFIED and could never move
+	// a payment out of VERIFIED. The table below now matches the
+	// implemented path and the API statusManager PAYMENT table.
 	validTransitions := map[string]map[string][]string{
 		"LC": {
 			"PENDING":             []string{"DOCUMENTS_SUBMITTED"},
-			"DOCUMENTS_SUBMITTED": []string{"UNDER_VERIFICATION", "REJECTED"},
-			"UNDER_VERIFICATION":  []string{"VERIFICATION_PASSED", "VERIFICATION_FAILED"},
-			"VERIFICATION_PASSED": []string{"PAYMENT_AUTHORIZED"},
-			"PAYMENT_AUTHORIZED":  []string{"SWIFT_INITIATED"},
+			"DOCUMENTS_SUBMITTED": []string{"VERIFIED", "REJECTED"},
+			"VERIFIED":            []string{"SWIFT_INITIATED", "SETTLED"},
 			"SWIFT_INITIATED":     []string{"SWIFT_RECEIVED", "REJECTED"},
 			"SWIFT_RECEIVED":      []string{"SETTLED"},
 			"SETTLED":             []string{"DOCUMENTS_RELEASED"},

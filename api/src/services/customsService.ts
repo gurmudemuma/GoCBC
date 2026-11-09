@@ -162,11 +162,15 @@ export class CustomsService {
       );
 
       // Update database
+      // NOTE: ReviewCustomsDeclaration moves the chaincode declaration
+      // SUBMITTED → UNDER_INSPECTION (customs.go). The old PG value
+      // UNDER_REVIEW was the *next* step's state, so Postgres and the
+      // ledger disagreed after every review.
       await this.dbService.run(
         `UPDATE customs_declarations 
          SET status = $1, reviewer_name = $2, review_notes = $3, review_date = $4, updated_at = CURRENT_TIMESTAMP
          WHERE declaration_id = $5`,
-        ['UNDER_REVIEW', reviewData.reviewerName, reviewData.reviewNotes, new Date().toISOString(), reviewData.declarationID]
+        ['UNDER_INSPECTION', reviewData.reviewerName, reviewData.reviewNotes, new Date().toISOString(), reviewData.declarationID]
       );
 
       // Audit log
@@ -177,20 +181,20 @@ export class CustomsService {
         performedBy: reviewData.userId,
         organization: reviewData.userOrg,
         performedByOrg: reviewData.userOrg,
-        newValue: 'UNDER_REVIEW',
+        newValue: 'UNDER_INSPECTION',
         metadata: { 
-          status: 'UNDER_REVIEW', 
+          status: 'UNDER_INSPECTION', 
           reviewer: reviewData.reviewerName,
           blockchainTxId: typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
         }
       });
 
-      logger.info(`[CustomsService] ✅ Declaration under review: ${reviewData.declarationID}`);
+      logger.info(`[CustomsService] ✅ Declaration under inspection: ${reviewData.declarationID}`);
 
       return {
         success: true,
         declarationID: reviewData.declarationID,
-        status: 'UNDER_REVIEW'
+        status: 'UNDER_INSPECTION'
       };
 
     } catch (error) {
@@ -228,13 +232,16 @@ export class CustomsService {
       );
 
       // Update database
+      // NOTE: CompleteCustomsInspection moves the chaincode declaration
+      // UNDER_INSPECTION → UNDER_REVIEW (customs.go). The old PG value
+      // INSPECTION_COMPLETE exists in no state machine.
       await this.dbService.run(
         `UPDATE customs_declarations 
          SET status = $1, inspector_name = $2, inspection_result = $3, 
              inspection_notes = $4, inspection_date = $5, updated_at = CURRENT_TIMESTAMP
          WHERE declaration_id = $6`,
         [
-          'INSPECTION_COMPLETE',
+          'UNDER_REVIEW',
           inspectionData.inspectorName,
           inspectionData.inspectionResult,
           inspectionData.inspectionNotes,
@@ -251,9 +258,9 @@ export class CustomsService {
         performedBy: inspectionData.userId,
         organization: inspectionData.userOrg,
         performedByOrg: inspectionData.userOrg,
-        newValue: 'INSPECTION_COMPLETE',
+        newValue: 'UNDER_REVIEW',
         metadata: { 
-          status: 'INSPECTION_COMPLETE', 
+          status: 'UNDER_REVIEW', 
           inspector: inspectionData.inspectorName,
           result: inspectionData.inspectionResult,
           blockchainTxId: typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
@@ -265,7 +272,7 @@ export class CustomsService {
       return {
         success: true,
         declarationID: inspectionData.declarationID,
-        status: 'INSPECTION_COMPLETE',
+        status: 'UNDER_REVIEW',
         result: inspectionData.inspectionResult
       };
 
@@ -306,15 +313,16 @@ export class CustomsService {
       await this.fabricService.connectAsOrg('CustomsMSP');
 
       // Submit clearance to blockchain
+      // NOTE: ClearCustomsDeclaration takes 4 args (declarationID,
+      // clearedBy, clearanceNumber, dutiesAmountStr — customs.go:682).
+      // The old call passed 7 (adding taxes, clearanceNotes and a date),
+      // which the chaincode dispatcher rejects.
       const blockchainResult = await this.fabricService.submitTransaction(
         'ClearCustomsDeclaration',
         clearanceData.declarationID,
         clearanceData.clearedBy,
         clearanceData.clearanceNumber,
-        (clearanceData.duties || 0).toString(),
-        (clearanceData.taxes || 0).toString(),
-        clearanceData.clearanceNotes || 'Customs clearance approved',
-        new Date().toISOString()
+        (clearanceData.duties || 0).toString()
       );
 
       // Update database

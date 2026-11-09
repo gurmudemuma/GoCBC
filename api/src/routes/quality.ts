@@ -296,7 +296,7 @@ router.post('/inspections',
       // Check if shipment already has a pending inspection
       const pendingInspection = await postgresDb.get(
         'SELECT inspection_id FROM quality_inspections WHERE shipment_id = $1 AND status = $2',
-        [shipmentID, 'pending']
+        [shipmentID, 'PENDING']
       );
 
       if (pendingInspection) {
@@ -325,7 +325,7 @@ router.post('/inspections',
         quantity,
         sampleSize: sampleSize || 100,
         requestedDate: requestedDate || new Date().toISOString().split('T')[0],
-        status: 'pending',
+        status: 'PENDING',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -356,14 +356,14 @@ router.post('/inspections',
           quantity, sample_size, requested_date, status, blockchain_tx_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [inspectionID, exporterID, contractID || null, shipmentID || null, coffeeType, 
-         quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'pending', null]
+         quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'PENDING', null]
       );
 
       logger.info(`Quality inspection requested: ${inspectionID}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'pending', blockchain_tx_id: null },
+        data: { inspectionID, status: 'PENDING', blockchain_tx_id: null },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -431,7 +431,7 @@ router.post('/inspections/:inspectionID/perform',
         });
       }
 
-      if (inspection.status !== 'pending' && inspection.status !== 'requested') {
+      if (inspection.status !== 'PENDING' && inspection.status !== 'REQUESTED') {
         return res.status(400).json({
           success: false,
           error: {
@@ -514,7 +514,7 @@ ${remarks || 'No additional remarks'}
 
         const updatedDoc = {
           ...existingDoc.data,
-          status: 'inspected',
+          status: 'INSPECTED',
           inspectionDate: new Date().toISOString(),
           inspectorID: inspectorID || 'AUTO',
           inspectorName: inspectorName || 'ECTA Quality Lab',
@@ -550,7 +550,7 @@ ${remarks || 'No additional remarks'}
       // Now update inspection with ALL results in PostgreSQL
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'inspected',
+          status = 'INSPECTED',
           inspection_date = NOW(),
           inspector_name = $2,
           sample_size = $3,
@@ -582,7 +582,7 @@ ${remarks || 'No additional remarks'}
         success: true,
         data: { 
           inspectionID, 
-          status: 'inspected',
+          status: 'INSPECTED',
           grade,
           overall,
           cupQuality: cupQualityScores,
@@ -643,12 +643,12 @@ router.post('/inspections/:inspectionID/approve',
         });
       }
 
-      if (inspection.status !== 'inspected') {
+      if (inspection.status !== 'INSPECTED') {
         return res.status(400).json({
           success: false,
           error: {
             code: 'INVALID_STATUS',
-            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'inspected' first.`
+            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
           },
           timestamp: new Date().toISOString()
         });
@@ -667,7 +667,7 @@ router.post('/inspections/:inspectionID/approve',
 
         const updatedDoc = {
           ...existingDoc.data,
-          status: 'approved',
+          status: 'APPROVED',
           passed: true,
           approvedBy: approvedBy || 'ECTA Quality Director',
           certificateNo: certificateNo || `CERT${inspectionID}`,
@@ -691,7 +691,7 @@ router.post('/inspections/:inspectionID/approve',
       // Now approve inspection in PostgreSQL database
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'approved',
+          status = 'APPROVED',
           passed = true,
           certification_number = $2,
           grade = COALESCE(grade, 'Grade 1'),
@@ -851,7 +851,7 @@ router.post('/inspections/:inspectionID/approve',
         success: true,
         data: { 
           inspectionID, 
-          status: 'approved', 
+          status: 'APPROVED', 
           certificateNo, 
           blockchain_tx_id: null,
           customsAutoTriggered: true
@@ -901,12 +901,12 @@ router.put('/inspections/:inspectionID/approve',
         });
       }
 
-      if (inspection.status !== 'inspected') {
+      if (inspection.status !== 'INSPECTED') {
         return res.status(400).json({
           success: false,
           error: {
             code: 'INVALID_STATUS',
-            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'inspected' first.`
+            message: `Cannot approve inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
           },
           timestamp: new Date().toISOString()
         });
@@ -915,7 +915,7 @@ router.put('/inspections/:inspectionID/approve',
       // Update inspection to approved status
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'approved',
+          status = 'APPROVED',
           passed = true,
           certification_number = $1,
           grade = $2,
@@ -979,12 +979,12 @@ router.post('/inspections/:inspectionID/reject',
         });
       }
 
-      if (inspection.status !== 'inspected') {
+      if (inspection.status !== 'INSPECTED') {
         return res.status(400).json({
           success: false,
           error: {
             code: 'INVALID_STATUS',
-            message: `Cannot reject inspection. Current status: ${inspection.status}. Must be 'inspected' first.`
+            message: `Cannot reject inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
           },
           timestamp: new Date().toISOString()
         });
@@ -1006,7 +1006,7 @@ router.post('/inspections/:inspectionID/reject',
       // Now reject inspection in database
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'rejected',
+          status = 'REJECTED',
           passed = false,
           remarks = $2,
           blockchain_tx_id = $3,
@@ -1019,7 +1019,7 @@ router.post('/inspections/:inspectionID/reject',
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'rejected', reason, blockchain_tx_id },
+        data: { inspectionID, status: 'REJECTED', reason, blockchain_tx_id },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -1094,7 +1094,7 @@ router.post('/issue',
       await postgresDb.run(
         `UPDATE quality_inspections SET
           certification_number = $1,
-          status = 'certificate_issued',
+          status = 'CERTIFICATE_ISSUED',
           blockchain_tx_id = $2,
           updated_at = NOW()
         WHERE inspection_id = $3`,
@@ -1156,7 +1156,7 @@ router.post('/inspections/:inspectionID/issue-permit',
         });
       }
 
-      if (inspection.status !== 'approved' && inspection.passed !== true) {
+      if (inspection.status !== 'APPROVED' && inspection.passed !== true) {
         return res.status(400).json({
           success: false,
           error: {
@@ -1187,7 +1187,7 @@ router.post('/inspections/:inspectionID/issue-permit',
       // Update inspection status to permit_issued in PostgreSQL
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'permit_issued',
+          status = 'PERMIT_ISSUED',
           remarks = COALESCE(remarks, '') || '\n\nEXPORT PERMIT ISSUED: ' || $2 || ' by ' || $3,
           blockchain_tx_id = NULL,
           updated_at = NOW()
@@ -1207,7 +1207,7 @@ router.post('/inspections/:inspectionID/issue-permit',
           shipmentID: inspection.shipment_id,
           exportPermitNo: permitNumber,
           certificateNo: inspection.certification_number,
-          status: 'permit_issued',
+          status: 'PERMIT_ISSUED',
           blockchain_tx_id: null
         },
         message: 'Export permit issued successfully. Shipment ready for customs clearance.',
@@ -1281,14 +1281,14 @@ router.post('/inspections/:inspectionID/complete',
         WHERE inspection_id = $12`,
         [new Date().toISOString().split('T')[0], grade, cupQuality || null, moistureContent || null,
          defectCount || null, screenSize || null, passed, certificationNumber || null,
-         inspectorName || null, remarks || null, 'completed', inspectionID]
+         inspectorName || null, remarks || null, 'COMPLETED', inspectionID]
       );
 
       logger.info(`Quality inspection completed: ${inspectionID}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'completed', passed },
+        data: { inspectionID, status: 'COMPLETED', passed },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -1621,7 +1621,7 @@ router.post('/inspections/:inspectionID/collect-sample',
         `UPDATE quality_inspections SET
           sample_size = $1,
           inspector_name = $2,
-          status = 'sample_collected',
+          status = 'SAMPLE_COLLECTED',
           updated_at = NOW()
          WHERE inspection_id = $3`,
         [sampleWeight, collectorName || 'Quality Officer', inspectionID]
@@ -1633,7 +1633,7 @@ router.post('/inspections/:inspectionID/collect-sample',
         success: true,
         data: {
           inspectionID,
-          status: 'sample_collected',
+          status: 'SAMPLE_COLLECTED',
           sampleWeight,
           collectionDate,
           collectorName,
@@ -1700,7 +1700,7 @@ router.post('/inspections/:inspectionID/lab-results',
           screen_size = $4,
           inspector_name = $5,
           inspection_date = $6,
-          status = 'inspected',
+          status = 'INSPECTED',
           updated_at = NOW()
          WHERE inspection_id = $7`,
         [
@@ -1720,7 +1720,7 @@ router.post('/inspections/:inspectionID/lab-results',
         success: true,
         data: {
           inspectionID,
-          status: 'inspected',
+          status: 'INSPECTED',
           moistureContent,
           defectCount,
           cupScore,
@@ -1772,10 +1772,23 @@ router.put('/inspections/:inspectionID/reject',
         });
       }
 
+      // Only an inspected inspection can be rejected (same guard as the
+      // POST reject route). The old handler rejected from any state.
+      if (inspection.status !== 'INSPECTED') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_STATUS',
+            message: `Cannot reject inspection. Current status: ${inspection.status}. Must be 'INSPECTED' first.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Update inspection status to rejected
       await postgresDb.run(
         `UPDATE quality_inspections SET
-          status = 'rejected',
+          status = 'REJECTED',
           notes = $1,
           updated_at = NOW()
          WHERE inspection_id = $2`,
@@ -1788,7 +1801,7 @@ router.put('/inspections/:inspectionID/reject',
         success: true,
         data: {
           inspectionID,
-          status: 'rejected',
+          status: 'REJECTED',
           rejectionReason
         },
         timestamp: new Date().toISOString()

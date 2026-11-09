@@ -27,6 +27,7 @@ export type PaymentStatus =
   | 'REJECTED'
   // LC statuses
   | 'DOCUMENTS_SUBMITTED'
+  | 'VERIFIED'
   | 'UNDER_VERIFICATION'
   | 'VERIFICATION_PASSED'
   | 'VERIFICATION_FAILED'
@@ -87,6 +88,12 @@ const STATUS_CONFIG: Record<PaymentStatus, StatusConfig> = {
     color: 'info',
     icon: <DocumentIcon />,
     description: 'Documents submitted to bank for verification',
+  },
+  VERIFIED: {
+    label: 'Verified',
+    color: 'success',
+    icon: <VerifiedIcon />,
+    description: 'Documents verified against LC terms (UCP 600)',
   },
   UNDER_VERIFICATION: {
     label: 'Verifying',
@@ -287,13 +294,10 @@ export const PaymentStatusTimeline: React.FC<PaymentStatusTimelineProps> = ({
         return [
           'PENDING',
           'DOCUMENTS_SUBMITTED',
-          'UNDER_VERIFICATION',
-          'VERIFICATION_PASSED',
-          'PAYMENT_AUTHORIZED',
+          'VERIFIED',
           'SWIFT_INITIATED',
           'SWIFT_RECEIVED',
           'SETTLED',
-          'DOCUMENTS_RELEASED',
         ];
       case 'CAD':
         return [
