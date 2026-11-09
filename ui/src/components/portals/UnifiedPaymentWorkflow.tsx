@@ -385,9 +385,13 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
         'REQUESTED': 0,           // LC Requested - shows "Approve Request" button (step 1)
         'APPROVED': 1,            // LC Approved - shows "Issue LC" button (step 2)
         'ISSUED': 2,              // LC Issued (MT700 sent) - forex allocated, awaiting documents
+        'AMENDED': 2,             // LC Amended - back to issued state
+        'FOREX_ALLOCATED': 3,     // Forex allocated - awaiting document examination
         'UTILIZED': 4,            // Documents verified, LC can be used for payment
-        'EXPIRED': 5,             // LC expired
+        'PAYMENT_RELEASED': 5,    // Payment released - awaiting settlement
+        'EXPIRED': 5,             // LC expired (terminal)
         'SETTLED': 5,             // Payment complete
+        'REJECTED': 5,            // LC rejected (terminal)
       },
       CAD: {
         'PENDING': 0,

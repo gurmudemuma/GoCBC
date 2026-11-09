@@ -227,8 +227,10 @@ class SWIFTApiService {
 
   async getHighValueTransactions(threshold: number = 1000000) {
     const response = await this.api.get('/swift/messages', {
-      params: { 
-        status: 'PENDING_APPROVAL',
+      params: {
+        // Awaiting-approval SWIFT state is DRAFT (PENDING_APPROVAL is a
+        // chaincode constant only — it is never assigned, so it matched nothing).
+        status: 'DRAFT',
         minAmount: threshold,
       },
     });

@@ -445,6 +445,11 @@ const BanksPortal: React.FC = () => {
   // Search and Filter State
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  // Tab-local LC status filter for the All LCs tab (tab 10). The shared
+  // filterStatus above is per-tab state in effect (forex / SWIFT / LC
+  // dropdowns use different value domains), so the All LCs tab keeps its
+  // own filter instead of reusing it.
+  const [allLcFilterStatus, setAllLcFilterStatus] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(5);
   
@@ -607,6 +612,15 @@ const BanksPortal: React.FC = () => {
     if (childIndex !== activeChildTab) setActiveChildTab(childIndex);
     setActiveTab(children[childIndex]?.tabIndex ?? 0);
   }, [activeParentTab, activeChildTab, userRole]);
+
+  // The shared filterStatus state is reused by the forex, SWIFT and LC
+  // dropdowns, whose value domains do not overlap (e.g. a forex value
+  // would filter the SWIFT tab to 0 rows). Reset it whenever the active
+  // tab changes so a filter can never leak across tabs.
+  React.useEffect(() => {
+    setFilterStatus('ALL');
+    setAllLcFilterStatus('ALL');
+  }, [activeTab]);
 
   // Legacy compatibility - keep old visibleTabs for backward compatibility
   const getRoleBasedTabs = () => {
@@ -828,7 +842,7 @@ const BanksPortal: React.FC = () => {
             if (result.success) {
               const delivered = (result.data || []).filter((s: any) => {
                 const status = s.Status || s.status || '';
-                return status === 'DELIVERED' || status === 'COMPLETED';
+                return status === 'DELIVERED';
               });
               setDeliveredShipments(delivered);
               devLog(`[BANKS] ⚡ Shipments loaded: ${delivered.length}`);
@@ -937,9 +951,9 @@ const BanksPortal: React.FC = () => {
           if (!lc.documents || lc.documents.length === 0) return false;
           
           // ✅ Show LCs that have documents for examination
-          // Show APPROVED and higher statuses (APPROVED, FOREX_ALLOCATED, UTILIZED)
-          // This allows banks to examine documents at any stage after LC approval
-          if (!['APPROVED', 'FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)) return false;
+          // Chaincode ExamineLCDocuments accepts exactly {ISSUED, FOREX_ALLOCATED}
+          // and rejects APPROVED; UTILIZED means already examined.
+          if (!['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status)) return false;
           
           // ✅ Show ALL LCs in these statuses, regardless of document verification status
           // Banks can see which documents are pending vs verified in the dialog
@@ -970,10 +984,10 @@ const BanksPortal: React.FC = () => {
           if (isTarget) console.log('[BANKS] ✅ Has documents:', lc.documents.length);
           
           // ✅ Must be UTILIZED (documents examined) to release payment
-          // Valid chaincode workflow: UTILIZED → PAYMENT_RELEASED (via ReleaseLCPayment)
-          // TEMPORARY: Also accept FOREX_ALLOCATED with verified docs (migration period)
-          if (lc.status !== 'UTILIZED' && lc.status !== 'FOREX_ALLOCATED') {
-            if (isTarget) console.log('[BANKS] ❌ FAIL: Status not UTILIZED or FOREX_ALLOCATED. Current:', lc.status);
+          // Valid chaincode workflow: UTILIZED → PAYMENT_RELEASED (via ReleaseLCPayment,
+          // which requires UTILIZED only — FOREX_ALLOCATED is rejected on-chain).
+          if (lc.status !== 'UTILIZED') {
+            if (isTarget) console.log('[BANKS] ❌ FAIL: Status not UTILIZED. Current:', lc.status);
             return false;
           }
           if (isTarget) console.log('[BANKS] ✅ Status OK:', lc.status);
@@ -1400,8 +1414,8 @@ const BanksPortal: React.FC = () => {
       prerequisites: [
         {
           label: 'ECTA Approval',
-          status: (contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED') ? 'PASSED' : 'FAILED',
-          details: contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED' ? 'Contract approved by ECTA for export compliance' : `Current status: ${contract.status}`
+          status: contract.status === 'APPROVED' ? 'PASSED' : 'FAILED',
+          details: contract.status === 'APPROVED' ? 'Contract approved by ECTA for export compliance' : `Current status: ${contract.status}`
         },
         {
           label: 'Exporter License',
@@ -1447,10 +1461,8 @@ const BanksPortal: React.FC = () => {
           details: 'Complies with Ethiopian export regulations and coffee quality standards'
         },
       ],
-      additionalInfo: contract.status === 'NBE_APPROVED' || contract.status === 'APPROVED' ? 
+      additionalInfo: contract.status === 'APPROVED' ?
         'This contract has been approved by ECTA. You can now issue a Letter of Credit for this contract.' :
-        contract.status === 'PENDING' ?
-        'Contract is pending ECTA approval. LC issuance will be available after approval.' :
         'Review contract details and current status.'
     });
     setValidationDialogOpen(true);
@@ -2081,31 +2093,6 @@ const BanksPortal: React.FC = () => {
   };
 
   // Filter and Pagination Helper Functions
-  const getFilteredContracts = () => {
-    let filtered = contracts;
-    if (searchTerm) {
-      filtered = filtered.filter(c => 
-        c.contractId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.exporterId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.buyerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.buyerCountry.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-    if (dateFrom) {
-      filtered = filtered.filter(c => new Date(c.registrationDate) >= new Date(dateFrom));
-    }
-    if (dateTo) {
-      filtered = filtered.filter(c => new Date(c.registrationDate) <= new Date(dateTo));
-    }
-    if (amountMin) {
-      filtered = filtered.filter(c => c.totalValue >= parseFloat(amountMin));
-    }
-    if (amountMax) {
-      filtered = filtered.filter(c => c.totalValue <= parseFloat(amountMax));
-    }
-    return filtered;
-  };
-
   const getFilteredLCs = () => {
     devLog(`[BANKS] 🔍 getFilteredLCs() called with ${letterOfCredits.length} total LCs`);
     let filtered = letterOfCredits;
@@ -2139,6 +2126,14 @@ const BanksPortal: React.FC = () => {
     }
     devLog(`[BANKS] 🔍 Returning ${filtered.length} filtered LCs`);
     return filtered;
+  };
+
+  // All LCs tab (tab 10) filter — the 11 real LC statuses (matrix §3: the 10
+  // chaincode states plus PENDING, the letters_of_credit default from
+  // migration 058). Uses the tab-local allLcFilterStatus state.
+  const getFilteredAllLCs = () => {
+    if (allLcFilterStatus === 'ALL') return letterOfCredits;
+    return letterOfCredits.filter(lc => lc.status === allLcFilterStatus);
   };
 
   const getFilteredForex = () => {
@@ -2202,25 +2197,11 @@ const BanksPortal: React.FC = () => {
     return filtered;
   };
 
-  const getFilteredPayments = () => {
-    let filtered = pendingDocuments;
-    if (searchTerm) {
-      filtered = filtered.filter(payment => 
-        payment.paymentId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        payment.exporterId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        payment.paymentMethod?.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-    if (filterStatus !== 'ALL') {
-      filtered = filtered.filter(payment => payment.status === filterStatus);
-    }
-    return filtered;
-  };
-
   const getFilteredDocumentExaminationLCs = () => {
     const baseList = documentExaminationFilter === 'VERIFIED'
       ? letterOfCredits.filter(lc => lc.status === 'UTILIZED') // UTILIZED = documents verified
-      : lcsForExamination;
+      // Pending queue: exclude UTILIZED — an examined LC must not also appear here.
+      : lcsForExamination.filter(lc => lc.status !== 'UTILIZED');
 
     if (!searchTerm) {
       return baseList;
@@ -2457,7 +2438,7 @@ const BanksPortal: React.FC = () => {
               },
               { 
                 icon: <CheckCircle />, 
-                label: 'Allocated', 
+                label: 'Confirmed / Allocated', 
                 value: persistedForexAllocations.filter(f => f.status === 'CONFIRMED' || f.status === 'ALLOCATED').length,
                 color: '#4caf50',
                 subtitle: 'Ready to Use',
@@ -3118,7 +3099,7 @@ const BanksPortal: React.FC = () => {
                 const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
                 if (lc) {
                   // Check if LC is already issued
-                  if (lc.status === 'ISSUED' || lc.status === 'ACTIVE') {
+                  if (lc.status === 'ISSUED') {
                     showInfo('LC Already Issued', `LC ${paymentId} has already been issued`);
                     return;
                   }
@@ -3291,7 +3272,7 @@ const BanksPortal: React.FC = () => {
                   },
                   {
                     label: 'ECTA Approval',
-                    status: (contract?.status === 'NBE_APPROVED' || contract?.status === 'APPROVED') ? 'PASSED' : 'WARNING',
+                    status: contract?.status === 'APPROVED' ? 'PASSED' : 'WARNING',
                     details: contract ? 
                       `Contract status: ${contract.status}` : 
                       'Contract approval status unknown'
@@ -3445,9 +3426,8 @@ const BanksPortal: React.FC = () => {
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="REQUESTED">Requested (Awaiting Allocation)</MenuItem>
               <MenuItem value="ALLOCATED">Allocated</MenuItem>
-              <MenuItem value="CONFIRMED_OR_ALLOCATED">Approved</MenuItem>
+              <MenuItem value="CONFIRMED_OR_ALLOCATED">Confirmed / Allocated</MenuItem>
               <MenuItem value="UTILIZED">Utilized</MenuItem>
-              <MenuItem value="EXPIRED">Expired</MenuItem>
             </TextField>
             <Button
               size="small"
@@ -5395,8 +5375,11 @@ const BanksPortal: React.FC = () => {
             >
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="DRAFT">Draft</MenuItem>
+              <MenuItem value="NBE_APPROVED">NBE Approved</MenuItem>
+              <MenuItem value="APPROVED">Approved</MenuItem>
               <MenuItem value="SENT">Sent</MenuItem>
               <MenuItem value="RECEIVED">Received</MenuItem>
+              <MenuItem value="PROCESSING">Processing</MenuItem>
               <MenuItem value="SETTLED">Settled</MenuItem>
               <MenuItem value="REJECTED">Rejected</MenuItem>
             </TextField>
@@ -5804,14 +5787,50 @@ const BanksPortal: React.FC = () => {
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
               View and manage all Letter of Credits in the system regardless of status.
-              This includes REQUESTED, APPROVED, ISSUED, FOREX_ALLOCATED, UTILIZED, PAYMENT_RELEASED, and SETTLED LCs.
+              Use the status filter to narrow the list to one of the 11 real LC statuses.
             </Typography>
           </Alert>
 
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              All LCs ({letterOfCredits.length})
+          <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Typography variant="h6" gutterBottom sx={{ mb: 0 }}>
+              All LCs ({getFilteredAllLCs().length})
             </Typography>
+            <TextField
+              select
+              size="small"
+              label="Filter by Status"
+              value={allLcFilterStatus}
+              onChange={(e) => {
+                setAllLcFilterStatus(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 200 }}
+            >
+              <MenuItem value="ALL">All Statuses</MenuItem>
+              <MenuItem value="PENDING">Pending</MenuItem>
+              <MenuItem value="REQUESTED">Requested</MenuItem>
+              <MenuItem value="APPROVED">Approved</MenuItem>
+              <MenuItem value="REJECTED">Rejected</MenuItem>
+              <MenuItem value="ISSUED">Issued</MenuItem>
+              <MenuItem value="FOREX_ALLOCATED">Forex Allocated</MenuItem>
+              <MenuItem value="AMENDED">Amended</MenuItem>
+              <MenuItem value="UTILIZED">Utilized</MenuItem>
+              <MenuItem value="PAYMENT_RELEASED">Payment Released</MenuItem>
+              <MenuItem value="SETTLED">Settled</MenuItem>
+              <MenuItem value="EXPIRED">Expired</MenuItem>
+            </TextField>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setAllLcFilterStatus('ALL');
+                setCurrentPage(0);
+              }}
+            >
+              Clear Filter
+            </Button>
+          </Box>
+          <Box sx={{ mb: 3 }}>
             <TableContainer component={Paper}>
               <Table>
                 <TableHead>
@@ -5827,7 +5846,7 @@ const BanksPortal: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {letterOfCredits.length === 0 ? (
+                  {getFilteredAllLCs().length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={8} align="center">
                         <Typography variant="body2" color="textSecondary">
@@ -5836,7 +5855,7 @@ const BanksPortal: React.FC = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    letterOfCredits.slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage).map((lc) => (
+                    getFilteredAllLCs().slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage).map((lc) => (
                       <TableRow key={lc.lcId} hover>
                         <TableCell>{lc.lcId}</TableCell>
                         <TableCell>{lc.contractId}</TableCell>
@@ -5861,6 +5880,8 @@ const BanksPortal: React.FC = () => {
                               lc.status === 'FOREX_ALLOCATED' ? 'secondary' :
                               lc.status === 'UTILIZED' ? 'default' :
                               lc.status === 'PAYMENT_RELEASED' ? 'success' :
+                              lc.status === 'SETTLED' ? 'success' :
+                              lc.status === 'REJECTED' || lc.status === 'EXPIRED' ? 'error' :
                               'default'
                             }
                           />
@@ -5902,7 +5923,7 @@ const BanksPortal: React.FC = () => {
             
             <TablePagination
               component="div"
-              count={letterOfCredits.length}
+              count={getFilteredAllLCs().length}
               page={currentPage}
               onPageChange={(_, newPage) => setCurrentPage(newPage)}
               rowsPerPage={rowsPerPage}

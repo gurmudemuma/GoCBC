@@ -12,7 +12,7 @@ import {
 import {
   Add, Warehouse, Assignment, CheckCircle, LocalShipping,
   Coffee, TrendingUp, Assessment, Visibility, Refresh,
-  AttachMoney, Warning, Science, Person,
+  AttachMoney, Warning, Science, Person, Cancel,
 } from '@mui/icons-material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -158,6 +158,7 @@ const ECXPortal: React.FC = () => {
     else if (filterKey === 'GRADED') setLots(allLots.filter(l => l.status === 'GRADED'));
     else if (filterKey === 'ASSIGNED') setLots(allLots.filter(l => l.status === 'ASSIGNED'));
     else if (filterKey === 'RELEASED') setLots(allLots.filter(l => l.status === 'RELEASED'));
+    else if (filterKey === 'REJECTED') setLots(allLots.filter(l => l.status === 'REJECTED'));
     else setLots(allLots);
   };
 
@@ -328,12 +329,14 @@ const ECXPortal: React.FC = () => {
       {/* Dynamic KPI Cards - Compact design like Shipping Portal */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {(() => {
-          const kpis = tabValue === 0 ? [
+          const kpis: { icon: React.ReactElement; label: string; value: string | number; color: string; filterKey?: string }[] = tabValue === 0 ? [
             // Tab 0: Lot Management - Show lot status breakdown
-            { icon: <Coffee />, label: 'Total Lots', value: allLots.length, color: BRAND_COLOR },
-            { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800' },
-            { icon: <CheckCircle />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#4caf50' },
-            { icon: <LocalShipping />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#2196f3' },
+            { icon: <Coffee />, label: 'Total Lots', value: allLots.length, color: BRAND_COLOR, filterKey: 'ALL_LOTS' },
+            { icon: <Warehouse />, label: 'Warehoused', value: allLots.filter(l => l.status === 'WAREHOUSED').length, color: '#ff9800', filterKey: 'WAREHOUSED' },
+            { icon: <CheckCircle />, label: 'Graded', value: allLots.filter(l => l.status === 'GRADED').length, color: '#4caf50', filterKey: 'GRADED' },
+            { icon: <Assignment />, label: 'Assigned', value: allLots.filter(l => l.status === 'ASSIGNED').length, color: '#7b1fa2', filterKey: 'ASSIGNED' },
+            { icon: <LocalShipping />, label: 'Released', value: allLots.filter(l => l.status === 'RELEASED').length, color: '#2196f3', filterKey: 'RELEASED' },
+            { icon: <Cancel />, label: 'Rejected', value: allLots.filter(l => l.status === 'REJECTED').length, color: '#f44336', filterKey: 'REJECTED' },
           ] : tabValue === 1 ? [
             // Tab 1: Market Prices - Show price statistics
             { icon: <TrendingUp />, label: 'Market Active', value: 'OPEN', color: '#4caf50' },
@@ -356,12 +359,13 @@ const ECXPortal: React.FC = () => {
 
           return kpis.map((kpi, index) => (
             <Grid item xs={12} sm={6} md={3} key={index}>
-              <Card sx={{ 
+              <Card onClick={kpi.filterKey ? () => handleKPIFilter(kpi.filterKey as string, kpi.label) : undefined} sx={{ 
                 bgcolor: '#fff', 
                 border: `1px solid ${kpi.color}20`,
                 borderLeft: `4px solid ${kpi.color}`,
                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
                 transition: 'all 0.2s ease',
+                ...(kpi.filterKey ? { cursor: 'pointer', outline: activeKPIFilter === kpi.filterKey ? `2px solid ${kpi.color}` : 'none' } : {}),
                 '&:hover': {
                   boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
                   transform: 'translateY(-2px)',

@@ -164,17 +164,23 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
   };
 
   const getStatusColor = (status: string): string => {
+    // LC statuses only (TEST-STATUS-MATRIX: REQUESTED → APPROVED → ISSUED
+    // → FOREX_ALLOCATED → AMENDED → UTILIZED → PAYMENT_RELEASED → SETTLED,
+    // plus REJECTED/EXPIRED). DOCUMENTS_SUBMITTED is a payment status, never
+    // an LC status, so it has no entry here.
     const colors: Record<string, string> = {
       'REQUESTED': 'blue',
       'APPROVED': 'cyan',
       'ISSUED': 'green',
-      'DOCUMENTS_SUBMITTED': 'orange',
-      'UNDER_REVIEW': 'gold',
-      // PAID was not an LC status (the completed LC/payment state is
-      // SETTLED — see TEST-STATUS-MATRIX §17 #15); mapped, not removed,
-      // so settled LCs keep their purple chip.
+      'FOREX_ALLOCATED': 'teal',
+      'AMENDED': 'gold',
+      'UTILIZED': 'orange',
+      'PAYMENT_RELEASED': 'lime',
+      // The completed LC/payment state is SETTLED — see
+      // TEST-STATUS-MATRIX §17 #15; settled LCs keep their purple chip.
       'SETTLED': 'purple',
-      'CLOSED': 'default',
+      'REJECTED': 'red',
+      'EXPIRED': 'default',
     };
     return colors[status] || 'default';
   };
@@ -345,9 +351,16 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
             style={{ width: 150 }}
           >
             <Option value="all">All Status</Option>
+            <Option value="REQUESTED">Requested</Option>
+            <Option value="APPROVED">Approved</Option>
             <Option value="ISSUED">Issued</Option>
-            <Option value="DOCUMENTS_SUBMITTED">Under Review</Option>
+            <Option value="FOREX_ALLOCATED">Forex Allocated</Option>
+            <Option value="AMENDED">Amended</Option>
+            <Option value="UTILIZED">Utilized</Option>
+            <Option value="PAYMENT_RELEASED">Payment Released</Option>
             <Option value="SETTLED">Settled</Option>
+            <Option value="REJECTED">Rejected</Option>
+            <Option value="EXPIRED">Expired</Option>
           </Select>
         </Space>
 

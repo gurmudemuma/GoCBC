@@ -1360,7 +1360,7 @@ router.get('/lc', async (req, res) => {
       try {
         const pgLCs = await dbService.all(`
           SELECT 
-            lc.lc_id, lc.contract_id, lc.exporter_id, lc.amount, lc.currency,
+            lc.lc_id, lc.lc_number, lc.contract_id, lc.exporter_id, lc.amount, lc.currency,
             lc.status, lc.issue_date, lc.expiry_date, lc.request_date,
             lc.issuing_bank, lc.advising_bank, lc.terms,
             lc.rejection_reason, lc.rejected_by, lc.rejected_by_msp, lc.rejection_date,
@@ -1401,7 +1401,49 @@ router.get('/lc', async (req, res) => {
         }
         
         logger.info(`[BANKING] ✅ Loaded ${pgLCs.length} LCs from PostgreSQL`);
-        
+
+        // Documents per LC (same rule as the LC-detail PG fallback:
+        // active documents linked to the LC by lc_id or lc_number).
+        // Without this, `documents` was hardcoded to [] here, so the
+        // Document Examination queue (LCs with documents, ISSUED or
+        // FOREX_ALLOCATED) and the Payment Release queue (UTILIZED with
+        // verified documents) could never fill in dev mode.
+        const pgDocs = await dbService.all(
+          `SELECT document_id, document_type, file_name, file_path, status,
+                  verification_status, verified, uploaded_at, uploaded_by,
+                  entity_type, entity_id
+           FROM documents WHERE status = 'active' AND entity_type = 'LC'`,
+          []
+        );
+        const docsByLC = new Map<string, any[]>();
+        for (const d of pgDocs) {
+          const doc = {
+            documentId: d.document_id,
+            documentType: d.document_type,
+            fileName: d.file_name,
+            filePath: d.file_path,
+            status: d.status || 'pending',
+            verificationStatus: d.verification_status || '',
+            verified: !!d.verified,
+            uploadedAt: d.uploaded_at,
+            uploadedBy: d.uploaded_by,
+            entityType: d.entity_type,
+            entityId: d.entity_id,
+          };
+          const list = docsByLC.get(d.entity_id) || [];
+          list.push(doc);
+          docsByLC.set(d.entity_id, list);
+        }
+
+        // Customs clearance per contract: the Payment Release queue requires
+        // customsClearanceStatus 'CLEARED' (or customsCleared true), which
+        // the chaincode LC object carries but this PG fallback never set.
+        const pgCleared = await dbService.all(
+          `SELECT DISTINCT contract_id FROM customs_declarations WHERE status = 'CLEARED'`,
+          []
+        );
+        const clearedContracts = new Set(pgCleared.map((r: any) => r.contract_id));
+
         lcData = pgLCs.map((lc: any) => ({
           lcId: lc.lc_id,
           contractId: lc.contract_id,
@@ -1427,7 +1469,12 @@ router.get('/lc', async (req, res) => {
           documentRejectedBy: lc.document_rejected_by || '',
           documentRejectedByMsp: lc.document_rejected_by_msp || '',
           documentRejectionDate: lc.document_rejection_date || null,
-          documents: [],
+          documents: [
+            ...(docsByLC.get(lc.lc_id) || []),
+            ...(lc.lc_number && lc.lc_number !== lc.lc_id ? (docsByLC.get(lc.lc_number) || []) : []),
+          ],
+          customsClearanceStatus: clearedContracts.has(lc.contract_id) ? 'CLEARED' : '',
+          customsCleared: clearedContracts.has(lc.contract_id),
           amendments: [],
           amendmentCount: 0,
           discrepancies: discrepanciesByLC.get(lc.lc_id) || [],

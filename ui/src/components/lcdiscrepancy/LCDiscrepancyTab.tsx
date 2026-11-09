@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Grid, Card, CardContent, Typography, Button, TextField, MenuItem, Chip, IconButton, Tooltip, Alert, Paper, InputAdornment } from '@mui/material';
 import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
-import { Visibility, Warning, CheckCircle, Assessment, FilterList, Refresh, Error as ErrorIcon } from '@mui/icons-material';
+import { Visibility, Warning, CheckCircle, FilterList, Refresh } from '@mui/icons-material';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import { useNotification } from '@/hooks/useNotification';
 import DiscrepancyReportingDialog from './DiscrepancyReportingDialog';
@@ -93,9 +93,9 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
         }).filter((item: Discrepancy) => Boolean(item.discrepancyId));
       });
       setDiscrepancies(rows);
-      const open = rows.filter((item) => item.status === 'REPORTED' || item.status === 'UNDER_REVIEW').length;
+      const open = rows.filter((item) => item.status === 'REPORTED').length;
       const resolved = rows.filter((item) => item.status === 'RESOLVED' || item.status === 'WAIVED').length;
-      const closed = rows.filter((item) => ['RESOLVED', 'WAIVED', 'REJECTED'].includes(item.status)).length;
+      const closed = rows.filter((item) => ['RESOLVED', 'WAIVED'].includes(item.status)).length;
       const durations = rows.filter((item) => item.resolvedDate && item.reportedDate).map((item) =>
         Math.max(0, (new Date(item.resolvedDate as string).getTime() - new Date(item.reportedDate).getTime()) / 86400000)
       );
@@ -146,11 +146,8 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
   const getStatusChip = (status: string) => {
     const cfg: Record<string, any> = {
       REPORTED: { color: '#1976d2', label: 'Reported', icon: <Warning /> },
-      UNDER_REVIEW: { color: '#0288d1', label: 'Under Review', icon: <Assessment /> },
-      RESOLUTION_AGREED: { color: '#0097a7', label: 'Resolution Agreed', icon: <CheckCircle /> },
       RESOLVED: { color: CBE_COLORS.success, label: 'Resolved', icon: <CheckCircle /> },
       WAIVED: { color: CBE_COLORS.success, label: 'Waived', icon: <CheckCircle /> },
-      REJECTED: { color: CBE_COLORS.error, label: 'Rejected', icon: <ErrorIcon /> },
     };
     const c = cfg[status] || cfg.REPORTED;
     return <Chip label={c.label} size="small" icon={c.icon} sx={{ backgroundColor: c.color, color: 'white', fontWeight: 600, '& .MuiChip-icon': { color: 'white' } }} />;
@@ -173,7 +170,7 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
     { field: 'actions', headerName: 'Actions', width: 150, sortable: false, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         <Tooltip title="View Details"><IconButton size="small" onClick={() => { setSelected(p.row); setDetailsDialogOpen(true); }} sx={{ color: CBE_COLORS.purple }}><Visibility fontSize="small" /></IconButton></Tooltip>
-        {(p.row.status === 'REPORTED' || p.row.status === 'UNDER_REVIEW') && (
+        {p.row.status === 'REPORTED' && (
           <Tooltip title="Resolve"><IconButton size="small" onClick={() => { setSelected(p.row); setResolutionDialogOpen(true); }} sx={{ color: CBE_COLORS.success }}><CheckCircle fontSize="small" /></IconButton></Tooltip>
         )}
       </Box>
@@ -194,11 +191,8 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
               <TextField fullWidth select size="small" label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <MenuItem value="ALL">All Statuses</MenuItem>
                 <MenuItem value="REPORTED">Reported</MenuItem>
-                <MenuItem value="UNDER_REVIEW">Under Review</MenuItem>
-                <MenuItem value="RESOLUTION_AGREED">Resolution Agreed</MenuItem>
                 <MenuItem value="RESOLVED">Resolved</MenuItem>
                 <MenuItem value="WAIVED">Waived</MenuItem>
-                <MenuItem value="REJECTED">Rejected</MenuItem>
               </TextField>
             </Grid>
             <Grid item xs={12} sm={6} md={2}>

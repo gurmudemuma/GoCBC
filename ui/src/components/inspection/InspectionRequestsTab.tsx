@@ -61,7 +61,12 @@ interface Inspection {
   exporterName?: string;
   coffeeType: string;
   quantity: number;
-  status: 'REQUESTED' | 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'PASSED' | 'FAILED';
+  status: 'REQUESTED' | 'SCHEDULED' | 'COMPLETED' | 'APPROVED' | 'REJECTED';
+  // Inspection outcome recorded by RecordInspectionResults
+  // (chaincodes/coffee/inspection.go): PASS, FAIL or CONDITIONAL_PASS.
+  // Pass/fail is derived from this field, never from status — no
+  // PreShipmentInspection row ever carries PASSED/FAILED as a status.
+  overallResult?: string;
   requestDate: string;
   scheduledDate?: string;
   completedDate?: string;
@@ -143,6 +148,13 @@ const InspectionRequestsTab: React.FC = () => {
     }
   };
 
+  // Overall inspection outcome (PASS / FAIL / CONDITIONAL_PASS), from the
+  // chaincode `overallResult` field (RecordInspectionResults sets COMPLETED
+  // for PASS, CONDITIONAL_PASS and FAIL alike, so status alone cannot tell
+  // a pass from a fail).
+  const getOverallResult = (i: Inspection): string =>
+    String((i as any).overallResult || (i as any).result || (i as any).outcome || '').toUpperCase();
+
   // Calculate statistics
   const calculateStats = (data: Inspection[]) => {
     const total = data.length;
@@ -153,9 +165,11 @@ const InspectionRequestsTab: React.FC = () => {
       i.completedDate && i.completedDate.startsWith(today)
     ).length;
     
-    const completed = data.filter(i => i.status === 'PASSED' || i.status === 'FAILED');
-    const passed = data.filter(i => i.status === 'PASSED').length;
-    const passRate = completed.length > 0 ? (passed / completed.length) * 100 : 0;
+    // Pass/fail comes from the result field, not status: a completed
+    // inspection has overallResult PASS, CONDITIONAL_PASS or FAIL.
+    const withResult = data.filter(i => ['PASS', 'FAIL', 'CONDITIONAL_PASS'].includes(getOverallResult(i)));
+    const passed = withResult.filter(i => getOverallResult(i) !== 'FAIL').length;
+    const passRate = withResult.length > 0 ? (passed / withResult.length) * 100 : 0;
     
     // Calculate average duration (simplified)
     const avgDuration = 2.5; // days (placeholder)
@@ -234,11 +248,12 @@ const InspectionRequestsTab: React.FC = () => {
     const statusConfig: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
       REQUESTED: { color: '#1976d2', label: 'Requested', icon: <Assignment /> },
       SCHEDULED: { color: '#0288d1', label: 'Scheduled', icon: <Schedule /> },
-      IN_PROGRESS: { color: '#ff9800', label: 'In Progress', icon: <Science /> },
       COMPLETED: { color: '#0097a7', label: 'Completed', icon: <CheckCircle /> },
-      PASSED: { color: ECTA_COLORS.success, label: 'Passed', icon: <CheckCircle /> },
-      FAILED: { color: ECTA_COLORS.error, label: 'Failed', icon: <Cancel /> },
+      APPROVED: { color: ECTA_COLORS.success, label: 'Approved', icon: <CheckCircle /> },
+      REJECTED: { color: ECTA_COLORS.error, label: 'Rejected', icon: <Cancel /> },
     };
+    // Unknown/lowercase statuses (e.g. 'pending' from POST /inspection)
+    // fall through to the REQUESTED chip.
     
     const config = statusConfig[status] || statusConfig.REQUESTED;
     
@@ -377,7 +392,7 @@ const InspectionRequestsTab: React.FC = () => {
             </Tooltip>
           )}
           
-          {(params.row.status === 'PASSED' || params.row.status === 'FAILED') && (
+          {params.row.status === 'COMPLETED' && (
             <Tooltip title="View Report">
               <IconButton
                 size="small"
@@ -428,10 +443,9 @@ const InspectionRequestsTab: React.FC = () => {
                 <MenuItem value="ALL">All Statuses</MenuItem>
                 <MenuItem value="REQUESTED">Requested</MenuItem>
                 <MenuItem value="SCHEDULED">Scheduled</MenuItem>
-                <MenuItem value="IN_PROGRESS">In Progress</MenuItem>
                 <MenuItem value="COMPLETED">Completed</MenuItem>
-                <MenuItem value="PASSED">Passed</MenuItem>
-                <MenuItem value="FAILED">Failed</MenuItem>
+                <MenuItem value="APPROVED">Approved</MenuItem>
+                <MenuItem value="REJECTED">Rejected</MenuItem>
               </TextField>
             </Grid>
             <Grid item xs={12} sm={6} md={2}>

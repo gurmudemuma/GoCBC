@@ -29,8 +29,6 @@ import {
   Alert,
   Tabs,
   Tab,
-  FormControlLabel,
-  Switch,
   Divider,
   Snackbar,
   Button,
@@ -77,7 +75,6 @@ import AuditTrailTable from './AuditTrailTable';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { useForm, Controller } from 'react-hook-form';
 import { InspectionManagement } from './InspectionManagement';
 import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
@@ -200,13 +197,15 @@ const ECTAPortal: React.FC = () => {
   const [subTabValue, setSubTabValue] = useState(0);
   
   // Inspection filter state (for Quality Control tab). The values are the
-  // states this tab actually renders (PENDING/REQUESTED → Inspect,
-  // INSPECTED → Approve/Reject, APPROVED → Issue Permit, REJECTED and
-  // PERMIT_ISSUED → status chip). SCHEDULED belongs to the separate
-  // PreShipmentInspection entity (inspection.go) and UNDER_REVIEW is a
-  // customs state — neither ever occurs on a QualityInspection row, so
-  // they were dead filter values (TEST-STATUS-MATRIX §17 #15).
-  const [inspectionFilterTab, setInspectionFilterTab] = useState<'PENDING' | 'REQUESTED' | 'INSPECTED' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('PENDING');
+  // states this tab actually renders (PENDING → Inspect, INSPECTED →
+  // Approve/Reject, APPROVED → Issue Permit, REJECTED and PERMIT_ISSUED →
+  // status chip). SCHEDULED belongs to the separate PreShipmentInspection
+  // entity (inspection.go) and UNDER_REVIEW is a customs state — neither
+  // ever occurs on a QualityInspection row, so they were dead filter values
+  // (TEST-STATUS-MATRIX §17 #15). 'ALL' shows every row; REQUESTED is kept
+  // because quality_inspections rows can carry it (quality.ts perform
+  // guard accepts PENDING or REQUESTED).
+  const [inspectionFilterTab, setInspectionFilterTab] = useState<'ALL' | 'PENDING' | 'REQUESTED' | 'INSPECTED' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('ALL');
   
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [allExporters, setAllExporters] = useState<Exporter[]>([]);
@@ -271,7 +270,7 @@ const ECTAPortal: React.FC = () => {
   const [selectedContract, setSelectedContract] = useState<any>(null);
   const [contractRejectionField, setContractRejectionField] = useState('');
   const [contractRejectionReason, setContractRejectionReason] = useState('');
-  const [contractStatusFilter, setContractStatusFilter] = useState<string>(''); // '' = all, 'REGISTERED', 'APPROVED', 'REJECTED'
+  const [contractStatusFilter, setContractStatusFilter] = useState<string>(''); // '' = all, 'PENDING', 'REGISTERED', 'APPROVED', 'REJECTED', 'CANCELLED', 'COMPLETED' — DRAFT is not a contract status: nothing writes it (create writes REGISTERED; the old 'draft' column default was removed by migration 058 and chk_contracts_status excludes it)
   
   // Contract Documents State
   const [contractDocs, setContractDocs] = useState<any[]>([]);
@@ -566,7 +565,7 @@ const ECTAPortal: React.FC = () => {
           console.log(`[ECTA] 📊 Contract status breakdown:`, {
             all: contractsRes.data.length,
             filtered: filteredContracts.length,
-            pending: contractsRes.data.filter((c: any) => c.contractStatus === 'PENDING_APPROVAL' || c.status === 'PENDING_APPROVAL').length,
+            pending: contractsRes.data.filter((c: any) => c.contractStatus === 'PENDING' || c.status === 'PENDING').length,
             approved: contractsRes.data.filter((c: any) => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length,
             rejected: contractsRes.data.filter((c: any) => c.contractStatus === 'REJECTED' || c.status === 'REJECTED').length,
             registered: contractsRes.data.filter((c: any) => c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED').length
@@ -602,15 +601,15 @@ const ECTAPortal: React.FC = () => {
         if (shipmentsRes.success && shipmentsRes.data) {
           const ectaRelevantShipments = shipmentsRes.data.filter((s: any) => {
             const status = s.Status || s.status || s.shipmentStatus || '';
-            return status === 'CREATED' || 
-                   status === 'INSPECTION_PENDING' || 
-                   status === 'QUALITY_APPROVED' ||
+            return status === 'CREATED' ||
+                   status === 'INSPECTION_PENDING' ||
                    status === 'INSPECTED';
           });
           
           const delivered = shipmentsRes.data.filter((s: any) => {
             const status = s.Status || s.status || s.shipmentStatus || '';
-            return status === 'DELIVERED' || status === 'COMPLETED';
+            // COMPLETED is never a shipments.status — delivered is DELIVERED only.
+            return status === 'DELIVERED';
           });
           
           console.log(`[ECTA] ✅ Shipments loaded: ${ectaRelevantShipments.length} ECTA-relevant, ${delivered.length} delivered (${performance.now().toFixed(0)}ms)`);
@@ -1433,100 +1432,6 @@ The exporter can reapply once all requirements are met.`,
     });
   };
 
-  const exporterColumns: GridColDef[] = [
-    { field: 'exporterId', headerName: 'Exporter ID', width: 130 },
-    { field: 'companyName', headerName: 'Company Name', width: 200 },
-    { field: 'ectaLicenseNumber', headerName: 'License Number', width: 150 },
-    {
-      field: 'licenseStatus',
-      headerName: 'Status',
-      width: 120,
-      renderCell: (params) => (
-        <StatusChip
-          status={params.value === 'ACTIVE' ? 'approved' : params.value === 'SUSPENDED' ? 'rejected' : 'pending'}
-          label={params.value}
-          brandColor={BRAND_COLOR}
-        />
-      ),
-    },
-    {
-      field: 'capitalRequirement',
-      headerName: 'Capital (ETB)',
-      width: 130,
-      renderCell: (params) => formatCurrency(params.value, 'ETB'),
-    },
-    {
-      field: 'laboratoryCertified',
-      headerName: 'Lab Certified',
-      width: 120,
-      renderCell: (params) => (
-        <FormControlLabel
-          control={
-            <Switch
-              checked={params.value}
-              onChange={(e) => handleUpdateLaboratory(params.row.exporterId, e.target.checked)}
-              size="small"
-            />
-          }
-          label=""
-        />
-      ),
-    },
-    {
-      field: 'licenseExpiryDate',
-      headerName: 'Expires',
-      width: 120,
-      renderCell: (params) => formatDate(params.value),
-    },
-    {
-      field: 'actions',
-      headerName: 'Actions',
-      width: 180,
-      sortable: false,
-      filterable: false,
-      disableColumnMenu: true,
-      renderCell: (params) => (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="View Details">
-            <IconButton 
-              size="small" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedExporter(params.row);
-              }}
-            >
-              <Visibility />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Quality Control">
-            <IconButton 
-              size="small" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedExporter(params.row);
-                setQualityDialogOpen(true);
-              }}
-            >
-              <Science />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={params.row.licenseStatus === 'SUSPENDED' ? 'Activate License' : 'Suspend License'}>
-            <IconButton 
-              size="small"
-              color={params.row.licenseStatus === 'SUSPENDED' ? 'success' : 'warning'}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSuspendLicense(params.row.exporterId, params.row.licenseStatus);
-              }}
-            >
-              {params.row.licenseStatus === 'SUSPENDED' ? <CheckCircle /> : <Warning />}
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ),
-    },
-  ];
-
   const getExporterStats = () => {
     // Use approved applications as the source of truth for total exporters
     // since approval creates both database record AND blockchain registration
@@ -1550,6 +1455,33 @@ The exporter can reapply once all requirements are met.`,
     const approvedCount = approvedApplications.length;
 
     return { total, active, expiringSoon, pendingApplications, approvedCount };
+  };
+
+  // Real licence status for an approved-exporter row (F1): the chain
+  // exporter record carries licenseStatus (PENDING/ACTIVE/SUSPENDED/
+  // EXPIRED/REVOKED, TEST-STATUS-MATRIX §2); the application row itself
+  // has no licence-status field. Fall back to the licence expiry date.
+  const getLicenseStatus = (application: ExporterApplication): 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'EXPIRED' | 'REVOKED' => {
+    const chainExporter = allExporters.find((e) => e.exporterId === application.exporter_id);
+    const chainStatus = String(chainExporter?.licenseStatus || '').toUpperCase();
+    if (['PENDING', 'ACTIVE', 'SUSPENDED', 'EXPIRED', 'REVOKED'].includes(chainStatus)) {
+      return chainStatus as 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'EXPIRED' | 'REVOKED';
+    }
+    if (application.license_expiry_date && new Date(application.license_expiry_date).getTime() < Date.now()) {
+      return 'EXPIRED';
+    }
+    return 'ACTIVE';
+  };
+
+  // StatusChip rendering for a licence status: ACTIVE renders as the
+  // approved (green) chip, SUSPENDED as rejected (red); EXPIRED, REVOKED
+  // and PENDING render as their own chips.
+  const licenseStatusChip: Record<'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'EXPIRED' | 'REVOKED', 'approved' | 'rejected' | 'pending' | 'EXPIRED' | 'REVOKED'> = {
+    ACTIVE: 'approved',
+    SUSPENDED: 'rejected',
+    EXPIRED: 'EXPIRED',
+    REVOKED: 'REVOKED',
+    PENDING: 'pending',
   };
 
   const normalizeInspectionStatus = (status?: string): string => {
@@ -1803,6 +1735,81 @@ The exporter can reapply once all requirements are met.`,
               </Card>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
+              <Card
+                sx={{
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'PENDING' ? '#ef6c00' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('PENDING')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ef6c0015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Pending sx={{ fontSize: 28, color: '#ef6c00' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Pending
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ef6c00', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'PENDING' || c.status === 'PENDING').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card
+                sx={{
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'CANCELLED' ? '#616161' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('CANCELLED')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#61616115', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <Block sx={{ fontSize: 28, color: '#616161' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Cancelled
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#616161', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'CANCELLED' || c.status === 'CANCELLED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card
+                sx={{
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  py: 3,
+                  transition: 'all 0.3s ease',
+                  border: `2px solid ${contractStatusFilter === 'COMPLETED' ? '#00897b' : 'transparent'}`,
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
+                }}
+                onClick={() => setContractStatusFilter('COMPLETED')}
+              >
+                <CardContent>
+                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#00897b15', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
+                    <CheckCircleOutline sx={{ fontSize: 28, color: '#00897b' }} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
+                    Completed
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#00897b', lineHeight: 1 }}>
+                    {allContracts.filter(c => c.contractStatus === 'COMPLETED' || c.status === 'COMPLETED').length}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
               <Card 
                 sx={{ 
                   cursor: 'pointer',
@@ -1845,7 +1852,7 @@ The exporter can reapply once all requirements are met.`,
                   <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
                     {allShipments.filter(s => {
                       const status = (s.status || (s as any).Status || '').toUpperCase();
-                      return (status === 'CREATED' || status === 'REGISTERED') && 
+                      return status === 'CREATED' && 
                              !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
                     }).length}
                   </Typography>
@@ -1864,7 +1871,7 @@ The exporter can reapply once all requirements are met.`,
                   <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
                     {allInspectionRecords.filter(i => {
                       const status = (i.status || (i as any).Status || '').toUpperCase();
-                      return status === 'REQUESTED' || status === 'IN_PROGRESS';
+                      return status === 'INSPECTED';
                     }).length}
                   </Typography>
                 </CardContent>
@@ -1882,7 +1889,7 @@ The exporter can reapply once all requirements are met.`,
                   <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
                     {allInspectionRecords.filter(i => {
                       const status = (i.status || (i as any).Status || '').toUpperCase();
-                      return status === 'COMPLETED' || status === 'QUALITY_APPROVED';
+                      return status === 'COMPLETED';
                     }).length}
                   </Typography>
                 </CardContent>
@@ -2028,8 +2035,8 @@ The exporter can reapply once all requirements are met.`,
                 tab.index === 3 ? `${tab.label} (${(() => {
                   const pendingShipments = allShipments.filter(s => {
                     const status = (s.status || (s as any).Status || '').toUpperCase();
-                    return (status === 'CREATED' || status === 'REGISTERED') && 
-                           !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
+                    return status === 'CREATED' && 
+                           !allInspectionRecords.some(i => (i.shipment_id || i.shipmentID || i.ShipmentID) === s.shipmentId);
                   });
                   return pendingShipments.length + allInspectionRecords.length;
                 })()})` :
@@ -2279,9 +2286,8 @@ The exporter can reapply once all requirements are met.`,
                       <TableCell>{application.license_expiry_date ? formatDate(application.license_expiry_date) : 'Not Set'}</TableCell>
                       <TableCell>
                         <StatusChip
-                          status="approved"
-                          label="ACTIVE"
-                          brandColor={BRAND_COLOR}
+                          status={licenseStatusChip[getLicenseStatus(application)]}
+                          label={getLicenseStatus(application)}
                         />
                       </TableCell>
                       <TableCell>
@@ -2752,20 +2758,47 @@ The exporter can reapply once all requirements are met.`,
             <Science /> Quality Inspection Records
           </Typography>
 
+          {/* Inspection status filter (F8) — filters the table below by the
+              displayed inspection status. */}
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+            {(['ALL', 'PENDING', 'REQUESTED', 'INSPECTED', 'APPROVED', 'REJECTED', 'PERMIT_ISSUED'] as const).map((filter) => (
+              <Button
+                key={filter}
+                size="small"
+                variant={inspectionFilterTab === filter ? 'contained' : 'outlined'}
+                onClick={() => setInspectionFilterTab(filter)}
+              >
+                {filter === 'ALL' ? 'All' : filter.split('_').map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')}
+              </Button>
+            ))}
+          </Box>
+
           {/* Unified Table for All Inspection Data */}
           {(() => {
             // Show all inspection data: pending shipments + all inspection records
             const getPendingShipments = () => allShipments.filter(s => {
               const status = (s.status || (s as any).Status || '').toUpperCase();
-              return (status === 'CREATED' || status === 'REGISTERED') && 
+              return status === 'CREATED' &&
                      !allInspectionRecords.some(i => (i.shipment_id || i.shipmentID || i.ShipmentID) === s.shipmentId);
             });
 
             const dataToShow = [...getPendingShipments(), ...allInspectionRecords];
             const isPendingShipment = (item: any) => item.shipmentId && !item.inspection_id && !item.inspectionID && !item.InspectionID;
 
-            return dataToShow.length === 0 ? (
-              <Alert severity="info">No inspection records to display</Alert>
+            // Displayed status of a row, using the same mapping the rows
+            // render below (COMPLETED → APPROVED/REJECTED by `passed`).
+            const displayedStatus = (item: any) => {
+              if (isPendingShipment(item)) return 'PENDING';
+              const raw = String(item.status || item.Status || 'UNKNOWN').toUpperCase();
+              if (raw === 'COMPLETED') return item.passed ? 'APPROVED' : 'REJECTED';
+              return raw;
+            };
+            const filteredData = inspectionFilterTab === 'ALL'
+              ? dataToShow
+              : dataToShow.filter((item) => displayedStatus(item) === inspectionFilterTab);
+
+            return filteredData.length === 0 ? (
+              <Alert severity="info">{inspectionFilterTab === 'ALL' ? 'No inspection records to display' : `No inspection records with status "${inspectionFilterTab}".`}</Alert>
             ) : (
               <>
                 <TableContainer component={Paper}>
@@ -2789,20 +2822,19 @@ The exporter can reapply once all requirements are met.`,
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {getPaginatedData(dataToShow).map((item: any, index) => {
+                    {getPaginatedData(filteredData).map((item: any, index) => {
                       const isShipment = isPendingShipment(item);
                       const itemId = isShipment ? item.shipmentId : (item.inspection_id || item.inspectionID || item.InspectionID);
                       const shipmentId = isShipment ? item.shipmentId : (item.shipment_id || item.shipmentID || item.ShipmentID);
                       const exporterId = isShipment ? item.exporterId : (item.exporter_id || item.exporterID || item.ExporterID);
                       
-                      // Map database status to workflow status
                       const rawStatus = isShipment ? 'PENDING' : (item.status || item.Status || 'UNKNOWN');
                       const status = (() => {
                         const normalized = String(rawStatus).toUpperCase();
-                        // Map 'pending' from database to 'REQUESTED' (scheduled, awaiting inspection)
-                        if (normalized === 'PENDING' && !isShipment && item.requestedDate) {
-                          return 'REQUESTED';
-                        }
+                        // PENDING is a real QualityInspection state — show it
+                        // as PENDING, never relabelled REQUESTED (REQUESTED
+                        // belongs to the separate PreShipmentInspection
+                        // entity, TEST-STATUS-MATRIX §17 #18).
                         // Map 'completed' to 'APPROVED' or 'REJECTED' based on passed field
                         if (normalized === 'COMPLETED') {
                           return item.passed ? 'APPROVED' : 'REJECTED';
@@ -2967,7 +2999,7 @@ The exporter can reapply once all requirements are met.`,
               </TableContainer>
 
               {/* Pagination Controls */}
-              {dataToShow.length > 0 && (
+              {filteredData.length > 0 && (
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography variant="body2" color="black">Rows per page:</Typography>
@@ -2987,7 +3019,7 @@ The exporter can reapply once all requirements are met.`,
                   </Box>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                     <Typography variant="body2" color="black">
-                      Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, dataToShow.length)} of {dataToShow.length}
+                      Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, filteredData.length)} of {filteredData.length}
                     </Typography>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <Button
@@ -3001,7 +3033,7 @@ The exporter can reapply once all requirements are met.`,
                       <Button
                         size="small"
                         variant="outlined"
-                        disabled={currentPage >= Math.ceil(dataToShow.length / rowsPerPage) - 1}
+                        disabled={currentPage >= Math.ceil(filteredData.length / rowsPerPage) - 1}
                         onClick={() => handleChangePage(currentPage + 1)}
                       >
                         Next

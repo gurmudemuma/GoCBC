@@ -169,9 +169,6 @@ const CustomsPortal: React.FC = () => {
     }
   }, [tabValue, visibleTabs]);
   
-  // Workflow filter state
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [permitReadyShipments, setPermitReadyShipments] = useState<any[]>([]);
   
   // Auto-mapped data for inspection scheduling
   const [inspectionAutoData, setInspectionAutoData] = useState<any>({
@@ -931,7 +928,6 @@ ${solution}`);
 
   useEffect(() => {
     loadData();
-    loadPermitReadyShipments();
     loadCustomsOfficers();
   }, []);
 
@@ -940,24 +936,6 @@ ${solution}`);
       loadAuditStats();
     }
   }, [tabValue]);
-
-  const loadPermitReadyShipments = async () => {
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-
-    try {
-      const response = await apiFetch('/customs/permit-ready', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      
-      const result = await response.json();
-      if (result.success && result.data) {
-        setPermitReadyShipments(result.data);
-      }
-    } catch (error) {
-      console.error('[CUSTOMS] Failed to load permit-ready shipments:', error);
-    }
-  };
 
   const loadCustomsOfficers = async () => {
     const token = localStorage.getItem('authToken');
@@ -1596,10 +1574,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         
         // Reload declarations to show the new one
         await loadData();
-        
-        // Reload permit-ready shipments (remove the one we just submitted)
-        await loadPermitReadyShipments();
-        
+
         // Switch to Tab 1 (Submitted) to show the new declaration
         setTabValue(1);
         
@@ -1954,12 +1929,6 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
   const stats = getDeclarationStats();
 
-  // Filter declarations based on selected status
-  const getFilteredDeclarations = () => {
-    if (statusFilter === 'ALL') return declarations;
-    return declarations.filter(d => d.status === statusFilter);
-  };
-
   // Brand colors for Customs Portal
   const brandPrimary = '#0F47AF'; // Government Blue
   const brandSecondary = '#FCDD09'; // Ethiopian Gold
@@ -2121,7 +2090,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => d.status && d.status !== 'DRAFT')}
+              rows={declarations.filter(d => d.status === 'SUBMITTED')}
               columns={getSmartColumns('SUBMITTED', 'Inspection Scheduled')}
               getRowId={(row) => row.declarationId}
               loading={loading}
@@ -2147,7 +2116,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => ['UNDER_INSPECTION', 'UNDER_REVIEW', 'CLEARED', 'REJECTED'].includes(d.status))}
+              rows={declarations.filter(d => d.status === 'UNDER_INSPECTION')}
               columns={getSmartColumns('UNDER_INSPECTION', 'Inspection Completed')}
               getRowId={(row) => row.declarationId}
               loading={loading}
@@ -2173,7 +2142,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
           <Box sx={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={declarations.filter(d => ['UNDER_REVIEW', 'CLEARED', 'REJECTED'].includes(d.status))}
+              rows={declarations.filter(d => d.status === 'UNDER_REVIEW')}
               columns={getSmartColumns('UNDER_REVIEW', 'Review Completed')}
               getRowId={(row) => row.declarationId}
               loading={loading}

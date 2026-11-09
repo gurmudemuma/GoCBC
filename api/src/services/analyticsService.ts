@@ -94,6 +94,21 @@ export class AnalyticsService {
       ${whereClause.replace('WHERE', 'AND')}
     `);
 
+    // Payment methods breakdown (same shape as the NBE KPI path — the
+    // ECTA AnalyticsDashboard Breakdown renders only when
+    // kpis.paymentMethods exists, and without it the section was always
+    // empty for ECTA).
+    const paymentMethods = await this.db.all(`
+      SELECT 
+        metadata->>'paymentMethod' as method,
+        COUNT(*) as count,
+        SUM(CAST(metadata->>'totalValue' AS NUMERIC)) as total_value
+      FROM audit_trail
+      WHERE entity_type = 'CONTRACT' AND action = 'CREATE'
+      ${whereClause.replace('WHERE', 'AND')}
+      GROUP BY metadata->>'paymentMethod'
+    `);
+
     return {
       applications: {
         total: parseInt(applications?.total || 0),
@@ -121,7 +136,12 @@ export class AnalyticsService {
         avgPricePerKg: exportVolume?.total_kg > 0 
           ? (exportVolume.total_value_usd / exportVolume.total_kg).toFixed(2)
           : 0
-      }
+      },
+      paymentMethods: paymentMethods.map(pm => ({
+        method: pm.method || 'LC',
+        count: parseInt(pm.count),
+        totalValue: parseFloat(pm.total_value || 0)
+      }))
     };
   }
 

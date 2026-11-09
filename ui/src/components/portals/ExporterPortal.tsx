@@ -138,7 +138,7 @@ interface ExportContract {
   pricePerKg: number;
   totalValue: number;
   currency: string;
-  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'NBE_APPROVED' | 'REJECTED';
+  status: 'DRAFT' | 'REGISTERED' | 'APPROVED' | 'COMPLETED' | 'CANCELLED' | 'REJECTED';
   rejectionReason?: string;
   rejectionDate?: string | null;
   rejectedBy?: string;
@@ -299,11 +299,12 @@ interface ShipmentStatus {
   grade?: string;
   // Workflow status (backend): DRAFT, REGISTERED, QUALITY_PENDING, QUALITY_APPROVED, QUALITY_REJECTED, CUSTOMS_CLEARED, COMPLETED
   // plus the lifecycle values the shipment endpoints actually return
-  // (CREATED, BOOKED, LOADED, DEPARTED, IN_TRANSIT, SHIPPED, ARRIVED,
-  // DELIVERED, CONFIRMED — see api/src/routes/shipments.ts).
-  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'SHIPPED' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DESTINATION_ARRIVED' | 'INSPECTION_PENDING' | 'CUSTOMS_REJECTED';
+  // (CREATED, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED,
+  // DELIVERED, CONFIRMED — see api/src/routes/shipments.ts). SHIPPED is
+  // in no machine (TEST-STATUS-MATRIX) and must never be written here.
+  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DESTINATION_ARRIVED' | 'INSPECTION_PENDING' | 'CUSTOMS_REJECTED';
   // Logistics tracking status: PENDING, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED, CONFIRMED
-  logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'CREATED' | 'SHIPPED';
+  logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'CREATED';
   transportMode?: TransportMode;
   billOfLading?: string;
   vesselName?: string;
@@ -378,6 +379,10 @@ const ExporterPortal: React.FC = () => {
   const [allPayments, setAllPayments] = useState<PaymentStatus[]>([]);
   const [shipmentsWithPermits, setShipmentsWithPermits] = useState<Set<string>>(new Set());
   const [shipmentsWithDeclarations, setShipmentsWithDeclarations] = useState<Set<string>>(new Set());
+  // Latest customs declaration per shipment, joined by shipmentId
+  // (GET /customs/declarations returns declaration.status alongside
+  // shipmentId). Used for the real customs-cleared derivation (F18/F24).
+  const [declarationsByShipment, setDeclarationsByShipment] = useState<Map<string, any>>(new Map());
   const [loading, setLoading] = useState(false);
   
   // Dialog States
@@ -747,6 +752,14 @@ const ExporterPortal: React.FC = () => {
           
           console.log('[EXPORTER] Found declarations for shipments:', declaredShipmentIds);
           setShipmentsWithDeclarations(new Set(declaredShipmentIds));
+          // Join declarations by shipmentId so the Customs tab and the
+          // dashboard can show the real declaration.status (F18/F24).
+          // Last declaration per shipment wins.
+          const byShipment = new Map<string, any>();
+          result.data.forEach((decl: any) => {
+            if (decl.shipmentId) byShipment.set(decl.shipmentId, decl);
+          });
+          setDeclarationsByShipment(byShipment);
         }
       }
     } catch (error) {
@@ -1024,32 +1037,6 @@ const ExporterPortal: React.FC = () => {
       );
       console.log(`[EXPORTER] ✅ Found ${myShipments.length} shipments for exporter ${currentExporterId}`);
         
-        // Load quality inspections to check for approved shipments
-        const inspectionsResponse = await apiFetch('/quality/inspections', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const inspectionsResult = await inspectionsResponse.json();
-        
-        let approvedShipmentIds: Set<string> = new Set();
-        if (inspectionsResult.success && inspectionsResult.data && Array.isArray(inspectionsResult.data)) {
-          console.log('[EXPORTER] Loaded quality inspections:', inspectionsResult.data.length);
-          // Find all approved inspections
-          const approvedInspections = inspectionsResult.data.filter((i: any) => 
-            i.status === 'APPROVED' || i.status === 'SHIPPED'
-          );
-          approvedShipmentIds = new Set(approvedInspections.map((i: any) => i.shipmentId || i.shipmentID));
-          console.log('[EXPORTER] Approved shipment IDs:', Array.from(approvedShipmentIds));
-          
-          // Log first MY shipment RAW data to see exact blockchain fields
-          if (myShipments.length > 0) {
-            console.log('[EXPORTER] ========== FIRST MY SHIPMENT RAW DATA ==========');
-            console.log(JSON.stringify(myShipments[0], null, 2));
-            console.log('[EXPORTER] ======================================================');
-          }
-        } else {
-          console.log('[EXPORTER] Loaded quality inspections: no data or not an array', inspectionsResult.data);
-        }
-        
         // Filter out shipments with empty/invalid data - show ALL shipments with shipmentId
         const validShipments = myShipments.filter((s: any) => {
           const shipmentId = s.shipmentID || s.shipmentId || '';
@@ -1068,13 +1055,7 @@ const ExporterPortal: React.FC = () => {
         
         const mappedShipments = validShipments.map((s: any) => {
           const shipmentId = s.shipmentID || s.shipmentId;
-          let status = s.status || s.Status || s.shipmentStatus || 'CREATED';
-          
-          // Update status if quality inspection is approved
-          if (status === 'CREATED' && approvedShipmentIds.has(shipmentId)) {
-            status = 'SHIPPED';
-            console.log(`[EXPORTER] Updated shipment ${shipmentId} status to SHIPPED (quality approved)`);
-          }
+          const status = s.status || s.Status || s.shipmentStatus || 'CREATED';
           
           // Ensure quantity is always a valid number - try all possible field names
           const rawQuantity = s.quantity || s.Quantity || s.shipmentQuantity || s.ShipmentQuantity || 0;
@@ -1212,17 +1193,29 @@ const ExporterPortal: React.FC = () => {
           
           console.log(`[EXPORTER] Filtered from ${myPayments.length} to ${validPayments.length} valid payments`);
           
-          const mappedPayments = validPayments.map((p: any) => ({
-            paymentId: p.paymentID || p.paymentId,
-            contractId: p.contractID || p.contractId,
-            amount: p.amount || p.Amount || 0,
-            currency: p.currency || p.Currency || 'USD',
-            retainedAmount: p.retainedAmount || p.RetainedAmount || 0,
-            convertedAmount: p.convertedAmount || p.ConvertedAmount || 0,
-            amountBirr: p.amountBirr || p.AmountBirr || 0,
-            status: p.status || p.Status || 'PENDING',
-            swiftReference: p.swiftReference || p.SWIFTReference || p.swiftRef,
-          }));
+          const mappedPayments = validPayments.map((p: any) => {
+            // The chaincode payment's `status` IS the document-tracking
+            // machine (PENDING → DOCUMENTS_SUBMITTED → VERIFIED →
+            // SWIFT_INITIATED → SWIFT_RECEIVED → SETTLED, payment.go) —
+            // there is no separate tracking field on-chain, so populate
+            // paymentTrackingStatus from it (or from a PG row's
+            // payment_tracking_status). The dashboard KPIs read this
+            // field; without it Processing/Received/Settled were always 0.
+            const rawTracking = p.paymentTrackingStatus || p.payment_tracking_status || p.status || p.Status || 'PENDING';
+            const trackingStatus = ['PENDING', 'DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SETTLED'].includes(rawTracking) ? rawTracking : 'PENDING';
+            return {
+              paymentId: p.paymentID || p.paymentId,
+              contractId: p.contractID || p.contractId,
+              amount: p.amount || p.Amount || 0,
+              currency: p.currency || p.Currency || 'USD',
+              retainedAmount: p.retainedAmount || p.RetainedAmount || 0,
+              convertedAmount: p.convertedAmount || p.ConvertedAmount || 0,
+              amountBirr: p.amountBirr || p.AmountBirr || 0,
+              status: p.status || p.Status || 'PENDING',
+              paymentTrackingStatus: trackingStatus,
+              swiftReference: p.swiftReference || p.SWIFTReference || p.swiftRef,
+            };
+          });
           setPayments(mappedPayments);
           setAllPayments(mappedPayments);
           console.log(`[EXPORTER] Loaded ${validPayments.length} payments for exporter`);
@@ -1828,6 +1821,10 @@ const ExporterPortal: React.FC = () => {
         const updatedDeclarations = new Set([...shipmentsWithDeclarations, selectedShipmentForCustoms.shipmentId]);
         console.log('[EXPORTER] Updated declarations after submit:', Array.from(updatedDeclarations));
         setShipmentsWithDeclarations(updatedDeclarations);
+        // Newly submitted declarations start SUBMITTED.
+        const updatedByShipment = new Map(declarationsByShipment);
+        updatedByShipment.set(selectedShipmentForCustoms.shipmentId, { shipmentId: selectedShipmentForCustoms.shipmentId, status: 'SUBMITTED' });
+        setDeclarationsByShipment(updatedByShipment);
         
         // Close dialog and reset form BEFORE showing success message
         setCustomsDeclarationDialogOpen(false);
@@ -1889,37 +1886,30 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
-      const selectedContract = contracts.find(c => c.contractId === selectedShipmentForShipping.contractId);
-      const bookingId = `BOOK-${selectedShipmentForShipping.shipmentId}`;
       const containerNumber = `CONT${Date.now()}`;
       const billOfLading = `BL-${Date.now()}`;
-      
-      const bookingData = {
-        bookingID: bookingId,
-        shipmentID: selectedShipmentForShipping.shipmentId,
-        exporterID: profile.exporterId,
-        shippingLine: shippingForm.shippingLine,
-        containerNumber,
-        containerType: shippingForm.containerType,
-        portOfLoading: shippingForm.portOfLoading,
-        portOfDischarge: shippingForm.portOfDischarge,
-        vesselName: shippingForm.vesselName || 'TBD - Assigned by shipping line',
-        estimatedDeparture: shippingForm.estimatedDeparture,
-        estimatedArrival: new Date(new Date(shippingForm.estimatedDeparture).getTime() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-        billOfLading,
-        weight: selectedShipmentForShipping.quantity,
-        specialInstructions: shippingForm.specialInstructions,
-      };
 
-      // For now, just update shipment status to SHIPPED
-      // In production, this would call a shipping/booking API
-      const response = await apiFetch(`/shipments/${selectedShipmentForShipping.shipmentId}/status`, {
-        method: 'PUT',
+      // Book freight through the shipping endpoint: POST /shipping/bookings
+      // moves the real shipment row to FREIGHT_BOOKED (aa0947f fix). The
+      // old PUT /shipments/:id/status {status:'SHIPPED'} wrote a status no
+      // machine produces, so the PG CHECK silently dropped the mirror.
+      const response = await apiFetch('/shipping/bookings', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ status: 'SHIPPED' })
+        body: JSON.stringify({
+          shipmentID: selectedShipmentForShipping.shipmentId,
+          exporterID: profile.exporterId,
+          shippingLine: shippingForm.shippingLine,
+          vesselName: shippingForm.vesselName || 'TBD - Assigned by shipping line',
+          containerType: shippingForm.containerType,
+          portOfLoading: shippingForm.portOfLoading,
+          portOfDischarge: shippingForm.portOfDischarge,
+          estimatedDepartureDate: shippingForm.estimatedDeparture,
+          estimatedArrivalDate: new Date(new Date(shippingForm.estimatedDeparture).getTime() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        })
       });
 
       const result = await response.json();
@@ -2227,6 +2217,26 @@ const ExporterPortal: React.FC = () => {
     }
   };
   
+  // A contract is approved iff its status is APPROVED (TEST-STATUS-MATRIX
+  // §1). NBE_APPROVED and ACTIVE are not contract statuses — no layer
+  // produces them — so every former NBE_APPROVED/ACTIVE arm collapses here.
+  const isContractApproved = (c: { status: string }) => c.status === 'APPROVED';
+
+  // An LC counts as issued once it has reached ISSUED or any later forward
+  // state of the LC machine (REQUESTED → APPROVED → ISSUED →
+  // FOREX_ALLOCATED → AMENDED → UTILIZED → PAYMENT_RELEASED → SETTLED).
+  const hasIssuedLC = (contractId: string) =>
+    lcStatuses.some(lc => lc.contractId === contractId &&
+      ['ISSUED', 'FOREX_ALLOCATED', 'AMENDED', 'UTILIZED', 'PAYMENT_RELEASED', 'SETTLED'].includes(lc.status));
+
+  // Real customs-cleared state for a shipment (F18/F24): the shipment's own
+  // CUSTOMS_CLEARED status, or a joined declaration in CLEARED status.
+  // Never inferred from transit states (DEPARTED/IN_TRANSIT/SHIPPED) —
+  // a shipment that has departed has not necessarily cleared customs.
+  const isShipmentCustomsCleared = (shipment: { shipmentId: string; status: string }) =>
+    shipment.status === 'CUSTOMS_CLEARED' ||
+    declarationsByShipment.get(shipment.shipmentId)?.status === 'CLEARED';
+
   // Calculate Dashboard KPIs - Similar to CustomsPortal pattern
   const getExporterStats = () => {
     // Overall counts
@@ -2238,13 +2248,12 @@ const ExporterPortal: React.FC = () => {
     
     // Contract statuses
     const contractsRegistered = contracts.filter(c => c.status === 'REGISTERED').length;
-    const contractsApproved = contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED').length;
-    const contractsActive = contracts.filter(c => c.status === 'ACTIVE').length;
+    const contractsApproved = contracts.filter(c => isContractApproved(c)).length;
     
     // Shipment statuses
     const shipmentsCreated = shipments.filter(s => s.status === 'CREATED').length;
-    const shipmentsBooked = shipments.filter(s => s.status === 'BOOKED' || s.status === 'LOADED').length;
-    const shipmentsInTransit = shipments.filter(s => ['IN_TRANSIT', 'DEPARTED', 'SHIPPED'].includes(s.status)).length;
+    const shipmentsBooked = shipments.filter(s => s.status === 'FREIGHT_BOOKED' || s.status === 'BOOKED').length;
+    const shipmentsInTransit = shipments.filter(s => ['IN_TRANSIT', 'DEPARTED'].includes(s.status)).length;
     const shipmentsDelivered = shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length;
     
     // Forex statuses
@@ -2253,7 +2262,7 @@ const ExporterPortal: React.FC = () => {
     
     // Approved contracts pending LC request (should appear in Forex & Banking)
     const contractsPendingLC = contracts.filter(c => {
-      const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+      const isApproved = isContractApproved(c);
       const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
       return isApproved && !hasLC;
     }).length;
@@ -2267,7 +2276,7 @@ const ExporterPortal: React.FC = () => {
     const customsAwaitingPermit = shipments.filter(s => {
       const hasPermit = shipmentsWithPermits.has(s.shipmentId);
       const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
-      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      const isCleared = isShipmentCustomsCleared(s);
       // "Awaiting Permit" = not cleared, not declared, not has permit
       return !isCleared && !hasDeclared && !hasPermit;
     }).length;
@@ -2275,7 +2284,7 @@ const ExporterPortal: React.FC = () => {
     const customsPendingDeclaration = shipments.filter(s => {
       const hasPermit = shipmentsWithPermits.has(s.shipmentId);
       const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
-      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      const isCleared = isShipmentCustomsCleared(s);
       // "Pending Declaration" (Ready to Declare) = has permit, not declared, not cleared
       return hasPermit && !hasDeclared && !isCleared;
     }).length;
@@ -2283,12 +2292,12 @@ const ExporterPortal: React.FC = () => {
     const customsDeclared = shipments.filter(s => {
       const hasPermit = shipmentsWithPermits.has(s.shipmentId);
       const hasDeclared = shipmentsWithDeclarations.has(s.shipmentId);
-      const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status);
+      const isCleared = isShipmentCustomsCleared(s);
       // "Declared" = has declared, not cleared yet
       return hasDeclared && !isCleared;
     }).length;
     
-    const customsCleared = shipments.filter(s => ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(s.status)).length;
+    const customsCleared = shipments.filter(s => isShipmentCustomsCleared(s)).length;
     
     // Payment statuses
     const paymentsPending = payments.filter(p => p.status === 'PENDING').length;
@@ -2301,7 +2310,7 @@ const ExporterPortal: React.FC = () => {
     const totalQuantity = contracts.reduce((sum, c) => sum + c.quantity, 0);
     const avgContractValue = totalContracts > 0 ? totalExportValue / totalContracts : 0;
     const successRate = totalContracts > 0 
-      ? Math.round((contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE').length / totalContracts) * 100)
+      ? Math.round((contracts.filter(c => isContractApproved(c)).length / totalContracts) * 100)
       : 0;
     
     return {
@@ -2314,7 +2323,6 @@ const ExporterPortal: React.FC = () => {
       // My Contracts (tab 1)
       contractsRegistered,
       contractsApproved,
-      contractsActive,
       
       // Forex & Banking (tab 2)
       contractsPendingLC, // New stat for pending LC contracts
@@ -2359,7 +2367,8 @@ const ExporterPortal: React.FC = () => {
     lcStatuses,
     payments,
     shipmentsWithPermits,
-    shipmentsWithDeclarations
+    shipmentsWithDeclarations,
+    declarationsByShipment
   ]);
 
   // Remove excessive debug logging
@@ -2410,7 +2419,7 @@ const ExporterPortal: React.FC = () => {
       field: 'status',
       headerName: 'Status',
       width: 150,
-      renderCell: (params) => <StatusChip status={params.value === 'NBE_APPROVED' ? 'APPROVED' : params.value} />,
+      renderCell: (params) => <StatusChip status={params.value} />,
     },
     {
       field: 'actions',
@@ -2420,7 +2429,7 @@ const ExporterPortal: React.FC = () => {
       renderCell: (params) => {
         const contract = params.row;
         const hasExistingLC = lcStatuses.some(lc => lc.contractId === contract.contractId);
-        const canRequestLC = (contract.status === 'APPROVED' || contract.status === 'NBE_APPROVED') && !hasExistingLC;
+        const canRequestLC = isContractApproved(contract) && !hasExistingLC;
         
         return (
           <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -2830,7 +2839,6 @@ const ExporterPortal: React.FC = () => {
               { icon: <Description />, label: 'Total Contracts', value: stats.totalContracts, color: brandPrimary },
               { icon: <Assessment />, label: 'Registered', value: stats.contractsRegistered, color: '#FFD700' },
               { icon: <CheckCircle />, label: 'Approved', value: stats.contractsApproved, color: brandPrimary },
-              { icon: <TrendingUp />, label: 'Active', value: stats.contractsActive, color: '#b366cc' },
             ]
           ) : tabValue === 2 ? (
             // Forex & Banking - Forex/LC Status
@@ -2997,7 +3005,7 @@ const ExporterPortal: React.FC = () => {
                 const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
                 const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED'].includes(lc.status)).length;
                 const pendingLCContracts = contracts.filter(c => {
-                  const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+                  const isApproved = isContractApproved(c);
                   const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
                   return isApproved && !hasLC;
                 }).length;
@@ -3221,7 +3229,7 @@ const ExporterPortal: React.FC = () => {
                         </Typography>
                         <Typography variant="h4" fontWeight={700}>
                           {contracts.length > 0 
-                            ? Math.round((contracts.filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE').length / contracts.length) * 100)
+                            ? Math.round((contracts.filter(c => isContractApproved(c)).length / contracts.length) * 100)
                             : 0}%
                         </Typography>
                         <Typography variant="body2" sx={{ opacity: 0.9 }}>
@@ -3334,7 +3342,7 @@ const ExporterPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <Alert severity="info">
                     <Typography variant="body2">
-                      <strong>Status:</strong> <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
+                      <strong>Status:</strong> <StatusChip status={selectedContract.status} />
                     </Typography>
                   </Alert>
                 </Grid>
@@ -4051,7 +4059,7 @@ const ExporterPortal: React.FC = () => {
           {/* Info Alert: Show Approved Contracts Pending LC Request */}
           {(() => {
             const approvedContractsWithoutLC = contracts.filter(c => {
-              const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+              const isApproved = isContractApproved(c);
               const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
               return isApproved && !hasLC;
             });
@@ -4078,7 +4086,7 @@ const ExporterPortal: React.FC = () => {
           {/* Approved Contracts Without LC - Show as PENDING in Table */}
           {(() => {
             const approvedContractsWithoutLC = contracts.filter(c => {
-              const isApproved = c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE';
+              const isApproved = isContractApproved(c);
               const hasLC = lcStatuses.some(lc => lc.contractId === c.contractId);
               return isApproved && !hasLC;
             });
@@ -4099,7 +4107,10 @@ const ExporterPortal: React.FC = () => {
                           value: contract.totalValue || 0,
                           quantity: contract.quantity || 0,
                           approvalDate: contract.registrationDate || new Date().toISOString(),
-                          status: 'PENDING_LC',
+                          status: contract.status,
+                          // Pending-LC is a flag, not a status: the row
+                          // keeps the contract's real status (APPROVED).
+                          pendingLC: true,
                         }))}
                         columns={[
                           {
@@ -4116,16 +4127,21 @@ const ExporterPortal: React.FC = () => {
                             field: 'status',
                             headerName: 'Status',
                             width: 200,
-                            renderCell: () => (
-                              <Chip 
-                                label="PENDING LC REQUEST" 
-                                size="small" 
-                                sx={{ 
-                                  bgcolor: '#FF9800', 
-                                  color: 'white',
-                                  fontWeight: 600 
-                                }} 
-                              />
+                            renderCell: (params) => (
+                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                                <StatusChip status={params.row.status} />
+                                {params.row.pendingLC && (
+                                  <Chip
+                                    label="Pending LC"
+                                    size="small"
+                                    sx={{
+                                      bgcolor: '#FF9800',
+                                      color: 'white',
+                                      fontWeight: 600
+                                    }}
+                                  />
+                                )}
+                              </Box>
                             ),
                           },
                           {
@@ -4700,7 +4716,8 @@ const ExporterPortal: React.FC = () => {
                 const contract = contracts.find(c => c.contractId === shipment.contractId);
                 const hasPermit = shipmentsWithPermits.has(shipment.shipmentId);
                 const hasDeclared = shipmentsWithDeclarations.has(shipment.shipmentId);
-                const isCleared = ['DEPARTED', 'IN_TRANSIT', 'SHIPPED'].includes(shipment.status);
+                const declaration = declarationsByShipment.get(shipment.shipmentId);
+                const isCleared = isShipmentCustomsCleared(shipment);
                 const isPendingContract = (shipment as any)._isContract === true; // This is an approved contract, not a shipment yet
                 
                 // console.log(`[EXPORTER] Shipment ${shipment.shipmentId}: hasPermit=${hasPermit}, hasDeclared=${hasDeclared}, isCleared=${isCleared}, isPendingContract=${isPendingContract}`);
@@ -4721,14 +4738,27 @@ const ExporterPortal: React.FC = () => {
                   permitColor = '#4CAF50';
                 }
                 
-                // Determine customs declaration status
+                // Determine customs declaration status from the real
+                // declaration.status (SUBMITTED / UNDER_INSPECTION /
+                // UNDER_REVIEW / CLEARED / REJECTED) — never derived from
+                // the shipment's transit state. A REJECTED declaration
+                // shows Rejected, a CLEARED one shows Cleared.
                 let customsStatus = isPendingContract ? 'N/A' : 'Not Declared';
                 let customsColor = isPendingContract ? '#9E9E9E' : '#FF9800';
-                if (isCleared) {
+                if (declaration?.status === 'REJECTED') {
+                  customsStatus = 'Rejected';
+                  customsColor = '#F44336';
+                } else if (isCleared) {
                   customsStatus = 'Cleared';
                   customsColor = '#4CAF50';
+                } else if (declaration?.status === 'UNDER_INSPECTION') {
+                  customsStatus = 'Under Inspection';
+                  customsColor = '#2196F3';
+                } else if (declaration?.status === 'UNDER_REVIEW') {
+                  customsStatus = 'Under Review';
+                  customsColor = '#2196F3';
                 } else if (hasDeclared) {
-                  customsStatus = 'Declared';
+                  customsStatus = 'Submitted';
                   customsColor = '#2196F3';
                 } else if (hasPermit) {
                   customsStatus = 'Ready to Declare';
@@ -5390,12 +5420,10 @@ const ExporterPortal: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">Status</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                  <StatusChip status={selectedContract.status === 'NBE_APPROVED' ? 'APPROVED' : selectedContract.status} />
+                  <StatusChip status={selectedContract.status} />
                   <Typography variant="body1" fontWeight={600}>
                     {selectedContract.status === 'REGISTERED' && 'Awaiting ECTA Review'}
-                    {selectedContract.status === 'APPROVED' && 'ECTA Approved - Ready for LC'}
-                    {selectedContract.status === 'NBE_APPROVED' && 'NBE Approved - Forex Allocated'}
-                    {selectedContract.status === 'ACTIVE' && 'Active - LC Issued'}
+                    {selectedContract.status === 'APPROVED' && (hasIssuedLC(selectedContract.contractId) ? 'ECTA Approved - LC Issued' : 'ECTA Approved - Ready for LC')}
                     {selectedContract.status === 'COMPLETED' && 'Export Completed'}
                   </Typography>
                 </Box>
@@ -5415,22 +5443,22 @@ const ExporterPortal: React.FC = () => {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 2 }}>
                   <Chip 
                     label="1. Registered" 
-                    color={['REGISTERED', 'APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    color={['REGISTERED', 'APPROVED', 'COMPLETED'].includes(selectedContract.status) ? 'success' : 'default'} 
                     icon={<CheckCircle />}
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
                     label="2. ECTA Approved" 
-                    color={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? 'success' : 'default'} 
-                    icon={['APPROVED', 'NBE_APPROVED', 'ACTIVE'].includes(selectedContract.status) ? <CheckCircle /> : undefined}
+                    color={['APPROVED', 'COMPLETED'].includes(selectedContract.status) ? 'success' : 'default'} 
+                    icon={['APPROVED', 'COMPLETED'].includes(selectedContract.status) ? <CheckCircle /> : undefined}
                     size="small" 
                   />
                   <Typography>→</Typography>
                   <Chip 
                     label="3. Bank LC Issued" 
-                    color={selectedContract.status === 'ACTIVE' ? 'success' : 'default'} 
-                    icon={selectedContract.status === 'ACTIVE' ? <CheckCircle /> : undefined}
+                    color={hasIssuedLC(selectedContract.contractId) ? 'success' : 'default'} 
+                    icon={hasIssuedLC(selectedContract.contractId) ? <CheckCircle /> : undefined}
                     size="small" 
                   />
                   <Typography>→</Typography>
@@ -5459,7 +5487,7 @@ const ExporterPortal: React.FC = () => {
       </DialogContent>
       <DialogActions>
         <Button onClick={handleContractDialogClose}>Close</Button>
-        {selectedContract && selectedContract.status === 'ACTIVE' && (
+        {selectedContract && isContractApproved(selectedContract) && hasIssuedLC(selectedContract.contractId) && (
           <AnimatedButton
             variant="contained"
             brandColor={brandPrimary}
@@ -5553,7 +5581,7 @@ This contract is registered with ECTA and approved by NBE.
             <Alert 
               severity={selectedContractForDetail.status === 'REJECTED'
                 ? 'error'
-                : selectedContractForDetail.status === 'APPROVED' || selectedContractForDetail.status === 'NBE_APPROVED' || selectedContractForDetail.status === 'ACTIVE'
+                : isContractApproved(selectedContractForDetail)
                   ? 'success'
                   : 'info'}
               icon={selectedContractForDetail.status === 'REJECTED' ? <Warning /> : <CheckCircle />}
@@ -5563,9 +5591,7 @@ This contract is registered with ECTA and approved by NBE.
                 Contract Status: {selectedContractForDetail.status}
               </Typography>
               <Typography variant="caption">
-                {selectedContractForDetail.status === 'APPROVED' && 'Approved by ECTA - Ready for shipment creation'}
-                {selectedContractForDetail.status === 'NBE_APPROVED' && 'Approved by NBE - Forex allocated'}
-                {selectedContractForDetail.status === 'ACTIVE' && 'Active - LC issued, ready for export'}
+                {selectedContractForDetail.status === 'APPROVED' && (hasIssuedLC(selectedContractForDetail.contractId) ? 'Approved by ECTA - LC issued, ready for export' : 'Approved by ECTA - Ready for shipment creation')}
               </Typography>
               {selectedContractForDetail.status === 'REJECTED' && (
                 <Box sx={{ mt: 1 }}>
@@ -5750,9 +5776,7 @@ This contract is registered with ECTA and approved by NBE.
             </Card>
 
             {/* Signed Documents Section - Real documents with signatures */}
-            {(selectedContractForDetail.status === 'APPROVED' || 
-              selectedContractForDetail.status === 'NBE_APPROVED' || 
-              selectedContractForDetail.status === 'ACTIVE') && (
+            {isContractApproved(selectedContractForDetail) && (
               <Card variant="outlined" sx={{ mt: 2 }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
@@ -6682,7 +6706,7 @@ This contract is registered with ECTA and approved by NBE.
         {/* Warning when no contracts with forex available */}
         {(() => {
           const contractsWithForex = contracts
-            .filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE')
+            .filter(c => isContractApproved(c))
             .filter(c => forexStatuses.some(f => f.contractId === c.contractId && f.status === 'ALLOCATED'));
           
           if (contractsWithForex.length > 0) return null;
@@ -6726,7 +6750,7 @@ This contract is registered with ECTA and approved by NBE.
                 }}
               >
                 {contracts
-                  .filter(c => c.status === 'APPROVED' || c.status === 'NBE_APPROVED' || c.status === 'ACTIVE')
+                  .filter(c => isContractApproved(c))
                   .map((contract) => {
                     const forex = forexStatuses.find(f => f.contractId === contract.contractId && f.status === 'ALLOCATED');
                     const hasForex = !!forex;

@@ -807,6 +807,7 @@ const UserManagement: React.FC = () => {
                   <MenuItem value="active">Active</MenuItem>
                   <MenuItem value="suspended">Suspended</MenuItem>
                   <MenuItem value="inactive">Inactive</MenuItem>
+                  <MenuItem value="rejected">Rejected</MenuItem>
                 </Select>
               </FormControl>
             </Grid>

@@ -117,7 +117,7 @@ interface ForexAllocation {
   retentionRate: number;
   retentionStatus?: string;
   transportMode?: TransportMode;
-  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED';
+  status: 'REQUESTED' | 'CONFIRMED' | 'ALLOCATED' | 'UTILIZED';
   requestDate: string;
   approvalDate?: string | null;
   allocationDate?: string | null;
@@ -186,9 +186,8 @@ const NBEPortal: React.FC = () => {
   
   // Sub-tab state for Analytics and other tabs with sub-tabs
   const [analyticsSubTab, setAnalyticsSubTab] = useState(0); // 0: Overview, 1: Trends, 2: Breakdown
-  const [forexSubTab, setForexSubTab] = useState(0); // 0: All, 1: Allocated, 2: Requested, 3: Expired
+  const [forexSubTab, setForexSubTab] = useState(0); // 0: All, 1: Allocated, 2: Requested (no Expired sub-tab: forex EXPIRED is never assigned)
   const [swiftSubTab, setSwiftSubTab] = useState(0); // 0: All Messages, 1: Analytics & Charts, 2: Compliance Alerts
-  const [swiftStatusFilter, setSwiftStatusFilter] = useState<string | null>(null); // Filter SWIFT messages by status
   const [activeKPIFilter, setActiveKPIFilter] = useState<string | null>(null);
   
   const [contracts, setContracts] = useState<SalesContract[]>([]);
@@ -1127,7 +1126,7 @@ const NBEPortal: React.FC = () => {
           ) : tabValue === 1 ? [
             // LC Monitoring KPIs
             { icon: <AccountBalance />, label: 'Total LCs', value: lettersOfCredit.length, color: BRAND_COLOR },
-            { icon: <CheckCircle />, label: 'Active LCs', value: lettersOfCredit.filter(lc => lc.status === 'ISSUED').length, color: '#4caf50' },
+            { icon: <CheckCircle />, label: 'Active LCs', value: lettersOfCredit.filter(lc => ['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED', 'AMENDED'].includes(lc.status)).length, color: '#4caf50' },
             { icon: <AttachMoney />, label: 'Total Value (M USD)', value: `$${(lettersOfCredit.reduce((sum, lc) => sum + parseFloat(lc.amount), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
             { icon: <Warning />, label: 'Expiring Soon', value: lettersOfCredit.filter(lc => new Date(lc.expiry_date) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)).length, color: '#ff9800' },
           ] : tabValue === 2 ? [
@@ -1153,7 +1152,7 @@ const NBEPortal: React.FC = () => {
               // Sub-tab 2: Compliance Alerts - Show compliance metrics
               { icon: <VerifiedUser />, label: 'Compliant', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#4caf50' },
               { icon: <Warning />, label: 'High Value Alerts', value: swiftMessages.filter(m => m.amount > 100000).length, color: '#ff9800' },
-              { icon: <Assessment />, label: 'Under Review', value: swiftMessages.filter(m => m.status === 'PENDING').length, color: '#2196f3' },
+              { icon: <Assessment />, label: 'Under Review', value: swiftMessages.filter(m => m.status === 'DRAFT' || m.status === 'NBE_APPROVED').length, color: '#2196f3' },
               { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
             ]
           ) : tabValue === 4 ? [
@@ -1680,7 +1679,7 @@ const NBEPortal: React.FC = () => {
 
           <Box sx={{ bgcolor: 'white', px: 3, pb: 3 }}>
             <DataGrid
-              rows={forexAllocations}
+              rows={forexSubTab === 1 ? forexAllocations.filter(f => f.status === 'ALLOCATED') : forexSubTab === 2 ? forexAllocations.filter(f => f.status === 'REQUESTED') : forexAllocations}
               columns={forexColumns}
               getRowId={(row) => row.forexId}
               loading={loading}
@@ -1865,7 +1864,6 @@ const NBEPortal: React.FC = () => {
             accentColor="#333333"
             activeSubTab={swiftSubTab}
             onSubTabChange={setSwiftSubTab}
-            statusFilter={swiftStatusFilter}
           />
         </TabPanel>
 

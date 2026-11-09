@@ -207,7 +207,7 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
       totalValue,
       forexInflow,
       forexRetention: forexInflow, // 100% retention
-      pendingApproval: msgs.filter(m => m.status === 'PENDING_APPROVAL').length,
+      pendingApproval: msgs.filter(m => m.status === 'DRAFT' || m.status === 'NBE_APPROVED').length,
       highValueTransactions: highValueCount,
       byBank,
       byType,
@@ -220,7 +220,7 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
 
     msgs.forEach(msg => {
       // High value alert
-      if (msg.amount > 1000000 && msg.status === 'PENDING_APPROVAL') {
+      if (msg.amount > 1000000 && (msg.status === 'DRAFT' || msg.status === 'NBE_APPROVED')) {
         newAlerts.push({
           id: `alert_${msg.messageId}`,
           type: 'HIGH_VALUE',
@@ -337,8 +337,8 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
       dataIndex: 'status',
       key: 'status',
       render: (status: string) => {
-        const color = status === 'SETTLED' ? 'green' : 
-                     status === 'PENDING_APPROVAL' ? 'orange' : 'blue';
+        const color = status === 'SETTLED' ? 'green' :
+                     status === 'DRAFT' || status === 'NBE_APPROVED' ? 'orange' : 'blue';
         return <Tag color={color}>{status}</Tag>;
       },
     },
@@ -358,13 +358,14 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
             icon={<EyeOutlined />}
             onClick={() => {
               setSelectedMessage(record);
-              if (record.amount > 1000000 && record.status === 'PENDING_APPROVAL') {
+              // The NBE-approve endpoint only accepts DRAFT (chaincode DRAFT -> NBE_APPROVED).
+              if (record.amount > 1000000 && record.status === 'DRAFT') {
                 setApprovalModalVisible(true);
               }
             }}
           >
-            {record.amount > 1000000 && record.status === 'PENDING_APPROVAL' 
-              ? 'Approve' 
+            {record.amount > 1000000 && record.status === 'DRAFT'
+              ? 'Approve'
               : 'View'}
           </Button>
         </Space>

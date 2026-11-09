@@ -99,7 +99,7 @@ interface ShippingRecord {
   estimatedArrival: string;
   actualDeparture?: string;
   actualArrival?: string;
-  status: 'CUSTOMS_CLEARED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'SHIPPED' | 'LOADED' | 'BOOKED' | 'CREATED' | 'ARRIVED' | 'CONFIRMED';
+  status: 'CUSTOMS_CLEARED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'ARRIVED' | 'DELIVERED' | 'LOADED' | 'CREATED';
   trackingNumber: string;
   billOfLading?: string; // Sea freight B/L number
   containerType?: 'DRY' | 'REEFER' | 'OPEN_TOP'; // Sea freight only
@@ -189,14 +189,14 @@ const ShippingPortal: React.FC = () => {
 
   // Main tab structure - one dedicated tab per shipping lifecycle status (matches KPI branches 0-8 + Users at 9)
   const mainTabs = [
-    { index: 0, label: 'Clearance', icon: <CheckCircle />, status: 'CUSTOMS_CLEARED', description: 'Customs cleared shipments ready for transport' },
+    { index: 0, label: 'Clearance', icon: <CheckCircle />, status: 'CUSTOMS_CLEARED', statuses: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED'], description: 'Customs cleared shipments ready for transport' },
     { index: 1, label: 'Land Transport', icon: <LocalShipping />, status: 'LAND_TRANSPORT', description: 'Addis Ababa → Djibouti (800km)' },
     { index: 2, label: 'Port Arrival', icon: <Anchor />, status: 'PORT_ARRIVED', description: 'Arrived at Djibouti Port' },
     { index: 3, label: 'Container Stuffing', icon: <Inventory />, status: 'CONTAINER_STUFFED', description: 'Loading into containers' },
-    { index: 4, label: 'Vessel Loading', icon: <DirectionsBoat />, status: 'VESSEL_LOADED', description: 'Loaded on ship/aircraft' },
+    { index: 4, label: 'Vessel Loading', icon: <DirectionsBoat />, status: 'VESSEL_LOADED', statuses: ['VESSEL_LOADED', 'LOADED'], description: 'Loaded on ship/aircraft' },
     { index: 5, label: 'Departed', icon: <DirectionsBoat />, status: 'DEPARTED', description: 'Left Djibouti Port' },
     { index: 6, label: 'In Transit', icon: <DirectionsBoat />, status: 'IN_TRANSIT', description: 'Ocean/air freight journey' },
-    { index: 7, label: 'Destination Arrived', icon: <LocationOn />, status: 'DESTINATION_ARRIVED', description: 'Arrived at buyer\'s port' },
+    { index: 7, label: 'Destination Arrived', icon: <LocationOn />, status: 'DESTINATION_ARRIVED', statuses: ['DESTINATION_ARRIVED', 'ARRIVED'], description: 'Arrived at buyer\'s port' },
     { index: 8, label: 'Delivered', icon: <CheckCircle />, status: 'DELIVERED', description: 'Completed deliveries' },
     { index: 9, label: 'Users', icon: <Person />, status: '', description: 'User management', roles: ['ADMIN', 'SHIPPING', 'Shipping Portal Administrator'] },
   ];
@@ -207,24 +207,30 @@ const ShippingPortal: React.FC = () => {
   // Lifecycle progress and stage colors used by the per-status tab tables
   const lifecycleProgressMap: { [key: string]: number } = {
     'CUSTOMS_CLEARED': 10,
+    'FREIGHT_BOOKED': 10,
     'LAND_TRANSPORT': 25,
     'PORT_ARRIVED': 40,
     'CONTAINER_STUFFED': 55,
     'VESSEL_LOADED': 70,
+    'LOADED': 70,
     'DEPARTED': 75,
     'IN_TRANSIT': 85,
     'DESTINATION_ARRIVED': 95,
+    'ARRIVED': 95,
     'DELIVERED': 100,
   };
   const lifecycleStageColors: { [key: string]: string } = {
     'CUSTOMS_CLEARED': '#ff9800',
+    'FREIGHT_BOOKED': '#ff9800',
     'LAND_TRANSPORT': '#2196f3',
     'PORT_ARRIVED': '#00bcd4',
     'CONTAINER_STUFFED': '#009688',
     'VESSEL_LOADED': '#4caf50',
+    'LOADED': '#4caf50',
     'DEPARTED': '#8bc34a',
     'IN_TRANSIT': '#673ab7',
     'DESTINATION_ARRIVED': '#3f51b5',
+    'ARRIVED': '#3f51b5',
     'DELIVERED': '#4caf50',
   };
 
@@ -311,23 +317,6 @@ const ShippingPortal: React.FC = () => {
     { month: 'May', containers: 172, onTime: 96, delayed: 4 },
   ];
 
-  // Helper function to check if shipment should appear in a stage tab
-  // Shows shipments that are ready for, currently in, or have passed this stage
-  const shouldShowInStage = (status: string, stage: string): boolean => {
-    const stageMap: { [key: string]: string[] } = {
-      'LAND_TRANSPORT': ['CUSTOMS_CLEARED', 'LAND_TRANSPORT', 'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED', 'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'PORT_ARRIVED': ['PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED', 'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'CONTAINER_STUFFED': ['CONTAINER_STUFFED', 'VESSEL_LOADED', 'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'VESSEL_LOADED': ['VESSEL_LOADED', 'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'DEPARTED': ['DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'IN_TRANSIT': ['IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED'],
-      'DESTINATION_ARRIVED': ['DESTINATION_ARRIVED', 'DELIVERED'],
-      'DELIVERED': ['DELIVERED'],
-    };
-    
-    return stageMap[stage]?.includes(status) || false;
-  };
-
   // Computed KPI metrics derived from actual shipping records (no hardcoded values)
   const completionRate = useMemo(() => {
     if (!allShippingRecords.length) return '0%';
@@ -338,35 +327,35 @@ const ShippingPortal: React.FC = () => {
   const pipelineProgressRate = useMemo(() => {
     const active = allShippingRecords.filter(r => r.status !== 'CUSTOMS_CLEARED');
     if (!active.length) return '0%';
-    const progressed = active.filter(r => ['PORT_ARRIVED','CONTAINER_STUFFED','VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const progressed = active.filter(r => ['PORT_ARRIVED','CONTAINER_STUFFED','VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     return `${Math.round((progressed / active.length) * 100)}%`;
   }, [allShippingRecords]);
 
   const landTransportProgressRate = useMemo(() => {
     const active = allShippingRecords.filter(r => r.status !== 'CUSTOMS_CLEARED');
     if (!active.length) return '0%';
-    const progressed = active.filter(r => ['CONTAINER_STUFFED','VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const progressed = active.filter(r => ['CONTAINER_STUFFED','VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     return `${Math.round((progressed / active.length) * 100)}%`;
   }, [allShippingRecords]);
 
   const loadingEfficiencyRate = useMemo(() => {
-    const stuffed = allShippingRecords.filter(r => ['CONTAINER_STUFFED','VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const stuffed = allShippingRecords.filter(r => ['CONTAINER_STUFFED','VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     if (!stuffed) return '0%';
-    const loaded = allShippingRecords.filter(r => ['VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const loaded = allShippingRecords.filter(r => ['VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     return `${Math.round((loaded / stuffed) * 100)}%`;
   }, [allShippingRecords]);
 
   const departureRate = useMemo(() => {
-    const loaded = allShippingRecords.filter(r => ['VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const loaded = allShippingRecords.filter(r => ['VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     if (!loaded) return '0%';
-    const departed = allShippingRecords.filter(r => ['DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const departed = allShippingRecords.filter(r => ['DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     return `${Math.round((departed / loaded) * 100)}%`;
   }, [allShippingRecords]);
 
   const transitProgressRate = useMemo(() => {
-    const departed = allShippingRecords.filter(r => ['DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const departed = allShippingRecords.filter(r => ['DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     if (!departed) return '0%';
-    const arrived = allShippingRecords.filter(r => ['DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length;
+    const arrived = allShippingRecords.filter(r => ['DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length;
     return `${Math.round((arrived / departed) * 100)}%`;
   }, [allShippingRecords]);
 
@@ -494,7 +483,8 @@ const ShippingPortal: React.FC = () => {
           const isClearedInDatabase = clearedShipmentIds.has(shipmentId);
           
           // Include if: cleared in database OR has a shipping workflow status
-          const hasShippingStatus = status === 'CUSTOMS_CLEARED' || 
+          const hasShippingStatus = status === 'CUSTOMS_CLEARED' ||
+                 status === 'FREIGHT_BOOKED' ||
                  status === 'LAND_TRANSPORT' ||
                  status === 'PORT_ARRIVED' ||
                  status === 'CONTAINER_STUFFED' ||
@@ -502,6 +492,7 @@ const ShippingPortal: React.FC = () => {
                  status === 'DEPARTED' ||
                  status === 'IN_TRANSIT' ||
                  status === 'DESTINATION_ARRIVED' ||
+                 status === 'ARRIVED' ||
                  status === 'DELIVERED' ||
                  status === 'LOADED';
           
@@ -558,9 +549,23 @@ const ShippingPortal: React.FC = () => {
             shippingStatus = 'LAND_TRANSPORT';
           } else if (status === 'CUSTOMS_CLEARED') {
             shippingStatus = 'CUSTOMS_CLEARED';
+          } else if (status === 'FREIGHT_BOOKED') {
+            // Booked but not yet dispatched — still shown on the Clearance tab (S3)
+            shippingStatus = 'FREIGHT_BOOKED';
           } else if (status === 'LOADED') {
-            // LOADED = B/L recorded, treat as CUSTOMS_CLEARED (ready for land transport)
-            shippingStatus = 'CUSTOMS_CLEARED';
+            // LOADED = bill of lading / airway bill recorded after vessel loading.
+            // Its own display bucket at the vessel-loaded stage — it must NOT
+            // fold back to CUSTOMS_CLEARED (that sent the shipment backwards).
+            shippingStatus = 'LOADED';
+          } else if (status === 'ARRIVED') {
+            // Booking-lifecycle arrival (mirrorBookingStatusToShipment writes
+            // ARRIVED to the real row); the main lifecycle's equivalent is
+            // DESTINATION_ARRIVED. Shown on the Destination Arrived tab.
+            shippingStatus = 'ARRIVED';
+          } else if (status === 'CREATED') {
+            // Deliberately excluded: a CREATED shipment has not cleared customs
+            // yet, so it is not part of the shipping workflow.
+            return null;
           } else if (isClearedInDatabase) {
             // If cleared in database but blockchain status not updated, treat as CUSTOMS_CLEARED
             console.log(`[SHIPPING] ⚠️ Using database clearance for ${shipmentId} (blockchain status: ${status})`);
@@ -617,6 +622,7 @@ const ShippingPortal: React.FC = () => {
         console.log('[SHIPPING] Sample record:', mappedRecords[0]);
         console.log('[SHIPPING] Status distribution:', {
           CUSTOMS_CLEARED: mappedRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length,
+          FREIGHT_BOOKED: mappedRecords.filter(r => r.status === 'FREIGHT_BOOKED').length,
           LAND_TRANSPORT: mappedRecords.filter(r => r.status === 'LAND_TRANSPORT').length,
           PORT_ARRIVED: mappedRecords.filter(r => r.status === 'PORT_ARRIVED').length,
           CONTAINER_STUFFED: mappedRecords.filter(r => r.status === 'CONTAINER_STUFFED').length,
@@ -624,6 +630,8 @@ const ShippingPortal: React.FC = () => {
           DEPARTED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DEPARTED').length,
           IN_TRANSIT: mappedRecords.filter((r: ShippingRecord) => r.status === 'IN_TRANSIT').length,
           DESTINATION_ARRIVED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DESTINATION_ARRIVED').length,
+          ARRIVED: mappedRecords.filter((r: ShippingRecord) => r.status === 'ARRIVED').length,
+          LOADED: mappedRecords.filter((r: ShippingRecord) => r.status === 'LOADED').length,
           DELIVERED: mappedRecords.filter((r: ShippingRecord) => r.status === 'DELIVERED').length,
         });
         
@@ -634,6 +642,7 @@ const ShippingPortal: React.FC = () => {
         console.log('[SHIPPING] ✅ Final loaded state:', {
           total: mappedRecords.length,
           CUSTOMS_CLEARED: mappedRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length,
+          FREIGHT_BOOKED: mappedRecords.filter(r => r.status === 'FREIGHT_BOOKED').length,
           LAND_TRANSPORT: mappedRecords.filter(r => r.status === 'LAND_TRANSPORT').length,
           PORT_ARRIVED: mappedRecords.filter(r => r.status === 'PORT_ARRIVED').length,
           CONTAINER_STUFFED: mappedRecords.filter(r => r.status === 'CONTAINER_STUFFED').length,
@@ -641,6 +650,8 @@ const ShippingPortal: React.FC = () => {
           DEPARTED: mappedRecords.filter(r => r.status === 'DEPARTED').length,
           IN_TRANSIT: mappedRecords.filter(r => r.status === 'IN_TRANSIT').length,
           DESTINATION_ARRIVED: mappedRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length,
+          ARRIVED: mappedRecords.filter(r => r.status === 'ARRIVED').length,
+          LOADED: mappedRecords.filter(r => r.status === 'LOADED').length,
           DELIVERED: mappedRecords.filter(r => r.status === 'DELIVERED').length,
           IN_PROGRESS_COUNT: mappedRecords.filter(r => r.status !== 'CUSTOMS_CLEARED' && r.status !== 'DELIVERED').length,
         });
@@ -2364,7 +2375,7 @@ const ShippingPortal: React.FC = () => {
             { 
               icon: <LocalShipping />, 
               label: 'Ready for Transport', 
-              value: allShippingRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length, 
+              value: allShippingRecords.filter(r => ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED'].includes(r.status)).length, 
               color: '#ff9800',
               subtitle: 'Awaiting Dispatch'
             },
@@ -2438,7 +2449,7 @@ const ShippingPortal: React.FC = () => {
             { 
               icon: <TrendingUp />, 
               label: 'Port Throughput', 
-              value: `${allShippingRecords.length > 0 ? Math.round((allShippingRecords.filter(r => ['PORT_ARRIVED','CONTAINER_STUFFED','VESSEL_LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','DELIVERED'].includes(r.status)).length / allShippingRecords.length) * 100) : 0}%`, 
+              value: `${allShippingRecords.length > 0 ? Math.round((allShippingRecords.filter(r => ['PORT_ARRIVED','CONTAINER_STUFFED','VESSEL_LOADED','LOADED','DEPARTED','IN_TRANSIT','DESTINATION_ARRIVED','ARRIVED','DELIVERED'].includes(r.status)).length / allShippingRecords.length) * 100) : 0}%`, 
               color: '#4caf50',
               subtitle: 'Past Port Arrival'
             },
@@ -2477,21 +2488,21 @@ const ShippingPortal: React.FC = () => {
             { 
               icon: <DirectionsBoat />, 
               label: 'Loaded', 
-              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              value: allShippingRecords.filter(r => ['VESSEL_LOADED', 'LOADED'].includes(r.status)).length, 
               color: '#4caf50',
               subtitle: 'On Vessel'
             },
             { 
               icon: <Schedule />, 
               label: 'Awaiting Departure', 
-              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              value: allShippingRecords.filter(r => ['VESSEL_LOADED', 'LOADED'].includes(r.status)).length, 
               color: '#ff9800',
               subtitle: 'Ready to Sail'
             },
             { 
               icon: <Anchor />, 
               label: 'At Djibouti', 
-              value: allShippingRecords.filter(r => r.status === 'VESSEL_LOADED').length, 
+              value: allShippingRecords.filter(r => ['VESSEL_LOADED', 'LOADED'].includes(r.status)).length, 
               color: brandPrimary,
               subtitle: 'Port'
             },
@@ -2567,21 +2578,21 @@ const ShippingPortal: React.FC = () => {
             { 
               icon: <LocationOn />, 
               label: 'Arrived', 
-              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              value: allShippingRecords.filter(r => ['DESTINATION_ARRIVED', 'ARRIVED'].includes(r.status)).length, 
               color: '#4caf50',
               subtitle: 'At Destination'
             },
             { 
               icon: <Schedule />, 
               label: 'Awaiting Clearance', 
-              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              value: allShippingRecords.filter(r => ['DESTINATION_ARRIVED', 'ARRIVED'].includes(r.status)).length, 
               color: '#ff9800',
               subtitle: 'Customs'
             },
             { 
               icon: <Inventory />, 
               label: 'Ready for Delivery', 
-              value: allShippingRecords.filter(r => r.status === 'DESTINATION_ARRIVED').length, 
+              value: allShippingRecords.filter(r => ['DESTINATION_ARRIVED', 'ARRIVED'].includes(r.status)).length, 
               color: brandPrimary,
               subtitle: 'Final Mile'
             },
@@ -2794,13 +2805,13 @@ const ShippingPortal: React.FC = () => {
 
             <Alert severity="info" icon={tab.icon} sx={{ mb: 3 }}>
               <Typography variant="body2">
-                <strong>{allShippingRecords.filter(r => r.status === tab.status).length}</strong> shipment(s) currently at <strong>{tab.status.replace(/_/g, ' ')}</strong>.
+                <strong>{allShippingRecords.filter(r => (tab.statuses || [tab.status]).includes(r.status)).length}</strong> shipment(s) currently at <strong>{tab.status.replace(/_/g, ' ')}</strong>.
               </Typography>
             </Alert>
 
             <Box sx={{ height: 600, width: '100%' }}>
               <DataGrid
-                rows={allShippingRecords.filter(r => r.status === tab.status)}
+                rows={allShippingRecords.filter(r => (tab.statuses || [tab.status]).includes(r.status))}
                 columns={[
                   ...shippingColumns.slice(0, -1),
                   {
@@ -3300,6 +3311,28 @@ const ShippingPortal: React.FC = () => {
               )}
               
               {selectedRecord.status === 'PORT_ARRIVED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('CONTAINER_STUFFING', 'Record Container Stuffing', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="secondary"
+                  startIcon={<Inventory />}
+                >
+                  Record Container Stuffing
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'CONTAINER_STUFFED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('VESSEL_LOADING', 'Record Vessel Loading', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<DirectionsBoat />}
+                >
+                  Record Vessel Loading
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'VESSEL_LOADED' && (
                 <>
                   <AnimatedButton 
                     onClick={() => {
@@ -3318,36 +3351,14 @@ const ShippingPortal: React.FC = () => {
                     Issue Bill of Lading
                   </AnimatedButton>
                   <AnimatedButton 
-                    onClick={() => openApprovalDialog('CONTAINER_STUFFING', 'Record Container Stuffing', selectedRecord.shipmentId)}
+                    onClick={() => openApprovalDialog('VESSEL_DEPARTURE', 'Record Vessel Departure', selectedRecord.shipmentId)}
                     variant="contained"
-                    color="secondary"
-                    startIcon={<Inventory />}
+                    color="primary"
+                    startIcon={<FlightTakeoff />}
                   >
-                    Record Container Stuffing
+                    Record Vessel Departure
                   </AnimatedButton>
                 </>
-              )}
-              
-              {selectedRecord.status === 'CONTAINER_STUFFED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('VESSEL_LOADING', 'Record Vessel Loading', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<DirectionsBoat />}
-                >
-                  Record Vessel Loading
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'VESSEL_LOADED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('VESSEL_DEPARTURE', 'Record Vessel Departure', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<FlightTakeoff />}
-                >
-                  Record Vessel Departure
-                </AnimatedButton>
               )}
               
               {selectedRecord.status === 'DEPARTED' && (
