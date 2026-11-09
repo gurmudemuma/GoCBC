@@ -589,7 +589,9 @@ export class PostDeliveryWorkflowService {
 
     if (record.payment_received) completed++;
     if (record.forex_repatriated) completed++;
-    if (!record.lc_used || record.lc_settled) completed++;
+    // The LC step only exists when an LC was used; counting it as done when
+    // no LC was used let `completed` reach 5 against a total of 4 (125%).
+    if (record.lc_used && record.lc_settled) completed++;
     if (record.ecta_audit_completed) completed++;
     if (record.contract_closed) completed++;
 
