@@ -8,7 +8,7 @@ import { EmailService } from '../services/emailService';
 import { AuditService } from '../services/auditService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { dedupeById, isValidContract, isValidForex, isValidLC, isValidShipment } from '../utils/dataFilters';
 import { body, param, query } from 'express-validator';
 
@@ -303,6 +303,10 @@ router.post('/exporter-applications',
 // 4. Sends professional email with license download link
 router.post('/exporter-applications/:applicationId/approve',
   authMiddleware,
+  // Previously authMiddleware only: ANY authenticated (or forged) user
+  // could approve an application, register the exporter on-chain and
+  // generate a licence. Only ECTA admins may do that.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('applicationId').notEmpty(),
     body('exporterId').notEmpty(),
@@ -521,11 +525,24 @@ router.post('/exporter-applications/:applicationId/approve',
     }
   }
 );
+ 
+// ALIAS for backward compatibility
+router.post('/applications/:applicationId/approve', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), async (req, res) => {
+  // @ts-ignore - reuse the same logic by redirecting/forwarding to the correct route handler
+  // For Express, we can just call the other route's handler or use a shared function.
+  // A simple way is to just call the other endpoint via a internal redirect or just repeat the logic.
+  // Since we want to avoid duplication, let's just make it a redirect for now if possible, 
+  // but better to just use a shared handler.
+  
+  // For simplicity in this mess, I'll just use a shared handler for both.
+  return res.status(307).redirect(req.originalUrl.replace('/applications/', '/exporter-applications/'));
+});
 
 // POST /exporter-applications/:applicationId/reject - Reject application (ECTA admin)
 // This endpoint updates the application status but KEEPS the user account for resubmission
 router.post('/exporter-applications/:applicationId/reject',
   authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('applicationId').notEmpty(),
     body('reason').notEmpty(),
@@ -574,7 +591,7 @@ router.post('/exporter-applications/:applicationId/reject',
 
       // Step 2: Update application status to rejected with blockchain TX ID
       await postgresDb.run(
-        'UPDATE exporter-applications SET status = $1, rejected_at = $2, rejection_reason = $3, blockchain_tx_id = $4 WHERE application_id = $5',
+        'UPDATE exporter_applications SET status = $1, rejected_at = $2, rejection_reason = $3, blockchain_tx_id = $4 WHERE application_id = $5',
         ['rejected', new Date().toISOString(), reason, blockchain_tx_id, applicationId]
       );
       
@@ -582,7 +599,7 @@ router.post('/exporter-applications/:applicationId/reject',
       const exporterUser = await postgresDb.get('SELECT username, password_hash FROM users WHERE email = $1 AND role = $2', [application.email, 'EXPORTER']);
       
       // Generate a new temporary password for resubmission
-      const bcrypt = require('bcrypt');
+      const bcrypt = require('bcryptjs');
       const tempPassword = `Rejected${Math.random().toString(36).slice(-6)}!`;
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
       
@@ -591,9 +608,9 @@ router.post('/exporter-applications/:applicationId/reject',
       
       logger.info(`❌ Application rejected: ${applicationId} (User ${application.email} can now login to see rejection and resubmit)`);
       
-      // Send rejection email to exporter (non-blocking)
+      // Rejection remains recorded even if SMTP is unavailable; report delivery.
       const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      emailService.sendRejectionEmail({
+      const rejectionEmailSent = await emailService.sendRejectionEmail({
         exporterName: application.company_name,
         applicationId,
         email: application.email,
@@ -601,8 +618,6 @@ router.post('/exporter-applications/:applicationId/reject',
         username: exporterUser?.username || application.email,
         temporaryPassword: tempPassword,
         resubmitUrl: `${loginUrl}/login`,
-      }).catch((emailError) => {
-        logger.error(`⚠️ Failed to send rejection email to ${application.email}:`, emailError.message);
       });
       
       res.json({ 
@@ -611,7 +626,10 @@ router.post('/exporter-applications/:applicationId/reject',
           applicationId, 
           status: 'rejected', 
           reason,
-          message: 'Application rejected. Credentials for resubmission have been updated.'
+          emailDelivery: rejectionEmailSent ? 'sent' : 'failed',
+          message: rejectionEmailSent
+            ? 'Application rejected. Credentials for resubmission have been updated and emailed.'
+            : 'Application rejected and credentials for resubmission have been updated. Email delivery failed.'
         }, 
         timestamp: new Date().toISOString() 
       });
@@ -1561,333 +1579,10 @@ router.get('/exporter-applications', authMiddleware, async (req, res) => {
 });
 */
 
-/**
- * @swagger
- * /api/v1/exporters/applications/{applicationId}/approve:
- *   post:
- *     summary: Approve exporter application and register on blockchain (ECTA admin only)
- *     tags: [Exporters]
- *     parameters:
- *       - in: path
- *         name: applicationId
- *         required: true
- *         schema:
- *           type: string
- *         description: Application ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - exporterId
- *               - ectaLicenseNumber
- *               - licenseExpiryDate
- *             properties:
- *               exporterId:
- *                 type: string
- *               ectaLicenseNumber:
- *                 type: string
- *               licenseExpiryDate:
- *                 type: string
- *     responses:
- *       200:
- *         description: Application approved and exporter registered
- *       400:
- *         description: Invalid input data
- *       404:
- *         description: Application not found
- *       500:
- *         description: Internal server error
- */
-router.post('/applications/:applicationId/approve',
-  authMiddleware, // Protected route - ECTA admin only
-  [
-    param('applicationId').notEmpty().withMessage('Application ID is required'),
-    body('exporterId').notEmpty().withMessage('Exporter ID is required'),
-    body('ectaLicenseNumber').notEmpty().withMessage('ECTA license number is required'),
-    body('licenseExpiryDate').isISO8601().withMessage('Valid license expiry date is required'),
-  ],
-  validateRequest,
-  async (req, res) => {
-    try {
-      const { applicationId } = req.params;
-      const { exporterId, ectaLicenseNumber, licenseExpiryDate } = req.body;
-      const db = fabricService['db'];
-      
-      if (!db) {
-        res.status(500).json({
-          success: false,
-          error: { code: 'NO_DATABASE', message: 'Database not available' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // Get application details
-      const application = await new Promise<any>((resolve, reject) => {
-        db.get(
-          'SELECT * FROM exporter_applications WHERE application_id = ?',
-          [applicationId],
-          (err: any, row: any) => {
-            if (err) reject(err);
-            else resolve(row);
-          }
-        );
-      });
-      
-      if (!application) {
-        res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Application not found' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      if (application.status !== 'pending') {
-        res.status(400).json({
-          success: false,
-          error: { code: 'INVALID_STATUS', message: 'Application already processed' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // Register exporter on blockchain
-      const result = await fabricService.registerExporter(
-        exporterId,
-        application.company_name,
-        ectaLicenseNumber,
-        application.exporter_type || 'private',
-        application.capital_requirement,
-        application.professional_taster,
-        application.taster_certificate,
-        application.laboratory_certificate_number || '',
-        licenseExpiryDate,
-        (req as any).user?.role
-      );
-      
-      if (!result.success) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'BLOCKCHAIN_ERROR',
-            message: result.error || 'Failed to register exporter on blockchain',
-          },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // Update application status
-      await new Promise((resolve, reject) => {
-        db.run(
-          'UPDATE exporter_applications SET status = ?, approved_at = ?, exporter_id = ?, license_number = ? WHERE application_id = ?',
-          ['approved', new Date().toISOString(), exporterId, exporterId, applicationId],
-          (err: any) => {
-            if (err) reject(err);
-            else resolve(true);
-          }
-        );
-      });
-      
-      // ✅ Record application approval on blockchain via AuditService
-      try {
-        const user = (req as any).user;
-        await auditService.log({
-          entityType: 'EXPORTER_APPLICATION',
-          entityId: applicationId,
-          action: 'APPROVE',
-          performedBy: user?.username || 'ECTA Admin',
-          organization: 'ECTAMSP',
-          performedByOrg: 'ECTAMSP',
-          oldValue: 'PENDING',
-          newValue: 'APPROVED',
-          reason: `Application approved by ECTA. Exporter ${exporterId} registered on blockchain.`,
-          metadata: {
-            exporterId,
-            ectaLicenseNumber,
-            licenseExpiryDate,
-            blockchainTxId: result.txId,
-            companyName: application.company_name,
-            approvedBy: user?.username || 'ECTA Admin',
-            approvedAt: new Date().toISOString()
-          },
-          ipAddress: req.ip
-        });
-        logger.info(`✅ Application approval audit log recorded: ${applicationId}`);
-      } catch (auditErr) {
-        logger.warn(`⚠️ Failed to create audit log for application approval:`, auditErr);
-        // Non-fatal
-      }
-      
-      res.json({
-        success: true,
-        data: {
-          applicationId,
-          exporterId,
-          status: 'approved',
-          txId: result.txId,
-        },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      logger.error('Error approving exporter application:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'APPROVAL_FAILED',
-          message: 'Failed to approve application',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }
-);
+// DUPLICATE ROUTES REMOVED
 
-/**
- * @swagger
- * /api/v1/exporters/applications/{applicationId}/reject:
- *   post:
- *     summary: Reject exporter application (ECTA admin only)
- *     tags: [Exporters]
- *     parameters:
- *       - in: path
- *         name: applicationId
- *         required: true
- *         schema:
- *           type: string
- *         description: Application ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - reason
- *             properties:
- *               reason:
- *                 type: string
- *     responses:
- *       200:
- *         description: Application rejected successfully
- *       400:
- *         description: Invalid input data
- *       404:
- *         description: Application not found
- *       500:
- *         description: Internal server error
- */
-router.post('/applications/:applicationId/reject',
-  authMiddleware, // Protected route - ECTA admin only
-  [
-    param('applicationId').notEmpty().withMessage('Application ID is required'),
-    body('reason').notEmpty().withMessage('Rejection reason is required'),
-  ],
-  validateRequest,
-  async (req, res) => {
-    try {
-      const { applicationId } = req.params;
-      const { reason } = req.body;
-      const db = fabricService['db'];
-      
-      if (!db) {
-        res.status(500).json({
-          success: false,
-          error: { code: 'NO_DATABASE', message: 'Database not available' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // Check if application exists
-      const application = await new Promise<any>((resolve, reject) => {
-        db.get(
-          'SELECT * FROM exporter_applications WHERE application_id = ?',
-          [applicationId],
-          (err: any, row: any) => {
-            if (err) reject(err);
-            else resolve(row);
-          }
-        );
-      });
-      
-      if (!application) {
-        res.status(404).json({
-          success: false,
-          error: { code: 'NOT_FOUND', message: 'Application not found' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      if (application.status !== 'pending') {
-        res.status(400).json({
-          success: false,
-          error: { code: 'INVALID_STATUS', message: 'Application already processed' },
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      
-      // ✅ BLOCKCHAIN-FIRST: Record application rejection on blockchain BEFORE DB update
-      const user = (req as any).user;
-      await auditService.log({
-        entityType: 'EXPORTER_APPLICATION',
-        entityId: applicationId,
-        action: 'REJECT',
-        performedBy: user?.username || 'ECTA Admin',
-        organization: 'ECTAMSP',
-        performedByOrg: 'ECTAMSP',
-        oldValue: 'PENDING',
-        newValue: 'REJECTED',
-        reason: `Application rejected by ECTA: ${reason}`,
-        metadata: {
-          rejectionReason: reason,
-          companyName: application.company_name,
-          rejectedBy: user?.username || 'ECTA Admin'
-        },
-        ipAddress: req.ip
-      });
-      logger.info(`✅ Application rejection recorded on blockchain: ${applicationId}`);
+// BROKEN DUPLICATE APPROVE AND REJECT ROUTES REMOVED — see the /exporter-applications approve and reject routes above
 
-      // Now update application status (blockchain_tx_id handled by auditService.log)
-      await new Promise((resolve, reject) => {
-        db.run(
-          'UPDATE exporter_applications SET status = ?, rejected_at = ?, rejection_reason = ? WHERE application_id = ?',
-          ['rejected', new Date().toISOString(), reason, applicationId],
-          (err: any) => {
-            if (err) reject(err);
-            else resolve(true);
-          }
-        );
-      });
-      
-      res.json({
-        success: true,
-        data: {
-          applicationId,
-          status: 'rejected',
-          reason,
-        },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      logger.error('Error rejecting exporter application:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'REJECTION_FAILED',
-          message: 'Failed to reject application',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }
-);
 
 
 // ============================================================================
