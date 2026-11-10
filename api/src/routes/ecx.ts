@@ -271,7 +271,7 @@ const isPendingDeploy = (error?: string) =>
   !!error && (error.includes('not found in contract') || error.includes('Function') && error.includes('not found'));
 
 // POST /api/v1/ecx/lots — warehouse intake (issue warehouse receipt)
-router.post('/lots', authMiddleware,
+router.post('/lots', authMiddleware, requireRole('ECX', 'ECX_ADMIN'),
   [body('exporterId').notEmpty(), body('origin').notEmpty(), body('quantity').isNumeric(), body('processingMethod').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -339,7 +339,7 @@ router.post('/lots', authMiddleware,
 );
 
 // POST /api/v1/ecx/lots/:lotId/grade
-router.post('/lots/:lotId/grade', authMiddleware,
+router.post('/lots/:lotId/grade', authMiddleware, requireRole('ECX', 'ECX_ADMIN'),
   [param('lotId').notEmpty(), body('grade').notEmpty(), body('moistureContent').isNumeric(), body('defectCount').isInt(), body('gradingOfficer').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -385,7 +385,7 @@ router.post('/lots/:lotId/grade', authMiddleware,
 // the portal's REJECTED filter can show the lot. REJECTED is terminal
 // (statusManager ECX machine: WAREHOUSED -> GRADED/REJECTED, REJECTED -> []).
 router.post('/lots/:lotId/reject', authMiddleware,
-  requireRole('ECX', 'ECX_ADMIN'), // Only ECX rejects lots (the grade route is still auth-only — see TEST-STATUS-MATRIX §17 #14 note)
+  requireRole('ECX', 'ECX_ADMIN'), // Only ECX rejects lots
   [param('lotId').notEmpty(), body('rejectionReason').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -410,7 +410,7 @@ router.post('/lots/:lotId/reject', authMiddleware,
 );
 
 // POST /api/v1/ecx/lots/:lotId/assign
-router.post('/lots/:lotId/assign', authMiddleware,
+router.post('/lots/:lotId/assign', authMiddleware, requireRole('ECX', 'ECX_ADMIN'),
   [param('lotId').notEmpty(), body('contractId').notEmpty(), body('pricePerKg').isNumeric()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -438,7 +438,7 @@ router.post('/lots/:lotId/assign', authMiddleware,
 );
 
 // POST /api/v1/ecx/lots/:lotId/release
-router.post('/lots/:lotId/release', authMiddleware,
+router.post('/lots/:lotId/release', authMiddleware, requireRole('ECX', 'ECX_ADMIN'),
   [param('lotId').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -463,7 +463,7 @@ router.post('/lots/:lotId/release', authMiddleware,
 );
 
 // POST /api/v1/ecx/lots/:lotId/auto-release — release only after customs clearance
-router.post('/lots/:lotId/auto-release', authMiddleware,
+router.post('/lots/:lotId/auto-release', authMiddleware, requireRole('ECX', 'ECX_ADMIN'),
   [param('lotId').notEmpty(), body('shipmentID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
