@@ -476,6 +476,50 @@ check_prerequisites() {
         fi
     fi
 
+    # REDIS_PASSWORD — the compose file requires it for the redis service
+    # (docker-compose-fabric.yml: redis-server --requirepass
+    # ${REDIS_PASSWORD:?set REDIS_PASSWORD}; compose fails fast if it is
+    # unset). It used to be hard-coded in the compose file; the auth fixes
+    # removed the hard-coded value but nothing ever supplied a replacement,
+    # so `docker compose` failed at interpolation on any host without
+    # REDIS_PASSWORD in its environment. Ensure one here, mirroring the
+    # JWT_SECRET handling above: prefer the environment, else the root
+    # .env file (which compose reads next to the compose file), else
+    # generate a fresh random one and persist it there. The root .env is
+    # gitignored, so the generated password never gets committed. Export
+    # it so every compose invocation below sees it regardless of how
+    # compose resolves the .env file.
+    REDIS_VALUE="${REDIS_PASSWORD:-}"
+    if [ -z "$REDIS_VALUE" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+        REDIS_VALUE=$(grep "^REDIS_PASSWORD=" "$PROJECT_ROOT/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+    fi
+    EXAMPLE_REDIS=$(grep "^REDIS_PASSWORD=" "$API_DIR/.env.example" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+    REDIS_WEAK=false
+    case "$REDIS_VALUE" in
+        ""|"password"|"redis"|"changeme"|"change-me"|"secret") REDIS_WEAK=true ;;
+    esac
+    if [ -n "$EXAMPLE_REDIS" ] && [ "$REDIS_VALUE" = "$EXAMPLE_REDIS" ]; then REDIS_WEAK=true; fi
+    if [ "$REDIS_WEAK" = false ] && [ -n "$REDIS_VALUE" ] && [ "${#REDIS_VALUE}" -ge 16 ]; then
+        log_verbose "REDIS_PASSWORD is configured (${#REDIS_VALUE} chars)"
+    else
+        if command -v openssl &> /dev/null; then
+            NEW_REDIS=$(openssl rand -base64 32 | tr -d '\n')
+            # Replace a weak/placeholder line, or append if absent
+            if grep -q "^REDIS_PASSWORD=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+                sed -i "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=$NEW_REDIS|" "$PROJECT_ROOT/.env"
+            else
+                echo "REDIS_PASSWORD=$NEW_REDIS" >> "$PROJECT_ROOT/.env"
+            fi
+            REDIS_VALUE="$NEW_REDIS"
+            write_success "Generated a fresh REDIS_PASSWORD in .env (gitignored, never committed)"
+        else
+            write_error "REDIS_PASSWORD is missing or too short and openssl is not available to generate one"
+            write_info "Set a random 16+ char REDIS_PASSWORD in $PROJECT_ROOT/.env (openssl rand -base64 32)"
+            all_good=false
+        fi
+    fi
+    export REDIS_PASSWORD="$REDIS_VALUE"
+
     # The compose API loads Fabric connection settings from this file.
     if [ -f "$API_DIR/.env.blockchain.fixed" ]; then
         log_verbose "Fabric env file api/.env.blockchain.fixed exists"
