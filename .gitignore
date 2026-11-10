@@ -118,3 +118,13 @@ Thumbs.db
 
 # TypeScript incremental build info
 ui/tsconfig.tsbuildinfo
+
+# Runtime upload/license/storage dirs — read from disk by the
+# document/license download routes; never commit their contents.
+# (Untracked with `git rm --cached`; files stay on disk so downloads keep
+# working. Same pull hazard as api/.env.blockchain above: on the Docker
+# host, back up these dirs OUTSIDE the repo BEFORE pulling this change —
+# git will delete the clean tracked copies on pull; restore them after.)
+api/uploads/
+api/licenses/
+api/storage/
