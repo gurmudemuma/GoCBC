@@ -155,6 +155,39 @@ export class AuditService {
   }
 
   /**
+   * Legacy audit-recording shape used by older call sites
+   * (exporter application reject, post-delivery workflow). The method
+   * previously called here, `recordAudit`, never existed on this class,
+   * so every caller 500'd with "recordAudit is not a function".
+   * This adapter maps the legacy field names onto AuditLogEntry and
+   * delegates to log(). NOTE: feature-testing log() returns void, so
+   * this returns { txId: null }; the features version returns the tx id
+   * because its log() was rewritten to return it (and depends on
+   * FabricService.getRequestMspId(), which feature-testing lacks).
+   */
+  async recordAudit(record: {
+    entityType: string;
+    entityId: string;
+    actionType: string;
+    actionBy: string;
+    organizationMSP: string;
+    details?: any;
+    reason?: string;
+    timestamp?: Date | string;
+  }): Promise<{ txId: string | null }> {
+    await this.log({
+      entityType: record.entityType,
+      entityId: record.entityId,
+      action: record.actionType,
+      performedBy: record.actionBy,
+      organization: record.organizationMSP,
+      performedByOrg: record.organizationMSP,
+      reason: record.reason,
+      metadata: record.details,
+    });
+    return { txId: null };
+  }
+  /**
    * Get audit logs for a specific entity
    */
   async getEntityLogs(entityType: string, entityId: string): Promise<any[]> {
