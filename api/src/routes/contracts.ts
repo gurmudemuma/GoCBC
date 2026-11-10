@@ -1112,6 +1112,7 @@ router.get('/:contractID/documents',
  *         description: Internal server error
  */
 router.get('/:contractID',
+  authMiddleware, // Added auth requirement
   [param('contractID').notEmpty().withMessage('Contract ID is required')],
   validateRequest,
   async (req, res) => {
@@ -1549,8 +1550,8 @@ router.post('/:contractID/approve',
               'APPROVE',
               user?.sub || user?.username || 'ECTA',
               user?.org || 'ECTAMSP',
-              currentStatus,
-              'APPROVED',
+              JSON.stringify({ status: currentStatus }),
+              JSON.stringify({ status: 'APPROVED' }),
               'Contract approved by ECTA for export compliance',
               JSON.stringify({
                 contractId: contractID,
@@ -1754,8 +1755,8 @@ router.post('/:contractID/reject',
               'REJECT',
               user?.sub || user?.username || 'ECTA',
               user?.org || 'ECTAMSP',
-              currentStatus,
-              'REJECTED',
+              JSON.stringify({ status: currentStatus }),
+              JSON.stringify({ status: 'REJECTED' }),
               rejectionFeedback,
               JSON.stringify({
                 contractId: contractID,

@@ -180,3 +180,39 @@ router.get('/status', async (req, res) => {
 });
 
 export default router;
+
+/**
+ * GET /api/v1/blockchain/history/:entityId
+ * Get blockchain transaction history for a specific entity
+ */
+router.get('/history/:entityId', authMiddleware, async (req, res) => {
+  try {
+    const { entityId } = req.params;
+    
+    logger.info(`[BLOCKCHAIN] Fetching transaction history for entity: ${entityId}`);
+    
+    // Get audit logs from blockchain that reference this entity
+    const auditService = (await import('../services/auditService')).default;
+    
+    const blockchainLogs = await auditService.getBlockchainAuditLogs({
+      entityId
+    });
+    
+    res.json({
+      success: true,
+      data: blockchainLogs || [],
+      metadata: {
+        entityId,
+        totalTransactions: blockchainLogs?.length || 0
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[BLOCKCHAIN] Error fetching history:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch blockchain history',
+      timestamp: new Date().toISOString()
+    });
+  }
+});

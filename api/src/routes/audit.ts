@@ -587,8 +587,8 @@ router.get('/entity/:entityType/:entityId', authMiddleware, async (req: any, res
                     bcLog.signature?.caller?.commonName || bcLog.Signature?.Caller?.CommonName || 'System',
                     bcLog.signature?.caller?.mspId || bcLog.Signature?.Caller?.MSPID || 'UNKNOWN',
                     bcLog.signature?.caller?.mspId || bcLog.Signature?.Caller?.MSPID || 'UNKNOWN',
-                    bcLog.statusBefore || bcLog.StatusBefore || '',
-                    bcLog.statusAfter || bcLog.StatusAfter || '',
+                    JSON.stringify({ status: bcLog.statusBefore || bcLog.StatusBefore || 'N/A' }),
+                    JSON.stringify({ status: bcLog.statusAfter || bcLog.StatusAfter || 'N/A' }),
                     bcLog.reason || bcLog.Reason || '',
                     JSON.stringify({
                       source: 'HYPERLEDGER_FABRIC',
@@ -1962,6 +1962,66 @@ router.get('/trail/:entityType/:entityId', authMiddleware, async (req: any, res:
     });
   } catch (error: any) {
     logger.error('[AUDIT] Error fetching audit trail:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch audit trail',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /audit/trail (with query params)
+ * Alias for audit trail that accepts query parameters instead of path params
+ */
+router.get('/trail', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { entityType, entityId } = req.query;
+    
+    if (!entityType || !entityId) {
+      return res.status(400).json({
+        success: false,
+        error: 'entityType and entityId query parameters are required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    logger.info(`[AUDIT] Fetching audit trail for ${entityType} ${entityId} (query params)`);
+    
+    // Duplicate the logic from the path param version
+    const dbLogs = await auditService.getEntityLogs(entityType as string, entityId as string);
+    
+    let blockchainLogs: any[] = [];
+    try {
+      const bcResult = await auditService.getBlockchainAuditLogs({
+        entityType: entityType as string,
+        entityId: entityId as string
+      });
+      blockchainLogs = bcResult || [];
+    } catch (bcErr) {
+      logger.warn(`[AUDIT] Could not fetch blockchain logs: ${bcErr}`);
+    }
+    
+    const allLogs = [...dbLogs, ...blockchainLogs].sort((a: any, b: any) => {
+      const timeA = new Date(a.timestamp || a.created_at).getTime();
+      const timeB = new Date(b.timestamp || b.created_at).getTime();
+      return timeB - timeA;
+    });
+    
+    res.json({
+      success: true,
+      data: allLogs,
+      metadata: {
+        totalLogs: allLogs.length,
+        databaseLogs: dbLogs.length,
+        blockchainLogs: blockchainLogs.length,
+        entityType,
+        entityId
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('[AUDIT] Error with query param trail:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch audit trail',

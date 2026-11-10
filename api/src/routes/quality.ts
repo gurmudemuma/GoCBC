@@ -412,11 +412,14 @@ router.post('/inspections',
       );
 
       if (pendingInspection) {
-        return res.status(409).json({
-          success: false,
-          error: {
-            code: 'INSPECTION_ALREADY_SCHEDULED',
-            message: `Shipment ${shipmentID} already has a pending inspection: ${pendingInspection.inspection_id}`
+        // Return the existing inspection instead of an error (shipment auto-creates inspections)
+        logger.info(`Shipment ${shipmentID} already has inspection ${pendingInspection.inspection_id}, returning existing`);
+        return res.status(200).json({
+          success: true,
+          data: { 
+            inspectionID: pendingInspection.inspection_id, 
+            status: 'PENDING',
+            message: 'Inspection already exists for this shipment'
           },
           timestamp: new Date().toISOString()
         });
@@ -1354,14 +1357,14 @@ router.post('/inspections/:inspectionID/complete',
         WHERE inspection_id = $12`,
         [new Date().toISOString().split('T')[0], grade, cupQuality || null, moistureContent || null,
          defectCount || null, screenSize || null, passed, certificationNumber || null,
-         inspectorName || null, remarks || null, 'COMPLETED', inspectionID]
+         inspectorName || null, remarks || null, 'INSPECTED', inspectionID]
       );
 
       logger.info(`Quality inspection completed: ${inspectionID}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'COMPLETED', passed },
+        data: { inspectionID, status: 'INSPECTED', passed },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

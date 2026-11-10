@@ -397,6 +397,7 @@ router.post('/bookings', authMiddleware,
   requireRole('EXPORTER', 'SHIPPING', 'SHIPPING_ADMIN', 'ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
   try {
     const {
+      bookingID: providedBookingID, // Accept bookingID from request
       shipmentID,
       exporterID,
       shippingLine,
@@ -410,7 +411,8 @@ router.post('/bookings', authMiddleware,
       estimatedArrivalDate
     } = req.body;
 
-    const bookingID = `BOOK-${Date.now()}`;
+    // Use provided bookingID or generate one
+    const bookingID = providedBookingID || `BOOK-${Date.now()}`;
     
     logger.info(`[SHIPPING] Creating booking: ${bookingID} for shipment: ${shipmentID}`);
 

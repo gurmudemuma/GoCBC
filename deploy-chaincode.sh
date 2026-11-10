@@ -107,38 +107,29 @@ rm -f "coffee_${VERSION}.tar.gz"
 # run packages v2.3 / seq 22.
 
 # Build the CCAAS package directory: label must match this run's version.
-rm -rf pkg-temp
-mkdir -p pkg-temp
+rm -rf pkg-temp code-temp
+mkdir -p pkg-temp/code
 cat > pkg-temp/metadata.json <<EOF
 {
   "type": "ccaas",
   "label": "coffee_${VERSION}"
 }
 EOF
-cp connection.json pkg-temp/
+cp connection.json pkg-temp/code/connection.json
 
-# Package the chaincode - let Docker run as root, then fix ownership
-docker run --rm \
-    -v "$CHAINCODE_DIR/pkg-temp":/pkg \
-    -v "$CHAINCODE_DIR":/out \
-    -w /out \
-    hyperledger/fabric-tools:2.5 \
-    peer lifecycle chaincode package "coffee_${VERSION}.tar.gz" \
-    --path /pkg \
-    --lang external \
-    --label "coffee_${VERSION}"
+# For CCAAS, manually create the tar.gz package
+# Structure: metadata.json at root, connection.json inside code/
+cd pkg-temp
+tar czf "../coffee_${VERSION}.tar.gz" metadata.json code/
+cd ..
 
 # Clean up the temporary package directory
-rm -rf pkg-temp
+rm -rf pkg-temp code-temp
 
 if [ ! -f "$CHAINCODE_PACKAGE" ]; then
     echo -e "${RED}✗ Failed to create chaincode package${NC}"
     exit 1
 fi
-
-# Fix ownership of the generated package
-sudo chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || chown $(id -u):$(id -g) "$CHAINCODE_PACKAGE" 2>/dev/null || true
-chmod 644 "$CHAINCODE_PACKAGE" 2>/dev/null || true
 
 echo -e "${GREEN}✓ Chaincode package created: coffee_${VERSION}.tar.gz${NC}"
 echo ""

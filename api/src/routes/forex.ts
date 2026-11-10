@@ -861,6 +861,79 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
   }
 });
 
+// POST /api/v1/forex/:forexID/allocate — Alias with forexID in path
+router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER', 'NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
+  try {
+    const { forexID } = req.params;
+    const user = (req as any).user;
+    const { lcId, amount, exchangeRate, retentionRate, officer, approvalRef, expiryDate } = req.body;
+    
+    if (!lcId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: { 
+          code: 'MISSING_FIELDS', 
+          message: 'lcId is required' 
+        } 
+      });
+    }
+
+    logger.info(`[FOREX] Allocating forex: ${forexID} with retention rate: ${retentionRate || '40% (default)'}`);
+
+    // Use ForexService which includes 40% retention logic
+    const result = await forexService.allocateForex({
+      forexID,
+      lcID: lcId,
+      amount: amount ? Number(amount) : 0,
+      exchangeRate: exchangeRate ? Number(exchangeRate) : 1,
+      retentionRate: retentionRate ? Number(retentionRate) : 40,
+      officer: officer || user?.username || user?.sub || '',
+      approvalRef: approvalRef || '',
+      expiryDate: expiryDate || null,
+      userId: user?.username || user?.sub,
+      userOrg: user?.org || 'BanksMSP'
+    });
+
+    if (result.success) {
+      logger.info(`✅ Forex allocated: ${forexID}, Retention Amount: ${result.retentionAmount}, Release Amount: ${result.releaseAmount}`);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Forex allocated successfully with retention policy',
+        data: {
+          forexID,
+          lcID: lcId,
+          retentionAmount: result.retentionAmount,
+          releaseAmount: result.releaseAmount,
+          txId: result.txId,
+          blockchainSynced: (result as any).blockchainSynced ?? false,
+          blockchainWarning: (result as any).blockchainWarning
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        error: { 
+          code: 'ALLOCATE_FAILED', 
+          message: 'Failed to allocate forex'
+        }, 
+        timestamp: new Date().toISOString() 
+      });
+    }
+  } catch (error: any) {
+    logger.error('[FOREX] Error allocating forex:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: { 
+        code: 'INTERNAL_ERROR', 
+        message: error.message 
+      }, 
+      timestamp: new Date().toISOString() 
+    });
+  }
+});
+
 // POST /api/v1/forex/utilize
 router.post('/utilize', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER', 'NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
   try {

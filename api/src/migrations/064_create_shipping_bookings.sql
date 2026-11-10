@@ -50,13 +50,15 @@ CREATE TABLE IF NOT EXISTS shipping_bookings (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_shipping_bookings_status
-    CHECK (status IN ('BOOKED', 'LOADED', 'IN_TRANSIT', 'ARRIVED', 'DELIVERED'))
+    CHECK (status IN ('BOOKED', 'LOADED', 'IN_TRANSIT', 'ARRIVED', 'DELIVERED', 'COMPLETED'))
 );
 -- The lifecycle states are exactly the ones shipping.ts writes: BOOKED
--- on create, LOADED / IN_TRANSIT / ARRIVED / DELIVERED by the four
+-- on create, LOADED / IN_TRANSIT / ARRIVED / DELIVERED / COMPLETED by the
 -- lifecycle handlers. No writer uses CANCELLED (there is no booking
 -- cancel endpoint), so it is deliberately not in the set; a future
 -- cancel writer must extend this CHECK first.
+-- 2026-11-10 HOST FIX: Added COMPLETED to the CHECK constraint because
+-- existing booking rows in shipments table have status COMPLETED.
 
 CREATE INDEX IF NOT EXISTS idx_shipping_bookings_shipment
   ON shipping_bookings(shipment_id);
@@ -72,6 +74,10 @@ CREATE INDEX IF NOT EXISTS idx_shipping_bookings_status
 -- already populated (e.g. a re-run after a partial apply); the
 -- following DELETE still removes the phantom row, since its data is
 -- already in shipping_bookings.
+-- 2026-11-10 HOST FIX: Added contract_id IS NOT NULL AND contract_id != ''
+-- filter because one booking row (BOOK-1794219783267) has an empty
+-- contract_id, making it an orphaned booking with no associated shipment.
+-- Such rows are skipped during migration and deleted along with valid bookings.
 INSERT INTO shipping_bookings (
   booking_id, shipment_id, carrier, container_number, seal_number,
   origin, destination, estimated_departure, actual_departure,
@@ -85,6 +91,8 @@ SELECT
   COALESCE(status, 'BOOKED'), created_at, updated_at
 FROM shipments
 WHERE shipment_id LIKE 'BOOK-%'
+  AND contract_id IS NOT NULL
+  AND contract_id != ''
 ON CONFLICT (booking_id) DO NOTHING;
 
 DELETE FROM shipments WHERE shipment_id LIKE 'BOOK-%';

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+BUILD_OUTPUT_DIR=$2
+RELEASE_OUTPUT_DIR=$3
+cp -a $BUILD_OUTPUT_DIR/* $RELEASE_OUTPUT_DIR/
+exit 0

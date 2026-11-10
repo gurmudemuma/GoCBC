@@ -127,9 +127,8 @@ ALTER TABLE quality_inspections
 -- 8. Shipments (chaincode main.go lifecycle + BOOKED/REGISTERED, see header;
 --    CUSTOMS_REJECTED is the customsService mirror of the chaincode cascade,
 --    INSPECTION_PENDING is set by chaincode RequestInspection. The
---    QUALITY_PENDING / QUALITY_APPROVED / QUALITY_REJECTED / COMPLETED
---    phase vocabulary from the statusManager comment has no writer and no
---    stored rows, so it is NOT in the set — a future writer must extend it.)
+--    QUALITY_PENDING / COMPLETED phase vocabulary DO have stored rows on the
+--    host DB, so they are included in the set.)
 ALTER TABLE shipments
   ADD CONSTRAINT chk_shipments_status
   CHECK (status IN ('CREATED', 'REGISTERED', 'FREIGHT_BOOKED', 'BOOKED',
@@ -137,7 +136,8 @@ ALTER TABLE shipments
                     'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'LAND_TRANSPORT',
                     'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED',
                     'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'ARRIVED',
-                    'DELIVERED', 'LOADED', 'CANCELLED'));
+                    'DELIVERED', 'LOADED', 'CANCELLED', 'QUALITY_PENDING',
+                    'COMPLETED'));
 
 -- 9. Shipment logistics status (shipmentService.validLogisticsStatuses).
 ALTER TABLE shipments

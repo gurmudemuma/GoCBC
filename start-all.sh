@@ -1027,7 +1027,7 @@ test_chaincode_basic() {
 ################################################################################
 
 initialize_database() {
-    write_header "Phase 6: Initializing Database"
+    write_header "Phase 6: Initializing Database & Running Migrations"
     
     # Check if database is accessible
     write_step "Checking database connection..."
@@ -1050,23 +1050,118 @@ initialize_database() {
         if psql "$DATABASE_URL" -c "SELECT 1;" &>/dev/null; then
             write_success "Database connection successful"
 
-            # Migrations are NOT applied here. The API runs them itself on
-            # startup through its tracked runner (api/src/migrations,
-            # _schema_migrations table) and refuses to start if one fails.
-            # Re-applying every file with psql, as this script used to do,
-            # ignores errors and races with the API's own runner, which
-            # starts with the compose stack in Phase 3. Just report state.
-            write_step "Checking applied migrations..."
-            APPLIED_COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM _schema_migrations;" 2>/dev/null | tr -d ' ' || echo "")
-            if [ -n "$APPLIED_COUNT" ]; then
-                TOTAL_COUNT=$(ls "$API_DIR/src/migrations"/*.sql 2>/dev/null | wc -l | tr -d ' ')
-                write_success "Migrations applied: $APPLIED_COUNT (files on disk: $TOTAL_COUNT)"
-                if [ "$APPLIED_COUNT" != "$TOTAL_COUNT" ]; then
-                    write_info "The API will apply the remaining migrations when it starts"
-                fi
-            else
-                write_info "No _schema_migrations table yet — the API will run all migrations on startup"
+            # Run migrations using Node.js migration runner
+            write_step "Running database migrations..."
+            cd "$API_DIR"
+            
+            # Build the API first to ensure migrations are up to date
+            if [ ! -d "$API_DIR/dist" ]; then
+                write_step "Building API..."
+                npm run build >/dev/null 2>&1 || write_warning "API build failed"
             fi
+            
+            # Run migrations via Node.js script
+            cat > /tmp/run-migrations.js << 'EOF'
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
+
+async function runMigrations() {
+    const databaseUrl = process.env.DATABASE_URL || process.argv[2];
+    const migrationsDir = path.join(__dirname, 'dist', 'migrations');
+    
+    if (!databaseUrl) {
+        console.error('❌ DATABASE_URL not provided');
+        process.exit(1);
+    }
+    
+    const pool = new Pool({ connectionString: databaseUrl });
+    
+    try {
+        // Create migrations tracking table if it doesn't exist
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS _schema_migrations (
+                migration_name VARCHAR(255) PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        
+        // Get list of applied migrations
+        const { rows: applied } = await pool.query(
+            'SELECT migration_name FROM _schema_migrations ORDER BY migration_name'
+        );
+        const appliedSet = new Set(applied.map(r => r.migration_name));
+        
+        // Get all migration files
+        const files = fs.readdirSync(migrationsDir)
+            .filter(f => f.endsWith('.sql'))
+            .sort();
+        
+        console.log(`📋 Found ${files.length} migration file(s)`);
+        
+        let appliedCount = 0;
+        let skippedCount = 0;
+        
+        for (const file of files) {
+            const migrationName = file.replace('.sql', '');
+            
+            if (appliedSet.has(migrationName)) {
+                console.log(`   ⏭️  Skipping: ${migrationName}`);
+                skippedCount++;
+                continue;
+            }
+            
+            console.log(`   ▶️  Applying: ${migrationName}`);
+            
+            const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+            
+            try {
+                await pool.query('BEGIN');
+                await pool.query(sql);
+                await pool.query(
+                    'INSERT INTO _schema_migrations (migration_name) VALUES ($1)',
+                    [migrationName]
+                );
+                await pool.query('COMMIT');
+                console.log(`   ✅ Applied: ${migrationName}`);
+                appliedCount++;
+            } catch (error) {
+                await pool.query('ROLLBACK');
+                console.error(`   ❌ Failed: ${migrationName}`);
+                console.error(`   Error: ${error.message}`);
+                process.exit(1);
+            }
+        }
+        
+        if (appliedCount > 0) {
+            console.log(`\n✅ Successfully applied ${appliedCount} migration(s)`);
+        } else {
+            console.log(`\n✅ All migrations up to date (${skippedCount} already applied)`);
+        }
+        
+    } catch (error) {
+        console.error('❌ Migration error:', error.message);
+        process.exit(1);
+    } finally {
+        await pool.end();
+    }
+}
+
+runMigrations();
+EOF
+            
+            # Run the migration script
+            if NODE_ENV=production node /tmp/run-migrations.js "$DATABASE_URL" 2>&1; then
+                write_success "All migrations completed successfully"
+            else
+                write_error "Migration failed! Check the output above"
+                write_info "You may need to fix migration files and re-run"
+                rm -f /tmp/run-migrations.js
+                return 1
+            fi
+            
+            rm -f /tmp/run-migrations.js
+            cd "$PROJECT_ROOT"
 
             # Check if users table exists and has data
             write_step "Checking for seed data..."

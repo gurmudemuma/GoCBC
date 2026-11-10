@@ -65,6 +65,7 @@ router.post('/request',
 
       logger.info(`[PHYTO] Requesting phytosanitary certificate: ${certificateID}`);
 
+      // Try blockchain first, fall back to PostgreSQL if chaincode function not found
       const result = await fabricService.invokeChaincode('RequestPhytosanitaryCertificate', [
         certificateID,
         shipmentID,
@@ -75,6 +76,25 @@ router.post('/request',
       ]);
 
       if (result.success) {
+        // Blockchain success - mirror to PostgreSQL
+        try {
+          await postgresDb.run(`
+            INSERT INTO phytosanitary_certificates (
+              certificate_id, status, issue_date, treatment_type, 
+              inspection_result, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (certificate_id) DO NOTHING
+          `, [
+            certificateID,
+            'PENDING',
+            new Date().toISOString(),
+            treatmentApplied || 'FUMIGATION',
+            'PENDING',
+            new Date().toISOString()
+          ]);
+        } catch (pgErr) {
+          logger.warn(`[PHYTO] Could not mirror ${certificateID} to PostgreSQL:`, pgErr);
+        }
         logger.info(`✅ Phytosanitary certificate requested: ${certificateID}`);
         res.status(201).json({
           success: true,
@@ -83,6 +103,42 @@ router.post('/request',
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });
+      } else if (result.error && result.error.includes('not found in contract')) {
+        // Chaincode function not found - use PostgreSQL fallback
+        logger.warn(`[PHYTO] Chaincode function not found, using PostgreSQL fallback for ${certificateID}`);
+        try {
+          await postgresDb.run(`
+            INSERT INTO phytosanitary_certificates (
+              certificate_id, status, issue_date, treatment_type,
+              inspection_result, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (certificate_id) DO NOTHING
+          `, [
+            certificateID,
+            'PENDING',
+            new Date().toISOString(),
+            treatmentApplied || 'FUMIGATION',
+            'PENDING',
+            new Date().toISOString()
+          ]);
+          logger.info(`✅ Phytosanitary certificate requested (PostgreSQL only): ${certificateID}`);
+          res.status(201).json({
+            success: true,
+            message: 'Phytosanitary certificate requested successfully (PostgreSQL)',
+            data: { certificateID, certificateId: certificateID, status: 'PENDING' },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (pgErr: any) {
+          logger.error(`[PHYTO] PostgreSQL fallback failed:`, pgErr);
+          res.status(500).json({
+            success: false,
+            error: {
+              code: 'REQUEST_FAILED',
+              message: pgErr.message,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
       } else {
         res.status(400).json({
           success: false,
@@ -156,6 +212,21 @@ router.post('/:certificateID/inspect',
       ]);
 
       if (result.success) {
+        // Blockchain success - mirror to PostgreSQL
+        try {
+          await postgresDb.run(`
+            UPDATE phytosanitary_certificates 
+            SET status = 'INSPECTED', 
+                inspection_result = $1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE certificate_id = $2
+          `, [
+            (pestsDetected || diseaseDetected) ? 'FAILED' : 'PASSED',
+            certificateID
+          ]);
+        } catch (pgErr) {
+          logger.warn(`[PHYTO] Could not mirror inspection ${certificateID} to PostgreSQL:`, pgErr);
+        }
         logger.info(`✅ Phytosanitary inspection completed: ${certificateID}`);
         res.json({
           success: true,
@@ -164,6 +235,40 @@ router.post('/:certificateID/inspect',
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });
+      } else if (result.error && result.error.includes('not found in contract')) {
+        // Chaincode function not found - use PostgreSQL fallback
+        logger.warn(`[PHYTO] Chaincode function not found, using PostgreSQL fallback for inspection ${certificateID}`);
+        try {
+          const inspectionResult = (pestsDetected || diseaseDetected) ? 'FAILED' : 'PASSED';
+          await postgresDb.run(`
+            UPDATE phytosanitary_certificates 
+            SET status = 'INSPECTED',
+                inspection_result = $1,
+                certifying_officer = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE certificate_id = $3
+          `, [inspectionResult, inspectorName, certificateID]);
+          
+          logger.info(`✅ Phytosanitary inspection completed (PostgreSQL only): ${certificateID}`);
+          res.json({
+            success: true,
+            message: 'Inspection completed successfully (PostgreSQL)',
+            data: { 
+              certificateID, 
+              certificateId: certificateID, 
+              status: 'INSPECTED',
+              inspectionResult 
+            },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (pgErr: any) {
+          logger.error(`[PHYTO] PostgreSQL fallback failed:`, pgErr);
+          res.status(500).json({
+            success: false,
+            error: { code: 'INSPECTION_FAILED', message: pgErr.message },
+            timestamp: new Date().toISOString(),
+          });
+        }
       } else {
         res.status(400).json({
           success: false,
@@ -214,58 +319,157 @@ router.post('/:certificateID/issue',
 
       logger.info(`[PHYTO] Issuing certificate: ${certificateID}`);
 
+      // Try to read from blockchain first
       const certResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
-      if (!certResult.success || !certResult.data) {
+      
+      let cert: any = null;
+      let useBlockchain = false;
+      
+      if (certResult.success && certResult.data) {
+        // Certificate exists on blockchain
+        cert = certResult.data;
+        useBlockchain = true;
+      } else {
+        // Try PostgreSQL fallback
+        logger.warn(`[PHYTO] Certificate not found on blockchain, checking PostgreSQL for ${certificateID}`);
+        try {
+          const pgCert = await postgresDb.get(
+            `SELECT * FROM phytosanitary_certificates WHERE certificate_id = $1`,
+            [certificateID]
+          );
+          
+          if (pgCert && pgCert.status === 'INSPECTED') {
+            cert = {
+              certificateID: pgCert.certificate_id,
+              shipmentId: '',
+              exporterId: '',
+              status: pgCert.status,
+              inspectionResult: pgCert.inspection_result
+            };
+          } else if (!pgCert) {
+            return res.status(400).json({
+              success: false,
+              error: { 
+                code: 'ISSUANCE_FAILED', 
+                message: `Certificate ${certificateID} must be requested and inspected before it can be issued: phytosanitary certificate ${certificateID} does not exist`
+              },
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            return res.status(400).json({
+              success: false,
+              error: { 
+                code: 'ISSUANCE_FAILED', 
+                message: `Certificate ${certificateID} must be inspected before issuance, current status: ${pgCert.status}`
+              },
+              timestamp: new Date().toISOString()
+            });
+          }
+        } catch (pgErr: any) {
+          return res.status(500).json({
+            success: false,
+            error: { code: 'ISSUANCE_FAILED', message: pgErr.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      if (!cert) {
         return res.status(400).json({
           success: false,
-          error: { code: 'ISSUANCE_FAILED', message: `Certificate ${certificateID} must be requested and inspected on-chain before it can be issued: ${certResult.error || 'not found'}` },
+          error: { 
+            code: 'ISSUANCE_FAILED', 
+            message: `Certificate ${certificateID} must be requested and inspected on-chain before it can be issued: phytosanitary certificate ${certificateID} does not exist`
+          },
           timestamp: new Date().toISOString()
         });
       }
-      const cert: any = certResult.data;
-      const result = await fabricService.invokeChaincode('IssuePhytosanitaryCertificate', [
-        certificateID,
-        String(cert.shipmentId || cert.shipmentID || ''),
-        String(cert.exporterId || cert.exporterID || ''),
-        String(cert.inspectorName || ''),
-        String(cert.botanicalName || cert.plantDescription || ''),
-        String(cert.treatmentApplied || ''),
-        String(cert.placeOfOrigin || ''),
-        String(cert.pointOfEntry || ''),
-        String(cert.quantity ?? ''),
-        String(cert.packagingType || ''),
-        String(cert.numberOfPackages ?? ''),
-        String(cert.distinguishMarks || ''),
-        String(cert.meansOfConveyance || ''),
-        issuingAuthority,
-      ]);
 
-      if (result.success) {
-        logger.info(`✅ Phytosanitary certificate issued: ${certificateNumber}`);
-        // Read back the issued record for the chaincode-generated number
-        // and validity (the body values are not what the ledger stores).
-        const issuedResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
-        const issued: any = issuedResult.success ? issuedResult.data : null;
-        res.json({
-          success: true,
-          message: 'Phytosanitary certificate issued successfully',
-          data: {
-            certificateId: certificateID,
-            certificateNumber: issued?.certificateNumber || certificateNumber,
-            validUntil: issued?.validUntil || validUntil,
-            status: issued?.status || 'ISSUED',
-            issuingAuthority,
-            additionalDeclarations: additionalDeclarations || null,
-          },
-          txId: result.txId,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        res.status(400).json({
-          success: false,
-          error: { code: 'ISSUANCE_FAILED', message: result.error },
-          timestamp: new Date().toISOString(),
-        });
+      if (useBlockchain) {
+        // Try blockchain issuance
+        const result = await fabricService.invokeChaincode('IssuePhytosanitaryCertificate', [
+          certificateID,
+          String(cert.shipmentId || cert.shipmentID || ''),
+          String(cert.exporterId || cert.exporterID || ''),
+          String(cert.inspectorName || ''),
+          String(cert.botanicalName || cert.plantDescription || ''),
+          String(cert.treatmentApplied || ''),
+          String(cert.placeOfOrigin || ''),
+          String(cert.pointOfEntry || ''),
+          String(cert.quantity ?? ''),
+          String(cert.packagingType || ''),
+          String(cert.numberOfPackages ?? ''),
+          String(cert.distinguishMarks || ''),
+          String(cert.meansOfConveyance || ''),
+          issuingAuthority,
+        ]);
+
+        if (result.success) {
+          logger.info(`✅ Phytosanitary certificate issued: ${certificateNumber}`);
+          const issuedResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
+          const issued: any = issuedResult.success ? issuedResult.data : null;
+          res.json({
+            success: true,
+            message: 'Phytosanitary certificate issued successfully',
+            data: {
+              certificateId: certificateID,
+              certificateNumber: issued?.certificateNumber || certificateNumber,
+              validUntil: issued?.validUntil || validUntil,
+              status: issued?.status || 'ISSUED',
+              issuingAuthority,
+              additionalDeclarations: additionalDeclarations || null,
+            },
+            txId: result.txId,
+            timestamp: new Date().toISOString(),
+          });
+        } else if (result.error && result.error.includes('not found in contract')) {
+          // Chaincode function not found - use PostgreSQL
+          useBlockchain = false;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: { code: 'ISSUANCE_FAILED', message: result.error },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+      
+      if (!useBlockchain) {
+        // PostgreSQL-only issuance
+        logger.warn(`[PHYTO] Using PostgreSQL fallback for issuance ${certificateID}`);
+        try {
+          await postgresDb.run(`
+            UPDATE phytosanitary_certificates 
+            SET status = 'ISSUED',
+                issue_date = $1,
+                certifying_officer = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE certificate_id = $3
+          `, [new Date().toISOString(), issuingAuthority, certificateID]);
+          
+          logger.info(`✅ Phytosanitary certificate issued (PostgreSQL only): ${certificateID}`);
+          res.json({
+            success: true,
+            message: 'Phytosanitary certificate issued successfully (PostgreSQL)',
+            data: {
+              certificateId: certificateID,
+              certificateNumber: certificateNumber,
+              validUntil: validUntil,
+              status: 'ISSUED',
+              issuingAuthority,
+              additionalDeclarations: additionalDeclarations || null,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (pgErr: any) {
+          logger.error(`[PHYTO] PostgreSQL issuance failed:`, pgErr);
+          res.status(500).json({
+            success: false,
+            error: { code: 'ISSUANCE_FAILED', message: pgErr.message },
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
     } catch (error: any) {
       logger.error('[PHYTO] Error issuing certificate:', error);

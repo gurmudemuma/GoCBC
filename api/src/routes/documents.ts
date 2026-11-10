@@ -967,8 +967,8 @@ router.get('/:documentId/download',
             'VIEW',
             user?.sub || user?.username || 'USER',
             user?.org || 'UNKNOWN',
-            'N/A',
-            'VIEWED',
+            JSON.stringify({ status: 'N/A' }),
+            JSON.stringify({ status: 'VIEWED' }),
             `Document ${inline === 'true' ? 'viewed' : 'downloaded'}: ${doc.file_name}`,
             JSON.stringify({
               documentId,
@@ -1103,8 +1103,8 @@ router.get('/:documentId/view',
             'VIEW',
             user?.sub || user?.username || 'USER',
             user?.org || 'UNKNOWN',
-            'N/A',
-            'VIEWED',
+            JSON.stringify({ status: 'N/A' }),
+            JSON.stringify({ status: 'VIEWED' }),
             `Document viewed: ${doc.file_name}`,
             JSON.stringify({
               documentId,
@@ -1509,7 +1509,7 @@ router.post('/:documentId/sign',
           ledgerDocumentHash = retryLedgerHash;
           try {
             await postgresDb.run(
-              'UPDATE documents SET blockchain_tx_id = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+              'UPDATE documents SET blockchain_tx_id = $1 WHERE document_id = $2',
               [registrationResult.txId, documentId]
             );
           } catch (databaseError) {
@@ -1758,7 +1758,7 @@ router.post('/:documentId/sign',
           
           // Update document status to approved immediately
           await postgresDb.run(
-            'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+            'UPDATE documents SET status = $1 WHERE document_id = $2',
             ['approved', documentId]
           );
           
@@ -1806,12 +1806,12 @@ router.post('/:documentId/sign',
           // Update document status only if all approvals complete
           if (approvalResult.workflowComplete) {
             await postgresDb.run(
-              'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+              'UPDATE documents SET status = $1 WHERE document_id = $2',
               ['approved', documentId]
             );
           } else {
             await postgresDb.run(
-              'UPDATE documents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE document_id = $2',
+              'UPDATE documents SET status = $1 WHERE document_id = $2',
               ['pending_approval', documentId]
             );
           }
@@ -1871,9 +1871,9 @@ router.post('/:documentId/sign',
             ledgerTransactionDetails?.blockHash ?? null,
             ledgerTransactionDetails?.creator.mspId ?? null,
             ledgerTransactionDetails?.creator.identity ?? null,
-            JSON.stringify(ledgerTransactionDetails?.endorsers.map((endorser) => endorser.mspId) || []),
+            JSON.stringify(ledgerTransactionDetails?.endorsers?.map((endorser) => endorser.mspId) ?? []),
             ledgerTransactionDetails?.creator.signatureValid ?? null,
-            ledgerTransactionDetails ? ledgerTransactionDetails.endorsers.every((endorser) => endorser.signatureValid === true) : null,
+            ledgerTransactionDetails ? (ledgerTransactionDetails.endorsers?.every((endorser) => endorser.signatureValid === true) ?? null) : null,
             documentId,
             blockchainTxId,
           ]
@@ -1881,6 +1881,25 @@ router.post('/:documentId/sign',
       }
 
       // 8. Log to audit trail
+      const auditMetadata = {
+        signatureId,
+        signatureType,
+        signer: user.username || 'UNKNOWN',
+        organization: user.org || user.organization || 'UNKNOWN',
+        visualSignatureAdded: visualSignatureAdded || false,
+        remarks: remarks || null,
+        timestamp
+      };
+      
+      let metadataJson: string;
+      try {
+        metadataJson = JSON.stringify(auditMetadata);
+      } catch (jsonError) {
+        logger.error(`[DOCUMENTS] Failed to stringify metadata:`, jsonError);
+        logger.error(`[DOCUMENTS] Problematic metadata object:`, auditMetadata);
+        metadataJson = JSON.stringify({ error: 'Failed to serialize metadata' });
+      }
+      
       await postgresDb.run(
         `INSERT INTO audit_trail (
           entity_type, entity_id, action, performed_by, organization, performed_by_org,
@@ -1891,20 +1910,12 @@ router.post('/:documentId/sign',
           documentId,
           `SIGNATURE_${signatureType}`,
           user.username || user.sub || 'UNKNOWN',
-          user.org || user.organization || 'SYSTEM',  // ✅ Default to SYSTEM if org not available
+          user.org || user.organization || 'SYSTEM',
           user.org || user.organization || null,
-          'unsigned',
-          'signed',
+          JSON.stringify({ status: 'unsigned' }),
+          JSON.stringify({ status: 'signed' }),
           `Document signed with ${signatureType} signature`,
-          JSON.stringify({
-            signatureId,
-            signatureType,
-            signer: user.username,
-            organization: user.org || user.organization,
-            visualSignatureAdded,
-            remarks,
-            timestamp
-          }),
+          metadataJson,
           req.ip || (req as any).connection?.remoteAddress || 'unknown'
         ]
       );
@@ -2857,8 +2868,8 @@ router.get('/:documentId/verify-signatures',
           'VERIFY_SIGNATURE',
           user.username || user.sub,
           user.org || 'UNKNOWN',
-          'N/A',
-          verificationResult.overallStatus,
+          JSON.stringify({ status: 'N/A' }),
+          JSON.stringify({ status: verificationResult.overallStatus }),
           'Signature verification performed',
           JSON.stringify({
             documentId,
@@ -3009,8 +3020,8 @@ router.post('/:documentId/add-certificate-page',
             'ADD_CERTIFICATE_PAGE',
             user.username || user.sub,
             user.org || 'UNKNOWN',
-            doc.file_hash,
-            newFileHash,
+            JSON.stringify({ fileHash: doc.file_hash }),
+            JSON.stringify({ fileHash: newFileHash }),
             'Signature certificate page added',
             JSON.stringify({
               documentId,

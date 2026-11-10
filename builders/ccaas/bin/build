@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+BUILD_OUTPUT_DIR=$3
+cp -a $2/* $BUILD_OUTPUT_DIR/
+exit 0

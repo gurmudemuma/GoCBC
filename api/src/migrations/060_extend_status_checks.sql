@@ -46,7 +46,8 @@
 -- loudly on the duplicate constraint name rather than silently
 -- double-applying; the runner tracks this file by name, so it runs once.
 
--- 1. Shipments: ARRIVED (proven) + CUSTOMS_DECLARED (chaincode-assigned).
+-- 1. Shipments: ARRIVED (proven) + CUSTOMS_DECLARED (chaincode-assigned)
+--    + QUALITY_PENDING and COMPLETED (found in host DB with actual data).
 ALTER TABLE shipments DROP CONSTRAINT IF EXISTS chk_shipments_status;
 ALTER TABLE shipments
   ADD CONSTRAINT chk_shipments_status
@@ -55,9 +56,11 @@ ALTER TABLE shipments
                     'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'LAND_TRANSPORT',
                     'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED',
                     'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED',
-                    'ARRIVED', 'DELIVERED', 'LOADED', 'CANCELLED'));
+                    'ARRIVED', 'DELIVERED', 'LOADED', 'CANCELLED',
+                    'QUALITY_PENDING', 'COMPLETED'));
 
--- 2. Shipment status history mirrors shipments.status: same two values.
+-- 2. Shipment status history mirrors shipments.status: same values including
+--    QUALITY_PENDING and COMPLETED.
 ALTER TABLE shipment_status_history DROP CONSTRAINT IF EXISTS chk_shipment_status_history_status;
 ALTER TABLE shipment_status_history
   ADD CONSTRAINT chk_shipment_status_history_status
@@ -66,7 +69,8 @@ ALTER TABLE shipment_status_history
                     'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'LAND_TRANSPORT',
                     'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED',
                     'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED',
-                    'ARRIVED', 'DELIVERED', 'LOADED', 'CANCELLED'));
+                    'ARRIVED', 'DELIVERED', 'LOADED', 'CANCELLED',
+                    'QUALITY_PENDING', 'COMPLETED'));
 
 -- 3. Forex allocations: REJECTED (new RejectForex + PG mirror).
 ALTER TABLE forex_allocations DROP CONSTRAINT IF EXISTS chk_forex_allocations_status;

@@ -42,13 +42,14 @@ export class ForexService {
     try {
       logger.info(`[ForexService] Requesting forex: ${forexData.forexId}`);
 
+      // Pass userOrg as MSP ID so the transaction is signed by the correct organization
       const result = await this.fabricService.invokeChaincode('RequestForex', [
         forexData.forexId,
         forexData.contractId,
         forexData.exporterId,
         forexData.amount.toString(),
         forexData.currency,
-      ]);
+      ], forexData.userOrg); // ← FIX: Pass userOrg as the MSP ID parameter
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to request forex on blockchain');
@@ -57,8 +58,8 @@ export class ForexService {
       await this.dbService.run(
         `INSERT INTO forex_allocations (
           allocation_id, forex_id, contract_id, lc_id, exporter_id, amount, currency,
-          status, blockchain_synced, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+          status, blockchain_tx_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
         [
           forexData.forexId, // allocation_id same as forex_id
           forexData.forexId,
@@ -68,7 +69,6 @@ export class ForexService {
           forexData.amount,
           forexData.currency,
           'REQUESTED',
-          true,
           result.txId,
         ]
       );

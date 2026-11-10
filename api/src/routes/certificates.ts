@@ -199,6 +199,65 @@ router.post('/phyto', authMiddleware,
 });
 
 /**
+ * POST /api/v1/certificates/coo/request
+ * Request certificate of origin (alias)
+ */
+router.post('/coo/request', authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
+  try {
+    const { certificateID, shipmentID, exporterID, origin } = req.body;
+
+    const certificateId = certificateID || req.body.certificateId || `COO-${Date.now()}`;
+
+    logger.info(`[CERTIFICATES] Requesting certificate of origin: ${certificateId}`);
+
+    // Get contract from shipment
+    let contractId = '';
+    if (shipmentID) {
+      const shipment = await dbService.get(
+        `SELECT contract_id FROM shipments WHERE shipment_id = $1`,
+        [shipmentID]
+      );
+      contractId = shipment?.contract_id || '';
+    }
+
+    await dbService.run(`
+      INSERT INTO certificate_of_origin (
+        certificate_id, contract_id, status, issue_date,
+        origin, certifying_authority, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (certificate_id) DO NOTHING
+    `, [
+      certificateId,
+      contractId,
+      'REQUESTED',
+      new Date().toISOString(),
+      origin || 'ETHIOPIA',
+      'ECTA',
+      new Date().toISOString()
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Certificate of origin requested successfully',
+      data: { certificateID: certificateId, certificate_id: certificateId },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    logger.error('[CERTIFICATES] Error requesting COO certificate:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * POST /api/v1/certificates/origin
  * Create certificate of origin
  */

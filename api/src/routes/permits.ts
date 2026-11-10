@@ -26,6 +26,95 @@ async function mirrorPermitPG(permitId: string, contractId: string, approvedBy: 
 }
 
 
+// POST /api/v1/permits/export — Issue export permit (alias)
+router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
+  try {
+    const {
+      permitID,
+      shipmentID,
+      exporterID,
+      quantity,
+      certificateID,
+      status
+    } = req.body;
+
+    logger.info(`[PERMITS] 📝 Issuing export permit: ${permitID}`);
+
+    const permitId = permitID || req.body.permitId || `PERMIT-${Date.now()}`;
+    const permitNumber = `EP${Date.now()}`;
+    const contractId = req.body.contractID || req.body.contractId || '';
+    const exporterId = exporterID || req.body.exporterId || '';
+    const lcId = req.body.lcID || req.body.lcId || '';
+    const paymentMethod = req.body.paymentMethod || 'LC';
+    const amount = req.body.amount || 85000;
+    const currency = req.body.currency || 'USD';
+    const description = `Export Permit for shipment ${shipmentID}`;
+    const destination = req.body.destination || 'Germany';
+    const commercialInvoice = certificateID || 'CI-' + permitId;
+    const bankBranch = 'CBE Main Branch';
+    const approvedBy = 'Bank Officer';
+
+    if (!permitId || !shipmentID) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Missing required fields: permitID, shipmentID',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Export permits are issued by Banks (Commercial Bank of Ethiopia)
+    await fabricService.connectAsOrg('BanksMSP');
+
+    const result = await fabricService.invokeChaincode(
+      'IssueCBEExportPermit',
+      [
+        permitId,
+        permitNumber,
+        contractId,
+        exporterId,
+        lcId,
+        paymentMethod,
+        amount.toString(),
+        currency,
+        description,
+        destination,
+        commercialInvoice,
+        bankBranch,
+        approvedBy
+      ]
+    );
+
+    if (result.success) {
+      await mirrorPermitPG(permitId, contractId, approvedBy);
+      logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
+      res.status(201).json({ 
+        success: true, 
+        message: 'Export permit issued successfully',
+        data: { permitID: permitId, permitId, status: 'ISSUED' },
+        txId: result.txId,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      logger.error(`❌ [PERMITS] Failed to issue: ${result.error}`);
+      res.status(400).json({ 
+        success: false, 
+        error: { message: result.error || 'Failed to issue permit' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error: any) {
+    logger.error('[PERMITS] Issue permit error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: { message: error.message },
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // POST /api/v1/permits — Issue permit (wrapper for /issue endpoint)
 // NOTE (TEST-STATUS-MATRIX §17 #10): the router is mounted behind
 // authMiddleware in server.ts, so unauthenticated requests already 401 —
