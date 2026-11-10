@@ -1,5 +1,26 @@
 -- Migration 059: add CHECK constraints on status columns.
 --
+-- 2026-11-10 HOST FIX: this file first failed on the live Docker host
+-- (error 23514, chk_quality_inspections_status) because the CHECK sets
+-- below were built from the current code + an empty test DB, while the
+-- host's real rows were written by the pre-fix code and hold statuses
+-- the sets omitted. Fixed here (verified by reproducing the failure on
+-- a seeded test DB before editing):
+--   quality_inspections 'SCHEDULED' — written by the old qualityService
+--     schedule mirror; the set now matches migration 061 exactly.
+--   shipments / shipment_status_history 'ARRIVED' + 'CUSTOMS_DECLARED'
+--     — written by the booking arrive handler / SubmitCustomsDeclaration;
+--     the set now matches migration 060 exactly. (059 runs before 060,
+--     so 059 must already contain them.)
+--   customs_declarations 'INSPECTING' / 'INSPECTION_COMPLETE' — written
+--     by the old customsService / customs route; the current machine
+--     uses UNDER_INSPECTION / UNDER_REVIEW instead, so the legacy rows
+--     are NORMALISED to those values just below (INSPECTING ->
+--     UNDER_INSPECTION, INSPECTION_COMPLETE -> UNDER_REVIEW) instead of
+--     being frozen into the CHECK. The runner wraps each file in a
+--     transaction, so the host's failed run rolled back cleanly and a
+--     re-run of this corrected file applies from scratch.
+--
 -- TEST-STATUS-MATRIX §17 #13: Postgres had no live CHECK or enum on any
 -- status column in the 15 matrix entities — every status column was an
 -- unrestricted VARCHAR, so a typo or a stale lowercase write silently
@@ -94,12 +115,14 @@ ALTER TABLE forex_allocations
   CHECK (retention_status IN ('', 'PENDING', 'COMPLIED', 'NON_COMPLIANT'));
 
 -- 7. Quality inspections (API machine quality.ts + REQUESTED, which the
---    perform route accepts as a from-state for inspection-flow rows).
+--    perform route accepts as a from-state for inspection-flow rows;
+--    SCHEDULED is written by the schedule mirror — see header, 2026-11-10
+--    host fix; this set now matches migration 061 exactly).
 ALTER TABLE quality_inspections
   ADD CONSTRAINT chk_quality_inspections_status
-  CHECK (status IN ('PENDING', 'REQUESTED', 'SAMPLE_COLLECTED', 'INSPECTED',
-                    'APPROVED', 'REJECTED', 'PERMIT_ISSUED', 'CERTIFICATE_ISSUED',
-                    'COMPLETED'));
+  CHECK (status IN ('PENDING', 'REQUESTED', 'SCHEDULED', 'SAMPLE_COLLECTED',
+                    'INSPECTED', 'APPROVED', 'REJECTED', 'PERMIT_ISSUED',
+                    'CERTIFICATE_ISSUED', 'COMPLETED'));
 
 -- 8. Shipments (chaincode main.go lifecycle + BOOKED/REGISTERED, see header;
 --    CUSTOMS_REJECTED is the customsService mirror of the chaincode cascade,
@@ -111,10 +134,10 @@ ALTER TABLE shipments
   ADD CONSTRAINT chk_shipments_status
   CHECK (status IN ('CREATED', 'REGISTERED', 'FREIGHT_BOOKED', 'BOOKED',
                     'PERMIT_ISSUED', 'CUSTOMS_CLEARED', 'CUSTOMS_REJECTED',
-                    'INSPECTION_PENDING', 'LAND_TRANSPORT', 'PORT_ARRIVED',
-                    'CONTAINER_STUFFED', 'VESSEL_LOADED', 'DEPARTED',
-                    'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED', 'LOADED',
-                    'CANCELLED'));
+                    'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'LAND_TRANSPORT',
+                    'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED',
+                    'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'ARRIVED',
+                    'DELIVERED', 'LOADED', 'CANCELLED'));
 
 -- 9. Shipment logistics status (shipmentService.validLogisticsStatuses).
 ALTER TABLE shipments
@@ -122,7 +145,14 @@ ALTER TABLE shipments
   CHECK (logistics_status IN ('PENDING', 'BOOKED', 'LOADED', 'DEPARTED',
                               'IN_TRANSIT', 'ARRIVED', 'DELIVERED', 'CONFIRMED'));
 
--- 10. Customs declarations (chaincode customs.go).
+-- 10. Customs declarations (chaincode customs.go). Legacy rows written
+--    by the pre-fix code use INSPECTING / INSPECTION_COMPLETE, which exist
+--    in no current state machine — normalise them to the current machine
+--    (INSPECTING -> UNDER_INSPECTION, INSPECTION_COMPLETE -> UNDER_REVIEW)
+--    before adding the CHECK, so the rows stay usable by the current
+--    review/complete routes. See header, 2026-11-10 host fix.
+UPDATE customs_declarations SET status = 'UNDER_INSPECTION' WHERE status = 'INSPECTING';
+UPDATE customs_declarations SET status = 'UNDER_REVIEW' WHERE status = 'INSPECTION_COMPLETE';
 ALTER TABLE customs_declarations ALTER COLUMN status SET DEFAULT 'SUBMITTED';
 ALTER TABLE customs_declarations
   ADD CONSTRAINT chk_customs_declarations_status
@@ -200,10 +230,10 @@ ALTER TABLE shipment_status_history
   ADD CONSTRAINT chk_shipment_status_history_status
   CHECK (status IN ('CREATED', 'REGISTERED', 'FREIGHT_BOOKED', 'BOOKED',
                     'PERMIT_ISSUED', 'CUSTOMS_CLEARED', 'CUSTOMS_REJECTED',
-                    'INSPECTION_PENDING', 'LAND_TRANSPORT', 'PORT_ARRIVED',
-                    'CONTAINER_STUFFED', 'VESSEL_LOADED', 'DEPARTED',
-                    'IN_TRANSIT', 'DESTINATION_ARRIVED', 'DELIVERED', 'LOADED',
-                    'CANCELLED'));
+                    'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'LAND_TRANSPORT',
+                    'PORT_ARRIVED', 'CONTAINER_STUFFED', 'VESSEL_LOADED',
+                    'DEPARTED', 'IN_TRANSIT', 'DESTINATION_ARRIVED', 'ARRIVED',
+                    'DELIVERED', 'LOADED', 'CANCELLED'));
 
 -- 22. LC discrepancies (chaincode banking.go Resolve/WaiveLCDiscrepancy).
 ALTER TABLE lc_discrepancies
