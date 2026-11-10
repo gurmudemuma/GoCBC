@@ -1011,7 +1011,10 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     logger.info('[PAYMENT] 🔗 Fetching payments DIRECTLY from Hyperledger Fabric blockchain');
     logger.info('[PAYMENT] Filters:', { shipmentID, status, dateFrom, dateTo, exporterID });
 
-    // Query blockchain directly - NO PostgreSQL fallback
+    // Query blockchain first; fall back to the PostgreSQL mirror when the
+    // ledger is unreachable (dev mode / no Fabric host). The mirror is the
+    // same best-effort pattern used by GET /shipments and the customs
+    // clear handler: honest source labelling, no fabricated tx ids.
     let result;
     if (shipmentID) {
       result = await fabricService.queryChaincode('GetPaymentsByShipment', [shipmentID as string]);
@@ -1019,21 +1022,54 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       result = await fabricService.queryChaincode('QueryAllPayments', []);
     }
 
+    let payments: any[] = [];
+    let source = 'blockchain';
     if (!result.success) {
-      logger.error(`[PAYMENT] ❌ Blockchain query failed: ${result.error}`);
-      return res.status(500).json({
-        success: false,
-        error: {
-          code: 'BLOCKCHAIN_QUERY_FAILED',
-          message: result.error || 'Failed to query blockchain'
-        },
-        source: 'blockchain',
-        timestamp: new Date().toISOString()
-      });
+      logger.warn(`[PAYMENT] Blockchain query failed, falling back to PostgreSQL: ${result.error}`);
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        const dbPayments = await db.all(`SELECT * FROM payments ORDER BY created_at DESC`);
+        source = 'database';
+        payments = dbPayments.map((p: any) => ({
+          paymentId: p.payment_id,
+          paymentID: p.payment_id,
+          contractId: p.contract_id,
+          exporterId: p.exporter_id,
+          shipmentId: p.shipment_id,
+          lcId: p.lc_id,
+          lcNumber: p.lc_number,
+          amount: p.amount != null ? parseFloat(p.amount) : 0,
+          currency: p.currency,
+          status: p.status,
+          paymentTrackingStatus: p.payment_tracking_status,
+          swiftReference: p.swift_reference,
+          retentionRate: p.retention_rate != null ? parseFloat(p.retention_rate) : null,
+          retainedAmount: p.retention_amount != null ? parseFloat(p.retention_amount) : null,
+          releaseAmount: p.release_amount != null ? parseFloat(p.release_amount) : null,
+          paymentMethod: p.payment_method,
+          paymentDate: p.payment_date,
+          blockchainTxId: p.blockchain_tx_id,
+          notes: p.notes,
+          createdAt: p.created_at,
+        }));
+        logger.info(`[PAYMENT] Loaded ${payments.length} payments from PostgreSQL (fallback)`);
+      } catch (pgError: any) {
+        logger.error(`[PAYMENT] PostgreSQL fallback failed: ${pgError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'BLOCKCHAIN_QUERY_FAILED',
+            message: result.error || 'Failed to query blockchain'
+          },
+          source: 'blockchain',
+          timestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      payments = result.data || [];
+      logger.info(`[PAYMENT] ✅ Found ${payments.length} payments on blockchain (PURE BLOCKCHAIN, NO CACHE)`);
     }
-
-    let payments = result.data || [];
-    logger.info(`[PAYMENT] ✅ Found ${payments.length} payments on blockchain (PURE BLOCKCHAIN, NO CACHE)`);
 
     // ✅ ENRICH with buyer data from PostgreSQL
     try {
@@ -1144,8 +1180,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       success: true,
       data: payments,
       count: payments.length,
-      source: 'blockchain', // ALWAYS blockchain
-      blockchainPowered: true,
+      source, // 'blockchain' when the ledger answered, 'database' on PG fallback
+      blockchainPowered: source === 'blockchain',
       enriched: true, // ✅ Flag showing data is enriched with PostgreSQL
       timestamp: new Date().toISOString(),
     });

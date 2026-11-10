@@ -242,6 +242,11 @@ const BanksPortal: React.FC = () => {
   const [advancePayments, setAdvancePayments] = useState<any[]>([]);
   const [consignments, setConsignments] = useState<any[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<any[]>([]);
+  // Raw payment records (GET /payments) — the Payments table below opens the
+  // payment details dialog, which is the only place the Settle Payment
+  // button lives. Without this list the dialog (and the button) was
+  // unreachable: nothing ever set selectedPaymentForDetails.
+  const [payments, setPayments] = useState<any[]>([]);
   const [swiftStats, setSwiftStats] = useState<any>(null);
   const [swiftMessages, setSwiftMessages] = useState<any[]>([]);
   const [selectedPayment, setSelectedPayment] = useState<any | null>(null);
@@ -760,7 +765,7 @@ const BanksPortal: React.FC = () => {
       // Launch ALL requests in parallel - each updates state as soon as it completes
       devLog('[BANKS] 🚀 Starting parallel data load with CONTRACTS support...');
       
-      const [contractsPromise, lcPromise, swiftPromise, forexPromise, shipmentsPromise, collectionsPromise, advancesPromise, consignmentsPromise] = [
+      const [contractsPromise, lcPromise, swiftPromise, forexPromise, shipmentsPromise, collectionsPromise, advancesPromise, consignmentsPromise, paymentsPromise] = [
         // 0. Contracts (for LC issuance) - NEWLY ADDED!
         apiFetch('/api/v1/contracts', { headers: { 'Authorization': `Bearer ${token}` }})
           .then(r => r.json())
@@ -872,10 +877,14 @@ const BanksPortal: React.FC = () => {
 
         // 7. Consignment payments directly from the ledger
         loadLedgerList('/api/v1/stats/consignments', 'Consignments', setConsignments),
+
+        // 8. Raw payment records — feeds the Payments table and the
+        // payment details dialog (the only place Settle Payment lives)
+        loadLedgerList('/api/v1/payments', 'Payments', setPayments),
       ];
 
       // Wait for all to complete and process forex with LC data
-      const [lcs, swift, forex, shipments, collections, advances, consignmentRows] = await Promise.all([
+      const [lcs, swift, forex, shipments, collections, advances, consignmentRows, paymentRows] = await Promise.all([
         lcPromise,
         swiftPromise,
         forexPromise,
@@ -883,6 +892,7 @@ const BanksPortal: React.FC = () => {
         collectionsPromise,
         advancesPromise,
         consignmentsPromise,
+        paymentsPromise,
       ]);
 
       devLog('[BANKS] Payment method records loaded:', {
@@ -3478,6 +3488,65 @@ const BanksPortal: React.FC = () => {
               setValidationDialogOpen(true);
             }}
           />
+
+          {/* Payments — raw payment records (GET /payments). The View Details
+              button opens the payment details dialog, which is the only
+              place the Settle Payment button renders (VERIFIED /
+              SWIFT_RECEIVED). Without this table the dialog was unreachable. */}
+          <Paper sx={{ mt: 3, p: 2 }}>
+            <Typography variant="h6" fontWeight={700} gutterBottom>
+              Payments ({payments.length})
+            </Typography>
+            {payments.length === 0 ? (
+              <Typography variant="body2" color="textSecondary">
+                No payment records found. Payments appear here once recorded on the ledger or in the PostgreSQL mirror.
+              </Typography>
+            ) : (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Payment ID</TableCell>
+                      <TableCell>Contract</TableCell>
+                      <TableCell>Exporter</TableCell>
+                      <TableCell>Amount</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {payments.map((payment: any) => (
+                      <TableRow key={payment.paymentId || payment.paymentID || payment.id} hover>
+                        <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                          {payment.paymentId || payment.paymentID || payment.id}
+                        </TableCell>
+                        <TableCell>{payment.contractId || payment.contractID || '—'}</TableCell>
+                        <TableCell>{payment.exporterId || payment.exporterID || '—'}</TableCell>
+                        <TableCell>
+                          {(payment.currency || 'USD')} {(payment.amount || 0).toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip label={payment.status || 'PENDING'} status={payment.status} />
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => {
+                              setSelectedPaymentForDetails(payment);
+                              setPaymentDetailsOpen(true);
+                            }}
+                          >
+                            View Details
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Paper>
         </Box>
       )}
 

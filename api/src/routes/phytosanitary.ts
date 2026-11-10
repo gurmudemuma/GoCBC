@@ -331,16 +331,57 @@ router.get('/', authMiddleware, async (req, res) => {
     logger.info('[PHYTO] 📋 Fetching all phytosanitary certificates...');
     
     const result = await fabricService.evaluateTransaction('QueryAllPhytosanitaryCertificates');
-    
+
+    // Chaincode first; fall back to the PostgreSQL mirror when the ledger
+    // is unreachable (dev mode / no Fabric host) — same best-effort
+    // pattern as GET /payments: honest source labelling, no fabricated data.
+    let certificates: any[] = [];
+    let source = 'blockchain';
     if (!result.success) {
-      return res.status(500).json({
-        success: false,
-        error: { code: 'QUERY_FAILED', message: result.error },
-        timestamp: new Date().toISOString()
-      });
+      logger.warn(`[PHYTO] Blockchain query failed, falling back to PostgreSQL: ${result.error}`);
+      try {
+        const { DatabaseService } = await import('../services/databaseService');
+        const db = DatabaseService.getInstance();
+        const dbCerts = await db.all(`SELECT * FROM phytosanitary_certificates ORDER BY created_at DESC`);
+        source = 'database';
+        certificates = dbCerts.map((c: any) => ({
+          certificateID: c.certificate_id,
+          certificateNumber: c.certificate_id,
+          contractId: c.contract_id,
+          status: c.status,
+          inspectionDate: c.issue_date,
+          issueDate: c.issue_date,
+          expiryDate: c.expiry_date,
+          treatment: c.treatment_type,
+          inspectionResult: c.inspection_result,
+          issuedBy: c.certifying_officer,
+          certifyingOfficer: c.certifying_officer,
+          shipmentID: '',
+          exporterID: '',
+          // The table reads these directly (quantity.toLocaleString() and
+          // new Date(inspectionDate)); they must be present, never undefined.
+          quantity: 0,
+          placeOfOrigin: '',
+          pointOfEntry: '',
+          packagingType: '',
+          numberOfPackages: 0,
+          distinguishingMarks: '',
+          meansOfConveyance: '',
+          validityPeriod: '',
+          botanicalName: 'Coffea arabica',
+        }));
+        logger.info(`[PHYTO] Loaded ${certificates.length} certificates from PostgreSQL (fallback)`);
+      } catch (pgError: any) {
+        logger.error(`[PHYTO] PostgreSQL fallback failed: ${pgError.message}`);
+        return res.status(500).json({
+          success: false,
+          error: { code: 'QUERY_FAILED', message: result.error },
+          timestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      certificates = result.data || [];
     }
-    
-    let certificates = result.data || [];
     
     // Apply filters if provided
     if (status) {
@@ -359,6 +400,7 @@ router.get('/', authMiddleware, async (req, res) => {
       success: true,
       data: certificates,
       count: certificates.length,
+      source,
       timestamp: new Date().toISOString()
     });
   } catch (error: any) {

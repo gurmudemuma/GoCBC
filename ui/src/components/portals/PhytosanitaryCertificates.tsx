@@ -78,7 +78,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
   const loadCertificates = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/v1/phytosanitary');
+      const response = await api.get('/phytosanitary');
       if (response.data.success) {
         setCertificates(response.data.data || []);
       }
@@ -110,7 +110,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
       const validUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
       // Step 1 — request the certificate on-chain (PENDING)
-      const requestResponse = await api.post('/api/v1/phytosanitary/request', {
+      const requestResponse = await api.post('/phytosanitary/request', {
         certificateID,
         shipmentID: formData.shipmentID,
         exporterID: formData.exporterID,
@@ -124,7 +124,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
 
       // Step 2 — inspect it (PENDING → INSPECTED). Pests/disease mark the
       // inspection FAILED on-chain, so a failed inspection cannot be issued.
-      const inspectResponse = await api.post(`/api/v1/phytosanitary/${certificateID}/inspect`, {
+      const inspectResponse = await api.post(`/phytosanitary/${certificateID}/inspect`, {
         inspectorName: formData.inspectorName,
         inspectionDate,
         pestsDetected: formData.pestsDetected,
@@ -136,7 +136,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
       }
 
       // Step 3 — issue the inspected certificate (INSPECTED → ISSUED)
-      const response = await api.post(`/api/v1/phytosanitary/${certificateID}/issue`, {
+      const response = await api.post(`/phytosanitary/${certificateID}/issue`, {
         certificateNumber,
         issuingAuthority: 'Ministry of Agriculture',
         validUntil,
@@ -173,7 +173,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
 
     try {
       setLoading(true);
-      const response = await api.get(`/api/v1/phytosanitary/shipment/${searchShipmentId}`);
+      const response = await api.get(`/phytosanitary/shipment/${searchShipmentId}`);
       if (response.data.success) {
         setCertificates(response.data.data || []);
       }
@@ -200,7 +200,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
       // The revoke route requires { reason, revokedBy } (both notEmpty) —
       // the old { revocationReason } body failed validation with 400.
       const revokedBy = JSON.parse(localStorage.getItem('user') || '{}').username || 'ECTA Officer';
-      const response = await api.post(`/api/v1/phytosanitary/${certificateId}/revoke`, {
+      const response = await api.post(`/phytosanitary/${certificateId}/revoke`, {
         reason,
         revokedBy
       });
