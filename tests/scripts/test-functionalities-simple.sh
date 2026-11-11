@@ -53,7 +53,7 @@ echo ""
 print_header "1. API HEALTH & CONNECTIVITY"
 
 # Test 1: API Health Check
-HEALTH=$(curl -s "$API_URL/../health" 2>/dev/null || curl -s "http://localhost:3001/health" 2>/dev/null)
+HEALTH=$(curl -s "${API_URL%/api/v1}/health" 2>/dev/null || curl -s "http://localhost:3001/health" 2>/dev/null)
 if echo "$HEALTH" | grep -qi "ok\|healthy\|up"; then
     print_success "1.1 API server is healthy and responding"
 else
@@ -61,7 +61,7 @@ else
 fi
 
 # Test 2: API Version/Info
-API_INFO=$(curl -s "$API_URL/../" 2>/dev/null || echo '{"status":"accessible"}')
+API_INFO=$(curl -s "${API_URL%/api/v1}/" 2>/dev/null || echo '{"status":"accessible"}')
 if [ ! -z "$API_INFO" ]; then
     print_success "1.2 API root endpoint accessible"
 else
@@ -119,7 +119,7 @@ else
 fi
 
 # Test 8: List Quality Inspections
-INSPECTIONS=$(curl -s "$API_URL/ecta/inspections" 2>/dev/null)
+INSPECTIONS=$(curl -s "$API_URL/quality/inspections" 2>/dev/null)
 if [ ! -z "$INSPECTIONS" ]; then
     print_success "2.6 Quality inspections endpoint functional"
 else
@@ -149,7 +149,7 @@ fi
 print_header "3. PORTAL-SPECIFIC FUNCTIONALITY"
 
 # Test 11: ECTA Applications
-ECTA_APPS=$(curl -s "$API_URL/ecta/applications" 2>/dev/null)
+ECTA_APPS=$(curl -s "$API_URL/exporters/exporter-applications" 2>/dev/null)
 if [ ! -z "$ECTA_APPS" ]; then
     print_success "3.1 ECTA applications endpoint functional"
 else
@@ -157,7 +157,7 @@ else
 fi
 
 # Test 12: ECTA Exporters Management
-ECTA_EXPORTERS=$(curl -s "$API_URL/ecta/exporters" 2>/dev/null)
+ECTA_EXPORTERS=$(curl -s "$API_URL/exporters" 2>/dev/null)
 if [ ! -z "$ECTA_EXPORTERS" ]; then
     print_success "3.2 ECTA exporters management functional"
 else
@@ -165,7 +165,7 @@ else
 fi
 
 # Test 13: ECTA Contracts
-ECTA_CONTRACTS=$(curl -s "$API_URL/ecta/contracts" 2>/dev/null)
+ECTA_CONTRACTS=$(curl -s "$API_URL/contracts" 2>/dev/null)
 if [ ! -z "$ECTA_CONTRACTS" ]; then
     print_success "3.3 ECTA contracts review functional"
 else
@@ -181,7 +181,7 @@ else
 fi
 
 # Test 15: NBE Exchange Rates
-NBE_RATES=$(curl -s "$API_URL/nbe/exchange-rates" 2>/dev/null)
+NBE_RATES=$(curl -s "$API_URL/exchange-rates" 2>/dev/null)
 if [ ! -z "$NBE_RATES" ]; then
     print_success "3.5 NBE exchange rates functional"
 else
@@ -189,7 +189,7 @@ else
 fi
 
 # Test 16: NBE SWIFT Monitoring
-NBE_SWIFT=$(curl -s "$API_URL/nbe/swift" 2>/dev/null)
+NBE_SWIFT=$(curl -s "$API_URL/swift/messages" 2>/dev/null)
 if [ ! -z "$NBE_SWIFT" ]; then
     print_success "3.6 NBE SWIFT monitoring functional"
 else
@@ -205,7 +205,7 @@ else
 fi
 
 # Test 18: ECX Market Prices
-ECX_PRICES=$(curl -s "$API_URL/ecx/prices" 2>/dev/null)
+ECX_PRICES=$(curl -s "$API_URL/market/prices" 2>/dev/null)
 if [ ! -z "$ECX_PRICES" ]; then
     print_success "3.8 ECX market prices functional"
 else
@@ -235,7 +235,7 @@ else
 fi
 
 # Test 21: Quality Inspections by Status (PENDING)
-PENDING_QI=$(curl -s "$API_URL/ecta/inspections?status=PENDING" 2>/dev/null)
+PENDING_QI=$(curl -s "$API_URL/quality/inspections?status=PENDING" 2>/dev/null)
 if [ ! -z "$PENDING_QI" ]; then
     print_success "4.3 Quality inspection status filtering functional"
 else
@@ -281,7 +281,9 @@ else
 fi
 
 # Test 26: Statistics Endpoint
-STATS=$(curl -s "$API_URL/stats" 2>/dev/null)
+# NOTE: there is no GET /stats root; the bank-portal stats are at
+# GET /stats/bank-portal (stats.ts:49).
+STATS=$(curl -s "$API_URL/stats/bank-portal" 2>/dev/null)
 if [ ! -z "$STATS" ]; then
     print_success "5.2 Statistics endpoint functional"
 else
@@ -289,7 +291,9 @@ else
 fi
 
 # Test 27: Audit Logs
-AUDIT_LOGS=$(curl -s "$API_URL/audit/logs" 2>/dev/null)
+# NOTE: there is no GET /audit/logs; recent entries are at
+# GET /audit/portal/recent (audit.ts:71).
+AUDIT_LOGS=$(curl -s "$API_URL/audit/portal/recent" 2>/dev/null)
 if [ ! -z "$AUDIT_LOGS" ]; then
     print_success "5.3 Audit trail logging functional"
 else
@@ -322,7 +326,7 @@ else
 fi
 
 # Test 29: Audit Trail for Entity
-AUDIT_CHECK=$(curl -s "$API_URL/audit/logs?entityType=CONTRACT" 2>/dev/null)
+AUDIT_CHECK=$(curl -s "$API_URL/audit/portal/recent?entityType=CONTRACT" 2>/dev/null)
 if [ ! -z "$AUDIT_CHECK" ]; then
     print_success "6.2 Entity-specific audit trail functional"
 else
@@ -385,7 +389,9 @@ else
 fi
 
 # Test 35: Notifications System
-NOTIF=$(curl -s "$API_URL/notifications" 2>/dev/null)
+# NOTE: there is no GET /notifications root; alerts live at
+# GET /notifications/alerts (notifications.ts:379).
+NOTIF=$(curl -s "$API_URL/notifications/alerts" 2>/dev/null)
 if [ ! -z "$NOTIF" ]; then
     print_success "8.3 Notification system functional"
 else
@@ -416,7 +422,9 @@ else
 fi
 
 # Test 38: SWIFT Messages
-SWIFT_MSG=$(curl -s "$API_URL/banking/swift" 2>/dev/null)
+# NOTE: SWIFT lives under /swift, not /banking; the list endpoint is
+# GET /swift/messages (swift.ts:972).
+SWIFT_MSG=$(curl -s "$API_URL/swift/messages" 2>/dev/null)
 if [ ! -z "$SWIFT_MSG" ]; then
     print_success "9.3 SWIFT messaging functional"
 else
@@ -430,7 +438,9 @@ fi
 print_header "10. COMPLIANCE & REGULATORY FEATURES"
 
 # Test 39: Forex Repatriation
-REPATRIATION=$(curl -s "$API_URL/forex/repatriation" 2>/dev/null || curl -s "$API_URL/nbe/repatriation" 2>/dev/null)
+# NOTE: there is no GET /forex/repatriation and no GET /nbe/repatriation;
+# the repatriation list is GET /repatriation (repatriation.ts:18).
+REPATRIATION=$(curl -s "$API_URL/repatriation" 2>/dev/null)
 if [ ! -z "$REPATRIATION" ]; then
     print_success "10.1 Forex repatriation tracking functional"
 else
@@ -469,7 +479,9 @@ fi
 print_header "12. TRACEABILITY & TRACKING"
 
 # Test 42: Traceability Endpoint
-TRACE=$(curl -s "$API_URL/traceability" 2>/dev/null)
+# NOTE: there is no GET /traceability root; the system statistics are at
+# GET /traceability/system/statistics (traceability.ts:73).
+TRACE=$(curl -s "$API_URL/traceability/system/statistics" 2>/dev/null)
 if [ ! -z "$TRACE" ]; then
     print_success "12.1 Product traceability functional"
 else

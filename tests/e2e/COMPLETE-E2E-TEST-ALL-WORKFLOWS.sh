@@ -541,48 +541,12 @@ fi
 
 sleep 5
 
-print_step "3. Creating forex repatriation request..."
-REPATR_RESPONSE=$(curl -s -X POST "$API_BASE/repatriation" \
-  -H "Authorization: Bearer $BANK_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"forexId\": \"$FOREX_ID\",
-    \"exporterId\": \"$EXPORTER_ID\",
-    \"contractId\": \"$CONTRACT_ID\",
-    \"lcNumber\": \"$LC_NUMBER\",
-    \"allocatedAmount\": 425000,
-    \"repatriatedAmount\": 425000,
-    \"currency\": \"USD\",
-    \"swiftReference\": \"$SWIFT_REF\",
-    \"repatriationDate\": \"2026-11-04\",
-    \"repatriationMethod\": \"SWIFT_TT\",
-    \"beneficiaryBank\": \"Commercial Bank of Ethiopia\",
-    \"beneficiaryAccount\": \"ET123456789012345\"
-  }")
-FOREX_REPATRIATION_ID=$(echo $REPATR_RESPONSE | jq -r '.data.repatriationId // .data.id // .repatriationId // .id // empty')
-if [ -n "$FOREX_REPATRIATION_ID" ] || echo "$REPATR_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
-    print_success "Forex repatriation created: ${FOREX_REPATRIATION_ID:-SUCCESS}"
-else
-    print_warning "Forex repatriation: endpoint exists but may need payment to be completed first"
-fi
-
-if [ -n "$FOREX_REPATRIATION_ID" ]; then
-    print_step "4. NBE verifying forex repatriation..."
-    REPATR_VERIFY=$(curl -s -X POST "$API_BASE/repatriation/$FOREX_REPATRIATION_ID/verify" \
-      -H "Authorization: Bearer $NBE_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{
-        \"verified\": true,
-        \"verificationDate\": \"2026-11-04\",
-        \"verifiedBy\": \"nbe_admin\",
-        \"comments\": \"Forex fully repatriated\"
-      }")
-    if echo "$REPATR_VERIFY" | jq -e '.success' > /dev/null 2>&1; then
-        print_success "Forex repatriation verified"
-    else
-        print_warning "Forex repatriation verification: may need additional workflow steps"
-    fi
-fi
+# NOTE: removed-unverifiable: POST /repatriation does not exist (no POST /
+# in api/src/routes/repatriation.ts). The real create is
+# POST /repatriation/initiate (repatriation.ts:199), but it requires a
+# paymentId and no payment exists in this script's flow before this stage
+# (payment initiate is Stage 12), so no real id can be supplied. The
+# dependent verify step (POST /repatriation/:id/verify) was deleted with it.
 
 print_step "5. Testing forex rejection workflow..."
 print_info "Note: Forex rejection is only possible before allocation (expected behavior)"
@@ -972,7 +936,7 @@ else
 fi
 
 print_step "3. Customs clearance..."
-CUSTOMS_CLEAR=$(curl -s -X POST "$API_BASE/customs/declarations/$CUSTOMS_ID/clear" \
+CUSTOMS_CLEAR=$(curl -s -X POST "$API_BASE/customs/declaration/$CUSTOMS_ID/clear" \
   -H "Authorization: Bearer $CUSTOMS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"clearanceDate":"2026-11-04","clearedBy":"Customs Admin"}')
@@ -1158,7 +1122,7 @@ echo -e "${GREEN}✓${NC} Stage 1:  Exporter Registration with Documents"
 echo -e "${GREEN}✓${NC} Stage 2:  Rejection & Resubmission Workflow"
 echo -e "${GREEN}✓${NC} Stage 3:  Multiple Contracts (2 buyers)"
 echo -e "${GREEN}✓${NC} Stage 4:  LC Lifecycle with Amendments & Discrepancies"
-echo -e "${GREEN}✓${NC} Stage 5:  Forex Allocation & Repatriation"
+echo -e "${GREEN}✓${NC} Stage 5:  Forex Allocation"
 echo -e "${GREEN}✓${NC} Stage 6:  SWIFT Messages (MT700, MT103)"
 echo -e "${GREEN}✓${NC} Stage 7:  Shipment with Document Management"
 echo -e "${GREEN}✓${NC} Stage 8:  Document Signing Workflow"
@@ -1173,7 +1137,6 @@ echo -e "  → SWIFT message generation (MT700, MT103)"
 echo -e "  → Document upload/verify/reject workflows"
 echo -e "  → Document signing & verification"
 echo -e "  → LC amendments & discrepancy handling"
-echo -e "  → Forex repatriation"
 echo -e "  → Rejection workflows (Exporter, Quality, Customs, LC)"
 echo -e "  → Multiple buyers/contracts per exporter"
 echo -e "  → Complete shipping lifecycle"

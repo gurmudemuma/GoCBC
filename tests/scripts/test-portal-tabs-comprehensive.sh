@@ -113,8 +113,11 @@ test_tab "Banks" "Forex Allocated" "/banking/lcs?status=FOREX_ALLOCATED" "has_da
 test_tab "Banks" "Utilized LCs" "/banking/lcs?status=UTILIZED" "has_data" "lcId"
 
 echo -e "\n${BLUE}Retention Management:${NC}"
-test_tab "Banks" "Retention Dashboard" "/portals/banks/retention" "has_field" "data.retentionPercentage"
-test_tab "Banks" "Retention Payments" "/banking/retention-payments" "has_data" "paymentId"
+test_tab "Banks" "Retention Dashboard" "/retention/policy/COFFEE" "has_field" "data.retentionPercentage"
+# NOTE: removed-unverifiable: there is no GET /banking/retention-payments and
+# no retention-payments endpoint under /stats either (verified by grep
+# 2026-11-11). Retention is exposed via GET /retention/policy/:commodityType
+# above and GET /retention/:forexId/retention (retention.ts:275).
 
 echo -e "\n${BLUE}Payment Methods:${NC}"
 test_tab "Banks" "Payment Methods" "/payment-methods" "has_data" "id"
@@ -128,20 +131,31 @@ echo -e "${BLUE}Main Dashboard:${NC}"
 test_tab "NBE" "Dashboard" "/portals/nbe" "dashboard" ""
 
 echo -e "\n${BLUE}Forex Management:${NC}"
-test_tab "NBE" "All Forex Allocations" "/nbe/forex-allocations" "has_data" "forexId"
-test_tab "NBE" "Pending Requests" "/nbe/forex-allocations?status=PENDING" "has_data" "forexId"
-test_tab "NBE" "Approved Requests" "/nbe/forex-allocations?status=APPROVED" "has_data" "forexId"
+# NOTE: there is no /nbe/forex-allocations; the forex list is GET /forex
+# (forex.ts:122). The forex status vocabulary is REQUESTED/ALLOCATED, not
+# PENDING/APPROVED, so the status filters are remapped accordingly — but note
+# GET /forex reads no query params, so ?status= is ignored and all rows are
+# returned.
+test_tab "NBE" "All Forex Allocations" "/forex" "has_data" "forexId"
+test_tab "NBE" "Pending Requests" "/forex?status=REQUESTED" "has_data" "forexId"
+test_tab "NBE" "Approved Requests" "/forex?status=ALLOCATED" "has_data" "forexId"
 
 echo -e "\n${BLUE}Exchange Rates:${NC}"
-test_tab "NBE" "Current Rates" "/nbe/exchange-rates" "has_data" "currency"
-test_tab "NBE" "USD Rate" "/nbe/exchange-rates/USD" "has_field" "data.buyingRate"
+test_tab "NBE" "Current Rates" "/exchange-rates" "has_data" "currency"
+test_tab "NBE" "USD Rate" "/exchange-rates/USD" "has_field" "data.buyingRate"
 
 echo -e "\n${BLUE}Retention Policy:${NC}"
-test_tab "NBE" "Current Policy" "/retention/policy" "has_field" "data.retentionPercentage"
-test_tab "NBE" "Policy History" "/retention/policy/history" "has_data" "policyId"
+test_tab "NBE" "Current Policy" "/retention/policy/COFFEE" "has_field" "data.retentionPercentage"
+# NOTE: removed-unverifiable: there is no GET /retention/policy/history —
+# retention.ts only defines POST /policy, GET /policy/:commodityType,
+# POST /:forexId/retention and GET /:forexId/retention.
 
 echo -e "\n${BLUE}Compliance Reports:${NC}"
-test_tab "NBE" "Compliance Dashboard" "/compliance/dashboard" "has_field" "data.totalExports"
+# NOTE: there is no GET /compliance/dashboard; the compliance dashboard is
+# GET /compliance (compliance.ts:244). Its payload has no `totalExports`
+# field — the dashboard object is {summary, forex, repatriation, swift,
+# retention, timestamp} — so the field check is changed to data.forex.
+test_tab "NBE" "Compliance Dashboard" "/compliance" "has_field" "data.forex"
 
 echo ""
 echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
@@ -149,7 +163,7 @@ echo -e "${CYAN}3. EXPORTERS PORTAL - Testing All Tabs${NC}"
 echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
 
 echo -e "${BLUE}Main Dashboard:${NC}"
-test_tab "Exporters" "Dashboard" "/portals/exporters/test-admin" "has_field" "data.exporterId"
+test_tab "Exporters" "Dashboard" "/portals/exporters" "has_field" "data.exporterId"
 
 echo -e "\n${BLUE}My Contracts:${NC}"
 test_tab "Exporters" "All Contracts" "/contracts" "has_data" "contractId"
@@ -166,7 +180,7 @@ test_tab "Exporters" "Pending Shipments" "/shipments?status=pending" "has_data" 
 test_tab "Exporters" "In Transit" "/shipments?status=in_transit" "has_data" "shipmentId"
 
 echo -e "\n${BLUE}Applications:${NC}"
-test_tab "Exporters" "My Applications" "/exporters/applications" "has_data" "applicationId"
+test_tab "Exporters" "My Applications" "/exporters/exporter-applications" "has_data" "applicationId"
 
 echo ""
 echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
@@ -183,8 +197,8 @@ test_tab "ECTA" "Rejected Contracts" "/contracts?status=REJECTED" "has_data" "co
 test_tab "ECTA" "All Contracts" "/contracts" "has_data" "contractId"
 
 echo -e "\n${BLUE}Exporter Applications:${NC}"
-test_tab "ECTA" "All Applications" "/applications" "has_data" "applicationId"
-test_tab "ECTA" "Pending Applications" "/exporters/applications?status=pending" "has_data" "applicationId"
+test_tab "ECTA" "All Applications" "/exporters/exporter-applications" "has_data" "applicationId"
+test_tab "ECTA" "Pending Applications" "/exporters/exporter-applications?status=pending" "has_data" "applicationId"
 
 echo -e "\n${BLUE}Quality Inspections:${NC}"
 test_tab "ECTA" "Inspection Queue" "/quality/inspections" "has_data" "inspectionID"
@@ -199,7 +213,7 @@ echo -e "${BLUE}Main Dashboard:${NC}"
 test_tab "ECX" "Dashboard" "/portals/ecx" "dashboard" ""
 
 echo -e "\n${BLUE}Warehouse Management:${NC}"
-test_tab "ECX" "Warehouse Lots" "/warehouse" "has_data" "lotId"
+test_tab "ECX" "Warehouse Lots" "/warehouse/inventory" "has_data" "lotId"
 test_tab "ECX" "Available Lots" "/ecx/lots?status=available" "has_data" "lotId"
 test_tab "ECX" "Released Lots" "/ecx/lots?status=released" "has_data" "lotId"
 
@@ -223,7 +237,10 @@ test_tab "Customs" "Approved" "/customs/clearance?status=approved" "has_data" "d
 
 echo -e "\n${BLUE}Document Verification:${NC}"
 test_tab "Customs" "Verification Queue" "/customs/document-verification" "has_data" "documentId"
-test_tab "Customs" "Verified Documents" "/customs/documents?status=verified" "has_data" "documentId"
+# NOTE: there is no GET /customs/documents. The documents list is
+# GET /documents (documents.ts:397); no documents endpoint honours a
+# ?status= filter, so the verified-only filter cannot be applied.
+test_tab "Customs" "Verified Documents" "/documents" "has_data" "documentId"
 
 echo -e "\n${BLUE}Risk Assessment:${NC}"
 test_tab "Customs" "Risk Assessments" "/customs/risk-assessment" "has_data" "assessmentId"
@@ -247,8 +264,11 @@ test_tab "Shipping" "Transport Dashboard" "/land-transport" "has_field" "data.st
 test_tab "Shipping" "Active Transports" "/land-transport?status=active" "has_data" "transportId"
 
 echo -e "\n${BLUE}Freight Booking:${NC}"
-test_tab "Shipping" "Sea Freight" "/shipping/freight?mode=sea" "has_data" "bookingId"
-test_tab "Shipping" "Air Freight" "/shipping/freight?mode=air" "has_data" "bookingId"
+# NOTE: there is no GET /shipping/freight; freight bookings are listed at
+# GET /shipping/bookings (shipping.ts:240). The ?mode= filter is not
+# supported there.
+test_tab "Shipping" "Sea Freight" "/shipping/bookings" "has_data" "bookingId"
+test_tab "Shipping" "Air Freight" "/shipping/bookings" "has_data" "bookingId"
 
 echo ""
 echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
@@ -261,9 +281,13 @@ test_tab "Quality" "Pending" "/quality/inspections?status=pending" "has_data" "i
 test_tab "Quality" "Completed" "/quality/inspections?status=completed" "has_data" "inspectionID"
 
 echo -e "\n${BLUE}Certificates:${NC}"
-test_tab "Certificates" "All Certificates" "/certificates" "has_data" "certificateId"
-test_tab "Certificates" "Phytosanitary" "/certificates?type=PHYTOSANITARY" "has_data" "certificateId"
-test_tab "Certificates" "Certificate of Origin" "/certificates?type=CERTIFICATE_OF_ORIGIN" "has_data" "certificateId"
+# NOTE: the bare /certificates mount resolves to the quality-inspections list
+# (qualityRoutes GET / is mounted first); phytosanitary certificates are at
+# GET /certificates/phyto (certificates.ts:16) and certificates of origin at
+# GET /certificates/origin (certificates.ts:87).
+test_tab "Certificates" "All Certificates" "/certificates/phyto" "has_data" "certificateId"
+test_tab "Certificates" "Phytosanitary" "/certificates/phyto" "has_data" "certificateId"
+test_tab "Certificates" "Certificate of Origin" "/certificates/origin" "has_data" "certificateId"
 
 echo -e "\n${BLUE}Documents:${NC}"
 test_tab "Documents" "All Documents" "/documents" "has_data" "documentId"
@@ -276,15 +300,22 @@ echo -e "${CYAN}═════════════════════�
 
 echo -e "${BLUE}Contract Lifecycle:${NC}"
 test_tab "Lifecycle" "Contract Details" "/contracts/CONTRACT-PENDING-1793381798" "has_field" "data.contractId"
-test_tab "Lifecycle" "Contract History" "/contracts/CONTRACT-PENDING-1793381798/history" "has_data" "timestamp"
+# NOTE: there is no GET /contracts/:id/history. The audit trail for a
+# contract is GET /audit/trail?entityType=CONTRACT&entityId=<id>
+# (audit.ts:1977), which returns data: allLogs[].
+test_tab "Lifecycle" "Contract History" "/audit/trail?entityType=CONTRACT&entityId=CONTRACT-PENDING-1793381798" "has_data" "timestamp"
 
 echo -e "\n${BLUE}Shipment Tracking:${NC}"
 test_tab "Tracking" "Shipment Details" "/shipping/shipments/SHIP-1793297109" "has_field" "data.shipmentId"
 test_tab "Tracking" "Traceability" "/shipments/SHIP-1793297109/traceability" "has_data" "stage"
 
 echo -e "\n${BLUE}Analytics & Reports:${NC}"
-test_tab "Analytics" "Export Analytics" "/analytics/exports" "has_data" "month"
-test_tab "Analytics" "Revenue Analytics" "/analytics/revenue" "has_data" "period"
+# NOTE: there is no GET /analytics/exports; the export report endpoint is
+# GET /analytics/export-report (analytics.ts:157).
+test_tab "Analytics" "Export Analytics" "/analytics/export-report" "has_data" "month"
+# NOTE: removed-unverifiable: there is no GET /analytics/revenue and no
+# revenue metric anywhere in analytics.ts — GET /timeseries/:metric
+# (analytics.ts:53) only allows contracts/shipments/payments.
 
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"

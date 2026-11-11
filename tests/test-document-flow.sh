@@ -50,7 +50,7 @@ echo ""
 
 # Step 3: Retrieve document metadata
 echo "3. Retrieving document metadata..."
-METADATA_RESPONSE=$(curl -s -X GET "${API_URL}/documents/${DOC_ID}/metadata" \
+METADATA_RESPONSE=$(curl -s -X GET "${API_URL}/documents/${DOC_ID}" \
   -H "Authorization: Bearer $TOKEN")
 
 echo "✅ Metadata retrieved:"

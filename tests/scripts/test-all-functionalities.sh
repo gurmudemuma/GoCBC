@@ -97,7 +97,9 @@ fi
 
 # Test 2: Validate token
 if [ ! -z "$AUTH_TOKEN" ]; then
-    PROFILE=$(curl -s -X GET "$API_URL/users/profile" \
+# NOTE: there is no GET /users/profile; the current-user endpoint is
+# GET /auth/me (auth.ts:258).
+    PROFILE=$(curl -s -X GET "$API_URL/auth/me" \
       -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
     
     if echo "$PROFILE" | grep -q "email\|userId"; then
@@ -203,11 +205,14 @@ print_header "3. CONTRACT APPROVAL WORKFLOW (ECTA)"
 print_step "Testing contract approval workflow..."
 
 # Test 8: Submit contract for approval (change status to REGISTERED)
+# NOTE: removed-unverifiable: there is no POST /contracts/:id/register.
+# Contract creation IS the registration: POST /contracts (contracts.ts:326)
+# calls registerContract (contracts.ts:504) and returns 201 with
+# data:{contractID, status:'pending', blockchainSynced}.
 if [ ! -z "$TEST_CONTRACT_ID" ]; then
-    REGISTER_CONTRACT=$(curl -s -X POST "$API_URL/contracts/$TEST_CONTRACT_ID/register" \
-      -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
+    REGISTER_CONTRACT="$CREATE_CONTRACT"
     
-    if echo "$REGISTER_CONTRACT" | grep -qi "registered\|success"; then
+    if echo "$REGISTER_CONTRACT" | grep -qi "registered\|success\|pending"; then
         print_success "3.1 Contract registered for ECTA approval"
     else
         print_fail "3.1 Contract registration failed"
@@ -216,7 +221,9 @@ fi
 
 # Test 9: ECTA approves contract
 if [ ! -z "$TEST_CONTRACT_ID" ]; then
-    APPROVE_CONTRACT=$(curl -s -X POST "$API_URL/ecta/contracts/$TEST_CONTRACT_ID/approve" \
+# NOTE: contract approval is POST /contracts/:contractID/approve
+# (contracts.ts:1255); there is no /ecta mount.
+    APPROVE_CONTRACT=$(curl -s -X POST "$API_URL/contracts/$TEST_CONTRACT_ID/approve" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $AUTH_TOKEN" \
       -d '{
@@ -374,12 +381,14 @@ fi
 # Test 16: Verify Quality Inspection task auto-created
 if [ ! -z "$TEST_SHIPMENT_ID" ]; then
     sleep 2
-    QUALITY_CHECK=$(curl -s -X GET "$API_URL/ecta/inspections" \
+    QUALITY_CHECK=$(curl -s -X GET "$API_URL/quality/inspections" \
       -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
     
     if echo "$QUALITY_CHECK" | grep -q "$TEST_SHIPMENT_ID"; then
         print_success "6.2 Quality inspection task auto-created (workflow trigger working)"
-        TEST_QUALITY_ID=$(echo "$QUALITY_CHECK" | grep -o '"inspectionId":"[^"]*"' | head -1 | cut -d'"' -f4)
+        # NOTE: GET /quality/inspections returns raw PG rows, so the id field
+        # is inspection_id (snake_case), not inspectionId.
+        TEST_QUALITY_ID=$(echo "$QUALITY_CHECK" | grep -o '"inspection_id":"[^"]*"' | head -1 | cut -d'"' -f4)
     else
         print_fail "6.2 Quality inspection auto-creation not triggered"
     fi
@@ -394,52 +403,38 @@ print_header "7. QUALITY INSPECTION 5-STAGE WORKFLOW"
 print_step "Testing quality inspection status transitions..."
 
 # Test 17: Schedule inspection (PENDING → SCHEDULED)
+# NOTE: removed-unverifiable: no quality route sets SCHEDULED. quality.ts
+# defines perform (:512, PENDING/REQUESTED → INSPECTED), approve (:746),
+# reject (:1042), issue-permit (:1208) and complete (:1307) — there is no
+# endpoint that moves an inspection to SCHEDULED.
 if [ ! -z "$TEST_QUALITY_ID" ]; then
-    SCHEDULE_QI=$(curl -s -X PATCH "$API_URL/ecta/inspections/$TEST_QUALITY_ID" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $AUTH_TOKEN" \
-      -d '{
-        "status": "SCHEDULED",
-        "scheduledDate": "'$(date -d '+7 days' +%Y-%m-%d)'",
-        "inspector": "ECTA Inspector 1"
-      }' 2>/dev/null)
-    
-    if echo "$SCHEDULE_QI" | grep -qi "scheduled\|success"; then
-        print_success "7.1 Inspection scheduled (PENDING → SCHEDULED)"
-    else
-        print_fail "7.1 Inspection scheduling failed"
-    fi
+    print_info "7.1 Inspection scheduling skipped — no endpoint sets SCHEDULED"
 fi
 
 # Test 18: Start inspection (SCHEDULED → UNDER_REVIEW)
+# NOTE: removed-unverifiable: no quality route sets UNDER_REVIEW either
+# (same evidence as Test 17). The review step is the perform call, which
+# sets INSPECTED (quality.ts:512).
 if [ ! -z "$TEST_QUALITY_ID" ]; then
-    START_REVIEW=$(curl -s -X PATCH "$API_URL/ecta/inspections/$TEST_QUALITY_ID" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $AUTH_TOKEN" \
-      -d '{
-        "status": "UNDER_REVIEW",
-        "startedAt": "'$(date +%Y-%m-%dT%H:%M:%S)'",
-        "notes": "Physical inspection started"
-      }' 2>/dev/null)
-    
-    if echo "$START_REVIEW" | grep -qi "under_review\|success"; then
-        print_success "7.2 Inspection started (SCHEDULED → UNDER_REVIEW)"
-    else
-        print_fail "7.2 Inspection start failed"
-    fi
+    print_info "7.2 Inspection start skipped — no endpoint sets UNDER_REVIEW"
 fi
 
 # Test 19: Approve inspection (UNDER_REVIEW → APPROVED)
+# NOTE: approval is POST /quality/inspections/:inspectionID/approve
+# (quality.ts:746); it reads approvedBy and certificateNo. (Normally an
+# inspection is performed first via POST .../perform, which this script never
+# calls, so approve may 400 on a PENDING inspection.)
 if [ ! -z "$TEST_QUALITY_ID" ]; then
-    APPROVE_QI=$(curl -s -X POST "$API_URL/ecta/inspections/$TEST_QUALITY_ID/approve" \
+    APPROVE_QI=$(curl -s -X POST "$API_URL/quality/inspections/$TEST_QUALITY_ID/approve" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $AUTH_TOKEN" \
       -d '{
+        "approvedBy": "ECTA Inspector 1",
+        "certificateNo": "QC-CERT-'$(date +%s)'",
         "grade": "GRADE_1",
         "moistureContent": 11.5,
         "defects": 2,
-        "notes": "Meets export standards",
-        "certificate": "QC-CERT-'$(date +%s)'"
+        "notes": "Meets export standards"
       }' 2>/dev/null)
     
     if echo "$APPROVE_QI" | grep -qi "approved\|success"; then
@@ -472,32 +467,27 @@ print_header "8. CUSTOMS CLEARANCE WORKFLOW"
 print_step "Testing customs declaration and clearance..."
 
 # Test 21: Submit customs declaration
+# NOTE: removed-unverifiable: there is no PATCH /customs/declarations/:id and
+# no endpoint that moves a declaration to SUBMITTED — POST
+# /customs/declaration/submit (customs.ts:676) already creates it as
+# SUBMITTED. (This script never creates a declaration, so TEST_CUSTOMS_ID
+# only exists if one was auto-created after the quality approval in Test 20.)
 if [ ! -z "$TEST_CUSTOMS_ID" ]; then
-    SUBMIT_CUSTOMS=$(curl -s -X PATCH "$API_URL/customs/declarations/$TEST_CUSTOMS_ID" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $AUTH_TOKEN" \
-      -d '{
-        "status": "SUBMITTED",
-        "submittedBy": "Exporter",
-        "declarationNumber": "CD-'$(date +%s)'"
-      }' 2>/dev/null)
-    
-    if echo "$SUBMIT_CUSTOMS" | grep -qi "submitted\|success"; then
-        print_success "8.1 Customs declaration submitted"
-    else
-        print_fail "8.1 Customs submission failed"
-    fi
+    print_info "8.1 Customs declaration submission skipped — submit already creates SUBMITTED"
 fi
 
 # Test 22: Approve customs clearance
+# NOTE: there is no POST /customs/declarations/:id/approve. Clearance is
+# POST /customs/declaration/:declarationId/clear (customs.ts:2022); it reads
+# clearedBy, clearanceNumber, exportDuty (among others).
 if [ ! -z "$TEST_CUSTOMS_ID" ]; then
-    APPROVE_CUSTOMS=$(curl -s -X POST "$API_URL/customs/declarations/$TEST_CUSTOMS_ID/approve" \
+    APPROVE_CUSTOMS=$(curl -s -X POST "$API_URL/customs/declaration/$TEST_CUSTOMS_ID/clear" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $AUTH_TOKEN" \
       -d '{
-        "approvedBy": "Customs Officer",
-        "clearanceReference": "CLR-'$(date +%s)'",
-        "dutyPaid": 15000.00
+        "clearedBy": "Customs Officer",
+        "clearanceNumber": "CLR-'$(date +%s)'",
+        "exportDuty": 15000.00
       }' 2>/dev/null)
     
     if echo "$APPROVE_CUSTOMS" | grep -qi "approved\|cleared\|success"; then
@@ -534,12 +524,17 @@ SHIPMENT_STAGES=("LAND_TRANSPORT" "PORT_ARRIVED" "CONTAINER_STUFFED" "VESSEL_LOA
 STAGE_NUM=24
 for STAGE in "${SHIPMENT_STAGES[@]}"; do
     if [ ! -z "$TEST_SHIPMENT_ID" ]; then
-        UPDATE_STAGE=$(curl -s -X PATCH "$API_URL/shipments/$TEST_SHIPMENT_ID" \
+        # NOTE: shipment status changes go through PUT /shipments/:shipmentID/status
+        # (shipments.ts:1124), which validates the status against the shipment
+        # status machine (statusManager.ts:116). These 8 stages are exactly the
+        # valid chain starting from CUSTOMS_CLEARED: CUSTOMS_CLEARED →
+        # LAND_TRANSPORT → PORT_ARRIVED → CONTAINER_STUFFED → VESSEL_LOADED →
+        # DEPARTED → IN_TRANSIT → DESTINATION_ARRIVED → DELIVERED.
+        UPDATE_STAGE=$(curl -s -X PUT "$API_URL/shipments/$TEST_SHIPMENT_ID/status" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer $AUTH_TOKEN" \
           -d '{
-            "logistics_status": "'$STAGE'",
-            "updatedBy": "Shipping Officer"
+            "status": "'$STAGE'"
           }' 2>/dev/null)
         
         if echo "$UPDATE_STAGE" | grep -qi "$STAGE\|success"; then
@@ -583,20 +578,16 @@ if [ ! -z "$TEST_CONTRACT_ID" ] && [ ! -z "$TEST_LC_ID" ]; then
 fi
 
 # Test 35: Process Payment
+# NOTE: removed-unverifiable: there is no POST /payments/:id/process. The
+# payment lifecycle endpoints are POST /payments/record (payments.ts:254),
+# POST /:paymentID/verify (payments.ts:452), POST /:paymentID/swift/initiate
+# (payments.ts:560), POST /:paymentID/swift/confirm (payments.ts:659),
+# POST /:paymentID/settle (payments.ts:761), PUT /:paymentID/confirm
+# (payments.ts:909) and POST /:paymentID/release (payments.ts:1772) — verify
+# and settle have different semantics and bodies, so no single replacement
+# exists for a generic "process" step.
 if [ ! -z "$TEST_PAYMENT_ID" ]; then
-    PROCESS_PAYMENT=$(curl -s -X POST "$API_URL/payments/$TEST_PAYMENT_ID/process" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $AUTH_TOKEN" \
-      -d '{
-        "processedBy": "Bank Officer",
-        "transactionReference": "TXN-'$(date +%s)'"
-      }' 2>/dev/null)
-    
-    if echo "$PROCESS_PAYMENT" | grep -qi "processed\|success"; then
-        print_success "10.2 Payment processed successfully"
-    else
-        print_fail "10.2 Payment processing failed"
-    fi
+    print_info "10.2 Payment processing skipped — no /process endpoint exists"
 fi
 
 ################################################################################
@@ -609,7 +600,10 @@ print_step "Testing audit logging and blockchain integration..."
 
 # Test 36: Verify audit logs for contract
 if [ ! -z "$TEST_CONTRACT_ID" ]; then
-    AUDIT_LOGS=$(curl -s -X GET "$API_URL/audit/logs?entityType=CONTRACT&entityId=$TEST_CONTRACT_ID" \
+# NOTE: there is no GET /audit/logs. The per-entity audit trail is
+# GET /audit/trail (audit.ts:1977); it requires BOTH entityType and entityId
+# query params and returns data: allLogs.
+    AUDIT_LOGS=$(curl -s -X GET "$API_URL/audit/trail?entityType=CONTRACT&entityId=$TEST_CONTRACT_ID" \
       -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
     
     if echo "$AUDIT_LOGS" | grep -q "CREATE\|UPDATE\|APPROVE"; then
@@ -633,7 +627,10 @@ fi
 
 # Test 38: Verify audit immutability
 if [ ! -z "$TEST_CONTRACT_ID" ]; then
-    AUDIT_COUNT=$(curl -s -X GET "$API_URL/audit/logs?entityId=$TEST_CONTRACT_ID" \
+    # NOTE: GET /audit/trail (audit.ts:1977) requires BOTH entityType and
+    # entityId, so the contract type is supplied here (the old call only
+    # passed entityId, which /trail would reject).
+    AUDIT_COUNT=$(curl -s -X GET "$API_URL/audit/trail?entityType=CONTRACT&entityId=$TEST_CONTRACT_ID" \
       -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null | grep -o "auditId" | wc -l)
     
     if [ "$AUDIT_COUNT" -gt 0 ]; then
@@ -662,7 +659,9 @@ else
 fi
 
 # Test 40: Export statistics
-STATS=$(curl -s -X GET "$API_URL/analytics/stats" \
+# NOTE: there is no GET /analytics/stats; the closest real analytics
+# endpoint is GET /analytics/breakdown (analytics.ts:225).
+STATS=$(curl -s -X GET "$API_URL/analytics/breakdown" \
   -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
 
 if [ ! -z "$STATS" ]; then
@@ -717,7 +716,9 @@ print_header "14. ROLE-BASED ACCESS CONTROL (RBAC)"
 print_step "Testing permission and role restrictions..."
 
 # Test 43: ECTA portal access
-ECTA_CONTRACTS=$(curl -s -X GET "$API_URL/ecta/contracts" \
+# NOTE: there is no /ecta mount; contracts live at GET /contracts
+# (contracts.ts:623).
+ECTA_CONTRACTS=$(curl -s -X GET "$API_URL/contracts" \
   -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
 
 if [ ! -z "$ECTA_CONTRACTS" ]; then
@@ -745,7 +746,9 @@ print_header "15. SWIFT MESSAGING INTEGRATION"
 print_step "Testing SWIFT message handling..."
 
 # Test 45: SWIFT message list
-SWIFT_MESSAGES=$(curl -s -X GET "$API_URL/banking/swift" \
+# NOTE: SWIFT lives under /swift, not /banking; the list endpoint is
+# GET /swift/messages (swift.ts:972).
+SWIFT_MESSAGES=$(curl -s -X GET "$API_URL/swift/messages" \
   -H "Authorization: Bearer $AUTH_TOKEN" 2>/dev/null)
 
 if [ ! -z "$SWIFT_MESSAGES" ]; then
@@ -755,14 +758,18 @@ else
 fi
 
 # Test 46: Create SWIFT message (if supported)
-CREATE_SWIFT=$(curl -s -X POST "$API_URL/banking/swift" \
+# NOTE: the create endpoint is POST /swift/messages (swift.ts:60); it
+# requires messageID, a messageType in MT103/MT700/MT707/MT750/MT752/MT710/
+# MT730/MT910, swiftReference, senderBIC and receiverBIC.
+CREATE_SWIFT=$(curl -s -X POST "$API_URL/swift/messages" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $AUTH_TOKEN" \
   -d '{
+    "messageID": "MSG-TEST-'$(date +%s)'",
     "messageType": "MT700",
-    "sender": "CBETETAA",
-    "receiver": "TESTUSX0",
-    "reference": "TEST-'$(date +%s)'"
+    "swiftReference": "TEST-'$(date +%s)'",
+    "senderBIC": "CBETETAA",
+    "receiverBIC": "TESTUSX0"
   }' 2>/dev/null)
 
 if echo "$CREATE_SWIFT" | grep -q "messageId\|success"; then
@@ -799,17 +806,46 @@ else
 fi
 
 # Test 48-50: Test lot status transitions
+# NOTE: there is no PATCH /ecx/lots/:id. Lot transitions are separate POSTs:
+# GRADED -> POST /ecx/lots/:lotId/grade (ecx.ts:342, requires grade, numeric
+# moistureContent, integer defectCount, gradingOfficer); ASSIGNED -> POST
+# /ecx/lots/:lotId/assign (ecx.ts:413, requires contractId, numeric
+# pricePerKg); RELEASED -> POST /ecx/lots/:lotId/release (ecx.ts:441).
 LOT_STAGES=("GRADED" "ASSIGNED" "RELEASED")
 STAGE_NUM=48
 
 for STAGE in "${LOT_STAGES[@]}"; do
     if [ ! -z "$TEST_LOT_ID" ]; then
-        UPDATE_LOT=$(curl -s -X PATCH "$API_URL/ecx/lots/$TEST_LOT_ID" \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Bearer $AUTH_TOKEN" \
-          -d '{
-            "status": "'$STAGE'"
-          }' 2>/dev/null)
+        case "$STAGE" in
+            GRADED)
+                UPDATE_LOT=$(curl -s -X POST "$API_URL/ecx/lots/$TEST_LOT_ID/grade" \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer $AUTH_TOKEN" \
+                  -d '{
+                    "grade": "GRADE_2",
+                    "moistureContent": 11.0,
+                    "defectCount": 3,
+                    "gradingOfficer": "ECX-GRADER-001"
+                  }' 2>/dev/null)
+                ;;
+            ASSIGNED)
+                UPDATE_LOT=$(curl -s -X POST "$API_URL/ecx/lots/$TEST_LOT_ID/assign" \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer $AUTH_TOKEN" \
+                  -d '{
+                    "contractId": "'$TEST_CONTRACT_ID'",
+                    "pricePerKg": 8.50
+                  }' 2>/dev/null)
+                ;;
+            RELEASED)
+                UPDATE_LOT=$(curl -s -X POST "$API_URL/ecx/lots/$TEST_LOT_ID/release" \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer $AUTH_TOKEN" \
+                  -d '{
+                    "releaseDate": "'$(date +%Y-%m-%d)'"
+                  }' 2>/dev/null)
+                ;;
+        esac
         
         if echo "$UPDATE_LOT" | grep -qi "$STAGE\|success"; then
             print_success "16.$((STAGE_NUM-46)) Lot status updated to $STAGE"

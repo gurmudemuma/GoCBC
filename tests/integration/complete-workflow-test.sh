@@ -209,8 +209,11 @@ EXPORTER_APP_DATA=$(cat <<EOF
   "exporterID": "$EXPORTER_ID",
   "companyName": "Test Coffee Exporter PLC",
   "tinNumber": "TIN-${TIMESTAMP}",
-  "businessLicense": "BL-${TIMESTAMP}",
+  "businessLicenseNumber": "BL-${TIMESTAMP}",
+  "capitalRequirement": 1000000,
+  "professionalTaster": "Abebe Kebede",
   "address": "Addis Ababa, Ethiopia",
+  "city": "Addis Ababa",
   "phone": "+251911234567",
   "email": "exporter${TIMESTAMP}@testcoffee.et",
   "contactPerson": "Abebe Kebede",
@@ -218,18 +221,18 @@ EXPORTER_APP_DATA=$(cat <<EOF
   "bankAccount": "1000${TIMESTAMP}",
   "warehouseLicense": "WL-${TIMESTAMP}",
   "exportLicense": "EL-${TIMESTAMP}",
-  "documents": {
-    "businessLicense": "$(create_test_document 'Business License' 'business_license.pdf')",
-    "tinCertificate": "$(create_test_document 'TIN Certificate' 'tin_cert.pdf')",
-    "warehouseLicense": "$(create_test_document 'Warehouse License' 'warehouse_license.pdf')"
-  }
+  "documents": [
+    "$(create_test_document 'Business License' 'business_license.pdf')",
+    "$(create_test_document 'TIN Certificate' 'tin_cert.pdf')",
+    "$(create_test_document 'Warehouse License' 'warehouse_license.pdf')"
+  ]
 }
 EOF
 )
 
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/exporters/applications" \
+  "$API_BASE/exporters/exporter-applications" \
   -d "$EXPORTER_APP_DATA" > /tmp/exporter_response.json
 
 if grep -q "success" /tmp/exporter_response.json 2>/dev/null; then
@@ -240,13 +243,21 @@ else
     cat /tmp/exporter_response.json
 fi
 
+# NOTE: POST /exporters/exporter-applications returns data.applicationId
+# (exporters.ts:102); capture it for the approve call below, which is
+# POST /exporters/exporter-applications/:applicationId/approve (exporters.ts:307)
+# and requires the exporterId in the body.
+APP_ID=$(jq -r '.data.applicationId // empty' /tmp/exporter_response.json 2>/dev/null)
+[ -n "$APP_ID" ] || APP_ID="$EXPORTER_ID"
+
 # Approve exporter application
 print_step "ECTA Admin approving exporter application..."
 
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/exporters/applications/$EXPORTER_ID/approve" \
+  "$API_BASE/exporters/exporter-applications/$APP_ID/approve" \
   -d '{
+    "exporterId": "'"$EXPORTER_ID"'",
     "approvedBy": "ECTA Administrator",
     "remarks": "All documents verified and approved"
   }' > /tmp/approve_response.json
@@ -556,13 +567,16 @@ else
     print_info "No auto-created declaration, creating manually..."
     
     # Create customs declaration
+    # NOTE: the create endpoint is POST /customs/declaration/submit
+    # (customs.ts:676); it requires declarationID, shipmentID, exporterID
+    # (capital ID) and creates the declaration as SUBMITTED.
     curl -s -X POST -H "Content-Type: application/json" \
       -H "Authorization: Bearer $ADMIN_TOKEN" \
-      "$API_BASE/customs/declarations" \
+      "$API_BASE/customs/declaration/submit" \
       -d "{
-        \"declarationId\": \"$CUSTOMS_ID\",
-        \"shipmentId\": \"$SHIPMENT_ID\",
-        \"exporterId\": \"$EXPORTER_ID\",
+        \"declarationID\": \"$CUSTOMS_ID\",
+        \"shipmentID\": \"$SHIPMENT_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
         \"declarant\": \"Customs Agent Ltd\",
         \"customsOffice\": \"Addis Ababa Bole International Airport\",
         \"declarationType\": \"EXPORT\",
@@ -597,10 +611,10 @@ print_step "Customs officer reviewing declaration..."
 
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/customs/declarations/$CUSTOMS_ID/review" \
+  "$API_BASE/customs/declaration/$CUSTOMS_ID/review" \
   -d '{
-    "reviewedBy": "Customs Officer",
-    "remarks": "All documents verified"
+    "assignedInspector": "Customs Officer",
+    "inspectorNotes": "All documents verified"
   }' > /tmp/customs_review.json
 
 if grep -q "success" /tmp/customs_review.json 2>/dev/null; then
@@ -613,11 +627,11 @@ print_step "Customs officer clearing shipment..."
 
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/customs/declarations/$CUSTOMS_ID/clear" \
+  "$API_BASE/customs/declaration/$CUSTOMS_ID/clear" \
   -d '{
     "clearedBy": "Customs Supervisor",
     "clearanceDate": "'$(date -I)'",
-    "remarks": "Cleared for export"
+    "clearanceRemarks": "Cleared for export"
   }' > /tmp/customs_clear.json
 
 if grep -q "success" /tmp/customs_clear.json 2>/dev/null; then
@@ -637,9 +651,9 @@ print_header "STAGE 7: SHIPPING & LOGISTICS"
 # Update shipment with shipping details
 print_step "Exporter updating shipping details..."
 
-curl -s -X PATCH -H "Content-Type: application/json" \
+curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $EXPORTER_TOKEN" \
-  "$API_BASE/shipments/$SHIPMENT_ID" \
+  "$API_BASE/shipments/$SHIPMENT_ID/bill-of-lading" \
   -d "{
     \"shippingLine\": \"Maersk Line\",
     \"vesselName\": \"MV Coffee Express\",
@@ -669,13 +683,14 @@ fi
 # Confirm shipment loaded
 print_step "Shipping company confirming container loaded..."
 
+# NOTE: there is no /confirm-loading route; the closest real endpoint is
+# POST /shipments/:shipmentID/vessel/load (shipments.ts:2326), whose body is
+# only {notes}. It invokes the LoadOnVessel chaincode function.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/shipments/$SHIPMENT_ID/confirm-loading" \
+  "$API_BASE/shipments/$SHIPMENT_ID/vessel/load" \
   -d "{
-    \"confirmedBy\": \"Maersk Operations\",
-    \"loadingDate\": \"$(date -I)\",
-    \"remarks\": \"Container loaded and sealed\"
+    \"notes\": \"Container loaded and sealed\"
   }" > /tmp/loading_confirm.json
 
 if grep -q "success" /tmp/loading_confirm.json 2>/dev/null; then
@@ -695,9 +710,11 @@ print_step "Issuing bank creating Letter of Credit..."
 
 LC_DATA=$(cat <<EOF
 {
-  "lcNumber": "$LC_NUMBER",
+  "lcID": "$LC_NUMBER",
   "shipmentId": "$SHIPMENT_ID",
-  "contractId": "$CONTRACT_ID",
+  "contractID": "$CONTRACT_ID",
+  "exporterID": "$EXPORTER_ID",
+  "bankName": "Deutsche Bank AG, Hamburg",
   "issuingBank": "Deutsche Bank AG, Hamburg",
   "advisingBank": "Commercial Bank of Ethiopia",
   "beneficiary": "Test Coffee Exporter PLC",
@@ -723,9 +740,13 @@ LC_DATA=$(cat <<EOF
 EOF
 )
 
+# NOTE: LCs live under /banking/lc; the create endpoint is
+# POST /banking/lc/request (banking.ts:85), which requires lcID, contractID,
+# exporterID, bankName, amount, currency, expiryDate and returns 201 with
+# data:{lcID, contractID, exporterID, status:'REQUESTED'}.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/banking/letters-of-credit" \
+  "$API_BASE/banking/lc/request" \
   -d "$LC_DATA" > /tmp/lc_create.json
 
 if grep -q "success" /tmp/lc_create.json 2>/dev/null; then
@@ -740,65 +761,35 @@ fi
 # Advising bank notifies beneficiary
 print_step "Advising bank notifying exporter..."
 
-curl -s -X POST -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/banking/letters-of-credit/$LC_NUMBER/advise" \
-  -d '{
-    "advisedBy": "CBE International Trade Finance",
-    "advisingDate": "'$(date -I)'",
-    "remarks": "LC terms verified and advised to beneficiary"
-  }' > /tmp/lc_advise.json
-
-if grep -q "success" /tmp/lc_advise.json 2>/dev/null; then
-    print_success "LC advised to beneficiary"
-    print_data "Status: ADVISED"
-else
-    print_info "LC advising endpoint might differ"
-fi
+# NOTE: removed-unverifiable: there is no /advise route for LCs anywhere in
+# api/src/routes/banking.ts or api/src/routes/lc-amendments.ts (verified by
+# grep 2026-11-11). The LC flow goes request -> approve -> issue
+# (banking.ts:85, :289, :921); no endpoint records an "advised" step.
+print_info "LC advising step skipped — no /advise endpoint exists"
 
 # Exporter presents documents
 print_step "Exporter presenting documents to bank..."
 
-DOCUMENT_PRESENTATION=$(cat <<EOF
-{
-  "presentedBy": "Test Coffee Exporter PLC",
-  "presentationDate": "$(date -I)",
-  "documents": {
-    "commercialInvoice": "$(create_test_document 'Commercial Invoice' 'commercial_invoice.pdf')",
-    "billOfLading": "$(create_test_document 'Bill of Lading' 'bl_final.pdf')",
-    "qualityCertificate": "$(create_test_document 'Quality Certificate' 'quality_final.pdf')",
-    "phytosanitaryCertificate": "$(create_test_document 'Phytosanitary Certificate' 'phyto.pdf')",
-    "certificateOfOrigin": "$(create_test_document 'Certificate of Origin' 'origin.pdf')",
-    "packingList": "$(create_test_document 'Packing List' 'packing_final.pdf')"
-  },
-  "remarks": "All required documents presented as per LC terms"
-}
-EOF
-)
-
-curl -s -X POST -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $EXPORTER_TOKEN" \
-  "$API_BASE/banking/letters-of-credit/$LC_NUMBER/present-documents" \
-  -d "$DOCUMENT_PRESENTATION" > /tmp/doc_present.json
-
-if grep -q "success" /tmp/doc_present.json 2>/dev/null; then
-    print_success "Documents presented to bank"
-    print_data "Status: DOCUMENTS_PRESENTED"
-else
-    print_error "Document presentation failed"
-    cat /tmp/doc_present.json
-fi
+# NOTE: removed-unverifiable: there is no LC-scoped document-presentation
+# endpoint. The closest real endpoint is POST
+# /banking/payment/:paymentID/submit-documents (banking.ts:2089), which is
+# scoped to a payment and needs a paymentID that does not exist at this stage
+# of the workflow, so the call cannot be mapped.
+print_info "Document presentation step skipped — no LC-scoped endpoint exists"
 
 # Bank examines documents
 print_step "Bank examining documents..."
 
+# NOTE: the real examination endpoint is POST
+# /banking/lc/:lcID/examine-documents (banking.ts:3268); it requires a
+# boolean `compliant` in the body and sets the LC to UTILIZED when compliant.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/banking/letters-of-credit/$LC_NUMBER/examine" \
+  "$API_BASE/banking/lc/$LC_NUMBER/examine-documents" \
   -d '{
     "examinedBy": "CBE Trade Finance Officer",
     "examinationDate": "'$(date -I)'",
-    "result": "COMPLIANT",
+    "compliant": true,
     "remarks": "All documents comply with LC terms"
   }' > /tmp/doc_examine.json
 
@@ -859,12 +850,16 @@ fi
 # CBE confirms receipt
 print_step "CBE confirming payment receipt..."
 
-curl -s -X POST -H "Content-Type: application/json" \
+# NOTE: the real endpoint is PUT /payments/:paymentID/confirm
+# (payments.ts:909); it requires confirmedBy and confirmationType and is
+# restricted to BANKS/BANK_ADMIN roles (this script uses an admin token,
+# which will 403 unless that token carries a bank role).
+curl -s -X PUT -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/payments/$PAYMENT_ID/confirm-receipt" \
+  "$API_BASE/payments/$PAYMENT_ID/confirm" \
   -d '{
     "confirmedBy": "CBE Treasury",
-    "receiptDate": "'$(date -I)'",
+    "confirmationType": "RECEIPT",
     "remarks": "Payment received and credited to exporter account"
   }' > /tmp/payment_confirm.json
 
@@ -885,10 +880,16 @@ print_step "Exporter submitting forex repatriation..."
 
 FOREX_DATA=$(cat <<EOF
 {
+  "repatriationId": "REP-$TIMESTAMP",
   "contractId": "$CONTRACT_ID",
   "shipmentId": "$SHIPMENT_ID",
   "paymentId": "$PAYMENT_ID",
   "exporterId": "$EXPORTER_ID",
+  "exportAmount": 135000,
+  "currency": "USD",
+  "shipmentDate": "$(date -I)",
+  "fcyBank": "Commercial Bank of Ethiopia",
+  "fcyBankBIC": "CBETETAA",
   "amountUSD": 135000,
   "exchangeRate": 120.5,
   "amountETB": 16267500,
@@ -902,10 +903,20 @@ FOREX_DATA=$(cat <<EOF
 EOF
 )
 
+# NOTE: the real endpoint is POST /repatriation/initiate
+# (repatriation.ts:199); it reads repatriationId, paymentId, contractId,
+# shipmentId, exporterId, exportAmount, currency, fcyBank, fcyBankBIC,
+# shipmentDate and returns 201 with data:{repatriationId}. It is restricted
+# to bank roles (BANKS/BANK/BANK_ADMIN/BANK OFFICER); this script uses an
+# exporter token, which will 403 unless that token carries a bank role.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $EXPORTER_TOKEN" \
-  "$API_BASE/forex/repatriation" \
+  "$API_BASE/repatriation/initiate" \
   -d "$FOREX_DATA" > /tmp/forex_submit.json
+
+# NOTE: capture the created repatriation id for the NBE verify step below.
+REPAT_ID=$(jq -r '.data.repatriationId // empty' /tmp/forex_submit.json 2>/dev/null)
+[ -n "$REPAT_ID" ] || REPAT_ID="REP-$TIMESTAMP"
 
 if grep -q "success" /tmp/forex_submit.json 2>/dev/null; then
     print_success "Forex repatriation submitted"
@@ -917,13 +928,16 @@ fi
 # NBE verifies forex repatriation
 print_step "NBE verifying forex repatriation..."
 
+# NOTE: the real endpoint is POST /repatriation/:id/verify
+# (repatriation.ts:306); it takes the repatriation record id (not the
+# contract id), requires NBE/NBE_ADMIN/NBE OFFICER role, and reads
+# verificationRef and verificationNotes from the body.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/forex/repatriation/$CONTRACT_ID/verify" \
+  "$API_BASE/repatriation/$REPAT_ID/verify" \
   -d '{
-    "verifiedBy": "NBE Forex Department",
-    "verificationDate": "'$(date -I)'",
-    "remarks": "Forex repatriation verified and approved"
+    "verificationRef": "NBE-VERIFY-'$TIMESTAMP'",
+    "verificationNotes": "Forex repatriation verified and approved"
   }' > /tmp/forex_verify.json
 
 if grep -q "success" /tmp/forex_verify.json 2>/dev/null; then
@@ -961,9 +975,12 @@ fi
 # Mark contract as completed
 print_step "Marking contract as completed..."
 
+# NOTE: there is no POST /contracts/:id/complete. The real close-out is
+# POST /post-delivery/:shipmentId/close-contract
+# (postDeliveryWorkflow.ts:368, roles ECTA/ECTA_ADMIN); the body is ignored.
 curl -s -X POST -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$API_BASE/contracts/$CONTRACT_ID/complete" \
+  "$API_BASE/post-delivery/$SHIPMENT_ID/close-contract" \
   -d '{
     "completedBy": "System",
     "completionDate": "'$(date -I)'",
@@ -985,7 +1002,7 @@ print_header "FINAL WORKFLOW VALIDATION"
 
 print_step "Running workflow validation..."
 
-bash /home/guda/GoCBC/validate-workflow.sh > /tmp/final_validation.txt 2>&1
+bash "$(dirname "$0")/../scripts/validate-workflow.sh" > /tmp/final_validation.txt 2>&1
 
 if [ -f /tmp/final_validation.txt ]; then
     cat /tmp/final_validation.txt

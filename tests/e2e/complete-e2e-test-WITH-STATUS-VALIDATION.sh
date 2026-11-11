@@ -568,7 +568,7 @@ if [ -n "$CUSTOMS_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $CUSTOMS_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/customs/declarations/$CUSTOMS_ID/clear" \
+      "$API_BASE/customs/declaration/$CUSTOMS_ID/clear" \
       -d "{
         \"clearedBy\": \"customs_admin\",
         \"clearanceNumber\": \"CUST-CLR-${TIMESTAMP}\"

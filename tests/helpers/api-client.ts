@@ -37,7 +37,9 @@ export class GoCBCApiClient {
   }
 
   /**
-   * Login and store authentication token
+   * Login and store authentication token.
+   * NOTE: POST /auth/login returns { success, data: { token, user } }
+   * (auth.ts:234), so the token lives at response.data.data.token.
    */
   async login(username: string, password: string): Promise<any> {
     try {
@@ -45,11 +47,11 @@ export class GoCBCApiClient {
         username,
         password,
       });
-      
-      if (response.data.token) {
-        this.token = response.data.token;
+
+      if (response.data?.data?.token) {
+        this.token = response.data.data.token;
       }
-      
+
       return response.data;
     } catch (error: any) {
       throw new Error(`Login failed: ${error.response?.data?.message || error.message}`);
@@ -57,7 +59,13 @@ export class GoCBCApiClient {
   }
 
   /**
-   * Register a new user
+   * Register a new user.
+   * NOTE: there is no POST /auth/register route (auth.ts has only
+   * login/logout/validate/refresh/applicant/*). User creation is
+   * POST /users (users.ts:269) and requires an authenticated caller whose
+   * role can manage users (ADMIN, ECTA, ECX, NBE, BANKS, CUSTOMS, SHIPPING)
+   * — call setToken() with such a token first. EXPORTER users also need
+   * an exporterId (users.ts:13).
    */
   async register(userData: {
     username: string;
@@ -65,8 +73,13 @@ export class GoCBCApiClient {
     email: string;
     role: string;
     fullName: string;
+    organization?: string;
+    exporterId?: string;
   }): Promise<any> {
-    const response = await this.client.post('/auth/register', userData);
+    const response = await this.client.post('/users', {
+      ...userData,
+      organization: userData.organization || userData.role,
+    });
     return response.data;
   }
 
@@ -88,8 +101,9 @@ export class GoCBCApiClient {
 
   /**
    * Generic POST request
+   * (data is optional — several POST routes take an empty body)
    */
-  async post(endpoint: string, data: any): Promise<any> {
+  async post(endpoint: string, data?: any): Promise<any> {
     const response = await this.client.post(endpoint, data);
     return response.data;
   }
@@ -97,7 +111,7 @@ export class GoCBCApiClient {
   /**
    * Generic PUT request
    */
-  async put(endpoint: string, data: any): Promise<any> {
+  async put(endpoint: string, data?: any): Promise<any> {
     const response = await this.client.put(endpoint, data);
     return response.data;
   }
@@ -125,10 +139,14 @@ export class GoCBCApiClient {
   }
 
   /**
-   * Health check
+   * Health check.
+   * NOTE: GET /health lives at the app root (server.ts:187), NOT under
+   * /api/v1, so this calls the server root, not this.baseURL + '/health'.
    */
   async healthCheck(): Promise<any> {
-    const response = await this.client.get('/health');
+    const response = await axios.get(
+      `${this.baseURL.replace(/\/api\/v1$/, '')}/health`
+    );
     return response.data;
   }
 }
@@ -138,7 +156,9 @@ export class GoCBCApiClient {
  */
 export class ExporterAPI extends GoCBCApiClient {
   async getProfile(): Promise<any> {
-    return this.get('/exporters/profile');
+    // Was /exporters/profile (does not exist). Real route:
+    // GET /exporters/me/profile (exporters.ts:1146).
+    return this.get('/exporters/me/profile');
   }
 
   async createContract(contractData: any): Promise<any> {
@@ -174,49 +194,59 @@ export class ExporterAPI extends GoCBCApiClient {
   }
 
   async submitCustomsDeclaration(declarationData: any): Promise<any> {
-    return this.post('/customs/declarations', declarationData);
+    // Was POST /customs/declarations (does not exist). Real route:
+    // POST /customs/declaration/submit (customs.ts:676).
+    return this.post('/customs/declaration/submit', declarationData);
   }
 }
 
 export class ECTAAPI extends GoCBCApiClient {
+  // NOTE: there is no /ecta/* mount in server.ts — the old /ecta/* paths
+  // below never existed. Each method now calls the real domain route.
   async getApplications(): Promise<any> {
-    return this.get('/ecta/applications');
+    return this.get('/exporters/exporter-applications');
   }
 
   async approveApplication(applicationId: string, approvalData: any): Promise<any> {
-    return this.post(`/ecta/applications/${applicationId}/approve`, approvalData);
+    return this.post(`/exporters/exporter-applications/${applicationId}/approve`, approvalData);
   }
 
   async rejectApplication(applicationId: string, reason: string): Promise<any> {
-    return this.post(`/ecta/applications/${applicationId}/reject`, { reason });
+    return this.post(`/exporters/exporter-applications/${applicationId}/reject`, { reason });
   }
 
   async getExporters(): Promise<any> {
-    return this.get('/ecta/exporters');
+    return this.get('/exporters');
   }
 
   async getContracts(): Promise<any> {
-    return this.get('/ecta/contracts');
+    return this.get('/contracts');
   }
 
   async approveContract(contractId: string): Promise<any> {
-    return this.post(`/ecta/contracts/${contractId}/approve`);
+    return this.post(`/contracts/${contractId}/approve`);
   }
 
   async getShipments(): Promise<any> {
-    return this.get('/ecta/shipments');
+    return this.get('/shipments');
   }
 
   async scheduleInspection(inspectionData: any): Promise<any> {
-    return this.post('/ecta/inspections/schedule', inspectionData);
+    // Was POST /ecta/inspections/schedule (does not exist). The real
+    // create-request route is POST /quality/inspections (quality.ts:364).
+    return this.post('/quality/inspections', inspectionData);
   }
 
   async conductInspection(inspectionId: string, results: any): Promise<any> {
-    return this.post(`/ecta/inspections/${inspectionId}/conduct`, results);
+    // Was POST /ecta/inspections/:id/conduct (does not exist). Real route:
+    // POST /quality/inspections/:id/perform (quality.ts:512).
+    return this.post(`/quality/inspections/${inspectionId}/perform`, results);
   }
 
   async approveInspection(inspectionId: string): Promise<any> {
-    return this.post(`/ecta/inspections/${inspectionId}/approve`);
+    // Was POST /ecta/inspections/:id/approve (does not exist). Real route:
+    // POST /quality/inspections/:id/approve (quality.ts:746).
+    return this.post(`/quality/inspections/${inspectionId}/approve`);
   }
 }
 
@@ -234,65 +264,114 @@ export class BanksAPI extends GoCBCApiClient {
   }
 
   async getForexAllocations(): Promise<any> {
-    return this.get('/banking/forex');
+    // Was GET /banking/forex (does not exist). Real route:
+    // GET /forex (forex.ts:122).
+    return this.get('/forex');
   }
 
   async allocateForex(forexData: any): Promise<any> {
-    return this.post('/banking/forex/allocate', forexData);
+    // Was POST /banking/forex/allocate (does not exist). Real route:
+    // POST /forex/allocate (forex.ts:793) — forexId + lcId in the body.
+    return this.post('/forex/allocate', forexData);
   }
 
   async examineDocuments(lcId: string, examination: any): Promise<any> {
-    return this.post(`/banking/lc/${lcId}/examine`, examination);
+    // Was POST /banking/lc/:id/examine — that path exists as a redirect
+    // shim (banking.ts:3790), but the canonical route is
+    // POST /banking/lc/:id/examine-documents (banking.ts:3268).
+    return this.post(`/banking/lc/${lcId}/examine-documents`, examination);
   }
 
   async releasePayment(lcId: string, paymentData: any): Promise<any> {
     return this.post(`/banking/lc/${lcId}/release-payment`, paymentData);
   }
 
-  async settleLC(lcId: string): Promise<any> {
-    return this.post(`/banking/lc/${lcId}/settle`);
+  async settleLC(lcId: string, settleData: any = {}): Promise<any> {
+    // Was POST /banking/lc/:id/settle (does not exist). Settlement is
+    // per-payment: POST /banking/payment/:paymentID/settle (banking.ts:2588).
+    // Look the payment up by LC first (GET /payments returns lcId per row,
+    // payments.ts:1007), then settle it. Defaults mirror the NBE policy
+    // (40% retention) and the CBE test values used by the shell suites.
+    const payments = await this.get('/payments');
+    const list = Array.isArray(payments) ? payments : payments?.data || [];
+    const payment = list.find((p: any) => (p.lcId || p.lc_id) === lcId);
+    if (!payment) {
+      throw new Error(`settleLC: no payment found for LC ${lcId} — run the payment flow first`);
+    }
+    const paymentId = payment.paymentId || payment.payment_id || payment.id;
+    return this.post(`/banking/payment/${paymentId}/settle`, {
+      exchangeRate: 57.5,
+      retentionRate: 40,
+      payingBank: 'Commercial Bank of Ethiopia',
+      payingBankBIC: 'CBETETAA',
+      swiftReference: `SWIFT-${Date.now()}`,
+      ...settleData,
+    });
   }
 
   async getSWIFTMessages(): Promise<any> {
-    return this.get('/banking/swift');
+    // Was GET /banking/swift (does not exist). Real route:
+    // GET /swift/messages (swift.ts:972).
+    return this.get('/swift/messages');
   }
 }
 
 export class NBEAPI extends GoCBCApiClient {
+  // NOTE: there is no /nbe/contracts or /nbe/forex or /nbe/exchange-rates
+  // or /nbe/swift route — the old /nbe/* paths below never existed (the
+  // /nbe mount, server.ts:255, only serves forex approval/repatriation,
+  // lc-monitoring, retention accounts, waivers, compliance-tracking).
+  // Each method now calls the real domain route.
   async getContracts(): Promise<any> {
-    return this.get('/nbe/contracts');
+    return this.get('/contracts');
   }
 
-  async registerContract(contractData: any): Promise<any> {
-    return this.post('/nbe/contracts/register', contractData);
-  }
+  // REMOVED (removed-unverifiable): registerContract() called
+  // POST /nbe/contracts/register, which has no equivalent — contracts are
+  // created via POST /contracts and NBE never registers them. No caller
+  // in tests/ used this method.
 
   async approveContract(contractId: string, approvalData: any): Promise<any> {
-    return this.post(`/nbe/contracts/${contractId}/approve`, approvalData);
+    // Was POST /nbe/contracts/:id/approve (does not exist). Real route:
+    // POST /contracts/:id/nbe-approve (contracts.ts:1823).
+    return this.post(`/contracts/${contractId}/nbe-approve`, approvalData);
   }
 
   async getForexAllocations(): Promise<any> {
-    return this.get('/nbe/forex');
+    // Was GET /nbe/forex (does not exist). Real route: GET /forex.
+    return this.get('/forex');
   }
 
   async allocateForex(forexId: string, allocationData: any): Promise<any> {
-    return this.post(`/nbe/forex/${forexId}/allocate`, allocationData);
+    // Was POST /nbe/forex/:id/allocate (does not exist). Real route:
+    // POST /forex/:forexId/allocate (forex.ts:865).
+    return this.post(`/forex/${forexId}/allocate`, allocationData);
   }
 
   async getExchangeRates(): Promise<any> {
-    return this.get('/nbe/exchange-rates');
+    // Was GET /nbe/exchange-rates (does not exist). Real route:
+    // GET /forex/rates (forex.ts:209).
+    return this.get('/forex/rates');
   }
 
   async setExchangeRate(rateData: any): Promise<any> {
-    return this.post('/nbe/exchange-rates', rateData);
+    // Was POST /nbe/exchange-rates (does not exist). Real route:
+    // POST /forex/rates (forex.ts:487) — body { currency, buyingRate,
+    // sellingRate }.
+    return this.post('/forex/rates', rateData);
   }
 
   async getSWIFTMessages(): Promise<any> {
-    return this.get('/nbe/swift');
+    // Was GET /nbe/swift (does not exist). Real route:
+    // GET /swift/messages (swift.ts:972).
+    return this.get('/swift/messages');
   }
 
-  async verifyRepatriation(shipmentId: string): Promise<any> {
-    return this.post(`/nbe/repatriation/${shipmentId}/verify`);
+  async verifyRepatriation(recordId: string): Promise<any> {
+    // Was POST /nbe/repatriation/:id/verify (does not exist). Real route:
+    // POST /repatriation/:id/verify (repatriation.ts:306) — the id is the
+    // repatriation record id, not a shipment id (parameter renamed).
+    return this.post(`/repatriation/${recordId}/verify`);
   }
 }
 
@@ -302,19 +381,32 @@ export class CustomsAPI extends GoCBCApiClient {
   }
 
   async scheduleInspection(declarationId: string, inspectionData: any): Promise<any> {
-    return this.post(`/customs/declarations/${declarationId}/schedule-inspection`, inspectionData);
+    // LEFTOVER — semantic mismatch, kept so tests/workflows/05-all-portals.test.ts
+    // still compiles (it calls this method expecting SUBMITTED → INSPECTING).
+    // The server has NO schedule-inspection endpoint. The closest real
+    // action is POST /customs/declaration/:id/inspect (customs.ts:1820),
+    // which STARTS the inspection (moves the declaration to inspecting);
+    // the scheduling fields (date/time/inspector) are not stored by it.
+    return this.post(`/customs/declaration/${declarationId}/inspect`, inspectionData);
   }
 
   async completeInspection(declarationId: string, results: any): Promise<any> {
-    return this.post(`/customs/declarations/${declarationId}/complete-inspection`, results);
+    // Was POST /customs/declarations/:id/complete-inspection (plural path
+    // does not exist). Real route: POST /customs/declaration/:id/complete-inspection
+    // (customs.ts:1837).
+    return this.post(`/customs/declaration/${declarationId}/complete-inspection`, results);
   }
 
   async clearDeclaration(declarationId: string, clearanceData: any): Promise<any> {
-    return this.post(`/customs/declarations/${declarationId}/clear`, clearanceData);
+    // Was POST /customs/declarations/:id/clear (plural path does not exist).
+    // Real route: POST /customs/declaration/:id/clear (customs.ts:2022).
+    return this.post(`/customs/declaration/${declarationId}/clear`, clearanceData);
   }
 
   async rejectDeclaration(declarationId: string, rejectionData: any): Promise<any> {
-    return this.post(`/customs/declarations/${declarationId}/reject`, rejectionData);
+    // Was POST /customs/declarations/:id/reject (plural path does not exist).
+    // Real route: POST /customs/declaration/:id/reject (customs.ts:1939).
+    return this.post(`/customs/declaration/${declarationId}/reject`, rejectionData);
   }
 }
 
@@ -324,19 +416,32 @@ export class ShippingAPI extends GoCBCApiClient {
   }
 
   async updateShipmentStatus(shipmentId: string, statusData: any): Promise<any> {
-    return this.post(`/shipping/shipments/${shipmentId}/update-status`, statusData);
+    // Was POST /shipping/shipments/:id/update-status (does not exist).
+    // Real route: PUT /shipments/:id/status (shipments.ts:1124),
+    // body { status, ... }.
+    return this.put(`/shipments/${shipmentId}/status`, statusData);
   }
 
-  async createBillOfLading(bolData: any): Promise<any> {
-    return this.post('/shipping/bill-of-lading', bolData);
+  async createBillOfLading(bookingId: string, bolData: any): Promise<any> {
+    // Was POST /shipping/bill-of-lading (does not exist). Real route:
+    // POST /shipping/bookings/:bookingId/bill-of-lading/issue (shipping.ts:812)
+    // — body { blNumber, blType, shipper, consignee, ... }. Signature
+    // changed: first argument is now the booking id (no callers in tests/).
+    return this.post(`/shipping/bookings/${bookingId}/bill-of-lading/issue`, bolData);
   }
 
-  async confirmDeparture(shipmentId: string, departureData: any): Promise<any> {
-    return this.post(`/shipping/shipments/${shipmentId}/confirm-departure`, departureData);
+  async confirmDeparture(bookingId: string, departureData: any): Promise<any> {
+    // Was POST /shipping/shipments/:id/confirm-departure (does not exist).
+    // Real route: POST /shipping/bookings/:bookingId/depart (shipping.ts:607).
+    // Signature changed: first argument is now the booking id (no callers).
+    return this.post(`/shipping/bookings/${bookingId}/depart`, departureData);
   }
 
-  async confirmDelivery(shipmentId: string, deliveryData: any): Promise<any> {
-    return this.post(`/shipping/shipments/${shipmentId}/confirm-delivery`, deliveryData);
+  async confirmDelivery(bookingId: string, deliveryData: any): Promise<any> {
+    // Was POST /shipping/shipments/:id/confirm-delivery (does not exist).
+    // Real route: POST /shipping/bookings/:bookingId/deliver (shipping.ts:741).
+    // Signature changed: first argument is now the booking id (no callers).
+    return this.post(`/shipping/bookings/${bookingId}/deliver`, deliveryData);
   }
 }
 
@@ -346,7 +451,9 @@ export class ECXAPI extends GoCBCApiClient {
   }
 
   async registerIntake(intakeData: any): Promise<any> {
-    return this.post('/ecx/lots/intake', intakeData);
+    // Was POST /ecx/lots/intake (does not exist). Real route:
+    // POST /ecx/lots (ecx.ts:274) — the intake endpoint itself.
+    return this.post('/ecx/lots', intakeData);
   }
 
   async gradeLot(lotId: string, gradingData: any): Promise<any> {
@@ -362,6 +469,8 @@ export class ECXAPI extends GoCBCApiClient {
   }
 
   async getMarketPrices(): Promise<any> {
-    return this.get('/ecx/prices');
+    // Was GET /ecx/prices (does not exist). Real route:
+    // GET /ecx/market (ecx.ts:81).
+    return this.get('/ecx/market');
   }
 }

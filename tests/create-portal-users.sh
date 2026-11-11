@@ -51,8 +51,8 @@ curl -s -X POST "$BASE_URL/users" \
         "password": "bank12345",
         "email": "bank.officer@cecbs.et",
         "fullName": "Bank Officer",
-        "role": "BANK",
-        "organization": "BANK",
+        "role": "BANKS",
+        "organization": "BANKS",
         "phone": "+251911000003"
     }' | jq -r '.success, .error.message // empty'
 

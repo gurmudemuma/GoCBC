@@ -10,7 +10,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # Check if API is already running
-if curl -s http://localhost:5000/api/v1/health > /dev/null 2>&1; then
+if curl -s http://localhost:3001/health > /dev/null 2>&1; then
     echo "✓ API is already running"
     echo ""
 else
@@ -26,7 +26,7 @@ else
     sleep 60
     
     # Check if API is now running
-    if curl -s http://localhost:5000/api/v1/health > /dev/null 2>&1; then
+    if curl -s http://localhost:3001/health > /dev/null 2>&1; then
         echo "✓ API is now running"
         echo ""
     else

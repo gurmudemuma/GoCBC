@@ -125,28 +125,39 @@ print_success "NBE Officer authenticated"
 print_header "STAGE 1: SETUP EXPORTER"
 
 print_step "Creating exporter application..."
-curl -s -X POST "$API_BASE/exporters/applications" \
+# NOTE: the application endpoint is POST /exporters/exporter-applications
+# (exporters.ts:102); it requires companyName, tinNumber,
+# businessLicenseNumber, capitalRequirement, professionalTaster, contactPerson,
+# email, phone, address and city. (The capitalRequirement, professionalTaster
+# and city values below are test fixtures.)
+curl -s -X POST "$API_BASE/exporters/exporter-applications" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
-    \"businessName\": \"Rejection Test Coffee Export Ltd\",
+    \"companyName\": \"Rejection Test Coffee Export Ltd\",
     \"tinNumber\": \"TIN${TIMESTAMP}\",
-    \"licenseNumber\": \"LIC-REJ-${TIMESTAMP}\",
+    \"businessLicenseNumber\": \"LIC-REJ-${TIMESTAMP}\",
+    \"capitalRequirement\": 1000000,
+    \"professionalTaster\": \"Test Exporter\",
     \"contactPerson\": \"Test Exporter\",
     \"email\": \"reject-test@coffee.et\",
     \"phone\": \"+251911000000\",
-    \"address\": \"Addis Ababa, Ethiopia\"
+    \"address\": \"Addis Ababa, Ethiopia\",
+    \"city\": \"Addis Ababa\"
   }" > /tmp/create_exporter_app.json
 
 APP_ID=$(cat /tmp/create_exporter_app.json | jq -r '.data.applicationId // .applicationId // .id')
 print_data "Application ID: $APP_ID"
 
 print_step "Approving exporter application..."
-curl -s -X POST "$API_BASE/exporters/applications/$APP_ID/approve" \
+# NOTE: the approve endpoint is POST
+# /exporters/exporter-applications/:applicationId/approve (exporters.ts:307);
+# it requires the exporterId in the body.
+curl -s -X POST "$API_BASE/exporters/exporter-applications/$APP_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
-    \"exporterID\": \"$EXPORTER_ID\",
+    \"exporterId\": \"$EXPORTER_ID\",
     \"licenseNumber\": \"LIC-REJ-${TIMESTAMP}\",
     \"approvedBy\": \"ECTA Admin\"
   }" > /tmp/approve_exporter.json

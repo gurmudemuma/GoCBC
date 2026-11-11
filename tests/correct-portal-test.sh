@@ -5,7 +5,7 @@
 
 set -e
 
-API_BASE="http://localhost:5000/api/v1"
+API_BASE="${API_BASE:-http://localhost:3001/api/v1}"
 TEST_OUTPUT="/tmp/correct-portal-test.txt"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 

@@ -92,12 +92,18 @@ test_endpoint "Document Verification" "/customs/document-verification"
 echo ""
 
 echo -e "${CYAN}CERTIFICATES & DOCUMENTS${NC}"
-test_endpoint "Certificates" "/certificates"
+# NOTE: the bare /certificates mount resolves to the quality-inspections list
+# (qualityRoutes GET / is mounted first); the phytosanitary list is
+# GET /certificates/phyto (certificates.ts:16).
+test_endpoint "Certificates" "/certificates/phyto"
 test_endpoint "Documents" "/documents"
 echo ""
 
 echo -e "${CYAN}WAREHOUSE & ECX${NC}"
-test_endpoint "Warehouse" "/warehouse"
+# NOTE: the bare /warehouse mount resolves to the ECX overview object
+# (ecxRoutes GET /); the inventory list is GET /warehouse/inventory
+# (warehouse.ts:16).
+test_endpoint "Warehouse" "/warehouse/inventory"
 test_endpoint "Market Prices" "/market"
 echo ""
 

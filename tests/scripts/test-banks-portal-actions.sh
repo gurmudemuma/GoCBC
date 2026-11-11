@@ -131,7 +131,11 @@ echo ""
 
 test_api "/forex" "GET" "Fetch Forex Allocations"
 test_api "/forex/rates" "GET" "Get Exchange Rates"
-test_api "/forex/exporter" "GET" "Get Exporter Forex"
+# NOTE: there is no GET /forex/exporter (the /exporter route needs an id
+# segment, forex.ts:400). The forex list is GET /forex (forex.ts:122);
+# ?lcId= is passed for intent but the handler reads no query params, so the
+# filter is ignored and all rows are returned.
+test_api "/forex?lcId=$LC_ID" "GET" "Get Exporter Forex"
 
 # Test forex allocation (only if we have an approved LC without forex)
 if [ -n "$LC_ID" ]; then
@@ -165,9 +169,11 @@ test_api "/swift/messages" "GET" "Fetch SWIFT Messages"
 echo -e "${BLUE}=== 6. Testing Payment Method Endpoints ===${NC}"
 echo ""
 
-test_api "/banking/documentary-collections" "GET" "Fetch Documentary Collections"
-test_api "/banking/advance-payments" "GET" "Fetch Advance Payments"
-test_api "/banking/consignment-payments" "GET" "Fetch Consignment Payments"
+# NOTE: removed-unverifiable: there are no GET /banking/documentary-collections,
+# /banking/advance-payments or /banking/consignment-payments list endpoints —
+# banking.ts has no such GET routes. The /stats/* equivalents below are the
+# real list endpoints and are already tested.
+# (Deleted 2026-11-11; see git history for the original three lines.)
 
 # Also test the stats endpoints
 test_api "/stats/documentary-collections" "GET" "Documentary Collections Stats"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-API_BASE="http://localhost:5001/api/v1"
+API_BASE="http://localhost:3001/api/v1"
 
 echo "=== Testing Payment Recording ==="
 

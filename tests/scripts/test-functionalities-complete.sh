@@ -84,18 +84,29 @@ endpoints=(
     "forex:Forex Allocations"
     "banking/lc:Letter of Credit"
     "payments:Payment Processing"
-    "ecta/applications:ECTA Applications"
-    "ecta/exporters:ECTA Exporters"
-    "ecta/contracts:ECTA Contracts"
-    "ecta/inspections:Quality Inspections"
+    # NOTE (2026-11-11): there is no /ecta mount; these map to the real
+    # resource endpoints — applications -> /exporters/exporter-applications
+    # (exporters.ts:27), exporters -> /exporters, contracts -> /contracts,
+    # inspections -> /quality/inspections (quality.ts:133).
+    "exporters/exporter-applications:ECTA Applications"
+    "exporters:ECTA Exporters"
+    "contracts:ECTA Contracts"
+    "quality/inspections:Quality Inspections"
     "nbe/forex:NBE Forex Monitoring"
-    "nbe/exchange-rates:Exchange Rates"
-    "nbe/swift:SWIFT Monitoring"
+    # NOTE: /nbe/exchange-rates does not exist; rates live at /exchange-rates
+    # (exchangeRates.ts:18). /nbe/swift does not exist either; SWIFT messages
+    # live at /swift/messages (swift.ts:972).
+    "exchange-rates:Exchange Rates"
+    "swift/messages:SWIFT Monitoring"
     "customs/declarations:Customs Declarations"
     "shipping/shipments:Shipping Portal"
     "ecx/lots:ECX Coffee Lots"
-    "ecx/prices:Market Prices"
-    "audit/logs:Audit Trail"
+    # NOTE: there is no GET /ecx/prices; market prices live at
+    # GET /market/prices (market.ts:53).
+    "market/prices:Market Prices"
+    # NOTE: there is no GET /audit/logs; recent entries are at
+    # GET /audit/portal/recent (audit.ts:71).
+    "audit/portal/recent:Audit Trail"
     "analytics/dashboard:Dashboard Analytics"
     "documents:Document Management"
     "users:User Management"
@@ -119,7 +130,7 @@ done
 print_header "2. DATA RETRIEVAL & RESPONSE FORMAT (10 tests)"
 
 # Test JSON responses
-for endpoint in "contracts" "shipments" "forex" "payments" "ecta/inspections"; do
+for endpoint in "contracts" "shipments" "forex" "payments" "quality/inspections"; do
     response=$(curl -s "$API_URL/$endpoint" 2>/dev/null)
     
     if echo "$response" | python3 -m json.tool > /dev/null 2>&1 || echo "$response" | grep -q "\["; then
@@ -157,7 +168,7 @@ done
 
 # Quality inspection statuses  
 for status in "PENDING" "SCHEDULED" "UNDER_REVIEW" "APPROVED" "REJECTED"; do
-    if curl -s "$API_URL/ecta/inspections?status=$status" > /dev/null 2>&1; then
+    if curl -s "$API_URL/quality/inspections?status=$status" > /dev/null 2>&1; then
         print_success "Quality filter: $status"
     else
         print_fail "Quality filter $status failed"
@@ -197,9 +208,12 @@ done
 print_header "5. PORTAL-SPECIFIC FUNCTIONALITY (15 tests)"
 
 # ECTA Portal
+# NOTE (2026-11-11): there is no /ecta mount; the ECTA-facing resources live
+# at /exporters/exporter-applications (exporters.ts:27), /exporters,
+# /contracts and /quality/inspections (quality.ts:133).
 print_info "Testing ECTA Portal..."
-for endpoint in "applications" "exporters" "contracts" "inspections"; do
-    if curl -s "$API_URL/ecta/$endpoint" > /dev/null 2>&1; then
+for endpoint in "exporters/exporter-applications" "exporters" "contracts" "quality/inspections"; do
+    if curl -s "$API_URL/$endpoint" > /dev/null 2>&1; then
         print_success "ECTA: $endpoint"
     else
         print_fail "ECTA: $endpoint"
@@ -207,9 +221,12 @@ for endpoint in "applications" "exporters" "contracts" "inspections"; do
 done
 
 # NBE Portal
+# NOTE (2026-11-11): /nbe/exchange-rates and /nbe/swift do not exist; rates
+# live at /exchange-rates (exchangeRates.ts:18) and SWIFT messages at
+# /swift/messages (swift.ts:972). /nbe/forex is real (nbe.ts:24).
 print_info "Testing NBE Portal..."
-for endpoint in "forex" "exchange-rates" "swift"; do
-    if curl -s "$API_URL/nbe/$endpoint" > /dev/null 2>&1; then
+for endpoint in "nbe/forex" "exchange-rates" "swift/messages"; do
+    if curl -s "$API_URL/$endpoint" > /dev/null 2>&1; then
         print_success "NBE: $endpoint"
     else
         print_fail "NBE: $endpoint"
@@ -217,9 +234,11 @@ for endpoint in "forex" "exchange-rates" "swift"; do
 done
 
 # Banks Portal
+# NOTE (2026-11-11): /banking/swift does not exist; SWIFT messages live at
+# /swift/messages (swift.ts:972). /banking/lc is real (banking.ts:1349).
 print_info "Testing Banks Portal..."
-for endpoint in "lc" "swift"; do
-    if curl -s "$API_URL/banking/$endpoint" > /dev/null 2>&1; then
+for endpoint in "banking/lc" "swift/messages"; do
+    if curl -s "$API_URL/$endpoint" > /dev/null 2>&1; then
         print_success "Banking: $endpoint"
     else
         print_fail "Banking: $endpoint"
@@ -241,8 +260,10 @@ else
 fi
 
 # ECX Portal
-for endpoint in "lots" "prices"; do
-    if curl -s "$API_URL/ecx/$endpoint" > /dev/null 2>&1; then
+# NOTE (2026-11-11): there is no GET /ecx/prices; market prices live at
+# GET /market/prices (market.ts:53).
+for endpoint in "ecx/lots" "market/prices"; do
+    if curl -s "$API_URL/$endpoint" > /dev/null 2>&1; then
         print_success "ECX: $endpoint"
     else
         print_fail "ECX: $endpoint"
@@ -318,25 +339,31 @@ else
     print_fail "Dashboard analytics"
 fi
 
-if curl -s "$API_URL/stats" > /dev/null 2>&1; then
+# NOTE (2026-11-11): there is no GET /stats root; the bank-portal stats are
+# at GET /stats/bank-portal (stats.ts:49).
+if curl -s "$API_URL/stats/bank-portal" > /dev/null 2>&1; then
     print_success "Statistics endpoint"
 else
     print_fail "Statistics"
 fi
 
-if curl -s "$API_URL/audit/logs" > /dev/null 2>&1; then
+# NOTE: there is no GET /audit/logs; recent entries are at
+# GET /audit/portal/recent (audit.ts:71).
+if curl -s "$API_URL/audit/portal/recent" > /dev/null 2>&1; then
     print_success "Audit trail"
 else
     print_fail "Audit trail"
 fi
 
-if curl -s "$API_URL/audit/logs?entityType=CONTRACT" > /dev/null 2>&1; then
+if curl -s "$API_URL/audit/portal/recent?entityType=CONTRACT" > /dev/null 2>&1; then
     print_success "Entity-specific audit"
 else
     print_fail "Entity audit"
 fi
 
-if curl -s "$API_URL/analytics/stats" > /dev/null 2>&1; then
+# NOTE: there is no GET /analytics/stats; the closest real analytics
+# endpoint is GET /analytics/breakdown (analytics.ts:225).
+if curl -s "$API_URL/analytics/breakdown" > /dev/null 2>&1; then
     print_success "Analytics stats"
 else
     print_fail "Analytics stats"
@@ -354,7 +381,9 @@ else
     print_fail "Document management"
 fi
 
-if curl -s "$API_URL/notifications" > /dev/null 2>&1; then
+# NOTE: there is no GET /notifications root; alerts live at
+# GET /notifications/alerts (notifications.ts:379).
+if curl -s "$API_URL/notifications/alerts" > /dev/null 2>&1; then
     print_success "Notifications"
 else
     print_info "Notifications (optional)"
@@ -368,14 +397,18 @@ else
     ((TESTS_PASSED++))
 fi
 
-if curl -s "$API_URL/traceability" > /dev/null 2>&1; then
+# NOTE: there is no GET /traceability root; the system statistics are at
+# GET /traceability/system/statistics (traceability.ts:73).
+if curl -s "$API_URL/traceability/system/statistics" > /dev/null 2>&1; then
     print_success "Traceability"
 else
     print_info "Traceability (optional)"
     ((TESTS_PASSED++))
 fi
 
-if curl -s "$API_URL/banking/swift" > /dev/null 2>&1; then
+# NOTE: SWIFT lives under /swift, not /banking; the list endpoint is
+# GET /swift/messages (swift.ts:972).
+if curl -s "$API_URL/swift/messages" > /dev/null 2>&1; then
     print_success "SWIFT messaging"
 else
     print_fail "SWIFT messaging"
@@ -400,8 +433,10 @@ if echo "$CONTRACTS" | grep -q "contractId"; then
             print_fail "Contract-Shipment relation"
         fi
         
-        # Test audit trail for contract
-        if curl -s "$API_URL/audit/logs?entityType=CONTRACT&entityId=$FIRST_CONTRACT" > /dev/null 2>&1; then
+        # NOTE: there is no GET /audit/logs. The per-entity audit trail is
+        # GET /audit/trail (audit.ts:1977); it requires BOTH entityType and
+        # entityId query params and returns data: allLogs.
+        if curl -s "$API_URL/audit/trail?entityType=CONTRACT&entityId=$FIRST_CONTRACT" > /dev/null 2>&1; then
             print_success "Contract audit trail"
         else
             print_fail "Contract audit"
@@ -416,7 +451,9 @@ else
 fi
 
 # Test general relationships
-if curl -s "$API_URL/audit/logs?entityType=SHIPMENT" > /dev/null 2>&1; then
+# NOTE: there is no GET /audit/logs; entity-filtered recent entries are at
+# GET /audit/portal/recent (audit.ts:71), which accepts entityType.
+if curl -s "$API_URL/audit/portal/recent?entityType=SHIPMENT" > /dev/null 2>&1; then
     print_success "Shipment audit queries"
 else
     print_fail "Shipment audit"

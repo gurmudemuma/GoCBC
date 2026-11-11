@@ -244,25 +244,12 @@ fi
 
 sleep 2
 
-log_info "Step 2.2: ECX registering contract..."
-
-REGISTRATION_DATA=$(cat <<EOF
-{
-  "ecxContractNumber": "ECX-TEST-$TEST_TIMESTAMP",
-  "registrationDate": "$(date +%Y-%m-%d)",
-  "notes": "Registered for testing"
-}
-EOF
-)
-
-RESPONSE=$(api_call "POST" "/contracts/$CONTRACT_ID/register" "$ECX_TOKEN" "$REGISTRATION_DATA")
-STATUS=$(echo $RESPONSE | jq -r '.data.status')
-
-if [ "$STATUS" == "registered" ] || [ "$STATUS" == "active" ]; then
-    log_success "Contract registered with ECX"
-else
-    log_warning "Contract registration status: $STATUS"
-fi
+# NOTE: removed-unverifiable: there is no POST /contracts/:id/register.
+# Contract creation IS the registration: POST /contracts (contracts.ts:326)
+# calls registerContract (contracts.ts:504) and returns 201 with
+# data:{contractID, status:'pending', blockchainSynced}, so no separate
+# registration step exists.
+log_info "Step 2.2: ECX registering contract — skipped (creation already registers the contract)"
 
 #================================================================================
 log_step "Phase 3: Quality Inspection & Certification"
@@ -300,8 +287,8 @@ RESULTS_DATA=$(cat <<EOF
 {
   "grade": "Grade 1",
   "screenSize": "15+",
-  "defects": "0.5%",
-  "moisture": "11.5%",
+  "defectCount": 0.5,
+  "moistureContent": 11.5,
   "cupScore": 85,
   "passed": true,
   "certificateNumber": "QC-TEST-$TEST_TIMESTAMP",
@@ -310,7 +297,9 @@ RESULTS_DATA=$(cat <<EOF
 EOF
 )
 
-RESPONSE=$(api_call "PUT" "/quality/inspections/$INSPECTION_ID/results" "$ECTA_TOKEN" "$RESULTS_DATA")
+# NOTE: the results endpoint is POST /quality/inspections/:inspectionID/lab-results
+# (quality.ts:1737); it requires numeric moistureContent and defectCount.
+RESPONSE=$(api_call "POST" "/quality/inspections/$INSPECTION_ID/lab-results" "$ECTA_TOKEN" "$RESULTS_DATA")
 STATUS=$(echo $RESPONSE | jq -r '.data.status')
 
 if [ "$STATUS" == "passed" ] || [ "$STATUS" == "completed" ]; then
@@ -325,24 +314,12 @@ log_step "Phase 4: Warehouse Release"
 
 log_info "Step 4.1: ECX issuing warehouse release order..."
 
-RELEASE_DATA=$(cat <<EOF
-{
-  "contractId": "$CONTRACT_ID",
-  "warehouse": "Dinsho Warehouse",
-  "releaseQuantity": 500,
-  "destination": "Djibouti Port",
-  "releaseDate": "$(date +%Y-%m-%d)"
-}
-EOF
-)
-
-RESPONSE=$(api_call "POST" "/warehouse/release" "$ECX_TOKEN" "$RELEASE_DATA")
-
-if echo $RESPONSE | jq -e '.success' > /dev/null 2>&1; then
-    log_success "Warehouse release order issued"
-else
-    log_warning "Warehouse release response unclear"
-fi
+# NOTE: removed-unverifiable: there is no warehouse release endpoint anywhere
+# in the API. warehouse.ts only defines GET /inventory (:16) and GET /receipts
+# (:89), and no other route file defines a warehouse release. The ECX lot
+# release endpoint is POST /ecx/lots/:lotId/release (ecx.ts:441), which needs
+# an ECX lot id this phase does not have.
+log_warning "Warehouse release skipped — no warehouse release endpoint exists"
 
 #================================================================================
 log_step "Phase 5: Shipping & Logistics"
@@ -380,14 +357,18 @@ log_info "Step 5.2: Shipping agent updating shipment status..."
 
 UPDATE_DATA=$(cat <<EOF
 {
-  "status": "in_transit",
+  "status": "IN_TRANSIT",
   "billOfLadingNumber": "BL-TEST-$TEST_TIMESTAMP",
   "actualDeparture": "$(date +%Y-%m-%d)"
 }
 EOF
 )
 
-RESPONSE=$(api_call "PUT" "/shipments/$SHIPMENT_ID" "$SHIPPING_TOKEN" "$UPDATE_DATA")
+# NOTE: shipment status changes go through PUT /shipments/:shipmentID/status
+# (shipments.ts:1124), which validates the status against the shipment status
+# machine (statusManager.ts:116); the machine uses UPPER-CASE values, so the
+# old lowercase "in_transit" would fail validation.
+RESPONSE=$(api_call "PUT" "/shipments/$SHIPMENT_ID/status" "$SHIPPING_TOKEN" "$UPDATE_DATA")
 log_success "Shipment status updated"
 
 #================================================================================
@@ -398,7 +379,10 @@ log_info "Step 6.1: Exporter requesting LC..."
 
 LC_REQUEST_DATA=$(cat <<EOF
 {
-  "contractId": "$CONTRACT_ID",
+  "lcID": "LC-REQ-TEST-$TEST_TIMESTAMP",
+  "contractID": "$CONTRACT_ID",
+  "exporterID": "$EXPORTER_ID",
+  "bankName": "Bank of America",
   "beneficiaryBank": "Commercial Bank of Ethiopia",
   "issuingBank": "Bank of America",
   "amount": 125000,
@@ -409,9 +393,13 @@ LC_REQUEST_DATA=$(cat <<EOF
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/lc/request" "$EXPORTER_TOKEN" "$LC_REQUEST_DATA")
+# NOTE: LCs live under /banking/lc; the request endpoint is POST
+# /banking/lc/request (banking.ts:85), which requires lcID, contractID,
+# exporterID, bankName, amount, currency, expiryDate and returns 201 with
+# data:{lcID, contractID, exporterID, status:'REQUESTED'}.
+RESPONSE=$(api_call "POST" "/banking/lc/request" "$EXPORTER_TOKEN" "$LC_REQUEST_DATA")
 
-LC_REQ_ID=$(echo $RESPONSE | jq -r '.data.id // .data.lcRequestId')
+LC_REQ_ID=$(echo $RESPONSE | jq -r '.data.lcID')
 
 if [ "$LC_REQ_ID" != "null" ] && [ -n "$LC_REQ_ID" ]; then
     log_success "LC requested: $LC_REQ_ID"
@@ -434,9 +422,11 @@ LC_ISSUE_DATA=$(cat <<EOF
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/lc/$LC_REQ_ID/issue" "$BANK_TOKEN" "$LC_ISSUE_DATA")
+# NOTE: the issue endpoint is POST /banking/lc/:lcID/issue (banking.ts:921);
+# it requires a `terms` body, which LC_ISSUE_DATA already has.
+RESPONSE=$(api_call "POST" "/banking/lc/$LC_REQ_ID/issue" "$BANK_TOKEN" "$LC_ISSUE_DATA")
 
-LC_ID=$(echo $RESPONSE | jq -r '.data.id // .data.lcId')
+LC_ID=$(echo $RESPONSE | jq -r '.data.lcID')
 
 if [ "$LC_ID" != "null" ] && [ -n "$LC_ID" ]; then
     log_success "LC issued: $LC_ID"
@@ -453,18 +443,23 @@ log_info "Step 7.1: Exporter submitting customs declaration..."
 
 CUSTOMS_DATA=$(cat <<EOF
 {
-  "shipmentId": "$SHIPMENT_ID",
+  "declarationID": "CUS-TEST-$TEST_TIMESTAMP",
+  "shipmentID": "$SHIPMENT_ID",
+  "exporterID": "$EXPORTER_ID",
   "hsCode": "0901.11",
-  "declaredValue": 125000,
+  "value": 125000,
   "currency": "USD",
   "exportDuty": 2500
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/customs/declarations" "$EXPORTER_TOKEN" "$CUSTOMS_DATA")
+# NOTE: the create endpoint is POST /customs/declaration/submit
+# (customs.ts:676); it requires declarationID, shipmentID, exporterID and
+# returns 200 with data:{declarationID, shipmentID, status:'SUBMITTED'}.
+RESPONSE=$(api_call "POST" "/customs/declaration/submit" "$EXPORTER_TOKEN" "$CUSTOMS_DATA")
 
-CUSTOMS_ID=$(echo $RESPONSE | jq -r '.data.id // .data.declarationId')
+CUSTOMS_ID=$(echo $RESPONSE | jq -r '.data.declarationID')
 
 if [ "$CUSTOMS_ID" != "null" ] && [ -n "$CUSTOMS_ID" ]; then
     log_success "Customs declaration submitted: $CUSTOMS_ID"
@@ -481,12 +476,14 @@ CLEAR_DATA=$(cat <<EOF
 {
   "clearanceNumber": "CLR-TEST-$TEST_TIMESTAMP",
   "cleared": true,
-  "notes": "All documents verified"
+  "clearanceRemarks": "All documents verified"
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/customs/declarations/$CUSTOMS_ID/clear" "$CUSTOMS_TOKEN" "$CLEAR_DATA")
+# NOTE: the clear endpoint is POST /customs/declaration/:declarationId/clear
+# (customs.ts:2022); it reads clearanceRemarks (not `notes`).
+RESPONSE=$(api_call "POST" "/customs/declaration/$CUSTOMS_ID/clear" "$CUSTOMS_TOKEN" "$CLEAR_DATA")
 log_success "Customs clearance completed"
 
 #================================================================================
@@ -497,18 +494,20 @@ log_info "Step 8.1: Exporter applying for forex retention..."
 
 FOREX_DATA=$(cat <<EOF
 {
+  "forexId": "FRX-TEST-$TEST_TIMESTAMP",
   "contractId": "$CONTRACT_ID",
-  "exportValue": 125000,
-  "requestedRetention": 37500,
-  "retentionPercentage": 30,
-  "purpose": "Import of machinery"
+  "exporterId": "$EXPORTER_ID",
+  "amount": 125000,
+  "currency": "USD"
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/forex/applications" "$EXPORTER_TOKEN" "$FOREX_DATA")
+# NOTE: the forex request endpoint is POST /forex/request (forex.ts:543); it
+# requires forexId and contractId and returns 201 with data:{forexId}.
+RESPONSE=$(api_call "POST" "/forex/request" "$EXPORTER_TOKEN" "$FOREX_DATA")
 
-FOREX_ID=$(echo $RESPONSE | jq -r '.data.id // .data.forexId')
+FOREX_ID=$(echo $RESPONSE | jq -r '.data.forexId')
 
 if [ "$FOREX_ID" != "null" ] && [ -n "$FOREX_ID" ]; then
     log_success "Forex application submitted: $FOREX_ID"
@@ -523,14 +522,17 @@ log_info "Step 8.2: NBE allocating forex..."
 
 ALLOCATION_DATA=$(cat <<EOF
 {
-  "approvedAmount": 37500,
-  "allocationReference": "NBE-FRX-TEST-$TEST_TIMESTAMP",
-  "validUntil": "$(date -d '+180 days' +%Y-%m-%d)"
+  "amount": 37500,
+  "approvalRef": "NBE-FRX-TEST-$TEST_TIMESTAMP",
+  "expiryDate": "$(date -d '+180 days' +%Y-%m-%d)"
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/forex/applications/$FOREX_ID/allocate" "$NBE_TOKEN" "$ALLOCATION_DATA")
+# NOTE: the allocate endpoint is POST /forex/:forexID/allocate (forex.ts:865);
+# it reads lcId, amount, exchangeRate, retentionRate, officer, approvalRef,
+# expiryDate.
+RESPONSE=$(api_call "POST" "/forex/$FOREX_ID/allocate" "$NBE_TOKEN" "$ALLOCATION_DATA")
 log_success "Forex allocated"
 
 #================================================================================
@@ -541,18 +543,26 @@ log_info "Step 9.1: Bank recording incoming payment..."
 
 PAYMENT_DATA=$(cat <<EOF
 {
-  "lcId": "$LC_ID",
-  "amount": 125000,
+  "paymentID": "PAY-TEST-$TEST_TIMESTAMP",
+  "contractID": "$CONTRACT_ID",
+  "shipmentID": "$SHIPMENT_ID",
+  "exporterID": "$EXPORTER_ID",
+  "lcID": "$LC_ID",
+  "amountUSD": 125000,
   "currency": "USD",
-  "swiftReference": "SWIFT-TEST-$TEST_TIMESTAMP",
-  "paymentDate": "$(date +%Y-%m-%d)"
+  "paymentDate": "$(date +%Y-%m-%d)",
+  "payerName": "Global Coffee Importers Inc.",
+  "swiftReference": "SWIFT-TEST-$TEST_TIMESTAMP"
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/payments/incoming" "$BANK_TOKEN" "$PAYMENT_DATA")
+# NOTE: the payment record endpoint is POST /payments/record (payments.ts:254);
+# it requires paymentID, contractID, shipmentID, exporterID, numeric amountUSD,
+# currency, paymentDate, payerName and returns 201 with data:{paymentID, ...}.
+RESPONSE=$(api_call "POST" "/payments/record" "$BANK_TOKEN" "$PAYMENT_DATA")
 
-PAYMENT_ID=$(echo $RESPONSE | jq -r '.data.id // .data.paymentId')
+PAYMENT_ID=$(echo $RESPONSE | jq -r '.data.paymentID')
 
 if [ "$PAYMENT_ID" != "null" ] && [ -n "$PAYMENT_ID" ]; then
     log_success "Payment received: $PAYMENT_ID"
@@ -567,15 +577,20 @@ log_info "Step 9.2: NBE verifying repatriation..."
 
 REPATRIATION_DATA=$(cat <<EOF
 {
-  "contractId": "$CONTRACT_ID",
-  "exportValue": 125000,
-  "repatriatedAmount": 125000,
-  "compliant": true
+  "repatriationAmount": 125000,
+  "repatriationDate": "$(date +%Y-%m-%d)",
+  "bankReference": "CBE-FOREX-$TEST_TIMESTAMP",
+  "repatriationMethod": "SWIFT"
 }
 EOF
 )
 
-RESPONSE=$(api_call "POST" "/repatriation/verify" "$NBE_TOKEN" "$REPATRIATION_DATA")
+# NOTE: the NBE repatriation endpoint is POST /nbe/forex/:forexId/repatriation
+# (nbe.ts:341, role NBE only); it reads repatriationAmount, repatriationDate,
+# bankReference, repatriationMethod. There is no POST /repatriation/verify —
+# POST /repatriation/:id/verify (repatriation.ts:306) needs a repatriation
+# record id that this flow never creates.
+RESPONSE=$(api_call "POST" "/nbe/forex/$FOREX_ID/repatriation" "$NBE_TOKEN" "$REPATRIATION_DATA")
 log_success "Repatriation verified"
 
 sleep 2
@@ -606,7 +621,9 @@ CONTRACT_STATUS=$(api_call "GET" "/contracts/$CONTRACT_ID" "$ADMIN_TOKEN" | jq -
 log_success "Contract status: $CONTRACT_STATUS"
 
 # Check blockchain audit trail
-if api_call "GET" "/blockchain/contracts/$CONTRACT_ID/history" "$ADMIN_TOKEN" | jq -e '.success' > /dev/null 2>&1; then
+# NOTE: the blockchain history endpoint is GET /blockchain/history/:entityId
+# (blockchain.ts:188); it returns data: blockchainLogs[].
+if api_call "GET" "/blockchain/history/$CONTRACT_ID" "$ADMIN_TOKEN" | jq -e '.success' > /dev/null 2>&1; then
     log_success "Blockchain audit trail verified"
 else
     log_warning "Blockchain audit trail check inconclusive"

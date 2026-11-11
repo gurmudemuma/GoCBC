@@ -2,7 +2,7 @@
 
 # Simple test for payment release endpoint
 
-API_BASE="http://localhost:5001/api/v1"
+API_BASE="http://localhost:3001/api/v1"
 
 # Test values
 PAYMENT_ID="PAY-E2E-1793607494"  # From last successful run

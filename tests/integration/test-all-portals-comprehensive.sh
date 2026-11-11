@@ -178,11 +178,20 @@ create_test_data() {
             5) STATUS="PAYMENT_RELEASED" ;;
         esac
         
-        curl -s -X POST "$API_URL/banking/lc" \
+        # NOTE: LCs live under /banking/lc; the request endpoint is POST
+        # /banking/lc/request (banking.ts:85), which requires lcID, contractID,
+        # exporterID, bankName, amount, currency, expiryDate and always creates
+        # the LC as REQUESTED — the `status` field below is ignored, so all 5
+        # LCs created here are REQUESTED and the APPROVED / FOREX_ALLOCATED /
+        # UTILIZED / PAYMENT_RELEASED tab checks below will find 0 until the
+        # LCs are moved through approve -> issue -> examine -> release.
+        curl -s -X POST "$API_URL/banking/lc/request" \
             -H "Content-Type: application/json" \
             -d "{
-                \"lcId\": \"$LC_ID\",
-                \"contractId\": \"$CONTRACT_ID\",
+                \"lcID\": \"$LC_ID\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP-001\",
+                \"bankName\": \"Commercial Bank of Ethiopia\",
                 \"issuingBank\": \"Commercial Bank of Ethiopia\",
                 \"advisingBank\": \"Awash Bank\",
                 \"beneficiary\": \"Test Exporter $i\",
@@ -345,14 +354,32 @@ create_test_data() {
             9) STATUS="CUSTOMS_CLEARED" ;;  # Extra for testing
         esac
         
-        curl -s -X POST "$API_URL/shipping/shipments" \
+        # NOTE: there is no POST /shipping/shipments. Shipments are created via
+        # POST /shipments (shipments.ts:150), which requires shipmentID,
+        # contractID, exporterID, buyerID, origin, numeric quantity, grade,
+        # icoNumber, channel, numeric forexRate, numeric valueUSD and boolean
+        # eudrCompliant, and always creates the shipment as CREATED — the
+        # `status` field below is ignored, so all 9 shipments are CREATED and
+        # the stage-filtered /shipping/shipments?status= checks below will
+        # find 0 until the shipments are moved through the status machine
+        # (PUT /shipments/:id/status, shipments.ts:1124).
+        curl -s -X POST "$API_URL/shipments" \
             -H "Content-Type: application/json" \
             -d "{
-                \"shipmentId\": \"SHIP-${TIMESTAMP}-${i}\",
-                \"contractId\": \"$CONTRACT_ID\",
-                \"status\": \"$STATUS\",
+                \"shipmentID\": \"SHIP-${TIMESTAMP}-${i}\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP-001\",
+                \"buyerID\": \"BUY-001\",
                 \"origin\": \"ADDIS_ABABA\",
                 \"destination\": \"DJIBOUTI\",
+                \"quantity\": 1000,
+                \"grade\": \"GRADE_1\",
+                \"icoNumber\": \"ICO-${TIMESTAMP}-${i}\",
+                \"channel\": \"EXPORT\",
+                \"forexRate\": 120.5,
+                \"valueUSD\": $(awk "BEGIN {printf \"%.2f\", 50000 + $i * 10000}"),
+                \"eudrCompliant\": true,
+                \"status\": \"$STATUS\",
                 \"carrier\": \"Test Carrier ${i}\",
                 \"bookingReference\": \"BOOK-${TIMESTAMP}-${i}\",
                 \"estimatedDeparture\": \"2026-12-01\",
@@ -379,17 +406,24 @@ create_test_data() {
             5) STATUS="RELEASED" ;;
         esac
         
-        curl -s -X POST "$API_URL/customs/declarations" \
+        # NOTE: the create endpoint is POST /customs/declaration/submit
+        # (customs.ts:676); it requires declarationID, shipmentID, exporterID
+        # and always creates the declaration as SUBMITTED — the `status` field
+        # below is ignored, so all 5 declarations are SUBMITTED and the
+        # UNDER_REVIEW / APPROVED / CLEARED / RELEASED tab checks below will
+        # find 0 until the declarations are moved through review -> clear.
+        curl -s -X POST "$API_URL/customs/declaration/submit" \
             -H "Content-Type: application/json" \
             -d "{
-                \"declarationId\": \"CUSTOMS-${TIMESTAMP}-${i}\",
-                \"shipmentId\": \"$SHIPMENT_ID\",
-                \"contractId\": \"$CONTRACT_ID\",
+                \"declarationID\": \"CUSTOMS-${TIMESTAMP}-${i}\",
+                \"shipmentID\": \"$SHIPMENT_ID\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP001\",
                 \"status\": \"$STATUS\",
                 \"declarationType\": \"EXPORT\",
                 \"submissionDate\": \"$(date +%Y-%m-%d)\",
                 \"hsCode\": \"0901.21\",
-                \"declaredValue\": $(awk "BEGIN {printf \"%.2f\", 50000 + $i * 10000}"),
+                \"value\": $(awk "BEGIN {printf \"%.2f\", 50000 + $i * 10000}"),
                 \"currency\": \"USD\"
             }" > /dev/null
         
@@ -404,17 +438,30 @@ create_test_data() {
     for i in {1..3}; do
         CONTRACT_ID="TEST-CONTRACT-${TIMESTAMP}-${i}"
         
-        curl -s -X POST "$API_URL/payments/documentary-collections" \
+        # NOTE: there is no POST /payments/documentary-collections. Documentary
+        # collections are created via POST /banking/cad (banking.ts:2662),
+        # which requires collectionID, contractID, exporterID, drawerName,
+        # draweeName, draweeAddress, numeric amount, currency, paymentTerm
+        # (SIGHT|ACCEPTANCE), remittingBank, remittingBankBIC, collectingBank,
+        # collectingBankBIC and a documents array.
+        curl -s -X POST "$API_URL/banking/cad" \
             -H "Content-Type: application/json" \
             -d "{
-                \"collectionId\": \"DC-${TIMESTAMP}-${i}\",
-                \"contractId\": \"$CONTRACT_ID\",
+                \"collectionID\": \"DC-${TIMESTAMP}-${i}\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP-001\",
+                \"drawerName\": \"Test Exporter $i\",
+                \"draweeName\": \"Test Buyer $i\",
+                \"draweeAddress\": \"Hamburg, Germany\",
                 \"amount\": $(awk "BEGIN {printf \"%.2f\", 30000 + $i * 5000}"),
                 \"currency\": \"USD\",
-                \"status\": \"COMPLETED\",
+                \"paymentTerm\": \"SIGHT\",
                 \"collectionDate\": \"$(date +%Y-%m-%d)\",
                 \"remittingBank\": \"Awash Bank\",
-                \"collectingBank\": \"Commercial Bank of Ethiopia\"
+                \"remittingBankBIC\": \"AWINETAA\",
+                \"collectingBank\": \"Commercial Bank of Ethiopia\",
+                \"collectingBankBIC\": \"CBETETAA\",
+                \"documents\": []
             }" > /dev/null
         
         log "  ${GREEN}✓${NC} Created documentary collection: DC-${TIMESTAMP}-${i}"
@@ -424,15 +471,24 @@ create_test_data() {
     for i in {1..3}; do
         CONTRACT_ID="TEST-CONTRACT-${TIMESTAMP}-${i}"
         
-        curl -s -X POST "$API_URL/payments/advance" \
+        # NOTE: there is no POST /payments/advance. Advance payments are
+        # recorded via the standalone payment create POST /payments
+        # (payments.ts:1653), which requires paymentID and numeric amount;
+        # paymentMethod:"ADVANCE" marks the record as an advance payment.
+        # (The Banks-portal advance-payment stats are fed by dualSourceService,
+        # not by this endpoint directly.)
+        curl -s -X POST "$API_URL/payments" \
             -H "Content-Type: application/json" \
             -d "{
-                \"paymentId\": \"ADV-${TIMESTAMP}-${i}\",
-                \"contractId\": \"$CONTRACT_ID\",
+                \"paymentID\": \"ADV-${TIMESTAMP}-${i}\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP-001\",
                 \"amount\": $(awk "BEGIN {printf \"%.2f\", 10000 + $i * 2000}"),
                 \"currency\": \"USD\",
-                \"status\": \"RECEIVED\",
+                \"paymentMethod\": \"ADVANCE\",
                 \"paymentDate\": \"$(date +%Y-%m-%d)\",
+                \"payerName\": \"Test Buyer $i\",
+                \"status\": \"RECEIVED\",
                 \"percentage\": $((10 + i * 5))
             }" > /dev/null
         
@@ -443,11 +499,27 @@ create_test_data() {
     for i in {1..3}; do
         CONTRACT_ID="TEST-CONTRACT-${TIMESTAMP}-${i}"
         
-        curl -s -X POST "$API_URL/payments/consignments" \
+        # NOTE: there is no POST /payments/consignments. Consignments are
+        # registered via POST /banking/consignment/register (banking.ts:2947),
+        # which requires consignmentID, exporterID, commodityType, description,
+        # buyerName, buyerAddress, buyerCountry and a float permitAmount >= 0.
+        # WARNING: the endpoint's commodityType enum is FRUITS/FLOWERS/MEAT
+        # only — coffee is NOT in the enum — so this test registers the
+        # consignment with a forced non-coffee value ("FRUITS") purely to
+        # exercise the endpoint. A product decision is needed to add coffee
+        # (or a COFFEE value) to that enum.
+        curl -s -X POST "$API_URL/banking/consignment/register" \
             -H "Content-Type: application/json" \
             -d "{
-                \"consignmentId\": \"CONSIGN-${TIMESTAMP}-${i}\",
-                \"contractId\": \"$CONTRACT_ID\",
+                \"consignmentID\": \"CONSIGN-${TIMESTAMP}-${i}\",
+                \"contractID\": \"$CONTRACT_ID\",
+                \"exporterID\": \"EXP-001\",
+                \"commodityType\": \"FRUITS\",
+                \"description\": \"Coffee consignment (fixture: endpoint enum has no coffee value)\",
+                \"buyerName\": \"Test Buyer $i\",
+                \"buyerAddress\": \"Hamburg, Germany\",
+                \"buyerCountry\": \"Germany\",
+                \"permitAmount\": $(awk "BEGIN {printf \"%.2f\", 40000 + $i * 8000}"),
                 \"amount\": $(awk "BEGIN {printf \"%.2f\", 40000 + $i * 8000}"),
                 \"currency\": \"USD\",
                 \"status\": \"PENDING\",
@@ -727,7 +799,7 @@ main() {
     # Check if services are running
     log "${YELLOW}Checking services...${NC}\n"
     
-    if ! curl -s "$API_URL/health" > /dev/null 2>&1; then
+    if ! curl -s "${API_URL%/api/v1}/health" > /dev/null 2>&1; then
         log "${RED}✗ API not responding at $API_URL${NC}"
         log "${YELLOW}Please start the API server first${NC}\n"
         exit 1

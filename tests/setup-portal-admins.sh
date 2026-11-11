@@ -72,7 +72,7 @@ echo ""
 
 create_portal_admin "ecta_admin" "ECTA" "ECTA Portal Administrator" "ecta.admin@cecbs.et"
 create_portal_admin "customs_admin" "CUSTOMS" "Customs Portal Administrator" "customs.admin@cecbs.et"
-create_portal_admin "bank_admin" "BANK" "Bank Portal Administrator" "bank.admin@cecbs.et"
+create_portal_admin "bank_admin" "BANKS" "Bank Portal Administrator" "bank.admin@cecbs.et"
 create_portal_admin "nbe_admin" "NBE" "NBE Portal Administrator" "nbe.admin@cecbs.et"
 create_portal_admin "shipping_admin" "SHIPPING" "Shipping Portal Administrator" "shipping.admin@cecbs.et"
 create_portal_admin "ecx_admin" "ECX" "ECX Portal Administrator" "ecx.admin@cecbs.et"

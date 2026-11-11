@@ -297,13 +297,17 @@ if [ -n "$ECTA_TOKEN" ]; then
         # Test Tab 5 Action: Schedule inspection
         log_test "Tab 5 Action: Schedule quality inspection"
         INSPECTION_DATA='{
-            "shipmentId":"SHP'$(date +%s)'",
+            "inspectionID":"QI'$(date +%s)'",
+            "exporterID":"'$EXPORTER_ID'",
+            "shipmentID":"SHP'$(date +%s)'",
+            "coffeeType":"Arabica",
+            "quantity":50000,
             "inspectionDate":"2024-06-15",
             "inspectorName":"Inspector Smith",
             "warehouseLocation":"Addis Ababa Central Warehouse"
         }'
-        INSPECTION_RESPONSE=$(api_call POST "/quality-inspections" "$ECTA_TOKEN" "$INSPECTION_DATA")
-        INSPECTION_ID=$(echo "$INSPECTION_RESPONSE" | jq -r '.data.inspection_id // .inspection_id // empty')
+        INSPECTION_RESPONSE=$(api_call POST "/quality/inspections" "$ECTA_TOKEN" "$INSPECTION_DATA")
+        INSPECTION_ID=$(echo "$INSPECTION_RESPONSE" | jq -r '.data.inspectionID // .inspectionID // empty')
         
         if [ -n "$INSPECTION_ID" ]; then
             log_pass "Inspection scheduled: $INSPECTION_ID"
@@ -311,7 +315,7 @@ if [ -n "$ECTA_TOKEN" ]; then
         
         # Test Tab 6: Export Permits
         log_test "Tab 6: View export permits"
-        PERMITS=$(api_call GET "/export-permits" "$ECTA_TOKEN")
+        PERMITS=$(api_call GET "/permits" "$ECTA_TOKEN")
         log_pass "Retrieved export permits"
         
         # Test Tab 7: Documents
@@ -321,7 +325,7 @@ if [ -n "$ECTA_TOKEN" ]; then
         
         # Test Tab 8: Reports & Analytics
         log_test "Tab 8: View dashboard statistics"
-        STATS=$(api_call GET "/dashboard/stats" "$ECTA_TOKEN")
+        STATS=$(api_call GET "/analytics/dashboard" "$ECTA_TOKEN")
         log_pass "Retrieved dashboard stats"
         
     else
@@ -343,30 +347,29 @@ if [ -n "$CUSTOMS_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     # Test Tab 1 Action: Submit declaration
     log_test "Tab 1 Action: Submit customs declaration"
     DECL_DATA='{
-        "shipmentId":"SHP'$(date +%s)'",
+        "declarationID":"CD'$(date +%s)'",
+        "shipmentID":"SHP'$(date +%s)'",
+        "exporterID":"'$EXPORTER_ID'",
         "declarationType":"EXPORT",
-        "declarationNumber":"CD'$(date +%s)'",
-        "exporterId":"'$EXPORTER_ID'",
-        "productDescription":"Arabica Coffee Beans",
         "hsCode":"0901.11",
         "quantity":50000,
         "value":175000,
         "currency":"USD"
     }'
-    DECL_RESPONSE=$(api_call POST "/customs/declarations" "$CUSTOMS_TOKEN" "$DECL_DATA")
-    DECLARATION_ID=$(echo "$DECL_RESPONSE" | jq -r '.data.declaration_id // .declaration_id // empty')
+    DECL_RESPONSE=$(api_call POST "/customs/declaration/submit" "$CUSTOMS_TOKEN" "$DECL_DATA")
+    DECLARATION_ID=$(echo "$DECL_RESPONSE" | jq -r '.data.declarationID // .declarationID // empty')
     
     if [ -n "$DECLARATION_ID" ]; then
         log_pass "Declaration submitted: $DECLARATION_ID"
         
         # Test Tab 1 Action: Inspect declaration
         log_test "Tab 1 Action: Mark declaration under inspection"
-        api_call PUT "/customs/declarations/$DECLARATION_ID/status" "$CUSTOMS_TOKEN" '{"status":"UNDER_INSPECTION"}'
+        api_call POST "/customs/declaration/$DECLARATION_ID/inspect" "$CUSTOMS_TOKEN" '{"inspectedBy":"customs_admin"}'
         check_status "customs/declarations" "$DECLARATION_ID" "UNDER_INSPECTION" "$CUSTOMS_TOKEN"
         
         # Test Tab 1 Action: Clear declaration
         log_test "Tab 1 Action: Clear customs declaration"
-        api_call PUT "/customs/declarations/$DECLARATION_ID/status" "$CUSTOMS_TOKEN" '{"status":"CLEARED"}'
+        api_call POST "/customs/declaration/$DECLARATION_ID/clear" "$CUSTOMS_TOKEN" '{"clearedBy":"customs_admin"}'
         check_status "customs/declarations" "$DECLARATION_ID" "CLEARED" "$CUSTOMS_TOKEN"
     fi
     
@@ -392,7 +395,7 @@ if [ -n "$CUSTOMS_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     
     # Test Tab 6: Reports
     log_test "Tab 6: View customs reports"
-    CUSTOMS_REPORTS=$(api_call GET "/reports/customs" "$CUSTOMS_TOKEN")
+    CUSTOMS_REPORTS=$(api_call GET "/customs/history" "$CUSTOMS_TOKEN")
     log_pass "Retrieved customs reports"
 fi
 
@@ -404,14 +407,16 @@ BANK_TOKEN=$(login_user "bank_admin" "password123" "Bank Admin" 3>&1 1>&2 2>&3)
 if [ -n "$BANK_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     # Test Tab 1: Letters of Credit
     log_test "Tab 1: View letters of credit"
-    LCS=$(api_call GET "/letters-of-credit" "$BANK_TOKEN")
+    LCS=$(api_call GET "/banking/lc" "$BANK_TOKEN")
     log_pass "Retrieved letters of credit"
     
     # Test Tab 1 Action: Create LC
     log_test "Tab 1 Action: Create letter of credit"
+    LC_NUM="LC$(date +%s)"
     LC_DATA='{
+        "lcId":"'$LC_NUM'",
         "contractId":"'$CONTRACT_ID'",
-        "lcNumber":"LC'$(date +%s)'",
+        "lcNumber":"'$LC_NUM'",
         "issuingBank":"Commercial Bank of Ethiopia",
         "beneficiaryBank":"Wells Fargo, USA",
         "amount":175000,
@@ -419,21 +424,21 @@ if [ -n "$BANK_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
         "expiryDate":"2024-12-31",
         "terms":"Sight LC"
     }'
-    LC_RESPONSE=$(api_call POST "/letters-of-credit" "$BANK_TOKEN" "$LC_DATA")
-    LC_ID=$(echo "$LC_RESPONSE" | jq -r '.data.lc_id // .lc_id // empty')
+    LC_RESPONSE=$(api_call POST "/banking/lc/issue" "$BANK_TOKEN" "$LC_DATA")
+    LC_ID=$(echo "$LC_RESPONSE" | jq -r '.data.lcID // .lcID // empty')
     
     if [ -n "$LC_ID" ]; then
         log_pass "LC created: $LC_ID"
         
         # Test Tab 1 Action: Approve LC
         log_test "Tab 1 Action: Approve letter of credit"
-        api_call PUT "/letters-of-credit/$LC_ID/status" "$BANK_TOKEN" '{"status":"APPROVED"}'
-        check_status "letters-of-credit" "$LC_ID" "APPROVED" "$BANK_TOKEN"
+        api_call POST "/banking/lc/$LC_ID/approve" "$BANK_TOKEN" '{"approvedBy":"bank_admin"}'
+        check_status "banking/lc" "$LC_ID" "APPROVED" "$BANK_TOKEN"
         
         # Test Tab 1 Action: Issue LC
         log_test "Tab 1 Action: Issue letter of credit"
-        api_call PUT "/letters-of-credit/$LC_ID/status" "$BANK_TOKEN" '{"status":"ISSUED"}'
-        check_status "letters-of-credit" "$LC_ID" "ISSUED" "$BANK_TOKEN"
+        api_call POST "/banking/lc/$LC_ID/issue" "$BANK_TOKEN" '{"terms":"Sight LC"}'
+        check_status "banking/lc" "$LC_ID" "ISSUED" "$BANK_TOKEN"
     fi
     
     # Test Tab 2: Forex Allocations
@@ -444,13 +449,15 @@ if [ -n "$BANK_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     # Test Tab 2 Action: Request forex
     log_test "Tab 2 Action: Request forex allocation"
     FOREX_DATA='{
+        "forexId":"FX'$(date +%s)'",
+        "contractId":"'$CONTRACT_ID'",
+        "exporterId":"'$EXPORTER_ID'",
         "lcId":"'$LC_ID'",
         "amount":175000,
-        "currency":"USD",
-        "purpose":"Export payment"
+        "currency":"USD"
     }'
-    FOREX_RESPONSE=$(api_call POST "/forex/allocations" "$BANK_TOKEN" "$FOREX_DATA")
-    FOREX_ID=$(echo "$FOREX_RESPONSE" | jq -r '.data.forex_id // .forex_id // empty')
+    FOREX_RESPONSE=$(api_call POST "/forex/request" "$BANK_TOKEN" "$FOREX_DATA")
+    FOREX_ID=$(echo "$FOREX_RESPONSE" | jq -r '.data.forexId // .forexId // empty')
     
     if [ -n "$FOREX_ID" ]; then
         log_pass "Forex requested: $FOREX_ID"
@@ -468,7 +475,7 @@ if [ -n "$BANK_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     
     # Test Tab 5: Documentary Collections
     log_test "Tab 5: View documentary collections"
-    COLLECTIONS=$(api_call GET "/documentary-collections" "$BANK_TOKEN")
+    COLLECTIONS=$(api_call GET "/stats/documentary-collections" "$BANK_TOKEN")
     log_pass "Retrieved documentary collections"
     
     # Test Tab 6: Documents
@@ -491,28 +498,28 @@ if [ -n "$NBE_TOKEN" ]; then
     if [ -n "$FOREX_ID" ]; then
         # Test Tab 1 Action: Approve forex
         log_test "Tab 1 Action: Approve forex allocation"
-        api_call PUT "/forex/allocations/$FOREX_ID/status" "$NBE_TOKEN" '{"status":"CONFIRMED"}'
-        check_status "forex/allocations" "$FOREX_ID" "CONFIRMED" "$NBE_TOKEN"
+        api_call POST "/forex/$FOREX_ID/confirm" "$NBE_TOKEN" '{"confirmedBy":"nbe_admin","comments":"Approved"}'
+        check_status "forex" "$FOREX_ID" "CONFIRMED" "$NBE_TOKEN"
     fi
     
     # Test Tab 2: Repatriation Monitoring
     log_test "Tab 2: View forex repatriations"
-    REPATRIATIONS=$(api_call GET "/forex/repatriations" "$NBE_TOKEN")
+    REPATRIATIONS=$(api_call GET "/repatriation/" "$NBE_TOKEN")
     log_pass "Retrieved repatriations"
     
     # Test Tab 3: Retention Accounts
     log_test "Tab 3: View retention accounts"
-    RETENTION=$(api_call GET "/forex/retention" "$NBE_TOKEN")
+    RETENTION=$(api_call GET "/retention/$FOREX_ID/retention" "$NBE_TOKEN")
     log_pass "Retrieved retention accounts"
     
     # Test Tab 4: LC Monitoring
     log_test "Tab 4: View LC monitoring"
-    NBE_LCS=$(api_call GET "/letters-of-credit?portal=nbe" "$NBE_TOKEN")
+    NBE_LCS=$(api_call GET "/nbe/lc-monitoring" "$NBE_TOKEN")
     log_pass "Retrieved LCs for monitoring"
     
     # Test Tab 5: Reports
     log_test "Tab 5: View NBE reports"
-    NBE_REPORTS=$(api_call GET "/reports/nbe" "$NBE_TOKEN")
+    NBE_REPORTS=$(api_call GET "/nbe/compliance-tracking" "$NBE_TOKEN")
     log_pass "Retrieved NBE reports"
 fi
 
@@ -555,7 +562,7 @@ if [ -n "$SHIPPING_TOKEN" ] && [ -n "$CONTRACT_ID" ]; then
     
     # Test Tab 3: Tracking
     log_test "Tab 3: View shipment tracking"
-    TRACKING=$(api_call GET "/shipments/$SHIPMENT_ID/tracking" "$SHIPPING_TOKEN")
+    TRACKING=$(api_call GET "/shipping/tracking?shipmentId=$SHIPMENT_ID" "$SHIPPING_TOKEN")
     log_pass "Retrieved tracking information"
     
     # Test Tab 4: Documents
@@ -579,32 +586,41 @@ if [ -n "$ECX_TOKEN" ]; then
     log_test "Tab 1 Action: Register coffee lot"
     LOT_DATA='{
         "lotNumber":"LOT'$(date +%s)'",
+        "exporterId":"'$EXPORTER_ID'",
+        "origin":"Yirgacheffe",
         "coffeeType":"Arabica",
         "grade":"Grade 1",
+        "quantity":50000,
         "weight":50000,
         "warehouse":"Addis Ababa Central",
+        "processingMethod":"Washed",
         "farmerId":"FARM001"
     }'
     LOT_RESPONSE=$(api_call POST "/ecx/lots" "$ECX_TOKEN" "$LOT_DATA")
-    LOT_ID=$(echo "$LOT_RESPONSE" | jq -r '.data.lot_id // .lot_id // empty')
+    LOT_ID=$(echo "$LOT_RESPONSE" | jq -r '.data.lotId // .lotId // empty')
     
     if [ -n "$LOT_ID" ]; then
         log_pass "Lot registered: $LOT_ID"
         
         # Test Tab 1 Action: Grade lot
         log_test "Tab 1 Action: Grade coffee lot"
-        api_call PUT "/ecx/lots/$LOT_ID/grade" "$ECX_TOKEN" '{"grade":"Grade 1","cupping_score":85.5}'
-        check_status "ecx/lots" "$LOT_ID" "GRADED" "$ECX_TOKEN"
+        GRADE_RESPONSE=$(api_call POST "/ecx/lots/$LOT_ID/grade" "$ECX_TOKEN" '{"grade":"Grade 1","qualityScore":85.5,"moistureContent":10.5,"defectCount":2,"gradingOfficer":"ECX Grading Officer"}')
+        GRADE_STATUS=$(echo "$GRADE_RESPONSE" | jq -r '.data.status // empty')
+        if [ "$GRADE_STATUS" = "GRADED" ]; then
+            log_pass "Lot graded: $LOT_ID"
+        else
+            log_fail "Lot grading failed (status: $GRADE_STATUS)"
+        fi
     fi
     
     # Test Tab 2: Warehouse Management
     log_test "Tab 2: View warehouse inventory"
-    INVENTORY=$(api_call GET "/ecx/inventory" "$ECX_TOKEN")
+    INVENTORY=$(api_call GET "/warehouse/inventory" "$ECX_TOKEN")
     log_pass "Retrieved warehouse inventory"
     
     # Test Tab 3: Quality Reports
     log_test "Tab 3: View quality reports"
-    QUALITY=$(api_call GET "/ecx/quality-reports" "$ECX_TOKEN")
+    QUALITY=$(api_call GET "/quality/inspections" "$ECX_TOKEN")
     log_pass "Retrieved quality reports"
 fi
 

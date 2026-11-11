@@ -163,18 +163,19 @@ fi
 
 if [ ! -z "$CREATED_CONTRACT_ID" ]; then
     print_info "Step 1.2: DRAFT → REGISTERED..."
-    
-    STATUS_UPDATE=$(api_call "PUT" "/contracts/$CREATED_CONTRACT_ID/status" '{"status": "REGISTERED"}')
-    
-    if echo "$STATUS_UPDATE" | grep -q "REGISTERED\|success"; then
-        print_success "Status changed: DRAFT → REGISTERED"
-    else
-        print_info "Status transition (check if endpoint exists)"
-    fi
-    
+
+    # NOTE: removed-unverifiable: there is no PUT /contracts/:id/status.
+    # PATCH /:contractId (contracts.ts:68) has an allowlist that does NOT
+    # include `status`, and creation IS the registration — POST /contracts
+    # (contracts.ts:326) calls registerContract (contracts.ts:504). No separate
+    # DRAFT → REGISTERED step exists.
+    print_info "DRAFT → REGISTERED skipped — contract creation already registers it"
+
     print_info "Step 1.3: REGISTERED → APPROVED..."
-    
-    STATUS_UPDATE=$(api_call "PUT" "/contracts/$CREATED_CONTRACT_ID/status" '{"status": "APPROVED"}')
+
+    # NOTE: contract approval is POST /contracts/:contractID/approve
+    # (contracts.ts:1255); it validates the transition to APPROVED.
+    STATUS_UPDATE=$(api_call "POST" "/contracts/$CREATED_CONTRACT_ID/approve" '{"approvedBy": "ADMIN-001"}')
     
     if echo "$STATUS_UPDATE" | grep -q "APPROVED\|success"; then
         print_success "✅ Status changed: REGISTERED → APPROVED"
@@ -193,7 +194,10 @@ if [ ! -z "$CREATED_CONTRACT_ID" ]; then
     print_info "Step 2.1: Creating Letter of Credit..."
     
     LC_PAYLOAD="{
-      \"contractId\": \"$CREATED_CONTRACT_ID\",
+      \"lcID\": \"LC-TEST-$(date +%s)\",
+      \"contractID\": \"$CREATED_CONTRACT_ID\",
+      \"exporterID\": \"EXP-001\",
+      \"bankName\": \"Commercial Bank of Ethiopia\",
       \"issuingBank\": \"Commercial Bank of Ethiopia\",
       \"amount\": 8500.00,
       \"currency\": \"USD\",
@@ -202,10 +206,14 @@ if [ ! -z "$CREATED_CONTRACT_ID" ]; then
       \"status\": \"ISSUED\"
     }"
     
-    LC_RESPONSE=$(api_call "POST" "/banking/lc" "$LC_PAYLOAD")
+    # NOTE: the LC request endpoint is POST /banking/lc/request (banking.ts:85);
+    # it requires lcID, contractID, exporterID, bankName, amount, currency,
+    # expiryDate and returns 201 with data:{lcID, contractID, exporterID,
+    # status:'REQUESTED'}.
+    LC_RESPONSE=$(api_call "POST" "/banking/lc/request" "$LC_PAYLOAD")
     
-    if echo "$LC_RESPONSE" | grep -q "lcId\|lc_id"; then
-        CREATED_LC_ID=$(echo "$LC_RESPONSE" | grep -o '"lcId":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if echo "$LC_RESPONSE" | grep -q "lcID"; then
+        CREATED_LC_ID=$(echo "$LC_RESPONSE" | grep -o '"lcID":"[^"]*"' | head -1 | cut -d'"' -f4)
         print_success "LC created: $CREATED_LC_ID (\$8,500 USD)"
         
         print_info "Step 2.2: Checking auto-forex allocation..."
@@ -288,29 +296,40 @@ if [ ! -z "$CREATED_SHIPMENT_ID" ]; then
     print_info "Step 4.1: Creating quality inspection..."
     
     QUALITY_PAYLOAD="{
+      \"inspectionID\": \"QI-TEST-$(date +%s)\",
+      \"exporterID\": \"EXP-001\",
+      \"shipmentID\": \"$CREATED_SHIPMENT_ID\",
+      \"coffeeType\": \"ARABICA\",
+      \"quantity\": 1000,
       \"shipmentId\": \"$CREATED_SHIPMENT_ID\",
       \"inspectionType\": \"PRE_SHIPMENT\",
       \"status\": \"PENDING\"
     }"
     
-    QUALITY_RESPONSE=$(api_call "POST" "/ecta/inspections" "$QUALITY_PAYLOAD")
+    # NOTE: the inspection create endpoint is POST /quality/inspections
+    # (quality.ts:364); it requires inspectionID, exporterID, shipmentID,
+    # coffeeType and numeric quantity, and returns data:{inspectionID,
+    # status:'PENDING'}.
+    QUALITY_RESPONSE=$(api_call "POST" "/quality/inspections" "$QUALITY_PAYLOAD")
     
-    if echo "$QUALITY_RESPONSE" | grep -q "inspectionId"; then
-        CREATED_QUALITY_ID=$(echo "$QUALITY_RESPONSE" | grep -o '"inspectionId":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if echo "$QUALITY_RESPONSE" | grep -q "inspectionID"; then
+        CREATED_QUALITY_ID=$(echo "$QUALITY_RESPONSE" | grep -o '"inspectionID":"[^"]*"' | head -1 | cut -d'"' -f4)
         print_success "Quality Inspection created: $CREATED_QUALITY_ID"
         
         print_info "Step 4.2: Testing 5-stage workflow..."
         
-        QI_STAGES=("SCHEDULED" "UNDER_REVIEW" "APPROVED")
-        for qi_stage in "${QI_STAGES[@]}"; do
-            QI_UPDATE=$(api_call "PUT" "/ecta/inspections/$CREATED_QUALITY_ID/status" "{\"status\": \"$qi_stage\"}")
-            
-            if echo "$QI_UPDATE" | grep -q "$qi_stage\|success"; then
-                print_success "Status: $qi_stage"
-            else
-                print_info "Status: $qi_stage (check endpoint)"
-            fi
-        done
+        # NOTE: no quality route sets SCHEDULED or UNDER_REVIEW. quality.ts
+        # defines perform (:512, PENDING/REQUESTED → INSPECTED), approve
+        # (:746), reject (:1042), issue-permit (:1208) and complete (:1307).
+        # Only the APPROVED step maps: POST
+        # /quality/inspections/:inspectionID/approve (quality.ts:746).
+        print_info "SCHEDULED / UNDER_REVIEW skipped — no endpoint sets those statuses"
+        QI_UPDATE=$(api_call "POST" "/quality/inspections/$CREATED_QUALITY_ID/approve" "{\"approvedBy\": \"ECTA-SUPERVISOR\"}")
+        if echo "$QI_UPDATE" | grep -q "APPROVED\|success"; then
+            print_success "Status: APPROVED"
+        else
+            print_info "Status: APPROVED (check endpoint)"
+        fi
         
         print_success "✅ QUALITY INSPECTION 5-STAGE WORKFLOW COMPLETE"
     else
@@ -328,7 +347,9 @@ if [ ! -z "$CREATED_SHIPMENT_ID" ]; then
     print_info "Step 5.1: Creating customs declaration..."
     
     CUSTOMS_PAYLOAD="{
-      \"shipmentId\": \"$CREATED_SHIPMENT_ID\",
+      \"declarationID\": \"CD-TEST-$(date +%s)\",
+      \"shipmentID\": \"$CREATED_SHIPMENT_ID\",
+      \"exporterID\": \"EXP-001\",
       \"declarationType\": \"EXPORT\",
       \"hsCode\": \"0901.21\",
       \"quantity\": 1000,
@@ -336,15 +357,38 @@ if [ ! -z "$CREATED_SHIPMENT_ID" ]; then
       \"status\": \"DRAFT\"
     }"
     
-    CUSTOMS_RESPONSE=$(api_call "POST" "/customs/declarations" "$CUSTOMS_PAYLOAD")
+    # NOTE: the create endpoint is POST /customs/declaration/submit
+    # (customs.ts:676); it requires declarationID, shipmentID, exporterID and
+    # creates the declaration as SUBMITTED, returning 200 with
+    # data:{declarationID, shipmentID, status:'SUBMITTED'}.
+    CUSTOMS_RESPONSE=$(api_call "POST" "/customs/declaration/submit" "$CUSTOMS_PAYLOAD")
     
-    if echo "$CUSTOMS_RESPONSE" | grep -q "declarationId"; then
-        CREATED_CUSTOMS_ID=$(echo "$CUSTOMS_RESPONSE" | grep -o '"declarationId":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if echo "$CUSTOMS_RESPONSE" | grep -q "declarationID"; then
+        CREATED_CUSTOMS_ID=$(echo "$CUSTOMS_RESPONSE" | grep -o '"declarationID":"[^"]*"' | head -1 | cut -d'"' -f4)
         print_success "Customs declaration created: $CREATED_CUSTOMS_ID"
         
         CUSTOMS_STAGES=("SUBMITTED" "INSPECTING" "CLEARED")
         for customs_stage in "${CUSTOMS_STAGES[@]}"; do
-            CUSTOMS_UPDATE=$(api_call "PUT" "/customs/declarations/$CREATED_CUSTOMS_ID/status" "{\"status\": \"$customs_stage\"}")
+            # NOTE: SUBMITTED is already the state created by
+            # POST /customs/declaration/submit (customs.ts:676) — no endpoint
+            # moves a declaration to SUBMITTED. INSPECTING does not exist in
+            # the customs flow; the review endpoint POST
+            # /customs/declaration/:declarationId/review (customs.ts:1624) sets
+            # UNDER_INSPECTION. CLEARED is POST
+            # /customs/declaration/:declarationId/clear (customs.ts:2022).
+            case "$customs_stage" in
+                SUBMITTED)
+                    print_info "Status: SUBMITTED (already SUBMITTED by the submit call)"
+                    continue
+                    ;;
+                INSPECTING)
+                    CUSTOMS_UPDATE=$(api_call "POST" "/customs/declaration/$CREATED_CUSTOMS_ID/review" "{\"assignedInspector\": \"CUSTOMS-OFFICER-001\"}")
+                    customs_stage="UNDER_INSPECTION"
+                    ;;
+                CLEARED)
+                    CUSTOMS_UPDATE=$(api_call "POST" "/customs/declaration/$CREATED_CUSTOMS_ID/clear" "{\"clearedBy\": \"CUSTOMS-OFFICER-001\"}")
+                    ;;
+            esac
             
             if echo "$CUSTOMS_UPDATE" | grep -q "$customs_stage\|success"; then
                 print_success "Status: $customs_stage"
@@ -384,7 +428,16 @@ if [ ! -z "$CREATED_CONTRACT_ID" ]; then
         
         print_info "Step 6.2: Processing with 40% retention..."
         
-        SPLIT_RESPONSE=$(api_call "PUT" "/payments/$CREATED_PAYMENT_ID/status" '{"status": "SPLIT", "exporterAmount": 5100.00, "nbeRetention": 3400.00}')
+        # NOTE: payment status changes go through POST /payments/:paymentID/status
+        # (payments.ts:1597), which requires a `status` body and calls the
+        # chaincode UpdatePaymentStatus. WARNING: SPLIT is NOT a valid payment
+        # status — chaincodes/coffee/payment.go validateStatusTransition only
+        # allows PENDING → DOCUMENTS_SUBMITTED → VERIFIED → SWIFT_INITIATED →
+        # SWIFT_RECEIVED → SETTLED → DOCUMENTS_RELEASED/CONFIRMED, so this
+        # call will 400. The 40% NBE retention split is recorded at payment
+        # creation via POST /payments/record (payments.ts:254), not by a
+        # status change.
+        SPLIT_RESPONSE=$(api_call "POST" "/payments/$CREATED_PAYMENT_ID/status" '{"status": "SPLIT", "exporterAmount": 5100.00, "nbeRetention": 3400.00}')
         
         if echo "$SPLIT_RESPONSE" | grep -q "SPLIT\|success"; then
             print_success "✅ PAYMENT SPLIT: \$5,100 to exporter, \$3,400 NBE (40%)"
@@ -405,7 +458,10 @@ fi
 print_header "PHASE 7: AUDIT TRAIL & DATABASE INTEGRITY"
 
 # Check audit logs
-AUDIT_LOGS=$(api_call "GET" "/audit/logs?limit=20")
+# NOTE: there is no GET /audit/logs; recent entries are at
+# GET /audit/portal/recent (audit.ts:71), which accepts limit, entityType,
+# action and performedBy as query params.
+AUDIT_LOGS=$(api_call "GET" "/audit/portal/recent?limit=20")
 
 if echo "$AUDIT_LOGS" | grep -q "auditId\|action"; then
     AUDIT_COUNT=$(echo "$AUDIT_LOGS" | grep -o "auditId" | wc -l || echo "0")

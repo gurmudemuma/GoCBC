@@ -211,13 +211,13 @@ echo ""
 
 # 9. CERTIFICATES & DOCUMENTS
 echo -e "${CYAN}CERTIFICATES & DOCUMENTS - Data Validation${NC}"
-test_functional "Certificates" "/certificates" "basic"
+test_functional "Certificates" "/certificates/phyto" "basic"
 test_functional "Documents" "/documents" "has_data"
 echo ""
 
 # 10. WAREHOUSE & ECX
 echo -e "${CYAN}WAREHOUSE & ECX - Data Validation${NC}"
-test_functional "Warehouse" "/warehouse" "basic"
+test_functional "Warehouse" "/warehouse/inventory" "basic"
 
 # Test market prices structure
 response=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/market")

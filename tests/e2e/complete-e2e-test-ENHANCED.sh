@@ -361,13 +361,14 @@ if [ -n "$BANK_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $BANK_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/banking/swift" \
+      "$API_BASE/swift/messages" \
       -d "{
+        \"messageID\": \"$SWIFT_REF\",
         \"messageType\": \"MT700\",
-        \"referenceNumber\": \"$SWIFT_REF\",
+        \"swiftReference\": \"$SWIFT_REF\",
         \"lcNumber\": \"$LC_NUMBER\",
-        \"sender\": \"CBETETAA\",
-        \"receiver\": \"DEUTDEFF\",
+        \"senderBIC\": \"CBETETAA\",
+        \"receiverBIC\": \"DEUTDEFF\",
         \"amount\": 135000,
         \"currency\": \"USD\",
         \"narrative\": \"Documentary Credit for Coffee Export\"
@@ -381,7 +382,7 @@ if [ -n "$BANK_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $BANK_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/banking/swift/$SWIFT_REF/send" \
+      "$API_BASE/swift/messages/$SWIFT_REF/send" \
       -d "{\"sentBy\": \"bank_admin\"}" > /tmp/send_swift.json
     
     check_response /tmp/send_swift.json "SWIFT message sent" "SWIFT sending failed"
@@ -489,13 +490,15 @@ print_step "2. Performing quality inspection..."
 curl -s -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  "$API_BASE/inspection/$INSPECTION_ID/perform" \
+  "$API_BASE/inspection/$INSPECTION_ID/results" \
   -d "{
-    \"moistureContent\": 11.2,
-    \"defectCount\": 3,
-    \"grade\": \"Grade 1\",
+    \"inspectedQuantity\": 18000,
+    \"actualGrade\": \"Grade 1\",
     \"cuppingScore\": 86.5,
-    \"remarks\": \"Excellent quality Yirgacheffe coffee\"
+    \"defectsCount\": 3,
+    \"moistureContent\": 11.2,
+    \"overallResult\": \"PASS\",
+    \"inspectionNotes\": \"Excellent quality Yirgacheffe coffee\"
   }" > /tmp/perform_inspection.json
 
 check_response /tmp/perform_inspection.json "Inspection performed (UNDER_REVIEW)" "Inspection failed"
@@ -535,7 +538,7 @@ print_step "1. Creating customs declaration..."
 curl -s -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  "$API_BASE/customs/declarations" \
+  "$API_BASE/customs/declaration/submit" \
   -d "{
     \"declarationID\": \"$CUSTOMS_ID\",
     \"shipmentID\": \"$SHIPMENT_ID\",
@@ -569,7 +572,7 @@ if [ -n "$CUSTOMS_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $CUSTOMS_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/customs/declarations/$CUSTOMS_ID/clear" \
+      "$API_BASE/customs/declaration/$CUSTOMS_ID/clear" \
       -d "{
         \"clearedBy\": \"customs_admin\",
         \"clearanceNumber\": \"CUST-CLR-${TIMESTAMP}\"
@@ -706,13 +709,18 @@ if [ -n "$BANK_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $BANK_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/banking/payments" \
+      "$API_BASE/banking/payment/initiate" \
       -d "{
         \"paymentID\": \"$PAYMENT_ID\",
-        \"lcNumber\": \"$LC_NUMBER\",
+        \"lcID\": \"$LC_NUMBER\",
         \"contractID\": \"$CONTRACT_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
         \"amount\": 135000,
         \"currency\": \"USD\",
+        \"receivingBank\": \"Commercial Bank of Ethiopia\",
+        \"receivingBankBIC\": \"CBETETAA\",
+        \"beneficiaryName\": \"Premium Coffee Exporters Ltd\",
+        \"beneficiaryAccount\": \"ET1234567890123456789\",
         \"paymentMethod\": \"LC\"
       }" > /tmp/create_payment.json
     
@@ -724,7 +732,7 @@ if [ -n "$BANK_TOKEN" ]; then
     curl -s -X POST \
       -H "Authorization: Bearer $BANK_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/banking/payments/$PAYMENT_ID/verify" \
+      "$API_BASE/banking/payment/$PAYMENT_ID/verify-documents" \
       -d "{
         \"verifiedBy\": \"bank_admin\",
         \"documentsComplete\": true
@@ -734,22 +742,15 @@ if [ -n "$BANK_TOKEN" ]; then
     
     sleep 2
     
-    print_step "3. Approving payment release..."
+    # NOTE: removed-unverifiable: no POST /banking/payment/:id/approve exists
+    # and APPROVED is not a state in the PAYMENT machine (statusManager.ts),
+    # so the approve step was deleted; flow goes verify-documents -> release-documents.
+    
+    print_step "3. Releasing payment..."
     curl -s -X POST \
       -H "Authorization: Bearer $BANK_TOKEN" \
       -H "Content-Type: application/json" \
-      "$API_BASE/banking/payments/$PAYMENT_ID/approve" \
-      -d "{\"approvedBy\": \"bank_admin\"}" > /tmp/approve_payment.json
-    
-    check_response /tmp/approve_payment.json "Payment approved" "Payment approval failed"
-    
-    sleep 2
-    
-    print_step "4. Releasing payment..."
-    curl -s -X POST \
-      -H "Authorization: Bearer $BANK_TOKEN" \
-      -H "Content-Type: application/json" \
-      "$API_BASE/banking/payments/$PAYMENT_ID/release" \
+      "$API_BASE/banking/payment/$PAYMENT_ID/release-documents" \
       -d "{
         \"releasedBy\": \"bank_admin\",
         \"releaseDate\": \"$(date -I)\"
@@ -764,30 +765,18 @@ fi
 
 print_header "STAGE 12: FOREX REPATRIATION (40% NBE Retention)"
 
-if [ -n "$NBE_TOKEN" ]; then
-    print_step "Verifying forex repatriation..."
-    curl -s -X POST \
-      -H "Authorization: Bearer $NBE_TOKEN" \
-      -H "Content-Type: application/json" \
-      "$API_BASE/forex/repatriation/verify" \
-      -d "{
-        \"contractID\": \"$CONTRACT_ID\",
-        \"exportValue\": 135000,
-        \"repatriatedAmount\": 81000,
-        \"retentionAmount\": 54000,
-        \"retentionRate\": 40
-      }" > /tmp/verify_repatriation.json
-    
-    check_response /tmp/verify_repatriation.json "Forex repatriation verified" "Repatriation verification failed"
-fi
+# NOTE: removed-unverifiable: the only call in this stage was
+# POST /forex/repatriation/verify, which does not exist. Verification lives
+# at POST /repatriation/:id/verify (repatriation.ts:306) and no repatriation
+# id exists in this script's flow, so the whole stage was deleted.
 
 # ============================================================================
 # STAGE 13: REJECTION WORKFLOW TEST
 # ============================================================================
 
-print_header "STAGE 13: REJECTION WORKFLOW TEST"
+print_header "STAGE 13: DOCUMENT UPLOAD TEST (rejection steps removed — see note below)"
 
-print_step "Testing document rejection and re-submission..."
+print_step "Uploading a test document..."
 
 # Upload a test document
 curl -s -X POST \
@@ -806,33 +795,10 @@ print_data "Test document ID: $TEST_DOC_ID"
 
 sleep 1
 
-# Reject the document
-print_step "Rejecting document..."
-curl -s -X POST \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  "$API_BASE/documents/$TEST_DOC_ID/reject" \
-  -d "{
-    \"rejectedBy\": \"ecta_admin\",
-    \"reason\": \"Missing company stamp\"
-  }" > /tmp/reject_doc.json
-
-check_response /tmp/reject_doc.json "Document rejected" "Document rejection failed"
-
-sleep 1
-
-# Re-submit corrected document
-print_step "Re-submitting corrected document..."
-curl -s -X POST \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  "$API_BASE/documents/$TEST_DOC_ID/resubmit" \
-  -d "{
-    \"resubmittedBy\": \"ecta_admin\",
-    \"corrections\": \"Added company stamp\"
-  }" > /tmp/resubmit_doc.json
-
-check_response /tmp/resubmit_doc.json "Document re-submitted" "Document re-submission failed"
+# NOTE: removed-unverifiable: POST /documents/:id/reject and
+# POST /documents/:id/resubmit do not exist in api/src/routes/documents.ts,
+# and no equivalent document reject/resubmit endpoint could be established,
+# so both steps were deleted rather than guessed.
 
 # ============================================================================
 # FINAL SUMMARY
@@ -855,9 +821,7 @@ echo "  8. ✓ Shipment creation"
 echo "  9. ✓ Quality inspection (complete 4-step workflow)"
 echo " 10. ✓ Customs workflow (declaration, inspection, clearance)"
 echo " 11. ✓ Shipping lifecycle (9 stages: land → port → sea → delivery)"
-echo " 12. ✓ Payment processing (request, verify, approve, release)"
-echo " 13. ✓ Forex repatriation verification"
-echo " 14. ✓ Rejection & re-submission workflow"
+echo " 12. ✓ Payment processing (request, verify, release)"
 echo ""
 print_data "Total API calls: ~70+"
 print_data "Portals tested: 6 (ECTA, Bank, NBE, Customs, Shipping, Documents)"

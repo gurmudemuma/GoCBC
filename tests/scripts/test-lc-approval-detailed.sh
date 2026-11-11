@@ -32,8 +32,10 @@ EXPORTER_TOKEN=$(curl -s -X POST "${API_URL}/auth/login" \
   -d '{"username":"exporter1","password":"password123"}' | jq -r '.data.token')
 
 LC_DATA='{
+  "lcID": "LC-TEST-'$(date +%s)'",
   "contractID": "CONT-TEST-'$(date +%s)'",
   "exporterID": "EXP-001",
+  "bankName": "Commercial Bank of Ethiopia",
   "buyerName": "Test Buyer Inc.",
   "amount": 50000,
   "currency": "USD",
@@ -43,7 +45,10 @@ LC_DATA='{
   "expiryDate": "'$(date -d '+90 days' +%Y-%m-%d)'"
 }'
 
-LC_RESPONSE=$(curl -s -X POST "${API_URL}/banking/lc" \
+# NOTE: the LC request endpoint is POST /banking/lc/request (banking.ts:85);
+# it requires lcID, contractID, exporterID, bankName, amount, currency,
+# expiryDate and returns 201 with data:{lcID, ...}.
+LC_RESPONSE=$(curl -s -X POST "${API_URL}/banking/lc/request" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $BANK_TOKEN" \
   -d "$LC_DATA")

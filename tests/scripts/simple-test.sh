@@ -8,7 +8,7 @@ echo ""
 API_URL="http://localhost:3001/api/v1"
 
 echo "1. Testing Health Endpoint..."
-curl -s "$API_URL/health" | head -10
+curl -s "${API_URL%/api/v1}/health" | head -10
 echo ""
 echo ""
 

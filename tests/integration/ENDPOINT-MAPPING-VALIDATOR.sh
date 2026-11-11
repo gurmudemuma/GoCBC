@@ -17,12 +17,17 @@ declare -A ENDPOINTS=(
   ["Shipments list"]="/shipments"
   ["Customs declarations"]="/customs/declarations"
   ["Payments list"]="/payments"
-  ["Export reports"]="/analytics/exports"
+  # NOTE (2026-11-11): was "/analytics/exports" — no such route; the export
+  # report endpoint is GET /analytics/export-report (analytics.ts:157).
+  ["Export reports"]="/analytics/export-report"
   ["Audit trail"]="/audit/portal/recent"
   
   # ECTA Portal
-  ["Pending applications"]="/exporters/applications?status=pending"
-  ["Approved exporters"]="/exporters/applications?status=approved"
+  # NOTE (2026-11-11): was "/exporters/applications" — the list lives only at
+  # GET /exporters/exporter-applications (exporters.ts:27), which supports
+  # ?status=; there is no /exporters/applications route.
+  ["Pending applications"]="/exporters/exporter-applications?status=pending"
+  ["Approved exporters"]="/exporters/exporter-applications?status=approved"
   ["Sales contracts"]="/contracts"
   ["All inspections"]="/quality/inspections"
   ["Inspections PENDING"]="/quality/inspections?status=PENDING"
@@ -31,7 +36,9 @@ declare -A ENDPOINTS=(
   ["Inspections APPROVED"]="/quality/inspections?status=APPROVED"
   ["Inspections REJECTED"]="/quality/inspections?status=REJECTED"
   ["License renewals"]="/exporters/renewals"
-  ["ECTA analytics"]="/analytics/ecta"
+  # NOTE (2026-11-11): was "/analytics/ecta" — analytics.ts has no /ecta
+  # route; the ECTA portal stats live at GET /stats/ecta-portal (stats.ts:416).
+  ["ECTA analytics"]="/stats/ecta-portal"
   ["Pre-shipment inspections"]="/quality/pre-shipment"
   ["ECTA users"]="/users?organization=ECTA"
   ["ECTA audit trail"]="/audit/portal/recent"
@@ -42,13 +49,22 @@ declare -A ENDPOINTS=(
   ["CAD (Documentary Collection)"]="/banking/lc?paymentMethod=CAD"
   ["ADVANCE (Advance Payment)"]="/banking/lc?paymentMethod=ADVANCE"
   ["CONSIGNMENT"]="/banking/lc?paymentMethod=CONSIGNMENT"
-  ["LC document examination"]="/banking/lc/pending-examination"
+  # NOTE (2026-11-11): was "/banking/lc/pending-examination" — no such route.
+  # The closest real pending-work queue is GET
+  # /banking/lc/discrepancies/pending (banking.ts:3756).
+  ["LC document examination"]="/banking/lc/discrepancies/pending"
   ["Pending payment releases"]="/payments/pending-release"
-  ["LC discrepancies"]="/banking/lc/discrepancies"
+  # NOTE (2026-11-11): was "/banking/lc/discrepancies" — the bare path would
+  # match GET /lc/:lcID with lcID="discrepancies"; the real queue is GET
+  # /banking/lc/discrepancies/pending (banking.ts:3756).
+  ["LC discrepancies"]="/banking/lc/discrepancies/pending"
   ["Forex allocations (Banks)"]="/forex"
   ["LC settlements"]="/banking/lc?status=SETTLED"
   ["SWIFT messages"]="/swift/messages"
-  ["Banking analytics"]="/analytics/banking"
+  # NOTE (2026-11-11): was "/analytics/banking" — analytics.ts has no
+  # /banking route; the bank portal stats live at GET /stats/bank-portal
+  # (stats.ts:49).
+  ["Banking analytics"]="/stats/bank-portal"
   ["Bank users"]="/users?organization=BANK"
   ["Bank audit trail"]="/audit/portal/recent"
   
@@ -62,8 +78,13 @@ declare -A ENDPOINTS=(
   ["SWIFT Compliance Alerts"]="/swift/messages?priority=HIGH"
   ["Forex repatriation"]="/repatriation"
   ["Policy & compliance"]="/compliance"
-  ["Analytics Overview"]="/analytics/nbe"
-  ["Analytics Trends"]="/analytics/trends"
+  # NOTE (2026-11-11): was "/analytics/nbe" — analytics.ts has no /nbe route;
+  # the NBE portal stats live at GET /stats/nbe-portal (stats.ts:316).
+  ["Analytics Overview"]="/stats/nbe-portal"
+  # NOTE (2026-11-11): was "/analytics/trends" — analytics.ts has no /trends
+  # route; the closest real analytics endpoint is GET /analytics/breakdown
+  # (analytics.ts:225).
+  ["Analytics Trends"]="/analytics/breakdown"
   ["Analytics Breakdown"]="/analytics/breakdown"
   ["NBE users"]="/users?organization=NBE"
   ["NBE audit trail"]="/audit/portal/recent"

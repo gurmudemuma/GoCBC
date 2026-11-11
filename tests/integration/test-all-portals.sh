@@ -132,7 +132,7 @@ echo "=====================================================================" >> 
 echo "" >> $OUTPUT_FILE
 
 test_endpoint "Get All Contracts" "GET" "/contracts?limit=10" "$ECTA_TOKEN" ""
-test_endpoint "Get Contract Statistics" "GET" "/contracts/statistics" "$ECTA_TOKEN" ""
+test_endpoint "Get Contract Statistics" "GET" "/stats/contracts" "$ECTA_TOKEN" ""
 
 # Create a test contract
 CONTRACT_DATA='{
@@ -156,21 +156,21 @@ echo "=====================================================================" >> 
 echo "" >> $OUTPUT_FILE
 
 test_endpoint "Get ECX Lots" "GET" "/ecx/lots?limit=10" "$ADMIN_TOKEN" ""
-test_endpoint "Get ECX Statistics" "GET" "/ecx/statistics" "$ADMIN_TOKEN" ""
+test_endpoint "Get ECX Statistics" "GET" "/stats/ecx-portal" "$ADMIN_TOKEN" ""
 
 echo "=====================================================================" >> $OUTPUT_FILE
 echo "STEP 5: BANKS PORTAL TESTS" >> $OUTPUT_FILE
 echo "=====================================================================" >> $OUTPUT_FILE
 echo "" >> $OUTPUT_FILE
 
-test_endpoint "Get Letters of Credit" "GET" "/letters-of-credit?limit=10" "$BANK_TOKEN" ""
-test_endpoint "Get LC Statistics" "GET" "/letters-of-credit/statistics" "$BANK_TOKEN" ""
+test_endpoint "Get Letters of Credit" "GET" "/banking/lc?limit=10" "$BANK_TOKEN" ""
+test_endpoint "Get LC Statistics" "GET" "/stats/lc" "$BANK_TOKEN" ""
 
 # Create a test LC
 LC_DATA='{
-  "lcNumber": "LC-TEST-'$(date +%s)'",
-  "contractId": "CONTRACT001",
-  "exporterId": "EXP001",
+  "lcID": "LC-TEST-'$(date +%s)'",
+  "contractID": "CONTRACT001",
+  "exporterID": "EXP001",
   "bankName": "Commercial Bank of Ethiopia",
   "amount": 10000,
   "currency": "USD",
@@ -179,7 +179,12 @@ LC_DATA='{
   "status": "pending_review"
 }'
 
-test_endpoint "Create Letter of Credit (Blockchain)" "POST" "/letters-of-credit" "$BANK_TOKEN" "$LC_DATA"
+# NOTE: LCs live under /banking/lc; the request endpoint is POST
+# /banking/lc/request (banking.ts:85). It requires lcID, contractID,
+# exporterID, bankName, amount, currency, expiryDate — and its roles are
+# EXPORTER/ECTA/ECTA_ADMIN/ADMIN, i.e. NOT banks, so this call uses the ECTA
+# token (the old $BANK_TOKEN would 403).
+test_endpoint "Create Letter of Credit (Blockchain)" "POST" "/banking/lc/request" "$ECTA_TOKEN" "$LC_DATA"
 
 echo "=====================================================================" >> $OUTPUT_FILE
 echo "STEP 6: NBE PORTAL TESTS (FOREX)" >> $OUTPUT_FILE
@@ -187,7 +192,7 @@ echo "=====================================================================" >> 
 echo "" >> $OUTPUT_FILE
 
 test_endpoint "Get Forex Applications" "GET" "/forex?limit=10" "$NBE_TOKEN" ""
-test_endpoint "Get Forex Statistics" "GET" "/forex/statistics" "$NBE_TOKEN" ""
+test_endpoint "Get Forex Statistics" "GET" "/stats/forex" "$NBE_TOKEN" ""
 
 # Create a test forex application
 FOREX_DATA='{
@@ -207,7 +212,7 @@ echo "STEP 7: CUSTOMS PORTAL TESTS" >> $OUTPUT_FILE
 echo "=====================================================================" >> $OUTPUT_FILE
 echo "" >> $OUTPUT_FILE
 
-test_endpoint "Get Customs Declarations" "GET" "/customs?limit=10" "$ADMIN_TOKEN" ""
+test_endpoint "Get Customs Declarations" "GET" "/customs/declarations?limit=10" "$ADMIN_TOKEN" ""
 
 echo "=====================================================================" >> $OUTPUT_FILE
 echo "STEP 8: SHIPPING PORTAL TESTS" >> $OUTPUT_FILE

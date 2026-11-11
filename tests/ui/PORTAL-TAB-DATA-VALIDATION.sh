@@ -104,7 +104,7 @@ echo ""
 
 # Check API health
 echo "▶ Checking API health..."
-if ! curl -s "$API_BASE/health" > /dev/null 2>&1; then
+if ! curl -s "${API_BASE%/api/v1}/health" > /dev/null 2>&1; then
     echo -e "${RED}✗ API is not responding at $API_BASE${NC}"
     echo "Please start the system with: ./start-all.sh"
     exit 1

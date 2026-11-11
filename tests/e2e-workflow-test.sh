@@ -6,7 +6,7 @@
 
 set -e
 
-API_BASE="http://localhost:5000/api/v1"
+API_BASE="${API_BASE:-http://localhost:3001/api/v1}"
 OUTPUT_FILE="/tmp/e2e-workflow-results.txt"
 
 # Colors for output
@@ -106,7 +106,7 @@ fi
 
 # Test 1.1: View pending applications
 log_step "View pending exporter applications"
-PENDING_APPS=$(test_endpoint "Get Pending Applications" "$TOKEN_ECTA" "/applications?status=pending")
+PENDING_APPS=$(test_endpoint "Get Pending Applications" "$TOKEN_ECTA" "/exporters/exporter-applications?status=pending")
 PENDING_COUNT=$(echo "$PENDING_APPS" | jq -r '.data.applications | length')
 log_info "Found $PENDING_COUNT pending applications"
 
@@ -119,14 +119,14 @@ fi
 
 # Test 1.3: View approved applications
 log_step "View approved applications"
-APPROVED_APPS=$(test_endpoint "Get Approved Applications" "$TOKEN_ECTA" "/applications?status=approved")
+APPROVED_APPS=$(test_endpoint "Get Approved Applications" "$TOKEN_ECTA" "/exporters/exporter-applications?status=approved")
 APPROVED_COUNT=$(echo "$APPROVED_APPS" | jq -r '.data.applications | length')
 log_info "Found $APPROVED_COUNT approved applications"
 
 # Test 1.4: View all exporters (who can now export)
 log_step "View registered exporters"
-EXPORTERS=$(test_endpoint "Get All Exporters" "$TOKEN_ECTA" "/users/exporters")
-EXPORTER_COUNT=$(echo "$EXPORTERS" | jq -r '.data.exporters | length')
+EXPORTERS=$(test_endpoint "Get All Exporters" "$TOKEN_ECTA" "/exporters")
+EXPORTER_COUNT=$(echo "$EXPORTERS" | jq -r '.data | length')
 log_info "Total registered exporters: $EXPORTER_COUNT"
 
 # Test 1.5: Dashboard statistics

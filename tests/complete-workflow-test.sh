@@ -6,7 +6,7 @@
 
 set -e
 
-API_BASE="http://localhost:5000/api/v1"
+API_BASE="${API_BASE:-http://localhost:3001/api/v1}"
 TEST_OUTPUT="/tmp/complete-workflow-test-v2.txt"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 
@@ -486,7 +486,7 @@ log_action "Verifying records across all portals"
 # Check application
 if [ -n "$APP_ID" ]; then
     APP_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
-      "${API_BASE}/exporters/exporter-applications/$APP_ID" 2>/dev/null || echo '{}')
+      "${API_BASE}/exporters/applications/$APP_ID" 2>/dev/null || echo '{}')
     if echo "$APP_CHECK" | jq -e '.data // .success' > /dev/null 2>&1; then
         log_pass "ECTA: Application record verified"
     fi

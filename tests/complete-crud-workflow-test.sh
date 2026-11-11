@@ -7,7 +7,7 @@
 # Don't exit on error - we want to collect all failures
 set +e
 
-BASE_URL="http://localhost:5000/api/v1"
+BASE_URL="${BASE_URL:-http://localhost:3001/api/v1}"
 PASSED=0
 FAILED=0
 WARNINGS=0
@@ -1153,7 +1153,7 @@ log_info "Settling payment before repatriation..."
 if [ -z "$LC_ID" ]; then
     log_warn "No LC_ID available, skipping payment settlement test"
 else
-    SETTLE_RESPONSE=$(curl -s -X POST "$BASE_URL/payments/PAY-$LC_ID/settle" \
+    SETTLE_RESPONSE=$(curl -s -X POST "$BASE_URL/payments/PAY_$LC_ID/settle" \
         -H "Authorization: Bearer $BANK_TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
@@ -1167,7 +1167,7 @@ else
 
     SETTLE_SUCCESS=$(echo "$SETTLE_RESPONSE" | jq -r '.success // false')
     if [ "$SETTLE_SUCCESS" = "true" ]; then
-        log_pass "Payment settled successfully (PAY-$LC_ID)"
+        log_pass "Payment settled successfully (PAY_$LC_ID)"
     else
         log_fail "Payment settlement failed" "$SETTLE_RESPONSE"
     fi

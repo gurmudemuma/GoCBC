@@ -122,38 +122,50 @@ fi
 echo ""
 echo "TEST 4: Creating Quality Inspection..."
 if [ ! -z "$SHIPMENT_ID" ]; then
-    QI_RESP=$(curl -s -X POST "$API/ecta/inspections" \
+    # NOTE: the inspection create endpoint is POST /quality/inspections
+    # (quality.ts:364); it requires inspectionID, exporterID, shipmentID,
+    # coffeeType and numeric quantity. There is no /ecta mount.
+    QI_RESP=$(curl -s -X POST "$API/quality/inspections" \
       -H "Content-Type: application/json" \
       -H "$AUTH_HEADER" \
       -d "{
+      \"inspectionID\": \"QI-TEST-$(date +%s)\",
+      \"exporterID\": \"EXP-001\",
+      \"shipmentID\": \"$SHIPMENT_ID\",
+      \"coffeeType\": \"ARABICA\",
+      \"quantity\": 1000,
       \"shipmentId\": \"$SHIPMENT_ID\",
       \"inspectionType\": \"PRE_SHIPMENT\",
       \"status\": \"PENDING\"
     }")
     
-    if echo "$QI_RESP" | grep -q "inspectionId"; then
-        QI_ID=$(echo "$QI_RESP" | grep -o '"inspectionId":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if echo "$QI_RESP" | grep -q "inspectionID"; then
+        QI_ID=$(echo "$QI_RESP" | grep -o '"inspectionID":"[^"]*"' | head -1 | cut -d'"' -f4)
         echo "✅ Quality Inspection created: $QI_ID"
         ((PASS++))
         
         # Test 5-stage workflow
         echo ""
         echo "TEST 5: Quality Inspection 5-Stage Workflow..."
-        QI_STAGES=("SCHEDULED" "UNDER_REVIEW" "APPROVED")
-        for qi_stage in "${QI_STAGES[@]}"; do
-            QI_UPDATE=$(curl -s -X PUT "$API/ecta/inspections/$QI_ID/status" \
-              -H "Content-Type: application/json" \
-              -H "$AUTH_HEADER" \
-              -d "{\"status\": \"$qi_stage\"}")
-            
-            if echo "$QI_UPDATE" | grep -q "$qi_stage\|success\|updated"; then
-                echo "  ✅ $qi_stage"
-                ((PASS++))
-            else
-                echo "  ❌ $qi_stage failed"
-                ((FAIL++))
-            fi
-        done
+        # NOTE: no quality route sets SCHEDULED or UNDER_REVIEW. quality.ts
+        # defines perform (:512, PENDING/REQUESTED → INSPECTED), approve
+        # (:746), reject (:1042), issue-permit (:1208) and complete (:1307).
+        # Only the APPROVED step maps: POST
+        # /quality/inspections/:inspectionID/approve (quality.ts:746).
+        echo "  ⏭️  SCHEDULED skipped — no endpoint sets that status"
+        echo "  ⏭️  UNDER_REVIEW skipped — no endpoint sets that status"
+        QI_UPDATE=$(curl -s -X POST "$API/quality/inspections/$QI_ID/approve" \
+          -H "Content-Type: application/json" \
+          -H "$AUTH_HEADER" \
+          -d "{\"approvedBy\": \"ECTA-SUPERVISOR\"}")
+        
+        if echo "$QI_UPDATE" | grep -q "APPROVED\|success\|updated"; then
+            echo "  ✅ APPROVED"
+            ((PASS++))
+        else
+            echo "  ❌ APPROVED failed"
+            ((FAIL++))
+        fi
     else
         echo "❌ Quality Inspection creation failed"
         ((FAIL++))
@@ -166,11 +178,16 @@ fi
 echo ""
 echo "TEST 6: Creating Customs Declaration..."
 if [ ! -z "$SHIPMENT_ID" ]; then
-    CUSTOMS_RESP=$(curl -s -X POST "$API/customs/declarations" \
+    # NOTE: the create endpoint is POST /customs/declaration/submit
+    # (customs.ts:676); it requires declarationID, shipmentID, exporterID and
+    # creates the declaration as SUBMITTED.
+    CUSTOMS_RESP=$(curl -s -X POST "$API/customs/declaration/submit" \
       -H "Content-Type: application/json" \
       -H "$AUTH_HEADER" \
       -d "{
-      \"shipmentId\": \"$SHIPMENT_ID\",
+      \"declarationID\": \"CD-TEST-$(date +%s)\",
+      \"shipmentID\": \"$SHIPMENT_ID\",
+      \"exporterID\": \"EXP-001\",
       \"declarationType\": \"EXPORT\",
       \"hsCode\": \"0901.21\",
       \"quantity\": 1000,
@@ -178,20 +195,43 @@ if [ ! -z "$SHIPMENT_ID" ]; then
       \"status\": \"DRAFT\"
     }")
     
-    if echo "$CUSTOMS_RESP" | grep -q "declarationId"; then
-        CUSTOMS_ID=$(echo "$CUSTOMS_RESP" | grep -o '"declarationId":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if echo "$CUSTOMS_RESP" | grep -q "declarationID"; then
+        CUSTOMS_ID=$(echo "$CUSTOMS_RESP" | grep -o '"declarationID":"[^"]*"' | head -1 | cut -d'"' -f4)
         echo "✅ Customs Declaration created: $CUSTOMS_ID"
         ((PASS++))
         
         # Test customs workflow
         echo ""
         echo "TEST 7: Customs Workflow (DRAFT → SUBMITTED → CLEARED)..."
+        # NOTE: SUBMITTED is already the state created by
+        # POST /customs/declaration/submit (customs.ts:676) — no endpoint
+        # moves a declaration to SUBMITTED. INSPECTING does not exist in the
+        # customs flow; the review endpoint POST
+        # /customs/declaration/:declarationId/review (customs.ts:1624) sets
+        # UNDER_INSPECTION. CLEARED is POST
+        # /customs/declaration/:declarationId/clear (customs.ts:2022).
         CUSTOMS_STAGES=("SUBMITTED" "INSPECTING" "CLEARED")
         for customs_stage in "${CUSTOMS_STAGES[@]}"; do
-            CUSTOMS_UPDATE=$(curl -s -X PUT "$API/customs/declarations/$CUSTOMS_ID/status" \
-              -H "Content-Type: application/json" \
-              -H "$AUTH_HEADER" \
-              -d "{\"status\": \"$customs_stage\"}")
+            case "$customs_stage" in
+                SUBMITTED)
+                    echo "  ✅ SUBMITTED (already SUBMITTED by the submit call)"
+                    ((PASS++))
+                    continue
+                    ;;
+                INSPECTING)
+                    CUSTOMS_UPDATE=$(curl -s -X POST "$API/customs/declaration/$CUSTOMS_ID/review" \
+                      -H "Content-Type: application/json" \
+                      -H "$AUTH_HEADER" \
+                      -d "{\"assignedInspector\": \"CUSTOMS-OFFICER-001\"}")
+                    customs_stage="UNDER_INSPECTION"
+                    ;;
+                CLEARED)
+                    CUSTOMS_UPDATE=$(curl -s -X POST "$API/customs/declaration/$CUSTOMS_ID/clear" \
+                      -H "Content-Type: application/json" \
+                      -H "$AUTH_HEADER" \
+                      -d "{\"clearedBy\": \"CUSTOMS-OFFICER-001\"}")
+                    ;;
+            esac
             
             if echo "$CUSTOMS_UPDATE" | grep -q "$customs_stage\|success\|updated"; then
                 echo "  ✅ $customs_stage"
@@ -232,7 +272,15 @@ if [ ! -z "$CONTRACT_ID" ]; then
         # Test 40% retention split
         echo ""
         echo "TEST 9: Payment Split (40% NBE Retention)..."
-        SPLIT_RESP=$(curl -s -X PUT "$API/payments/$PAYMENT_ID/status" \
+        # NOTE: payment status changes go through POST /payments/:paymentID/status
+        # (payments.ts:1597). WARNING: SPLIT is NOT a valid payment status —
+        # chaincodes/coffee/payment.go validateStatusTransition only allows
+        # PENDING → DOCUMENTS_SUBMITTED → VERIFIED → SWIFT_INITIATED →
+        # SWIFT_RECEIVED → SETTLED → DOCUMENTS_RELEASED/CONFIRMED, so this
+        # call will 400. The 40% NBE retention split is recorded at payment
+        # creation via POST /payments/record (payments.ts:254), not by a
+        # status change.
+        SPLIT_RESP=$(curl -s -X POST "$API/payments/$PAYMENT_ID/status" \
           -H "Content-Type: application/json" \
           -H "$AUTH_HEADER" \
           -d '{"status": "SPLIT", "exporterAmount": 5100, "nbeRetention": 3400}')

@@ -77,7 +77,7 @@ result=$(check_endpoint "/contracts?exporterId=$EXPORTER_ID")
 test_result "My Contracts Tab" "$result"
 
 # Tab 1.3: My Applications
-result=$(check_endpoint "/applications?exporterId=$EXPORTER_ID")
+result=$(check_endpoint "/exporters/exporter-applications?exporterId=$EXPORTER_ID")
 test_result "My Applications Tab" "$result"
 
 # Tab 1.4: Quality Inspections
@@ -179,7 +179,7 @@ result=$(check_endpoint "/quality-inspections")
 test_result "Quality Inspections Tab" "$result"
 
 # Tab 2.5: Certificates
-result=$(check_endpoint "/certificates")
+result=$(check_endpoint "/certificates/phyto")
 test_result "Certificates Tab" "$result"
 
 echo ""
@@ -227,16 +227,22 @@ result=$(check_endpoint "/quality-inspections?status=FAILED")
 test_result "Failed Inspections Tab" "$result"
 
 # Tab 3.5: Warehouse Management
-result=$(check_endpoint "/warehouse")
+result=$(check_endpoint "/warehouse/inventory")
 test_result "Warehouse Management Tab" "$result"
 
 echo ""
 echo "→ Creating quality inspection..."
 
+# NOTE: there is no POST /quality-inspections — quality.ts defines no POST /
+# route. The create endpoint is POST /quality/inspections (quality.ts:364);
+# it requires inspectionID, exporterID, shipmentID, coffeeType and numeric
+# quantity, and returns data:{inspectionID, status:'PENDING'}.
 QI_DATA=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"inspectionId\": \"$INSPECTION_ID\",
+        \"inspectionID\": \"$INSPECTION_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
+        \"shipmentID\": \"$SHIPMENT_ID\",
         \"contractId\": \"$CONTRACT_ID\",
         \"coffeeType\": \"ARABICA\",
         \"grade\": \"GRADE1\",
@@ -244,7 +250,7 @@ QI_DATA=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
         \"inspector\": \"ECX Inspector\",
         \"sampleSize\": 10
     }" \
-    "$API_URL/quality-inspections")
+    "$API_URL/quality/inspections")
 
 QI_SUCCESS=$(echo "$QI_DATA" | jq -r '.success // false')
 if [ "$QI_SUCCESS" = "true" ]; then
@@ -257,6 +263,11 @@ sleep 2
 
 echo "→ Recording inspection results (PASS)..."
 
+# NOTE: there is no POST /quality-inspections/:id/result. Lab results are
+# recorded via POST /quality/inspections/:inspectionID/lab-results
+# (quality.ts:1737), which requires numeric moistureContent and defectCount.
+# (It records the lab results; it does not set a PASSED status — the
+# inspection moves PENDING → INSPECTED via POST .../perform, quality.ts:512.)
 QI_RESULT=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
@@ -266,7 +277,7 @@ QI_RESULT=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
         \"cupScore\": 85,
         \"notes\": \"Quality standards met\"
     }" \
-    "$API_URL/quality-inspections/$INSPECTION_ID/result")
+    "$API_URL/quality/inspections/$INSPECTION_ID/lab-results")
 
 QI_RESULT_SUCCESS=$(echo "$QI_RESULT" | jq -r '.success // false')
 if [ "$QI_RESULT_SUCCESS" = "true" ]; then
@@ -318,32 +329,37 @@ result=$(check_endpoint "/forex")
 test_result "Forex Allocations Tab" "$result"
 
 # Tab 4.9: Payment Methods - LC
-result=$(check_endpoint "/banking/letters-of-credit")
+result=$(check_endpoint "/banking/lc")
 test_result "Payment Methods - LC" "$result"
 
 # Tab 4.10: Payment Methods - Documentary Collection
-result=$(check_endpoint "/documentary-collections")
+result=$(check_endpoint "/stats/documentary-collections")
 test_result "Payment Methods - Documentary Collection" "$result"
 
 # Tab 4.11: Payment Methods - Advance Payment
-result=$(check_endpoint "/advance-payments")
+result=$(check_endpoint "/stats/advance-payments")
 test_result "Payment Methods - Advance Payment" "$result"
 
 echo ""
 echo "→ Creating LC application..."
 
+# NOTE: the LC request endpoint is POST /banking/lc/request (banking.ts:85);
+# it requires lcID, contractID, exporterID, bankName, amount, currency,
+# expiryDate and returns 201 with data:{lcID, contractID, exporterID,
+# status:'REQUESTED'}.
 LC_DATA=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"lcId\": \"$LC_ID\",
-        \"contractId\": \"$CONTRACT_ID\",
-        \"exporterId\": \"$EXPORTER_ID\",
+        \"lcID\": \"$LC_ID\",
+        \"contractID\": \"$CONTRACT_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
+        \"bankName\": \"Commercial Bank of Ethiopia\",
         \"buyerId\": \"$BUYER_ID\",
         \"amount\": 45500,
         \"currency\": \"USD\",
         \"expiryDate\": \"2027-08-31\"
     }" \
-    "$API_URL/banking/lc")
+    "$API_URL/banking/lc/request")
 
 LC_SUCCESS=$(echo "$LC_DATA" | jq -r '.success // false')
 if [ "$LC_SUCCESS" = "true" ]; then
@@ -505,11 +521,11 @@ result=$(check_endpoint "/portals/customs")
 test_result "Customs Dashboard" "$result"
 
 # Tab 6.2: Pending Clearance
-result=$(check_endpoint "/customs?status=PENDING")
+result=$(check_endpoint "/customs/declarations?status=PENDING")
 test_result "Pending Clearance Tab" "$result"
 
 # Tab 6.3: Cleared Shipments
-result=$(check_endpoint "/customs?status=CLEARED")
+result=$(check_endpoint "/customs/declarations?status=CLEARED")
 test_result "Cleared Shipments Tab" "$result"
 
 # Tab 6.4: Document Verification
@@ -517,25 +533,31 @@ result=$(check_endpoint "/customs/document-verification")
 test_result "Document Verification Tab" "$result"
 
 # Tab 6.5: Duty & Tax Calculation
-result=$(check_endpoint "/customs?calculation=true")
+# NOTE: there is no GET /customs root and no duty-calculation GET; the
+# duty/tax assessment list is GET /customs/assessments (customs.ts:2131).
+result=$(check_endpoint "/customs/assessments")
 test_result "Duty & Tax Calculation Tab" "$result"
 
 echo ""
 echo "→ Creating customs declaration..."
 
+# NOTE: there is no POST /customs (customs.ts defines no POST / route). The
+# create endpoint is POST /customs/declaration/submit (customs.ts:676); it
+# requires declarationID, shipmentID, exporterID and returns 200 with
+# data:{declarationID, shipmentID, status:'SUBMITTED'}.
 CUSTOMS_DATA=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"declarationId\": \"CUSTOMS-$TIMESTAMP\",
-        \"contractId\": \"$CONTRACT_ID\",
-        \"shipmentId\": \"$SHIPMENT_ID\",
-        \"exporterId\": \"$EXPORTER_ID\",
+        \"declarationID\": \"CUSTOMS-$TIMESTAMP\",
+        \"contractID\": \"$CONTRACT_ID\",
+        \"shipmentID\": \"$SHIPMENT_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
         \"hsCode\": \"0901.21.00\",
         \"quantity\": 1000,
         \"value\": 45500,
         \"currency\": \"USD\"
     }" \
-    "$API_URL/customs")
+    "$API_URL/customs/declaration/submit")
 
 CUSTOMS_SUCCESS=$(echo "$CUSTOMS_DATA" | jq -r '.success // false')
 if [ "$CUSTOMS_SUCCESS" = "true" ]; then
@@ -667,7 +689,10 @@ EXPORTER_STATUS=$(echo "$EXPORTER_CHECK" | jq -r '.data.status // "UNKNOWN"')
 test_result "Exporters Portal - Contract Status: $EXPORTER_STATUS" "pass"
 
 # Verify ECTA Portal
-ECTA_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/quality-inspections/$INSPECTION_ID")
+# NOTE: there is no GET /quality-inspections/:id — quality.ts defines no
+# single-inspection GET. The inspection is looked up via the shipment it
+# belongs to: GET /quality/inspections?shipmentId= (quality.ts:133).
+ECTA_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/quality/inspections?shipmentId=$SHIPMENT_ID")
 ECTA_STATUS=$(echo "$ECTA_CHECK" | jq -r '.data.status // "UNKNOWN"')
 test_result "ECTA Portal - Inspection Status: $ECTA_STATUS" "pass"
 

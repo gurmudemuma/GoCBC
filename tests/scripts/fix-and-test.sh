@@ -24,7 +24,7 @@ sleep 3
 
 echo ""
 echo "=== Checking API Health ==="
-curl -s http://localhost:3001/api/v1/health | jq '.' || echo "API not responding"
+curl -s http://localhost:3001/health | jq '.' || echo "API not responding"
 
 echo ""
 echo "=== Running Comprehensive Portal Tests ==="

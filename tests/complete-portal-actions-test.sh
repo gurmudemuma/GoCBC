@@ -5,7 +5,7 @@
 
 set -e
 
-API_BASE="http://localhost:5000/api/v1"
+API_BASE="${API_BASE:-http://localhost:3001/api/v1}"
 TEST_OUTPUT="/tmp/complete-portal-actions-test.txt"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 
@@ -100,7 +100,7 @@ fi
 # READ: Verify application appears in pending list
 log_action "READ: Verify application in pending list"
 PENDING_LIST=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
-  "${API_BASE}/portals/ecta/pending-applications")
+  "${API_BASE}/exporters/exporter-applications?status=pending")
 PENDING_COUNT=$(echo "$PENDING_LIST" | jq -r '.data | length')
 if [ "$PENDING_COUNT" -gt 0 ]; then
     log_pass "Pending applications list shows $PENDING_COUNT applications"
@@ -319,7 +319,7 @@ fi
 
 # UPDATE: Update shipment status to IN_TRANSIT
 log_action "UPDATE: Update shipment status to IN_TRANSIT"
-UPDATE_SHIPMENT=$(curl -s -X PATCH ${API_BASE}/shipments/${SHIPMENT_ID} \
+UPDATE_SHIPMENT=$(curl -s -X PUT ${API_BASE}/shipments/${SHIPMENT_ID}/status \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN_SHIPPING" \
   -d "{
@@ -338,7 +338,7 @@ fi
 sleep 1
 log_action "READ: Verify shipment in in-transit list"
 IN_TRANSIT=$(curl -s -H "Authorization: Bearer $TOKEN_SHIPPING" \
-  "${API_BASE}/portals/shipping/in-transit")
+  "${API_BASE}/shipments?status=IN_TRANSIT")
 IN_TRANSIT_COUNT=$(echo "$IN_TRANSIT" | jq -r '.data | length')
 if [ "$IN_TRANSIT_COUNT" -gt 0 ]; then
     log_pass "In-transit list shows $IN_TRANSIT_COUNT shipments"
@@ -381,7 +381,7 @@ fi
 sleep 1
 log_action "READ: Verify inspection in pending list"
 PENDING_INSPECTIONS=$(curl -s -H "Authorization: Bearer $TOKEN_QUALITY" \
-  "${API_BASE}/portals/quality/pending-inspections")
+  "${API_BASE}/quality/inspections?status=PENDING")
 INSPECTION_COUNT=$(echo "$PENDING_INSPECTIONS" | jq -r '.data | length')
 if [ "$INSPECTION_COUNT" -gt 0 ]; then
     log_pass "Pending inspections list shows $INSPECTION_COUNT inspections"
@@ -461,21 +461,10 @@ else
     log_fail "No active LCs found"
 fi
 
-# SIGN: Bank signs LC documents
-log_action "SIGN: Bank signs LC documents"
-SIGN_LC=$(curl -s -X POST ${API_BASE}/banking/lc/${LC_NUMBER}/sign \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN_BANK" \
-  -d "{
-    \"signedBy\": \"bank_admin\",
-    \"signatureDate\": \"$(date +%Y-%m-%d)\"
-  }")
-
-if echo "$SIGN_LC" | jq -e '.success' > /dev/null 2>&1; then
-    log_pass "LC documents signed"
-else
-    log_fail "LC signing failed (endpoint may not exist)"
-fi
+# NOTE: removed-unverifiable: POST /banking/lc/:id/sign does not exist
+# (no sign route in api/src/routes/banking.ts; blockchain-signatures.ts
+# exposes GETs only). No equivalent LC-sign endpoint could be established
+# from the route source, so the SIGN step was deleted rather than guessed.
 
 # ==================================================================================
 # PORTAL 6: CUSTOMS - Complete Declaration Workflow
@@ -515,7 +504,7 @@ fi
 sleep 1
 log_action "READ: Verify declaration in inspection queue"
 INSPECTION_QUEUE=$(curl -s -H "Authorization: Bearer $TOKEN_CUSTOMS" \
-  "${API_BASE}/portals/customs/inspection-queue")
+  "${API_BASE}/customs/declarations?status=SUBMITTED")
 QUEUE_COUNT=$(echo "$INSPECTION_QUEUE" | jq -r '.data | length')
 if [ "$QUEUE_COUNT" -gt 0 ]; then
     log_pass "Inspection queue shows $QUEUE_COUNT declarations"

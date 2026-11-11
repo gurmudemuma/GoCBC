@@ -353,9 +353,9 @@ else
       -H "Content-Type: application/json" \
       "$API_BASE/customs/declaration/submit" \
       -d "{
-        \"declarationId\": \"$CUSTOMS_ID\",
-        \"shipmentId\": \"$SHIPMENT_ID\",
-        \"exporterId\": \"$EXPORTER_ID\",
+        \"declarationID\": \"$CUSTOMS_ID\",
+        \"shipmentID\": \"$SHIPMENT_ID\",
+        \"exporterID\": \"$EXPORTER_ID\",
         \"declarant\": \"Customs Agent Ltd\",
         \"customsOffice\": \"Addis Ababa Bole Airport\",
         \"tariffCode\": \"0901.21\",
@@ -437,12 +437,14 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   "$API_BASE/banking/lc/request" \
   -d "{
-    \"lcNumber\": \"$LC_NUMBER\",
+    \"lcID\": \"$LC_NUMBER\",
     \"shipmentId\": \"$SHIPMENT_ID\",
-    \"contractId\": \"$CONTRACT_ID\",
-    \"exporterId\": \"$EXPORTER_ID\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"bankName\": \"Deutsche Bank AG\",
     \"amount\": 135000,
     \"currency\": \"USD\",
+    \"expiryDate\": \"$(date -d '+90 days' +%Y-%m-%d)\",
     \"issuingBank\": \"Deutsche Bank AG\",
     \"advisingBank\": \"Commercial Bank of Ethiopia\"
   }" > /tmp/lc_create.json
@@ -545,7 +547,7 @@ echo -e "  ${BLUE}Payment:${NC}      $PAYMENT_ID"
 echo ""
 
 print_step "Running database validation..."
-bash /home/guda/GoCBC/validate-workflow.sh > /tmp/final_validation.txt 2>&1
+bash "$(dirname "$0")/../scripts/validate-workflow.sh" > /tmp/final_validation.txt 2>&1
 
 if [ -f /tmp/final_validation.txt ]; then
     cat /tmp/final_validation.txt

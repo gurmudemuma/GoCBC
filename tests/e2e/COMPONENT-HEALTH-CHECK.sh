@@ -161,7 +161,7 @@ print_header "COMPONENT 3: API SERVER"
 API_BASE="http://localhost:3001/api/v1"
 
 print_step "Checking API health endpoint..."
-HEALTH_RESPONSE=$(curl -s "$API_BASE/health" 2>/dev/null || echo "")
+HEALTH_RESPONSE=$(curl -s "${API_BASE%/api/v1}/health" 2>/dev/null || echo "")
 if echo "$HEALTH_RESPONSE" | grep -q "healthy\|UP\|ok"; then
     check_component "API health endpoint" "PASS"
 else

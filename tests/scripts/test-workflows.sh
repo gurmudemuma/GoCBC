@@ -329,7 +329,11 @@ fi
 print_header "TEST 8: Forex Management Workflow"
 
 print_test "Check NBE forex policies"
-FOREX_RESPONSE=$(curl -s -X GET "$API_BASE/nbe/forex/retention" \
+# NOTE: there is no GET /nbe/forex/retention. The retention policy for a
+# commodity is GET /retention/policy/:commodityType (retention.ts:85), which
+# returns data.retentionPercentage (default 40); the forex-side equivalent
+# is GET /forex/retention-policy/:commodityType (forex.ts:252).
+FOREX_RESPONSE=$(curl -s -X GET "$API_BASE/retention/policy/COFFEE" \
   -H "Authorization: Bearer $ADMIN_TOKEN" 2>/dev/null)
 
 if echo "$FOREX_RESPONSE" | grep -qE "retention|policies|COFFEE|success"; then

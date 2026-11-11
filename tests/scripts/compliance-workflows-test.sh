@@ -85,25 +85,38 @@ print_success "Bank Admin authenticated"
 print_header "SETUP: EXPORTER & SHIPMENT"
 
 print_step "Creating exporter..."
-curl -s -X POST "$API_BASE/exporters/applications" \
+# NOTE: the application endpoint is POST /exporters/exporter-applications
+# (exporters.ts:102); it requires companyName, tinNumber,
+# businessLicenseNumber, capitalRequirement, professionalTaster, contactPerson,
+# email, phone, address and city, and returns 201 with
+# data:{applicationId, status:'pending', ...}. (The capitalRequirement,
+# professionalTaster and city values below are test fixtures.)
+curl -s -X POST "$API_BASE/exporters/exporter-applications" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
-    \"businessName\": \"Compliance Test Coffee Export Ltd\",
+    \"companyName\": \"Compliance Test Coffee Export Ltd\",
     \"tinNumber\": \"TIN${TIMESTAMP}\",
-    \"licenseNumber\": \"LIC-COMP-${TIMESTAMP}\",
+    \"businessLicenseNumber\": \"LIC-COMP-${TIMESTAMP}\",
+    \"capitalRequirement\": 1000000,
+    \"professionalTaster\": \"Compliance Manager\",
     \"contactPerson\": \"Compliance Manager\",
     \"email\": \"compliance@coffee.et\",
-    \"phone\": \"+251911000000\"
+    \"phone\": \"+251911000000\",
+    \"address\": \"Addis Ababa, Ethiopia\",
+    \"city\": \"Addis Ababa\"
   }" > /tmp/create_exporter_comp.json
 
 APP_ID=$(cat /tmp/create_exporter_comp.json | jq -r '.data.applicationId // .applicationId // .id')
 
-curl -s -X POST "$API_BASE/exporters/applications/$APP_ID/approve" \
+# NOTE: the approve endpoint is POST
+# /exporters/exporter-applications/:applicationId/approve (exporters.ts:307);
+# it requires the exporterId in the body.
+curl -s -X POST "$API_BASE/exporters/exporter-applications/$APP_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
-    \"exporterID\": \"$EXPORTER_ID\",
+    \"exporterId\": \"$EXPORTER_ID\",
     \"licenseNumber\": \"LIC-COMP-${TIMESTAMP}\"
   }" > /tmp/approve_exporter_comp.json
 
@@ -336,7 +349,9 @@ fi
 print_header "STAGE 5: FOREX REPATRIATION TRACKING"
 
 print_step "Recording export proceeds repatriation..."
-curl -s -X POST "$API_BASE/repatriation/record" \
+# NOTE: the record endpoint is POST /repatriation/:id/record
+# (repatriation.ts:258, bank roles); the id is the repatriationID from the body.
+curl -s -X POST "$API_BASE/repatriation/REP-${TIMESTAMP}/record" \
   -H "Authorization: Bearer $BANK_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -370,19 +385,13 @@ fi
 print_header "STAGE 6: COURIER SERVICE (DOCUMENT DELIVERY)"
 
 print_step "Tracking courier delivery of original documents..."
-curl -s -X POST "$API_BASE/courier/track" \
+# NOTE: there is no POST /courier/track. Courier status is read via
+# GET /courier/:shipmentID/status (courier.ts:156); a courier delivery is
+# registered via POST /courier/:shipmentID/send (which this script never
+# calls, so the status lookup below may 404 until one is sent).
+curl -s -X GET "$API_BASE/courier/$SHIPMENT_ID/status" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"trackingNumber\": \"COURIER-${TIMESTAMP}\",
-    \"shipmentID\": \"$SHIPMENT_ID\",
-    \"documentType\": \"ORIGINAL_SHIPPING_DOCUMENTS\",
-    \"courier\": \"DHL Express\",
-    \"origin\": \"Addis Ababa, Ethiopia\",
-    \"destination\": \"Hamburg, Germany\",
-    \"recipient\": \"European Coffee Importers GmbH\",
-    \"status\": \"IN_TRANSIT\"
-  }" > /tmp/courier_track.json 2>/dev/null || print_info "Courier endpoint checking..."
+  > /tmp/courier_track.json 2>/dev/null || print_info "Courier endpoint checking..."
 
 if [ -f /tmp/courier_track.json ] && grep -q "success.*true\|tracking" /tmp/courier_track.json 2>/dev/null; then
     print_success "Courier tracking registered"

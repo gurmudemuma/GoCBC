@@ -38,9 +38,12 @@ echo
 
 # Check exchange rate
 echo "3. Checking Exchange Rate for USD..."
+# NOTE: there is no GET /forex/exchange-rate/:currency. The current rate is
+# GET /forex/rates/:currency/current (forex.ts:238); it returns the active
+# rate record from the ledger (data: result.data).
 RATE=$(curl -s -X GET \
   -H "Authorization: Bearer $NBE_TOKEN" \
-  "$API_BASE/forex/exchange-rate/USD" 2>/dev/null || echo '{"success":false}')
+  "$API_BASE/forex/rates/USD/current" 2>/dev/null || echo '{"success":false}')
 
 if echo "$RATE" | grep -q '"success":true'; then
     echo "✅ Exchange rate is ACTIVE"

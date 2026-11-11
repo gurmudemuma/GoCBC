@@ -68,7 +68,10 @@ print_header "1. CURRENT SYSTEM STATE"
 # Count existing records
 CONTRACTS_COUNT=$(curl -s "$API_URL/contracts" | grep -o "contractId" | wc -l || echo "0")
 SHIPMENTS_COUNT=$(curl -s "$API_URL/shipments" | grep -o "shipmentId" | wc -l || echo "0")
-INSPECTIONS_COUNT=$(curl -s "$API_URL/ecta/inspections" | grep -o "inspectionId" | wc -l || echo "0")
+# NOTE: there is no /ecta mount; inspections live under /quality. GET
+# /quality/inspections (quality.ts:133) returns raw PG rows, so the id field
+# is inspection_id (snake_case), not inspectionId.
+INSPECTIONS_COUNT=$(curl -s "$API_URL/quality/inspections" | grep -o "inspection_id" | wc -l || echo "0")
 
 print_info "Existing Records:"
 print_data "Contracts: $CONTRACTS_COUNT"
@@ -124,10 +127,10 @@ STAGES=("PENDING" "SCHEDULED" "UNDER_REVIEW" "APPROVED" "REJECTED")
 print_info "Checking quality inspection stages..."
 
 for stage in "${STAGES[@]}"; do
-    STAGE_DATA=$(curl -s "$API_URL/ecta/inspections?status=$stage")
+    STAGE_DATA=$(curl -s "$API_URL/quality/inspections?status=$stage")
     
-    if echo "$STAGE_DATA" | grep -q "inspectionId\|\["; then
-        COUNT=$(echo "$STAGE_DATA" | grep -o "inspectionId" | wc -l || echo "0")
+    if echo "$STAGE_DATA" | grep -q "inspection_id\|\["; then
+        COUNT=$(echo "$STAGE_DATA" | grep -o "inspection_id" | wc -l || echo "0")
         if [ "$COUNT" -gt 0 ]; then
             print_success "Stage '$stage': $COUNT inspection(s) found"
         else
@@ -139,9 +142,9 @@ for stage in "${STAGES[@]}"; do
 done
 
 # Check if we have any inspection to test transitions
-INSPECTIONS=$(curl -s "$API_URL/ecta/inspections")
-if echo "$INSPECTIONS" | grep -q "inspectionId"; then
-    FIRST_INSPECTION=$(echo "$INSPECTIONS" | grep -o '"inspectionId":"[^"]*"' | head -1 | cut -d'"' -f4)
+INSPECTIONS=$(curl -s "$API_URL/quality/inspections")
+if echo "$INSPECTIONS" | grep -q "inspection_id"; then
+    FIRST_INSPECTION=$(echo "$INSPECTIONS" | grep -o '"inspection_id":"[^"]*"' | head -1 | cut -d'"' -f4)
     INSPECTION_STATUS=$(echo "$INSPECTIONS" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
     
     print_data "Sample Inspection: $FIRST_INSPECTION (Status: $INSPECTION_STATUS)"
@@ -356,7 +359,7 @@ SHIPMENTS=$(curl -s "$API_URL/shipments")
 if echo "$SHIPMENTS" | grep -q "shipmentId"; then
     FIRST_SHIP=$(echo "$SHIPMENTS" | grep -o '"shipmentId":"[^"]*"' | head -1 | cut -d'"' -f4)
     
-    RELATED_QI=$(curl -s "$API_URL/ecta/inspections?shipmentId=$FIRST_SHIP")
+    RELATED_QI=$(curl -s "$API_URL/quality/inspections?shipmentId=$FIRST_SHIP")
     if [ ! -z "$RELATED_QI" ]; then
         print_success "Shipment → Quality Inspection relationship working"
     else
@@ -365,8 +368,8 @@ if echo "$SHIPMENTS" | grep -q "shipmentId"; then
 fi
 
 # Check if quality approvals trigger customs
-INSPECTIONS=$(curl -s "$API_URL/ecta/inspections?status=APPROVED")
-if echo "$INSPECTIONS" | grep -q "inspectionId"; then
+INSPECTIONS=$(curl -s "$API_URL/quality/inspections?status=APPROVED")
+if echo "$INSPECTIONS" | grep -q "inspection_id"; then
     print_success "Quality → Customs workflow appears active"
 else
     print_info "Quality → Customs auto-trigger (requires approved inspection)"
@@ -378,7 +381,9 @@ fi
 
 print_header "11. AUDIT TRAIL & BLOCKCHAIN INTEGRATION"
 
-AUDIT_LOGS=$(curl -s "$API_URL/audit/logs")
+# NOTE: there is no GET /audit/logs; recent entries are at
+# GET /audit/portal/recent (audit.ts:71), which accepts entityType.
+AUDIT_LOGS=$(curl -s "$API_URL/audit/portal/recent")
 
 if echo "$AUDIT_LOGS" | grep -q "auditId\|action"; then
     print_success "Audit logging is active"
@@ -388,7 +393,7 @@ if echo "$AUDIT_LOGS" | grep -q "auditId\|action"; then
     
     # Check audit for different entities
     for entity in "CONTRACT" "SHIPMENT" "PAYMENT" "QUALITY_INSPECTION"; do
-        ENTITY_AUDIT=$(curl -s "$API_URL/audit/logs?entityType=$entity")
+        ENTITY_AUDIT=$(curl -s "$API_URL/audit/portal/recent?entityType=$entity")
         if [ ! -z "$ENTITY_AUDIT" ]; then
             print_info "Audit trail for $entity: Available"
         fi
@@ -425,7 +430,7 @@ if echo "$SAMPLE_CONTRACT" | grep -q "contractId"; then
 fi
 
 # Test audit entity linkage
-ENTITY_AUDITS=$(curl -s "$API_URL/audit/logs?entityType=CONTRACT" | grep -o "entityId" | wc -l || echo "0")
+ENTITY_AUDITS=$(curl -s "$API_URL/audit/portal/recent?entityType=CONTRACT" | grep -o "entityId" | wc -l || echo "0")
 if [ "$ENTITY_AUDITS" -gt 0 ]; then
     print_success "Audit entity linkage working ($ENTITY_AUDITS entries)"
 else
