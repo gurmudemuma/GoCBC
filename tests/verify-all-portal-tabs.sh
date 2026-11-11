@@ -121,6 +121,7 @@ uncovered() {
 echo "🔐 Logging in as portal users..." | tee -a "$TEST_OUTPUT"
 TOKEN_ADMIN=$(login_user "admin" "admin123" 3>&1 1>&2 2>&3)
 TOKEN_ECTA=$(login_user "ecta_admin" "password123" 3>&1 1>&2 2>&3)
+TOKEN_EXPORTER=$(login_user "exporter_test" "password123" 3>&1 1>&2 2>&3)
 TOKEN_ECX=$(login_user "ecx_admin" "password123" 3>&1 1>&2 2>&3)
 TOKEN_BANK=$(login_user "bank_admin" "password123" 3>&1 1>&2 2>&3)
 TOKEN_NBE=$(login_user "nbe_admin" "password123" 3>&1 1>&2 2>&3)
@@ -170,7 +171,7 @@ echo "" | tee -a "$TEST_OUTPUT"
 # ==================================================================================
 echo "📋 PORTAL 3: EXPORTER - 8 TABS" | tee -a "$TEST_OUTPUT"
 echo "────────────────────────────────────────────────────────────────" | tee -a "$TEST_OUTPUT"
-uncovered "Exporter" "0 Dashboard" "GET /exporters/me/profile requires an exporterId on the token (exporters.ts:1146); no seeded exporter login exists. Needs an approved exporter account (see tests/missing-workflow-steps-test.sh, which creates one)."
+check_tab "Exporter" "0 Dashboard" "/exporters/me/profile" "$TOKEN_EXPORTER"
 check_tab "Exporter" "1 Contracts" "/contracts" "$TOKEN_ADMIN"
 check_tab "Exporter" "2 Forex & Banking" "/forex" "$TOKEN_ADMIN"
 check_tab "Exporter" "3 Shipments" "/shipments" "$TOKEN_ADMIN"

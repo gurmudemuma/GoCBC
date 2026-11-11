@@ -601,7 +601,8 @@ PHYTO_ID="PHYTO-$(date +%s)"
 PHYTO_DATA="{
     \"certificateID\": \"$PHYTO_ID\",
     \"shipmentID\": \"$SHIPMENT_ID\",
-    \"exporterID\": \"$EXPORTER_ID\"
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"quantity\": 50000
 }"
 
 PHYTO_RESPONSE=$(api_call POST "/phytosanitary/request" "$ECTA_TOKEN" "$PHYTO_DATA")

@@ -342,52 +342,51 @@ router.post('/',
 
       let result;
       let blockchainWriteSuccessful = false;
-      
+
       try {
-        // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
-        // Blockchain LC status validation causes failures when forex was also written to CouchDB
-        logger.info(`[SHIPMENT] Writing shipment ${shipmentID} directly to CouchDB`);
-        
-        const couchDbUrl = new URL(process.env.COUCHDB_URL || 'http://127.0.0.1:5984');
-        if (!couchDbUrl.username) {
-          couchDbUrl.username = process.env.COUCHDB_USERNAME || 'admin';
+        // Create the shipment on the ledger via chaincode. The old code wrote
+        // the shipment doc directly to ONE peer's CouchDB, so the other five
+        // peers never saw it and every later chaincode read (phytosanitary,
+        // shipping lifecycle) failed endorsement with "shipment does not
+        // exist". CreateShipment replicates through the orderer to all peers.
+        // Its LC gate (LC must be FOREX_ALLOCATED) is satisfied now that
+        // forex confirm/allocate run on-chain.
+        logger.info(`[SHIPMENT] Creating shipment ${shipmentID} on-chain via CreateShipment`);
+        const chainResult = await fabricService.invokeChaincode('CreateShipment', [
+          shipmentID,
+          contractID,
+          finalExporterID,
+          finalBuyerID,
+          origin,
+          String(finalQuantity),
+          finalGrade,
+          icoNumber,
+          ecxLotNumber || '',
+          channel,
+          String(forexRate),
+          String(finalValueUSD),
+          String(eudrCompliant),
+          JSON.stringify(documentIDs),
+        ]);
+        if (!chainResult.success) {
+          throw new Error(chainResult.error || 'CreateShipment failed');
         }
-        if (!couchDbUrl.password) {
-          couchDbUrl.password = process.env.COUCHDB_PASSWORD || 'adminpw';
-        }
-        const CouchDB = require('nano')(couchDbUrl.toString());
-        const db = CouchDB.use('coffeechannel_coffee');
-        
-        const shipmentDoc = {
-          _id: `SHIPMENT_${shipmentID}`,
-          ShipmentID: shipmentID,
-          ContractID: contractID,
-          ExporterID: finalExporterID,
-          BuyerID: finalBuyerID,
-          Origin: origin,
-          Destination: '',  // Will be set when shipping details are added
-          Quantity: finalQuantity,
-          Grade: finalGrade,
-          ICONumber: icoNumber,
-          ECXLotNumber: ecxLotNumber || '',
-          Channel: channel,
-          ForexRate: forexRate,
-          ValueUSD: finalValueUSD,
-          EUDRCompliant: eudrCompliant,
-          Status: 'CREATED',
-          Documents: documentIDs,
-          CreatedAt: new Date().toISOString(),
-          UpdatedAt: new Date().toISOString()
-        };
-        
-        await db.insert(shipmentDoc);
         blockchainWriteSuccessful = true;
-        result = { success: true, txId: null }; // CouchDB direct write
-        logger.info(`✅ [SHIPMENT] Shipment ${shipmentID} written to CouchDB`);
-      } catch (couchErr: any) {
-        logger.error(`❌ [SHIPMENT] CouchDB write failed: ${couchErr.message}`);
-        blockchainWriteSuccessful = false;
-        result = { success: false, error: couchErr.message, txId: null };
+        result = { success: true, txId: chainResult.txId };
+        logger.info(`✅ [SHIPMENT] Shipment ${shipmentID} created on-chain (tx ${chainResult.txId})`);
+      } catch (chainErr: any) {
+        // Fail honestly: do NOT record a Postgres/CouchDB-only phantom
+        // shipment. The old direct-CouchDB write left the shipment on one
+        // peer only, which broke every downstream chaincode step.
+        logger.error(`❌ [SHIPMENT] CreateShipment failed: ${chainErr.message}`);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'SHIPMENT_CREATE_FAILED',
+            message: chainErr.message,
+          },
+          timestamp: new Date().toISOString(),
+        });
       }
 
       // ✅ FIX: Always save to PostgreSQL regardless of blockchain status

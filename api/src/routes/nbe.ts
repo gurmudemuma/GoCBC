@@ -120,9 +120,14 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
     // Best-effort chain confirmation: ConfirmForex (REQUESTED → CONFIRMED,
     // NBE only). A chain failure must not fail the approval — the Postgres
     // record is what the portal reads — but it is reported honestly.
+    // ConfirmForex enforces the caller MSP (NBE only), so connect as
+    // NBEMSP first: the gateway is otherwise still on the org of the
+    // previous call (BanksMSP after a forex request) and the chaincode
+    // rejects with "only NBE can confirm forex (caller: BanksMSP)".
     let blockchainSynced = false;
     let blockchainWarning: string | null = null;
     try {
+      await fabricService.connectAsOrg('NBEMSP');
       const chainResult = await fabricService.invokeChaincode('ConfirmForex', [
         forexId,
         user?.username || 'NBE Officer',

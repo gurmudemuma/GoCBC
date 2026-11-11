@@ -513,38 +513,14 @@ else
     check_success_or_blocked "Approve contract (ECTA)"
 fi
 
-log_test "Create shipment (EXPORTER token)"
-SHIPMENT_ID="SHP-$TS"
-SHIPMENT_DATA="{
-    \"shipmentID\": \"$SHIPMENT_ID\",
-    \"contractID\": \"$CONTRACT_ID\",
-    \"exporterID\": \"$EXPORTER_ID\",
-    \"buyerID\": \"$BUYER_ID\",
-    \"origin\": \"ADDIS_ABABA\",
-    \"quantity\": 50000,
-    \"grade\": \"GRADE_1\",
-    \"icoNumber\": \"ICO-$TS\",
-    \"channel\": \"ECX\",
-    \"ecxLotNumber\": \"ECX-$TS\",
-    \"forexRate\": 55.50,
-    \"valueUSD\": 275000,
-    \"eudrCompliant\": true
-}"
-if [ -z "$EXPORTER_TOKEN" ]; then
-    log_blocked "Create shipment — no EXPORTER token"
-else
-    call POST "/shipments" "$EXPORTER_TOKEN" "$SHIPMENT_DATA"
-    CREATED_SHIPMENT_ID=$(echo "$RESP_BODY" | jq -r '.data.shipmentID // .data.shipment_id // empty')
-    if [ -n "$CREATED_SHIPMENT_ID" ]; then
-        log_pass "Shipment created: $SHIPMENT_ID"
-    else
-        log_fail "Failed to create shipment (HTTP $RESP_CODE)"
-        log_info "Response: $RESP_BODY"
-    fi
-fi
-
 ################################################################################
 log_section "PHASE 4: ECX LOT — INTAKE, GRADE, ASSIGN, RELEASE"
+
+# The shipment ID is fixed here so the ECX/inspection steps can reference it;
+# the shipment itself is only CREATED later (after forex allocation — see the
+# note above the creation block) because chaincode CreateShipment requires
+# the LC to already be FOREX_ALLOCATED.
+SHIPMENT_ID="SHP-$TS"
 
 log_test "ECX lot intake (POST /ecx/lots, ecx.ts:274)"
 LOT_DATA="{
@@ -924,11 +900,23 @@ else
 fi
 fi
 
+log_test "Set NBE exchange rate USD (POST /forex/rates, forex.ts:487)"
+if [ "$FOREX_OK" = "false" ]; then
+    log_blocked "Set NBE exchange rate — no forex record (request failed/blocked)"
+else
+    call POST "/forex/rates" "$NBE_TOKEN" "{
+    \"currency\": \"USD\",
+    \"buyingRate\": 57.0,
+    \"sellingRate\": 57.5
+}"
+    check_success_or_blocked "Set NBE exchange rate USD"
+fi
+
 log_test "Allocate forex (POST /forex/:id/allocate, forex.ts:865)"
 if [ "$FOREX_OK" = "false" ]; then
     log_blocked "Allocate forex — no forex record (request failed/blocked)"
 else
-ALLOCATE_DATA="{\"lcId\": \"$LC_ID\"}"
+ALLOCATE_DATA="{\"lcId\": \"$LC_ID\", \"amount\": 225000, \"exchangeRate\": 57.25, \"officer\": \"bank_admin\", \"approvalRef\": \"NBE-APPR-$FOREX_ID\"}"
 call POST "/forex/$FOREX_ID/allocate" "$BANKS_TOKEN" "$ALLOCATE_DATA"
 check_success_or_blocked "Allocate forex"
 fi
@@ -951,6 +939,57 @@ if [ "$FOREX_OK" = "false" ]; then
 else
 call GET "/retention/$FOREX_ID/retention" "$NBE_TOKEN"
 check_success "Read back retention record" ".data"
+fi
+
+# NOTE: shipment creation lives here (after forex allocation), not up with
+# the contract steps: chaincode CreateShipment requires the LC to already
+# be FOREX_ALLOCATED on the ledger, and the ECX/inspection steps above
+# deliberately tolerate a not-yet-created shipment (RequestInspection
+# creates the inspection without shipment linkage when it is missing).
+
+log_test "Create shipment (EXPORTER token)"
+SHIPMENT_ID="SHP-$TS"
+SHIPMENT_DATA="{
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"buyerID\": \"$BUYER_ID\",
+    \"origin\": \"ADDIS_ABABA\",
+    \"quantity\": 50000,
+    \"grade\": \"GRADE_1\",
+    \"icoNumber\": \"ICO-$TS\",
+    \"channel\": \"ECX\",
+    \"ecxLotNumber\": \"ECX-$TS\",
+    \"forexRate\": 55.50,
+    \"valueUSD\": 275000,
+    \"eudrCompliant\": true
+}"
+if [ -z "$EXPORTER_TOKEN" ]; then
+    log_blocked "Create shipment — no EXPORTER token"
+else
+    call POST "/shipments" "$EXPORTER_TOKEN" "$SHIPMENT_DATA"
+    CREATED_SHIPMENT_ID=$(echo "$RESP_BODY" | jq -r '.data.shipmentID // .data.shipment_id // empty')
+    if [ -n "$CREATED_SHIPMENT_ID" ]; then
+        log_pass "Shipment created: $SHIPMENT_ID"
+    else
+        log_fail "Failed to create shipment (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
+fi
+
+log_test "Issue export permit (POST /permits/export, permits.ts:30)"
+if [ -z "$CREATED_SHIPMENT_ID" ]; then
+    log_blocked "Issue export permit — no shipment (create failed/blocked)"
+else
+    call POST "/permits/export" "$BANKS_TOKEN" "{
+    \"permitID\": \"PERMIT-$TS\",
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"quantity\": 50000,
+    \"certificateID\": \"CERT-$TS\"
+}"
+    check_success_or_blocked "Issue export permit"
 fi
 
 ################################################################################
@@ -977,9 +1016,14 @@ if [ -z "$EXPORTER_TOKEN" ]; then
 else
     call POST "/payments/initiate" "$EXPORTER_TOKEN" "$PAYMENT_DATA"
     CREATED_PAYMENT_ID=$(echo "$RESP_BODY" | jq -r '.data.paymentID // .data.payment_id // empty')
+    # The route returns data:null on success (paymentID is in the request we
+    # sent, plus a real txId) — accept success:true + txId as a pass.
     if [ -n "$CREATED_PAYMENT_ID" ]; then
         PAYMENT_OK=true
         log_pass "Payment initiated: $PAYMENT_ID"
+    elif [ "$(echo "$RESP_BODY" | jq -r '.success')" = "true" ] && [ -n "$(echo "$RESP_BODY" | jq -r '.txId // empty')" ]; then
+        PAYMENT_OK=true
+        log_pass "Payment initiated: $PAYMENT_ID (txId $(echo "$RESP_BODY" | jq -r '.txId' | cut -c1-12)...)"
     elif is_fabric_error; then
         log_blocked "Initiate payment — Fabric/ledger unavailable (HTTP $RESP_CODE)"
     else
@@ -1009,6 +1053,27 @@ if [ -z "$DOC_ID" ]; then
 else
     call POST "/shipments/$SHIPMENT_ID/lc-documents" "$EXPORTER_TOKEN" "$LC_DOCS_DATA"
     check_success_or_blocked "Submit LC documents"
+fi
+
+log_test "Submit payment documents (POST /payments/:id/documents, payments.ts:358)"
+if [ "$PAYMENT_OK" = "false" ]; then
+    log_blocked "Submit payment documents — no payment (initiate failed/blocked)"
+else
+    call POST "/payments/$PAYMENT_ID/documents" "$BANKS_TOKEN" "{
+    \"documents\": [{\"type\": \"COMMERCIAL_INVOICE\", \"documentId\": \"INV-$TS\"}, {\"type\": \"BILL_OF_LADING\", \"documentId\": \"BOL-$TS\"}]
+}"
+    check_success_or_blocked "Submit payment documents"
+fi
+
+log_test "Verify payment documents (POST /payments/:id/verify, payments.ts:452)"
+if [ "$PAYMENT_OK" = "false" ]; then
+    log_blocked "Verify payment documents — no payment (initiate failed/blocked)"
+else
+    call POST "/payments/$PAYMENT_ID/verify" "$BANKS_TOKEN" "{
+    \"verifiedBy\": \"bank_admin\",
+    \"comments\": \"Documents verified against LC terms\"
+}"
+    check_success_or_blocked "Verify payment documents"
 fi
 
 log_test "SWIFT initiate (POST /payments/:id/swift/initiate, payments.ts:560)"
@@ -1054,26 +1119,6 @@ fi
 
 ################################################################################
 log_section "PHASE 9: CUSTOMS + SHIPPING LIFECYCLE + BILL OF LADING"
-
-log_test "Create freight booking (POST /shipping/bookings, shipping.ts:410)"
-BOOKING_ID="BOOK-$TS"
-BOOKING_DATA="{
-    \"bookingID\": \"$BOOKING_ID\",
-    \"shipmentID\": \"$SHIPMENT_ID\",
-    \"carrier\": \"Maersk Line\",
-    \"vesselName\": \"MSC MEDITERRANEAN\",
-    \"containerNumber\": \"CONT-$TS\"
-}"
-call POST "/shipping/bookings" "$SHIPPING_TOKEN" "$BOOKING_DATA"
-CREATED_BOOKING_ID=$(echo "$RESP_BODY" | jq -r '.data.bookingID // .data.booking_id // empty')
-if [ -n "$CREATED_BOOKING_ID" ]; then
-    log_pass "Freight booking created: $BOOKING_ID"
-elif is_fabric_error; then
-    log_blocked "Create freight booking — Fabric/ledger unavailable (HTTP $RESP_CODE)"
-else
-    log_fail "Failed to create freight booking (HTTP $RESP_CODE)"
-    log_info "Response: $RESP_BODY"
-fi
 
 log_test "Submit customs declaration (POST /customs/declaration/submit, customs.ts:676)"
 DECLARATION_ID="DEC-$TS"
@@ -1151,6 +1196,31 @@ call POST "/shipments/$SHIPMENT_ID/delivery/complete" "$SHIPPING_TOKEN" "{\"deli
 check_success_or_blocked "Delivery complete"
 [ $? -eq 0 ] && DELIVERY_OK=true
 
+# NOTE: the freight booking lives here (after delivery), not before customs:
+# booking-create mirrors FREIGHT_BOOKED onto the shipment on-chain, and
+# SubmitCustomsDeclaration requires PERMIT_ISSUED while StartLandTransport
+# requires CUSTOMS_CLEARED — booking first would break both gates.
+
+log_test "Create freight booking (POST /shipping/bookings, shipping.ts:410)"
+BOOKING_ID="BOOK-$TS"
+BOOKING_DATA="{
+    \"bookingID\": \"$BOOKING_ID\",
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"carrier\": \"Maersk Line\",
+    \"vesselName\": \"MSC MEDITERRANEAN\",
+    \"containerNumber\": \"CONT-$TS\"
+}"
+call POST "/shipping/bookings" "$SHIPPING_TOKEN" "$BOOKING_DATA"
+CREATED_BOOKING_ID=$(echo "$RESP_BODY" | jq -r '.data.bookingID // .data.booking_id // empty')
+if [ -n "$CREATED_BOOKING_ID" ]; then
+    log_pass "Freight booking created: $BOOKING_ID"
+elif is_fabric_error; then
+    log_blocked "Create freight booking — Fabric/ledger unavailable (HTTP $RESP_CODE)"
+else
+    log_fail "Failed to create freight booking (HTTP $RESP_CODE)"
+    log_info "Response: $RESP_BODY"
+fi
+
 log_test "Bill of Lading on shipment (POST /shipments/:id/bill-of-lading, shipments.ts:1499)"
 BOL_DATA="{
     \"billOfLadingNo\": \"BOL-$TS\",
@@ -1174,6 +1244,54 @@ if [ -z "$CREATED_BOOKING_ID" ]; then
 else
     call POST "/shipping/bookings/$BOOKING_ID/bill-of-lading/issue" "$SHIPPING_TOKEN" "$BOL_ISSUE_DATA"
     check_success_or_blocked "Bill of Lading issue on booking"
+fi
+
+log_test "Request phytosanitary certificate (POST /phytosanitary/request, phytosanitary.ts:43)"
+PHYTO_ID="PHYTO-$TS"
+PHYTO_DATA="{
+    \"certificateID\": \"$PHYTO_ID\",
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"quantity\": 50000
+}"
+if [ -z "$CREATED_SHIPMENT_ID" ]; then
+    log_blocked "Request phytosanitary certificate — no shipment (create failed/blocked)"
+else
+    call POST "/phytosanitary/request" "$ECTA_TOKEN" "$PHYTO_DATA"
+    # The route returns success:true + txId with data:null (same shape as
+    # payment initiate), so accept that as created and keep our own PHYTO_ID.
+    if [ "$(echo "$RESP_BODY" | jq -r '.success')" = "true" ] && [ -n "$(echo "$RESP_BODY" | jq -r '.txId // empty')" ]; then
+        CREATED_PHYTO_ID="$PHYTO_ID"
+        log_pass "Phytosanitary certificate requested: $PHYTO_ID (txId $(echo "$RESP_BODY" | jq -r '.txId' | cut -c1-12)...)"
+    else
+        log_fail "Failed to request phytosanitary certificate (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
+fi
+
+log_test "Inspect phytosanitary certificate (POST /phytosanitary/:id/inspect, phytosanitary.ts:173)"
+if [ -z "${CREATED_PHYTO_ID:-}" ]; then
+    log_blocked "Inspect phytosanitary certificate — no certificate (request failed/blocked)"
+else
+    call POST "/phytosanitary/$PHYTO_ID/inspect" "$ECTA_TOKEN" "{
+    \"inspectorName\": \"Inspector Alemayehu\",
+    \"inspectionDate\": \"2027-06-15T00:00:00Z\",
+    \"pestsDetected\": false,
+    \"diseaseDetected\": false
+}"
+    check_success_or_blocked "Inspect phytosanitary certificate"
+fi
+
+log_test "Issue phytosanitary certificate (POST /phytosanitary/:id/issue, phytosanitary.ts:297)"
+if [ -z "${CREATED_PHYTO_ID:-}" ]; then
+    log_blocked "Issue phytosanitary certificate — no certificate (request failed/blocked)"
+else
+    call POST "/phytosanitary/$PHYTO_ID/issue" "$ECTA_TOKEN" "{
+    \"certificateNumber\": \"PHYTO-CERT-$TS\",
+    \"issuingAuthority\": \"Ethiopian Ministry of Agriculture\",
+    \"validUntil\": \"2027-12-31T23:59:59Z\"
+}"
+    check_success_or_blocked "Issue phytosanitary certificate"
 fi
 
 ################################################################################
@@ -1202,6 +1320,18 @@ CROSSING_DATA="{
 }"
 call POST "/bordercrossing/initiate" "$CUSTOMS_TOKEN" "$CROSSING_DATA"
 check_success_or_blocked "Initiate border crossing" ".data.crossingId"
+
+log_test "Inspect border crossing (POST /bordercrossing/:id/inspect, bordercrossing.ts:545)"
+call POST "/bordercrossing/$CROSSING_ID/inspect" "$CUSTOMS_TOKEN" "{
+    \"inspectorName\": \"Customs Inspector\",
+    \"inspectionDate\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+    \"sealIntact\": true,
+    \"physicalCondition\": \"GOOD\",
+    \"documentationComplete\": true,
+    \"findings\": \"No issues found\",
+    \"passed\": true
+}"
+check_success_or_blocked "Inspect border crossing" ".data.crossingId"
 
 log_test "Clear border crossing (POST /bordercrossing/:id/clear, bordercrossing.ts:219)"
 call POST "/bordercrossing/$CROSSING_ID/clear" "$CUSTOMS_TOKEN" "{
