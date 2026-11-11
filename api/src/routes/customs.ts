@@ -1316,56 +1316,67 @@ router.post('/declaration/:declarationId/calculate-duty',
 
       logger.info(`[CUSTOMS] Calculating duty for declaration: ${declarationId}`);
 
-      // Get declaration details if not provided
-      let declValue = customsValueUSD;
-      let declHsCode = hsCode;
-      let declOrigin = origin;
+      // The declaration row is always needed: duty_calculations.declaration_id
+      // is a foreign key to customs_declarations(declaration_id), so the
+      // stored declaration_id (not the request param, which may be a
+      // declaration_number) must be used for the insert below.
+      const declaration = await postgresDb.get(
+        'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
+        [declarationId]
+      );
 
-      if (!declValue || !declHsCode) {
-        const declaration = await postgresDb.get(
-          'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
-          [declarationId]
-        );
-
-        if (!declaration) {
-          return res.status(404).json({
-            success: false,
-            error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
-            timestamp: new Date().toISOString()
-          });
-        }
-
-        declValue = declValue || declaration.customs_value_usd;
-        declHsCode = declHsCode || declaration.hs_code;
-        declOrigin = declOrigin || declaration.origin_country;
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
+          timestamp: new Date().toISOString()
+        });
       }
 
-      // Get duty rates from tariff table (or use default rates)
+      const declValue = customsValueUSD || declaration.customs_value_usd;
+      const declHsCode = hsCode || declaration.hs_code;
+
+      // Get duty rates from tariff table (or use default rates).
+      // customs_tariffs stores rates as percentages (e.g. 10.00 = 10%), while
+      // this handler calculates with fractions, so normalise anything > 1.
+      const toFraction = (r: number) => (r > 1 ? r / 100 : r);
       const tariffRate = await postgresDb.get(
         'SELECT * FROM customs_tariffs WHERE hs_code = $1',
         [declHsCode]
       );
 
       // Default rates if not found in tariff table
-      const dutyRate = tariffRate?.duty_rate || 0.10; // 10% default
-      const vatRate = tariffRate?.vat_rate || 0.15; // 15% VAT
-      const exciseRate = tariffRate?.excise_rate || 0;
+      const dutyRate = toFraction(parseFloat(tariffRate?.duty_rate) || 0.10); // 10% default
+      const vatRate = toFraction(parseFloat(tariffRate?.vat_rate) || 0.15); // 15% VAT
+      const exciseRate = toFraction(parseFloat(tariffRate?.excise_rate) || 0);
 
-      // Apply preferential rates if applicable (e.g., COMESA, AfCFTA)
+      // Apply preferential rates if applicable (e.g., COMESA, AfCFTA).
+      // NOTE: trade_preferences has no origin_country column (it keys on
+      // country_group + hs_code), so the old origin lookup always errored.
+      // Match on hs_code + active flag and take the lowest preferential rate.
       let effectiveDutyRate = dutyRate;
-      if (applyPreferences && declOrigin) {
-        // Check for trade agreements
-        const preference = await postgresDb.get(
-          'SELECT * FROM trade_preferences WHERE origin_country = $1 AND hs_code = $2',
-          [declOrigin, declHsCode]
+      let preference: any = null;
+      if (applyPreferences) {
+        preference = await postgresDb.get(
+          `SELECT * FROM trade_preferences
+            WHERE hs_code = $1 AND is_active = true
+            ORDER BY preferential_rate ASC LIMIT 1`,
+          [declHsCode]
         );
         if (preference) {
-          effectiveDutyRate = preference.preferential_rate || dutyRate;
+          effectiveDutyRate = toFraction(parseFloat(preference.preferential_rate) || dutyRate);
         }
       }
 
       // Calculate duties
       const valueInUSD = parseFloat(declValue);
+      if (!Number.isFinite(valueInUSD) || valueInUSD <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_VALUE', message: 'A positive customs value is required to calculate duty' },
+          timestamp: new Date().toISOString()
+        });
+      }
       const rate = exchangeRate || 125.50; // Default ETB/USD rate
       const valueInETB = valueInUSD * rate;
 
@@ -1375,42 +1386,47 @@ router.post('/declaration/:declarationId/calculate-duty',
       const exciseAmount = valueInETB * exciseRate;
       const totalDuty = dutyAmount + vatAmount + exciseAmount;
 
-      const calculationId = `CALC-${declarationId}-${Date.now()}`;
-
-      // Store calculation
-      await postgresDb.run(`
+      // Store calculation. Columns must match the table 068 creates
+      // (068_add_customs_extended_tables.sql) — the old insert used the
+      // columns of the deleted 060 .ts migration, which never ran, so it
+      // failed with "column does not exist". calculated_by is INTEGER
+      // REFERENCES users(id); req.user.userId is a string, parse it.
+      const userIdInt = /^\d+$/.test(String(user?.userId || '')) ? parseInt(user.userId, 10) : null;
+      const inserted = await postgresDb.run(`
         INSERT INTO duty_calculations (
-          calculation_id, declaration_id, customs_value_usd, customs_value_etb,
-          exchange_rate, hs_code, origin_country, duty_rate, vat_rate, excise_rate,
-          duty_amount, vat_amount, excise_amount, total_duty, calculated_by,
-          calculation_date, preferences_applied, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP)
+          declaration_id, calculation_method, customs_value, currency,
+          exchange_rate, basic_duty_rate, basic_duty_amount,
+          vat_rate, vat_amount, excise_rate, excise_amount,
+          total_duties, total_taxes, total_payable,
+          preference_applied, calculated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING calculation_id
       `, [
-        calculationId,
-        declarationId,
+        declaration.declaration_id,
+        preference ? 'preferential' : 'standard',
         valueInUSD,
-        valueInETB,
+        'USD',
         rate,
-        declHsCode,
-        declOrigin || 'UNKNOWN',
         effectiveDutyRate,
-        vatRate,
-        exciseRate,
         dutyAmount,
+        vatRate,
         vatAmount,
+        exciseRate,
         exciseAmount,
+        dutyAmount,
+        vatAmount + exciseAmount,
         totalDuty,
-        user.username,
-        new Date().toISOString(),
-        applyPreferences || false
+        preference ? preference.agreement_name : null,
+        userIdInt
       ]);
+      const calculationId = inserted.rows[0].calculation_id;
 
       // Update declaration with calculated duty
       await postgresDb.run(`
         UPDATE customs_declarations
         SET duty_amount = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE declaration_id = $2 OR declaration_number = $2
-      `, [totalDuty, declarationId]);
+        WHERE declaration_id = $2
+      `, [totalDuty, declaration.declaration_id]);
 
       logger.info(`✅ [CUSTOMS] Duty calculated: ${declarationId} - Total: ETB ${totalDuty.toFixed(2)}`);
 
@@ -1503,38 +1519,55 @@ router.post('/declaration/:declarationId/valuation',
         });
       }
 
-      const valuationId = `VAL-${declarationId}-${Date.now()}`;
       const declaredValue = parseFloat(declaration.customs_value_usd);
+      if (!Number.isFinite(declaredValue) || declaredValue <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_VALUE', message: 'The declaration has no usable customs value to adjust' },
+          timestamp: new Date().toISOString()
+        });
+      }
       const adjustedVal = parseFloat(adjustedValue);
       const adjustmentAmount = adjustedVal - declaredValue;
       const adjustmentPercentage = (adjustmentAmount / declaredValue) * 100;
 
-      // Record valuation
-      await postgresDb.run(`
+      // Record valuation. Columns must match the table 068 creates
+      // (068_add_customs_extended_tables.sql): valuation_id is a SERIAL
+      // primary key, there is no declared_value / adjustment_amount /
+      // basis_of_valuation / status column — the old insert failed with
+      // "column does not exist". The extra request fields are preserved in
+      // the adjustments JSONB and valuation_notes; valued_by is INTEGER
+      // REFERENCES users(id), parsed from req.user.userId. approval_status
+      // 'approved' is the 068 value for a completed valuation (the API
+      // response still reports status 'COMPLETED' as before).
+      const comparableNum = parseFloat(comparableGoods);
+      const userIdInt = /^\d+$/.test(String(user?.userId || '')) ? parseInt(user.userId, 10) : null;
+      const insertedValuation = await postgresDb.run(`
         INSERT INTO customs_valuations (
-          valuation_id, declaration_id, declared_value, adjusted_value,
-          adjustment_amount, adjustment_percentage, valuation_method,
-          adjustment_reason, basis_of_valuation, comparable_goods,
-          market_research, valuation_officer, supporting_documents,
-          valuation_date, status, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+          declaration_id, valuation_method,
+          invoice_value, invoice_currency,
+          adjustments, adjusted_value, final_customs_value, valuation_currency,
+          comparable_goods_value, comparable_goods_reference,
+          supporting_documents, valuation_notes, valued_by, approval_status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING valuation_id
       `, [
-        valuationId,
-        declaration.declaration_id || declarationId,
-        declaredValue,
-        adjustedVal,
-        adjustmentAmount,
-        adjustmentPercentage,
+        declaration.declaration_id,
         valuationMethod,
-        adjustmentReason || '',
-        basisOfValuation || '',
-        comparableGoods || '',
-        marketResearch || '',
-        valuationOfficer || user.username,
-        supportingDocuments ? JSON.stringify(supportingDocuments) : '[]',
-        new Date().toISOString(),
-        'COMPLETED'
+        declaredValue,
+        'USD',
+        JSON.stringify([{ type: 'adjustment', amount: adjustmentAmount, percentage: adjustmentPercentage, reason: adjustmentReason || null, basis: basisOfValuation || null }]),
+        adjustedVal,
+        adjustedVal,
+        'USD',
+        Number.isFinite(comparableNum) && String(comparableGoods).trim() === String(comparableNum) ? comparableNum : null,
+        Number.isFinite(comparableNum) && String(comparableGoods).trim() === String(comparableNum) ? null : (comparableGoods || null),
+        JSON.stringify(Array.isArray(supportingDocuments) ? supportingDocuments : (supportingDocuments ? [{ reference: String(supportingDocuments) }] : [])),
+        marketResearch || adjustmentReason || null,
+        userIdInt,
+        'approved'
       ]);
+      const valuationId = insertedValuation.rows[0].valuation_id;
 
       // Update declaration with adjusted value
       await postgresDb.run(`
