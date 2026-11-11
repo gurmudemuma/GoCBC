@@ -3830,3 +3830,546 @@ router.post('/lc/:lcId/examine', authMiddleware,
 });
 
 export default router;
+
+
+// ==================== ADVANCED BANKING OPERATIONS ====================
+
+/**
+ * POST /api/v1/banking/lc/:lcID/transfer
+ * Transfer LC to second beneficiary (UCP 600 Article 38)
+ * Allows original beneficiary to transfer all or part of LC credit
+ */
+router.post('/lc/:lcID/transfer',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('originalBeneficiary').notEmpty().withMessage('Original beneficiary is required'),
+    body('newBeneficiary').notEmpty().withMessage('New beneficiary is required'),
+    body('newBeneficiaryBank').notEmpty().withMessage('New beneficiary bank is required'),
+    body('transferType').isIn(['FULL', 'PARTIAL']).withMessage('Transfer type must be FULL or PARTIAL'),
+    body('transferAmount').notEmpty().withMessage('Transfer amount is required'),
+    body('transferReason').notEmpty().withMessage('Transfer reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const {
+        originalBeneficiary,
+        newBeneficiary,
+        newBeneficiaryBank,
+        transferType,
+        transferAmount,
+        transferReason,
+        originalBeneficiaryConsent,
+        termsAndConditions
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[BANKING] Transferring LC ${lcID} from ${originalBeneficiary} to ${newBeneficiary}`);
+
+      // Verify original beneficiary consent
+      if (!originalBeneficiaryConsent) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'CONSENT_REQUIRED',
+            message: 'Original beneficiary consent is required for LC transfer'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Read current LC details
+      const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
+      if (!lcResult.success || !lcResult.data) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'LC_NOT_FOUND', message: 'LC not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const lc = lcResult.data;
+      const transferId = `TRANS-${lcID}-${Date.now()}`;
+
+      // Record transfer in database
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+
+      await db.run(`
+        INSERT INTO lc_transfers (
+          transfer_id, lc_id, original_beneficiary, new_beneficiary,
+          new_beneficiary_bank, transfer_type, transfer_amount,
+          original_amount, transfer_reason, transfer_date,
+          transferred_by, consent_confirmed, terms_and_conditions,
+          status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+      `, [
+        transferId,
+        lcID,
+        originalBeneficiary,
+        newBeneficiary,
+        newBeneficiaryBank,
+        transferType,
+        transferAmount,
+        lc.Amount || lc.amount,
+        transferReason,
+        new Date().toISOString(),
+        user.username,
+        originalBeneficiaryConsent,
+        termsAndConditions || 'All original LC terms apply to second beneficiary',
+        'TRANSFERRED'
+      ]);
+
+      // Update LC on blockchain (optional - depends on chaincode support)
+      try {
+        await fabricService.invokeChaincode('TransferLC', [
+          lcID,
+          transferId,
+          originalBeneficiary,
+          newBeneficiary,
+          newBeneficiaryBank,
+          transferType,
+          transferAmount.toString(),
+          transferReason
+        ]);
+      } catch (chaincodeError) {
+        logger.warn('[BANKING] Chaincode TransferLC not available, using database only');
+      }
+
+      logger.info(`✅ [BANKING] LC ${lcID} transferred successfully: ${transferId}`);
+
+      res.json({
+        success: true,
+        data: {
+          transferId,
+          lcId: lcID,
+          originalBeneficiary,
+          newBeneficiary,
+          transferType,
+          transferAmount,
+          status: 'TRANSFERRED',
+          transferDate: new Date().toISOString()
+        },
+        message: 'LC transferred to second beneficiary successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      logger.error('[BANKING] Error transferring LC:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'TRANSFER_FAILED', message: 'Failed to transfer LC' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/standby/issue
+ * Issue Standby Letter of Credit (SBLC) - UCP 600 / ISP98
+ * Used for performance guarantees, advance payment guarantees, bid bonds
+ */
+router.post('/lc/standby/issue',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    body('standbyLCNumber').notEmpty().withMessage('Standby LC number is required'),
+    body('contractId').notEmpty().withMessage('Contract ID is required'),
+    body('amount').isNumeric().withMessage('Amount must be numeric'),
+    body('currency').notEmpty().withMessage('Currency is required'),
+    body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+    body('type').isIn(['PERFORMANCE', 'ADVANCE_PAYMENT', 'BID_BOND', 'FINANCIAL']).withMessage('Invalid standby LC type'),
+    body('purpose').notEmpty().withMessage('Purpose is required'),
+    body('beneficiary').notEmpty().withMessage('Beneficiary is required'),
+    body('applicant').notEmpty().withMessage('Applicant is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        standbyLCNumber,
+        contractId,
+        amount,
+        currency,
+        expiryDate,
+        type,
+        purpose,
+        beneficiary,
+        applicant,
+        terms,
+        issuingBank,
+        advisingBank
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[BANKING] Issuing Standby LC: ${standbyLCNumber}`);
+
+      const standbyId = `SBLC-${Date.now()}`;
+
+      // Store in database
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+
+      await db.run(`
+        INSERT INTO standby_letters_of_credit (
+          standby_lc_id, standby_lc_number, contract_id, amount, currency,
+          expiry_date, type, purpose, beneficiary, applicant, terms,
+          issuing_bank, advising_bank, issued_by, issue_date,
+          status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
+      `, [
+        standbyId,
+        standbyLCNumber,
+        contractId,
+        amount,
+        currency,
+        expiryDate,
+        type,
+        purpose,
+        beneficiary,
+        applicant,
+        terms || 'Payable on first written demand with beneficiary statement',
+        issuingBank || user.organization,
+        advisingBank || '',
+        user.username,
+        new Date().toISOString(),
+        'ISSUED'
+      ]);
+
+      // Record on blockchain (optional)
+      try {
+        await fabricService.invokeChaincode('IssueStandbyLC', [
+          standbyId,
+          standbyLCNumber,
+          contractId,
+          amount.toString(),
+          currency,
+          expiryDate,
+          type,
+          purpose,
+          beneficiary,
+          applicant
+        ]);
+      } catch (chaincodeError) {
+        logger.warn('[BANKING] Chaincode IssueStandbyLC not available, using database only');
+      }
+
+      logger.info(`✅ [BANKING] Standby LC issued: ${standbyId}`);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          standbyLCId: standbyId,
+          standbyLCNumber,
+          type,
+          amount,
+          currency,
+          beneficiary,
+          applicant,
+          status: 'ISSUED',
+          issueDate: new Date().toISOString(),
+          expiryDate
+        },
+        message: 'Standby Letter of Credit issued successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      logger.error('[BANKING] Error issuing standby LC:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'STANDBY_LC_FAILED', message: 'Failed to issue standby LC' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/deferred-payment/record
+ * Record deferred payment acceptance (Usance LC)
+ * Payment deferred to future date (e.g., 90 days after B/L date)
+ */
+router.post('/lc/:lcID/deferred-payment/record',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('documentPresentationDate').notEmpty().withMessage('Document presentation date is required'),
+    body('maturityDate').notEmpty().withMessage('Maturity date is required'),
+    body('deferredAmount').isNumeric().withMessage('Deferred amount must be numeric'),
+    body('deferredDays').isInt({ min: 1 }).withMessage('Deferred days must be positive integer'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const {
+        documentPresentationDate,
+        maturityDate,
+        deferredAmount,
+        deferredDays,
+        acceptanceBy,
+        acceptanceDate,
+        interest,
+        totalPayable
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[BANKING] Recording deferred payment for LC ${lcID}`);
+
+      const deferredPaymentId = `DEF-${lcID}-${Date.now()}`;
+
+      // Calculate interest if not provided
+      const calculatedInterest = interest || (deferredAmount * 0.05 * deferredDays / 365);
+      const calculatedTotal = totalPayable || (parseFloat(deferredAmount) + calculatedInterest);
+
+      // Store in database
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+
+      await db.run(`
+        INSERT INTO deferred_payments (
+          deferred_payment_id, lc_id, document_presentation_date,
+          maturity_date, deferred_days, deferred_amount, interest_amount,
+          total_payable, acceptance_by, acceptance_date, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      `, [
+        deferredPaymentId,
+        lcID,
+        documentPresentationDate,
+        maturityDate,
+        deferredDays,
+        deferredAmount,
+        calculatedInterest,
+        calculatedTotal,
+        acceptanceBy || user.username,
+        acceptanceDate || new Date().toISOString(),
+        'ACCEPTED'
+      ]);
+
+      logger.info(`✅ [BANKING] Deferred payment recorded: ${deferredPaymentId}`);
+
+      res.json({
+        success: true,
+        data: {
+          deferredPaymentId,
+          lcId: lcID,
+          documentPresentationDate,
+          maturityDate,
+          deferredDays,
+          deferredAmount,
+          interestAmount: calculatedInterest,
+          totalPayable: calculatedTotal,
+          status: 'ACCEPTED',
+          acceptanceDate: acceptanceDate || new Date().toISOString()
+        },
+        message: 'Deferred payment recorded successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      logger.error('[BANKING] Error recording deferred payment:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'DEFERRED_PAYMENT_FAILED', message: 'Failed to record deferred payment' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/lc/:lcID/acceptance-financing
+ * Process acceptance financing (negotiation/discounting)
+ * Bank advances payment to beneficiary at discount before maturity
+ */
+router.post('/lc/:lcID/acceptance-financing',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('lcID').notEmpty().withMessage('LC ID is required'),
+    body('financingAmount').isNumeric().withMessage('Financing amount must be numeric'),
+    body('discountRate').isFloat({ min: 0, max: 100 }).withMessage('Discount rate must be between 0 and 100'),
+    body('financingPeriod').isInt({ min: 1 }).withMessage('Financing period must be positive integer'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { lcID } = req.params;
+      const {
+        financingAmount,
+        discountRate,
+        financingPeriod,
+        beneficiary,
+        requestDate,
+        maturityDate,
+        terms
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[BANKING] Processing acceptance financing for LC ${lcID}`);
+
+      const financingId = `FIN-${lcID}-${Date.now()}`;
+
+      // Calculate discount and net amount
+      const discountAmount = (parseFloat(financingAmount) * parseFloat(discountRate) * financingPeriod) / (365 * 100);
+      const netAmount = parseFloat(financingAmount) - discountAmount;
+      const totalCost = parseFloat(financingAmount) + discountAmount; // Total cost includes discount amount (bank's fee)
+
+      // Store in database
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+
+      await db.run(`
+        INSERT INTO acceptance_financing (
+          financing_id, lc_id, financing_amount, discount_rate,
+          discount_amount, net_amount, financing_period, beneficiary,
+          request_date, maturity_date, terms, approved_by,
+          approval_date, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+      `, [
+        financingId,
+        lcID,
+        financingAmount,
+        discountRate,
+        discountAmount,
+        netAmount,
+        financingPeriod,
+        beneficiary,
+        requestDate || new Date().toISOString(),
+        maturityDate,
+        terms || 'Beneficiary requests early payment at discount',
+        user.username,
+        new Date().toISOString(),
+        'APPROVED'
+      ]);
+
+      logger.info(`✅ [BANKING] Acceptance financing approved: ${financingId}`);
+
+      res.json({
+        success: true,
+        data: {
+          financingId,
+          lcId: lcID,
+          financingAmount,
+          discountRate,
+          discountAmount,
+          netAmount,
+          totalCost, // Total cost equals financing amount plus discount (bank's fee)
+          financingPeriod,
+          beneficiary,
+          status: 'APPROVED',
+          approvalDate: new Date().toISOString(),
+          maturityDate
+        },
+        message: 'Acceptance financing approved successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      logger.error('[BANKING] Error processing acceptance financing:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'FINANCING_FAILED', message: 'Failed to process acceptance financing' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/banking/payment/:paymentID/apply-forex
+ * Apply forex conversion rate to payment
+ * Used when settling payment in different currency
+ */
+router.post('/payment/:paymentID/apply-forex',
+  authMiddleware,
+  requireRole(['BANKS', 'BANK_ADMIN']),
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('paymentAmount').isNumeric().withMessage('Payment amount must be numeric'),
+    body('currency').notEmpty().withMessage('Source currency is required'),
+    body('targetCurrency').notEmpty().withMessage('Target currency is required'),
+    body('forexRate').isFloat({ min: 0 }).withMessage('Forex rate must be positive number'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const {
+        paymentAmount,
+        currency,
+        targetCurrency,
+        forexRate,
+        conversionType,
+        rateDate,
+        rateSource,
+        conversionReference
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[BANKING] Applying forex rate to payment ${paymentID}`);
+
+      const convertedAmount = parseFloat(paymentAmount) * parseFloat(forexRate);
+      const conversionId = conversionReference || `FX-CONV-${Date.now()}`;
+
+      // Store conversion record
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+
+      await db.run(`
+        INSERT INTO forex_conversions (
+          conversion_id, payment_id, source_amount, source_currency,
+          target_currency, forex_rate, converted_amount, rate_date,
+          rate_source, converted_by, conversion_date, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      `, [
+        conversionId,
+        paymentID,
+        paymentAmount,
+        currency,
+        targetCurrency,
+        forexRate,
+        convertedAmount,
+        rateDate || new Date().toISOString(),
+        rateSource || 'NBE Official Rate',
+        user.username,
+        new Date().toISOString()
+      ]);
+
+      logger.info(`✅ [BANKING] Forex conversion applied: ${currency} ${paymentAmount} = ${targetCurrency} ${convertedAmount}`);
+
+      res.json({
+        success: true,
+        data: {
+          conversionId,
+          paymentId: paymentID,
+          sourceAmount: paymentAmount,
+          sourceCurrency: currency,
+          targetCurrency,
+          forexRate,
+          convertedAmount,
+          conversionType: conversionType || 'SPOT',
+          rateDate: rateDate || new Date().toISOString(),
+          rateSource: rateSource || 'NBE Official Rate'
+        },
+        message: 'Forex rate applied to payment successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      logger.error('[BANKING] Error applying forex rate:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'FOREX_CONVERSION_FAILED', message: 'Failed to apply forex rate' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+

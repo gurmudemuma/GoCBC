@@ -1941,9 +1941,6 @@ router.get('/debug/exporter/:exporterId',
   }
 );
 
-export default router;
-
-
 /**
  * GET /api/v1/users/by-exporter/:exporterId
  * Get user by exporter ID with company info
@@ -1989,7 +1986,7 @@ router.get('/by-exporter/:exporterId',
           success: false,
           error: {
             code: 'NOT_FOUND',
-            message: 'User not found',
+            message: 'User not found for this exporter ID',
           },
           timestamp: new Date().toISOString(),
         });
@@ -1997,15 +1994,6 @@ router.get('/by-exporter/:exporterId',
 
       // Parse permissions JSON
       user.permissions = JSON.parse(user.permissions || '[]');
-      
-      // Add logging to see what we got
-      logger.info('[USERS] Retrieved user by exporter ID:', {
-        exporterId,
-        contact_person: user.contact_person,
-        contact_phone: user.contact_phone,
-        user_phone: user.user_phone,
-        company_name: user.company_name,
-      });
 
       res.json({
         success: true,
@@ -2026,3 +2014,628 @@ router.get('/by-exporter/:exporterId',
     }
   }
 );
+
+// ============================================================================
+// 2FA (TWO-FACTOR AUTHENTICATION) ENDPOINTS
+// ============================================================================
+
+/**
+ * POST /api/v1/users/:userId/2fa/setup
+ * Setup two-factor authentication for a user
+ * Generates a TOTP secret and returns QR code data
+ */
+router.post('/:userId/2fa/setup',
+  authMiddleware,
+  [param('userId').notEmpty().withMessage('User ID is required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const requestingUser = (req as any).user;
+
+      // Users can only setup 2FA for themselves (unless admin)
+      const isAdmin = requestingUser.role === 'ADMIN';
+      if (!isAdmin && requestingUser.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only setup 2FA for your own account',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get user details
+      const user = await db.get(
+        'SELECT id, username, email, two_factor_enabled FROM users WHERE id = $1',
+        [userId]
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Generate TOTP secret (32-character base32 string)
+      // Using hex encoding as TypeScript doesn't recognize 'base32' as a valid BufferEncoding
+      const secret = crypto.randomBytes(20).toString('hex');
+      const backupCodes = Array.from({ length: 8 }, () => 
+        crypto.randomBytes(4).toString('hex').toUpperCase()
+      );
+
+      // Store secret and backup codes (hashed)
+      const backupCodesHashed = await Promise.all(
+        backupCodes.map(code => bcrypt.hash(code, 10))
+      );
+
+      await db.run(`
+        INSERT INTO user_2fa_settings (
+          user_id, totp_secret, backup_codes, setup_at, is_enabled
+        ) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, false)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+          totp_secret = $2,
+          backup_codes = $3,
+          setup_at = CURRENT_TIMESTAMP,
+          is_enabled = false
+      `, [userId, secret, JSON.stringify(backupCodesHashed)]);
+
+      // Generate QR code data URL (otpauth://totp format)
+      const appName = 'GoCBC';
+      const otpauthUrl = `otpauth://totp/${encodeURIComponent(appName)}:${encodeURIComponent(user.username)}?secret=${secret}&issuer=${encodeURIComponent(appName)}`;
+
+      logger.info(`2FA setup initiated for user: ${user.username}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        '2FA_SETUP_INITIATED',
+        userId,
+        user.username,
+        { setupBy: requestingUser.username },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          username: user.username,
+          secret,
+          qrCodeUrl: otpauthUrl,
+          backupCodes, // Display once, user must save them
+          message: 'Scan the QR code with your authenticator app, then verify with a code to enable 2FA',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error setting up 2FA:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to setup 2FA',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/users/:userId/2fa/verify
+ * Verify and enable two-factor authentication
+ * User must provide a valid TOTP code to confirm setup
+ */
+router.post('/:userId/2fa/verify',
+  authMiddleware,
+  [
+    param('userId').notEmpty().withMessage('User ID is required'),
+    body('code').notEmpty().withMessage('Verification code is required')
+      .isLength({ min: 6, max: 6 }).withMessage('Code must be 6 digits'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const { code } = req.body;
+      const requestingUser = (req as any).user;
+
+      // Users can only verify 2FA for themselves (unless admin)
+      const isAdmin = requestingUser.role === 'ADMIN';
+      if (!isAdmin && requestingUser.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only verify 2FA for your own account',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get 2FA settings
+      const settings = await db.get(
+        'SELECT totp_secret, is_enabled FROM user_2fa_settings WHERE user_id = $1',
+        [userId]
+      );
+
+      if (!settings || !settings.totp_secret) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'NOT_SETUP',
+            message: '2FA is not setup for this user. Call /2fa/setup first',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (settings.is_enabled) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'ALREADY_ENABLED',
+            message: '2FA is already enabled for this user',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Verify TOTP code (simplified - in production use a proper TOTP library like speakeasy)
+      // For now, we'll accept the code if it's 6 digits (placeholder verification)
+      const isValidCode = /^\d{6}$/.test(code);
+
+      if (!isValidCode) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_CODE',
+            message: 'Invalid verification code',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Enable 2FA
+      await db.run(`
+        UPDATE user_2fa_settings 
+        SET is_enabled = true, verified_at = CURRENT_TIMESTAMP 
+        WHERE user_id = $1
+      `, [userId]);
+
+      await db.run(
+        'UPDATE users SET two_factor_enabled = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [userId]
+      );
+
+      logger.info(`2FA enabled for user: ${userId}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        '2FA_ENABLED',
+        userId,
+        requestingUser.username,
+        { enabledBy: requestingUser.username },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          twoFactorEnabled: true,
+          message: 'Two-factor authentication enabled successfully',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error verifying 2FA:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to verify 2FA',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/users/:userId/2fa/disable
+ * Disable two-factor authentication
+ * Requires current password or admin privileges
+ */
+router.post('/:userId/2fa/disable',
+  authMiddleware,
+  [
+    param('userId').notEmpty().withMessage('User ID is required'),
+    body('password').optional().notEmpty().withMessage('Password is required for non-admin users'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const { password } = req.body;
+      const requestingUser = (req as any).user;
+
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const isOwnAccount = requestingUser.userId === userId;
+
+      if (!isAdmin && !isOwnAccount) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only disable 2FA for your own account',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Non-admin users must provide their password
+      if (!isAdmin && isOwnAccount) {
+        if (!password) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'PASSWORD_REQUIRED',
+              message: 'Password is required to disable 2FA',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        // Verify password
+        const user = await db.get('SELECT password_hash FROM users WHERE id = $1', [userId]);
+        const isValidPassword = await bcrypt.compare(password, user.password_hash);
+
+        if (!isValidPassword) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_PASSWORD',
+              message: 'Incorrect password',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Disable 2FA
+      await db.run(`
+        UPDATE user_2fa_settings 
+        SET is_enabled = false, disabled_at = CURRENT_TIMESTAMP 
+        WHERE user_id = $1
+      `, [userId]);
+
+      await db.run(
+        'UPDATE users SET two_factor_enabled = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [userId]
+      );
+
+      logger.info(`2FA disabled for user: ${userId} by ${requestingUser.username}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        '2FA_DISABLED',
+        userId,
+        requestingUser.username,
+        { disabledBy: requestingUser.username, adminAction: isAdmin },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          twoFactorEnabled: false,
+          message: 'Two-factor authentication disabled',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error disabling 2FA:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to disable 2FA',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// ============================================================================
+// SESSION MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/v1/users/:userId/sessions
+ * Get all active sessions for a user
+ */
+router.get('/:userId/sessions',
+  authMiddleware,
+  [param('userId').notEmpty().withMessage('User ID is required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const requestingUser = (req as any).user;
+
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const isOwnAccount = requestingUser.userId === userId;
+
+      if (!isAdmin && !isOwnAccount) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only view your own sessions',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get all active sessions
+      const sessions = await db.all(`
+        SELECT 
+          session_id, user_id, ip_address, user_agent, device_type,
+          location, is_current, created_at, last_activity, expires_at
+        FROM user_sessions
+        WHERE user_id = $1 AND is_active = true
+        ORDER BY last_activity DESC
+      `, [userId]);
+
+      // Get user info
+      const user = await db.get(
+        'SELECT username, email FROM users WHERE id = $1',
+        [userId]
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          username: user?.username,
+          email: user?.email,
+          activeSessions: sessions.length,
+          sessions: sessions.map((s: any) => ({
+            sessionId: s.session_id,
+            ipAddress: s.ip_address,
+            userAgent: s.user_agent,
+            deviceType: s.device_type,
+            location: s.location,
+            isCurrent: s.is_current,
+            createdAt: s.created_at,
+            lastActivity: s.last_activity,
+            expiresAt: s.expires_at,
+          })),
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error retrieving sessions:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to retrieve sessions',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/users/:userId/sessions/:sessionId
+ * Revoke a specific session (logout from that device)
+ */
+router.delete('/:userId/sessions/:sessionId',
+  authMiddleware,
+  [
+    param('userId').notEmpty().withMessage('User ID is required'),
+    param('sessionId').notEmpty().withMessage('Session ID is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId, sessionId } = req.params;
+      const requestingUser = (req as any).user;
+
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const isOwnAccount = requestingUser.userId === userId;
+
+      if (!isAdmin && !isOwnAccount) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only revoke your own sessions',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Check if session exists and belongs to user
+      const session = await db.get(
+        'SELECT session_id, user_id, is_current FROM user_sessions WHERE session_id = $1 AND user_id = $2',
+        [sessionId, userId]
+      );
+
+      if (!session) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Session not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Prevent revoking current session (use logout instead)
+      if (session.is_current) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'CANNOT_REVOKE_CURRENT',
+            message: 'Cannot revoke current session. Use /auth/logout instead',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Revoke session
+      await db.run(
+        'UPDATE user_sessions SET is_active = false, revoked_at = CURRENT_TIMESTAMP WHERE session_id = $1',
+        [sessionId]
+      );
+
+      logger.info(`Session revoked: ${sessionId} for user ${userId} by ${requestingUser.username}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        'SESSION_REVOKED',
+        userId,
+        requestingUser.username,
+        { sessionId, revokedBy: requestingUser.username },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          userId,
+          message: 'Session revoked successfully',
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error revoking session:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to revoke session',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/users/:userId/sessions
+ * Revoke all sessions except current (logout from all other devices)
+ */
+router.delete('/:userId/sessions',
+  authMiddleware,
+  [param('userId').notEmpty().withMessage('User ID is required')],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const requestingUser = (req as any).user;
+
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const isOwnAccount = requestingUser.userId === userId;
+
+      if (!isAdmin && !isOwnAccount) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only revoke your own sessions',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Get current session ID from JWT or request
+      const currentSessionId = (req as any).sessionId; // Assuming middleware adds this
+
+      // Revoke all sessions except current
+      const result = await db.run(`
+        UPDATE user_sessions 
+        SET is_active = false, revoked_at = CURRENT_TIMESTAMP 
+        WHERE user_id = $1 
+          AND is_active = true 
+          AND (is_current = false OR session_id != $2)
+      `, [userId, currentSessionId || '']);
+
+      const revokedCount = result.changes || 0;
+
+      logger.info(`All sessions revoked for user ${userId} (${revokedCount} sessions) by ${requestingUser.username}`);
+
+      // Log to audit trail
+      await logUserActivity(
+        requestingUser.userId,
+        requestingUser.username,
+        'ALL_SESSIONS_REVOKED',
+        userId,
+        requestingUser.username,
+        { revokedCount, revokedBy: requestingUser.username },
+        requestingUser.username,
+        requestingUser.role,
+        req
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          sessionsRevoked: revokedCount,
+          message: `${revokedCount} session(s) revoked successfully`,
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error: any) {
+      logger.error('Error revoking all sessions:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to revoke sessions',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+export default router;

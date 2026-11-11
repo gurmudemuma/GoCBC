@@ -2,6 +2,7 @@
 // Shipping Management Routes - Complete shipping lifecycle tracking
 
 import { Router, Request, Response } from 'express';
+import { body, param, validationResult } from 'express-validator';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
@@ -10,6 +11,19 @@ import { logger } from '../utils/logger';
 const router = Router();
 const dbService = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
+
+// Validation middleware
+const validateRequest = (req: Request, res: Response, next: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid input data', details: errors.array() },
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+};
 
 // A freight booking lives in its own shipping_bookings row
 // (booking_id = 'BOOK-<timestamp>', shipment_id = the real shipment).
@@ -787,5 +801,609 @@ router.post('/bookings/:bookingId/deliver', authMiddleware,
     });
   }
 });
+
+// ==================== ADVANCED SHIPPING OPERATIONS ====================
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/bill-of-lading/issue
+ * Issue Bill of Lading (various types)
+ * Types: NEGOTIABLE, NON_NEGOTIABLE, SEA_WAYBILL, MASTER_BL, HOUSE_BL
+ */
+router.post('/bookings/:bookingId/bill-of-lading/issue',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
+  [
+    param('bookingId').notEmpty().withMessage('Booking ID is required'),
+    body('blNumber').notEmpty().withMessage('B/L number is required'),
+    body('blType').isIn(['NEGOTIABLE', 'NON_NEGOTIABLE', 'SEA_WAYBILL', 'MASTER_BL', 'HOUSE_BL']).withMessage('Invalid B/L type'),
+    body('shipper').notEmpty().withMessage('Shipper is required'),
+    body('consignee').notEmpty().withMessage('Consignee is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId } = req.params;
+      const {
+        blNumber,
+        blType,
+        shipper,
+        consignee,
+        notifyParty,
+        portOfLoading,
+        portOfDischarge,
+        vesselName,
+        voyageNumber,
+        containerNumbers,
+        sealNumbers,
+        cargoDescription,
+        packageCount,
+        grossWeight,
+        measurement,
+        freightTerms,
+        numberOfOriginals,
+        issuedAt,
+        issueDate,
+        onBoardDate
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SHIPPING] Issuing ${blType} Bill of Lading: ${blNumber}`);
+
+      const blId = `BL-${Date.now()}`;
+
+      // Store in database
+      await dbService.run(`
+        INSERT INTO bills_of_lading (
+          bl_id, bl_number, bl_type, booking_id, shipper, consignee,
+          notify_party, port_of_loading, port_of_discharge, vessel_name,
+          voyage_number, container_numbers, seal_numbers, cargo_description,
+          package_count, gross_weight, measurement, freight_terms,
+          number_of_originals, issued_at, issue_date, on_board_date,
+          issued_by, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, CURRENT_TIMESTAMP)
+      `, [
+        blId,
+        blNumber,
+        blType,
+        bookingId,
+        shipper,
+        consignee,
+        notifyParty || '',
+        portOfLoading,
+        portOfDischarge,
+        vesselName,
+        voyageNumber || '',
+        Array.isArray(containerNumbers) ? containerNumbers.join(',') : containerNumbers || '',
+        Array.isArray(sealNumbers) ? sealNumbers.join(',') : sealNumbers || '',
+        cargoDescription,
+        packageCount || 0,
+        grossWeight || 0,
+        measurement || 0,
+        freightTerms || 'PREPAID',
+        numberOfOriginals || 3,
+        issuedAt || 'Port of Loading',
+        issueDate || new Date().toISOString(),
+        onBoardDate || new Date().toISOString(),
+        user.username,
+        'ISSUED'
+      ]);
+
+      logger.info(`✅ [SHIPPING] Bill of Lading issued: ${blId} (${blType})`);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          blId,
+          blNumber,
+          blType,
+          bookingId,
+          shipper,
+          consignee,
+          status: 'ISSUED',
+          issueDate: issueDate || new Date().toISOString(),
+          numberOfOriginals: numberOfOriginals || 3
+        },
+        message: `${blType} Bill of Lading issued successfully`,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error issuing Bill of Lading:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'BL_ISSUE_FAILED', message: 'Failed to issue Bill of Lading' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/shipping/bookings/:bookingId/amend
+ * Amend shipping booking details
+ */
+router.put('/bookings/:bookingId/amend',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN', 'EXPORTER'),
+  [
+    param('bookingId').notEmpty().withMessage('Booking ID is required'),
+    body('amendmentReason').notEmpty().withMessage('Amendment reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId } = req.params;
+      const {
+        amendmentReason,
+        newVesselName,
+        newVoyageNumber,
+        newEstimatedDeparture,
+        newEstimatedArrival,
+        newContainerType,
+        newNumberOfContainers,
+        additionalNotes
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SHIPPING] Amending booking: ${bookingId}`);
+
+      // Get current booking
+      const currentBooking = await dbService.get(
+        'SELECT * FROM shipping_bookings WHERE booking_id = $1',
+        [bookingId]
+      );
+
+      if (!currentBooking) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'BOOKING_NOT_FOUND', message: 'Booking not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const amendmentId = `AMD-${bookingId}-${Date.now()}`;
+
+      // Record amendment
+      await dbService.run(`
+        INSERT INTO booking_amendments (
+          amendment_id, booking_id, amendment_reason, amended_by,
+          old_vessel_name, new_vessel_name, old_voyage_number, new_voyage_number,
+          old_departure, new_departure, old_arrival, new_arrival,
+          old_container_type, new_container_type, old_container_count, new_container_count,
+          additional_notes, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)
+      `, [
+        amendmentId,
+        bookingId,
+        amendmentReason,
+        user.username,
+        currentBooking.vessel_name,
+        newVesselName || currentBooking.vessel_name,
+        currentBooking.voyage_number,
+        newVoyageNumber || currentBooking.voyage_number,
+        currentBooking.estimated_departure,
+        newEstimatedDeparture || currentBooking.estimated_departure,
+        currentBooking.estimated_arrival,
+        newEstimatedArrival || currentBooking.estimated_arrival,
+        currentBooking.container_type,
+        newContainerType || currentBooking.container_type,
+        currentBooking.number_of_containers,
+        newNumberOfContainers || currentBooking.number_of_containers,
+        additionalNotes || '',
+        'APPROVED'
+      ]);
+
+      // Update booking with amendments
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      if (newVesselName) {
+        updates.push(`vessel_name = $${paramIndex++}`);
+        values.push(newVesselName);
+      }
+      if (newVoyageNumber) {
+        updates.push(`voyage_number = $${paramIndex++}`);
+        values.push(newVoyageNumber);
+      }
+      if (newEstimatedDeparture) {
+        updates.push(`estimated_departure = $${paramIndex++}`);
+        values.push(newEstimatedDeparture);
+      }
+      if (newEstimatedArrival) {
+        updates.push(`estimated_arrival = $${paramIndex++}`);
+        values.push(newEstimatedArrival);
+      }
+      if (newContainerType) {
+        updates.push(`container_type = $${paramIndex++}`);
+        values.push(newContainerType);
+      }
+      if (newNumberOfContainers) {
+        updates.push(`number_of_containers = $${paramIndex++}`);
+        values.push(newNumberOfContainers);
+      }
+
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(bookingId);
+        
+        await dbService.run(
+          `UPDATE shipping_bookings SET ${updates.join(', ')} WHERE booking_id = $${paramIndex}`,
+          values
+        );
+      }
+
+      logger.info(`✅ [SHIPPING] Booking amended: ${bookingId} - ${amendmentId}`);
+
+      res.json({
+        success: true,
+        data: {
+          amendmentId,
+          bookingId,
+          amendmentReason,
+          status: 'APPROVED',
+          amendedFields: {
+            vesselName: newVesselName,
+            voyageNumber: newVoyageNumber,
+            estimatedDeparture: newEstimatedDeparture,
+            estimatedArrival: newEstimatedArrival,
+            containerType: newContainerType,
+            numberOfContainers: newNumberOfContainers
+          }
+        },
+        message: 'Booking amended successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error amending booking:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'AMENDMENT_FAILED', message: 'Failed to amend booking' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/shipping/bookings/:bookingId/cancel
+ * Cancel shipping booking
+ */
+router.delete('/bookings/:bookingId/cancel',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN', 'EXPORTER'),
+  [
+    param('bookingId').notEmpty().withMessage('Booking ID is required'),
+    body('cancellationReason').notEmpty().withMessage('Cancellation reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId } = req.params;
+      const { cancellationReason, cancelledBy } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SHIPPING] Cancelling booking: ${bookingId}`);
+
+      // Check if booking can be cancelled (not yet loaded/departed)
+      const booking = await dbService.get(
+        'SELECT * FROM shipping_bookings WHERE booking_id = $1',
+        [bookingId]
+      );
+
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'BOOKING_NOT_FOUND', message: 'Booking not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (['LOADED', 'DEPARTED', 'ARRIVED', 'DELIVERED'].includes(booking.status)) {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'CANCELLATION_NOT_ALLOWED', 
+            message: `Cannot cancel booking with status: ${booking.status}` 
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Update booking status to CANCELLED
+      await dbService.run(`
+        UPDATE shipping_bookings
+        SET status = 'CANCELLED',
+            cancellation_reason = $1,
+            cancelled_by = $2,
+            cancellation_date = NOW(),
+            updated_at = NOW()
+        WHERE booking_id = $3
+      `, [
+        cancellationReason,
+        cancelledBy || user.username,
+        bookingId
+      ]);
+
+      logger.info(`✅ [SHIPPING] Booking cancelled: ${bookingId}`);
+
+      res.json({
+        success: true,
+        data: {
+          bookingId,
+          status: 'CANCELLED',
+          cancellationReason,
+          cancelledBy: cancelledBy || user.username,
+          cancellationDate: new Date().toISOString()
+        },
+        message: 'Booking cancelled successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error cancelling booking:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'CANCELLATION_FAILED', message: 'Failed to cancel booking' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipping/bookings/:bookingId/containers/allocate
+ * Allocate specific containers to booking
+ */
+router.post('/bookings/:bookingId/containers/allocate',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
+  [
+    param('bookingId').notEmpty().withMessage('Booking ID is required'),
+    body('containers').isArray({ min: 1 }).withMessage('At least one container is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId } = req.params;
+      const { containers, allocatedBy } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SHIPPING] Allocating ${containers.length} containers to booking: ${bookingId}`);
+
+      // Validate container format
+      for (const container of containers) {
+        if (!container.containerNumber || !container.containerType || !container.sizeType) {
+          return res.status(400).json({
+            success: false,
+            error: { 
+              code: 'INVALID_CONTAINER', 
+              message: 'Each container must have containerNumber, containerType, and sizeType' 
+            },
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      // Store container allocations
+      for (const container of containers) {
+        await dbService.run(`
+          INSERT INTO container_allocations (
+            container_id, booking_id, container_number, container_type,
+            size_type, condition, allocated_by, allocated_date, status, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        `, [
+          `CONT-${bookingId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          bookingId,
+          container.containerNumber,
+          container.containerType,
+          container.sizeType,
+          container.condition || 'GOOD',
+          allocatedBy || user.username,
+          new Date().toISOString(),
+          'ALLOCATED'
+        ]);
+      }
+
+      // Update booking with container info
+      const containerNumbers = containers.map((c: any) => c.containerNumber).join(',');
+      await dbService.run(`
+        UPDATE shipping_bookings
+        SET container_number = $1,
+            number_of_containers = $2,
+            updated_at = NOW()
+        WHERE booking_id = $3
+      `, [
+        containerNumbers,
+        containers.length,
+        bookingId
+      ]);
+
+      logger.info(`✅ [SHIPPING] Containers allocated to booking: ${bookingId}`);
+
+      res.json({
+        success: true,
+        data: {
+          bookingId,
+          containersAllocated: containers.length,
+          containers: containers.map((c: any) => ({
+            containerNumber: c.containerNumber,
+            containerType: c.containerType,
+            sizeType: c.sizeType,
+            status: 'ALLOCATED'
+          })),
+          allocationDate: new Date().toISOString()
+        },
+        message: 'Containers allocated successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error allocating containers:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'ALLOCATION_FAILED', message: 'Failed to allocate containers' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/shipping/containers/:containerId/stuffing-report
+ * Record container stuffing report
+ */
+router.post('/containers/:containerId/stuffing-report',
+  authMiddleware,
+  requireRole('SHIPPING', 'SHIPPING_ADMIN'),
+  [
+    param('containerId').notEmpty().withMessage('Container ID is required'),
+    body('containerNumber').notEmpty().withMessage('Container number is required'),
+    body('stuffingDate').notEmpty().withMessage('Stuffing date is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { containerId } = req.params;
+      const {
+        containerNumber,
+        stuffingDate,
+        stuffingLocation,
+        cargoDescription,
+        packageCount,
+        grossWeight,
+        netWeight,
+        volumeCBM,
+        sealNumber,
+        stuffingSupervisor,
+        photoUrls,
+        remarks
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[SHIPPING] Recording stuffing report for container: ${containerNumber}`);
+
+      const reportId = `STUFF-${containerId}-${Date.now()}`;
+
+      await dbService.run(`
+        INSERT INTO container_stuffing_reports (
+          report_id, container_id, container_number, stuffing_date,
+          stuffing_location, cargo_description, package_count, gross_weight,
+          net_weight, volume_cbm, seal_number, stuffing_supervisor,
+          photo_urls, remarks, reported_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+      `, [
+        reportId,
+        containerId,
+        containerNumber,
+        stuffingDate,
+        stuffingLocation || '',
+        cargoDescription || '',
+        packageCount || 0,
+        grossWeight || 0,
+        netWeight || 0,
+        volumeCBM || 0,
+        sealNumber || '',
+        stuffingSupervisor || user.username,
+        photoUrls ? JSON.stringify(photoUrls) : '[]',
+        remarks || '',
+        user.username
+      ]);
+
+      logger.info(`✅ [SHIPPING] Container stuffing report recorded: ${reportId}`);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          reportId,
+          containerId,
+          containerNumber,
+          stuffingDate,
+          packageCount,
+          grossWeight,
+          sealNumber,
+          status: 'STUFFED'
+        },
+        message: 'Container stuffing report recorded successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error recording stuffing report:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'STUFFING_REPORT_FAILED', message: 'Failed to record stuffing report' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/shipping/bills-of-lading
+ * Get all Bills of Lading with filtering
+ */
+router.get('/bills-of-lading',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { blType, status, bookingId } = req.query;
+
+      logger.info('[SHIPPING] Fetching Bills of Lading...');
+
+      let query = 'SELECT * FROM bills_of_lading WHERE 1=1';
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (blType) {
+        query += ` AND bl_type = $${paramIndex++}`;
+        params.push(blType);
+      }
+      if (status) {
+        query += ` AND status = $${paramIndex++}`;
+        params.push(status);
+      }
+      if (bookingId) {
+        query += ` AND booking_id = $${paramIndex++}`;
+        params.push(bookingId);
+      }
+
+      query += ' ORDER BY issue_date DESC';
+
+      const billsOfLading = await dbService.all(query, params);
+
+      res.json({
+        success: true,
+        data: billsOfLading.map((bl: any) => ({
+          blId: bl.bl_id,
+          blNumber: bl.bl_number,
+          blType: bl.bl_type,
+          bookingId: bl.booking_id,
+          shipper: bl.shipper,
+          consignee: bl.consignee,
+          portOfLoading: bl.port_of_loading,
+          portOfDischarge: bl.port_of_discharge,
+          vesselName: bl.vessel_name,
+          voyageNumber: bl.voyage_number,
+          containerNumbers: bl.container_numbers,
+          status: bl.status,
+          issueDate: bl.issue_date,
+          onBoardDate: bl.on_board_date
+        })),
+        count: billsOfLading.length,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[SHIPPING] Error fetching Bills of Lading:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'FETCH_FAILED', message: 'Failed to fetch Bills of Lading' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 export default router;

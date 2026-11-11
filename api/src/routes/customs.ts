@@ -1048,6 +1048,539 @@ router.get('/risk-rules', authMiddleware, async (req, res) => {
   }
 });
 
+// ==================== CUSTOMS EXTENDED OPERATIONS ====================
+
+/**
+ * PUT /api/v1/customs/declaration/:declarationId/amend
+ * Amend customs declaration before clearance
+ * Allows corrections to declarations that haven't been cleared yet
+ */
+router.put('/declaration/:declarationId/amend',
+  authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN', 'EXPORTER'),
+  [
+    param('declarationId').notEmpty().withMessage('Declaration ID is required'),
+    body('amendmentReason').notEmpty().withMessage('Amendment reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const {
+        amendmentReason,
+        newQuantity,
+        newCustomsValueUSD,
+        newHsCode,
+        newDescription,
+        newDestination,
+        additionalDocuments
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Amending declaration: ${declarationId}`);
+
+      // Get current declaration
+      const currentDeclaration = await postgresDb.get(
+        'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
+        [declarationId]
+      );
+
+      if (!currentDeclaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Check if declaration can be amended (not yet cleared)
+      if (['CLEARED', 'REJECTED'].includes(currentDeclaration.status)) {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'AMENDMENT_NOT_ALLOWED', 
+            message: `Cannot amend declaration with status: ${currentDeclaration.status}` 
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const amendmentId = `AMD-${declarationId}-${Date.now()}`;
+
+      // Record amendment
+      await postgresDb.run(`
+        INSERT INTO declaration_amendments (
+          amendment_id, declaration_id, amendment_reason, amended_by,
+          old_quantity, new_quantity, old_value, new_value,
+          old_hs_code, new_hs_code, old_description, new_description,
+          old_destination, new_destination, additional_documents,
+          status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
+      `, [
+        amendmentId,
+        currentDeclaration.declaration_id || declarationId,
+        amendmentReason,
+        user.username,
+        currentDeclaration.quantity,
+        newQuantity || currentDeclaration.quantity,
+        currentDeclaration.customs_value_usd,
+        newCustomsValueUSD || currentDeclaration.customs_value_usd,
+        currentDeclaration.hs_code,
+        newHsCode || currentDeclaration.hs_code,
+        currentDeclaration.description,
+        newDescription || currentDeclaration.description,
+        currentDeclaration.destination,
+        newDestination || currentDeclaration.destination,
+        additionalDocuments || '',
+        'APPROVED'
+      ]);
+
+      // Update declaration with amendments
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      if (newQuantity) {
+        updates.push(`quantity = $${paramIndex++}`);
+        values.push(newQuantity);
+      }
+      if (newCustomsValueUSD) {
+        updates.push(`customs_value_usd = $${paramIndex++}`);
+        values.push(newCustomsValueUSD);
+      }
+      if (newHsCode) {
+        updates.push(`hs_code = $${paramIndex++}`);
+        values.push(newHsCode);
+      }
+      if (newDescription) {
+        updates.push(`description = $${paramIndex++}`);
+        values.push(newDescription);
+      }
+      if (newDestination) {
+        updates.push(`destination = $${paramIndex++}`);
+        values.push(newDestination);
+      }
+
+      if (updates.length > 0) {
+        updates.push(`updated_at = CURRENT_TIMESTAMP`);
+        values.push(currentDeclaration.declaration_id || declarationId);
+        
+        await postgresDb.run(
+          `UPDATE customs_declarations SET ${updates.join(', ')} WHERE declaration_id = $${paramIndex} OR declaration_number = $${paramIndex}`,
+          values
+        );
+      }
+
+      logger.info(`✅ [CUSTOMS] Declaration amended: ${declarationId} - ${amendmentId}`);
+
+      res.json({
+        success: true,
+        data: {
+          amendmentId,
+          declarationId: currentDeclaration.declaration_id || declarationId,
+          amendmentReason,
+          status: 'APPROVED',
+          amendedFields: {
+            quantity: newQuantity,
+            customsValueUSD: newCustomsValueUSD,
+            hsCode: newHsCode,
+            description: newDescription,
+            destination: newDestination
+          }
+        },
+        message: 'Declaration amended successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error amending declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'AMENDMENT_FAILED', message: 'Failed to amend declaration' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/customs/declaration/:declarationId/cancel
+ * Cancel customs declaration before processing
+ */
+router.delete('/declaration/:declarationId/cancel',
+  authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN', 'EXPORTER'),
+  [
+    param('declarationId').notEmpty().withMessage('Declaration ID is required'),
+    body('cancellationReason').notEmpty().withMessage('Cancellation reason is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { cancellationReason, cancelledBy } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Cancelling declaration: ${declarationId}`);
+
+      // Check if declaration exists and can be cancelled
+      const declaration = await postgresDb.get(
+        'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
+        [declarationId]
+      );
+
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (['CLEARED', 'INSPECTION_COMPLETE'].includes(declaration.status)) {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: 'CANCELLATION_NOT_ALLOWED', 
+            message: `Cannot cancel declaration with status: ${declaration.status}` 
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Update declaration status to CANCELLED
+      await postgresDb.run(`
+        UPDATE customs_declarations
+        SET status = 'CANCELLED',
+            cancellation_reason = $1,
+            cancelled_by = $2,
+            cancellation_date = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE declaration_id = $3 OR declaration_number = $3
+      `, [
+        cancellationReason,
+        cancelledBy || user.username,
+        declarationId
+      ]);
+
+      logger.info(`✅ [CUSTOMS] Declaration cancelled: ${declarationId}`);
+
+      res.json({
+        success: true,
+        data: {
+          declarationId: declaration.declaration_id || declarationId,
+          status: 'CANCELLED',
+          cancellationReason,
+          cancelledBy: cancelledBy || user.username,
+          cancellationDate: new Date().toISOString()
+        },
+        message: 'Declaration cancelled successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error cancelling declaration:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'CANCELLATION_FAILED', message: 'Failed to cancel declaration' },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/calculate-duty
+ * Calculate customs duty and taxes for declaration
+ * Based on HS code, origin, value, and applicable rates
+ */
+router.post('/declaration/:declarationId/calculate-duty',
+  authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
+  [
+    param('declarationId').notEmpty().withMessage('Declaration ID is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const { 
+        customsValueUSD, 
+        hsCode, 
+        origin, 
+        destination,
+        exchangeRate,
+        applyPreferences 
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Calculating duty for declaration: ${declarationId}`);
+
+      // Get declaration details if not provided
+      let declValue = customsValueUSD;
+      let declHsCode = hsCode;
+      let declOrigin = origin;
+
+      if (!declValue || !declHsCode) {
+        const declaration = await postgresDb.get(
+          'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
+          [declarationId]
+        );
+
+        if (!declaration) {
+          return res.status(404).json({
+            success: false,
+            error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        declValue = declValue || declaration.customs_value_usd;
+        declHsCode = declHsCode || declaration.hs_code;
+        declOrigin = declOrigin || declaration.origin_country;
+      }
+
+      // Get duty rates from tariff table (or use default rates)
+      const tariffRate = await postgresDb.get(
+        'SELECT * FROM customs_tariffs WHERE hs_code = $1',
+        [declHsCode]
+      );
+
+      // Default rates if not found in tariff table
+      const dutyRate = tariffRate?.duty_rate || 0.10; // 10% default
+      const vatRate = tariffRate?.vat_rate || 0.15; // 15% VAT
+      const exciseRate = tariffRate?.excise_rate || 0;
+
+      // Apply preferential rates if applicable (e.g., COMESA, AfCFTA)
+      let effectiveDutyRate = dutyRate;
+      if (applyPreferences && declOrigin) {
+        // Check for trade agreements
+        const preference = await postgresDb.get(
+          'SELECT * FROM trade_preferences WHERE origin_country = $1 AND hs_code = $2',
+          [declOrigin, declHsCode]
+        );
+        if (preference) {
+          effectiveDutyRate = preference.preferential_rate || dutyRate;
+        }
+      }
+
+      // Calculate duties
+      const valueInUSD = parseFloat(declValue);
+      const rate = exchangeRate || 125.50; // Default ETB/USD rate
+      const valueInETB = valueInUSD * rate;
+
+      const dutyAmount = valueInETB * effectiveDutyRate;
+      const taxableValue = valueInETB + dutyAmount;
+      const vatAmount = taxableValue * vatRate;
+      const exciseAmount = valueInETB * exciseRate;
+      const totalDuty = dutyAmount + vatAmount + exciseAmount;
+
+      const calculationId = `CALC-${declarationId}-${Date.now()}`;
+
+      // Store calculation
+      await postgresDb.run(`
+        INSERT INTO duty_calculations (
+          calculation_id, declaration_id, customs_value_usd, customs_value_etb,
+          exchange_rate, hs_code, origin_country, duty_rate, vat_rate, excise_rate,
+          duty_amount, vat_amount, excise_amount, total_duty, calculated_by,
+          calculation_date, preferences_applied, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP)
+      `, [
+        calculationId,
+        declarationId,
+        valueInUSD,
+        valueInETB,
+        rate,
+        declHsCode,
+        declOrigin || 'UNKNOWN',
+        effectiveDutyRate,
+        vatRate,
+        exciseRate,
+        dutyAmount,
+        vatAmount,
+        exciseAmount,
+        totalDuty,
+        user.username,
+        new Date().toISOString(),
+        applyPreferences || false
+      ]);
+
+      // Update declaration with calculated duty
+      await postgresDb.run(`
+        UPDATE customs_declarations
+        SET duty_amount = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE declaration_id = $2 OR declaration_number = $2
+      `, [totalDuty, declarationId]);
+
+      logger.info(`✅ [CUSTOMS] Duty calculated: ${declarationId} - Total: ETB ${totalDuty.toFixed(2)}`);
+
+      res.json({
+        success: true,
+        data: {
+          calculationId,
+          declarationId,
+          customsValueUSD: valueInUSD,
+          customsValueETB: valueInETB,
+          exchangeRate: rate,
+          hsCode: declHsCode,
+          rates: {
+            dutyRate: effectiveDutyRate,
+            vatRate,
+            exciseRate
+          },
+          amounts: {
+            dutyAmount: Math.round(dutyAmount * 100) / 100,
+            vatAmount: Math.round(vatAmount * 100) / 100,
+            exciseAmount: Math.round(exciseAmount * 100) / 100,
+            totalDuty: Math.round(totalDuty * 100) / 100
+          },
+          preferencesApplied: applyPreferences || false,
+          calculationDate: new Date().toISOString()
+        },
+        message: 'Duty calculated successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error calculating duty:', error);
+      logger.error('[CUSTOMS] Error stack:', error.stack);
+      logger.error('[CUSTOMS] Request params:', { declarationId: req.params.declarationId, body: req.body });
+      res.status(500).json({
+        success: false,
+        error: { 
+          code: 'CALCULATION_FAILED', 
+          message: 'Failed to calculate duty',
+          details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/customs/declaration/:declarationId/valuation
+ * Perform customs valuation adjustment
+ * WTO Valuation Agreement - adjust declared value if needed
+ */
+router.post('/declaration/:declarationId/valuation',
+  authMiddleware,
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
+  [
+    param('declarationId').notEmpty().withMessage('Declaration ID is required'),
+    body('valuationMethod').isIn(['TRANSACTION', 'IDENTICAL', 'SIMILAR', 'DEDUCTIVE', 'COMPUTED', 'FALLBACK']).withMessage('Invalid valuation method'),
+    body('adjustedValue').isNumeric().withMessage('Adjusted value must be numeric'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { declarationId } = req.params;
+      const {
+        valuationMethod,
+        adjustedValue,
+        adjustmentReason,
+        basisOfValuation,
+        comparableGoods,
+        marketResearch,
+        valuationOfficer,
+        supportingDocuments
+      } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[CUSTOMS] Performing valuation for declaration: ${declarationId}`);
+
+      // Get current declaration
+      const declaration = await postgresDb.get(
+        'SELECT * FROM customs_declarations WHERE declaration_id = $1 OR declaration_number = $1',
+        [declarationId]
+      );
+
+      if (!declaration) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'DECLARATION_NOT_FOUND', message: 'Declaration not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const valuationId = `VAL-${declarationId}-${Date.now()}`;
+      const declaredValue = parseFloat(declaration.customs_value_usd);
+      const adjustedVal = parseFloat(adjustedValue);
+      const adjustmentAmount = adjustedVal - declaredValue;
+      const adjustmentPercentage = (adjustmentAmount / declaredValue) * 100;
+
+      // Record valuation
+      await postgresDb.run(`
+        INSERT INTO customs_valuations (
+          valuation_id, declaration_id, declared_value, adjusted_value,
+          adjustment_amount, adjustment_percentage, valuation_method,
+          adjustment_reason, basis_of_valuation, comparable_goods,
+          market_research, valuation_officer, supporting_documents,
+          valuation_date, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+      `, [
+        valuationId,
+        declaration.declaration_id || declarationId,
+        declaredValue,
+        adjustedVal,
+        adjustmentAmount,
+        adjustmentPercentage,
+        valuationMethod,
+        adjustmentReason || '',
+        basisOfValuation || '',
+        comparableGoods || '',
+        marketResearch || '',
+        valuationOfficer || user.username,
+        supportingDocuments ? JSON.stringify(supportingDocuments) : '[]',
+        new Date().toISOString(),
+        'COMPLETED'
+      ]);
+
+      // Update declaration with adjusted value
+      await postgresDb.run(`
+        UPDATE customs_declarations
+        SET customs_value_usd = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE declaration_id = $2 OR declaration_number = $2
+      `, [adjustedVal, declarationId]);
+
+      logger.info(`✅ [CUSTOMS] Valuation completed: ${declarationId} - Adjusted from $${declaredValue} to $${adjustedVal}`);
+
+      res.json({
+        success: true,
+        data: {
+          valuationId,
+          declarationId: declaration.declaration_id || declarationId,
+          declaredValue,
+          adjustedValue: adjustedVal,
+          adjustmentAmount,
+          adjustmentPercentage: Math.round(adjustmentPercentage * 100) / 100,
+          valuationMethod,
+          adjustmentReason,
+          valuationOfficer: valuationOfficer || user.username,
+          valuationDate: new Date().toISOString(),
+          status: 'COMPLETED'
+        },
+        message: 'Customs valuation completed successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      logger.error('[CUSTOMS] Error performing valuation:', error);
+      logger.error('[CUSTOMS] Error stack:', error.stack);
+      logger.error('[CUSTOMS] Request params:', { declarationId: req.params.declarationId, body: req.body });
+      res.status(500).json({
+        success: false,
+        error: { 
+          code: 'VALUATION_FAILED', 
+          message: 'Failed to perform valuation',
+          details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 export default router;
 
 
