@@ -23,6 +23,7 @@ import {
   PrimaryButton, GhostButton, PortalDialog, PortalField, StatusChip, getPortalBrand,
 } from '@/components/shared/portal';
 import { useNotification } from '@/hooks/useNotification';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
@@ -446,6 +447,9 @@ const ECXPortal: React.FC = () => {
       setTabValue(visibleTabs[0].index);
     }
   }, [tabValue, visibleTabs]);
+
+  // ?tab=<index> deep-link from global search results.
+  useTabFromQuery(setTabValue, visibleTabs.map((tab) => tab.index));
 
   const stats = {
     warehoused: lots.filter(l => l.status === 'WAREHOUSED').length,

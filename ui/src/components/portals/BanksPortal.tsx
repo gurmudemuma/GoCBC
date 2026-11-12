@@ -639,11 +639,42 @@ const BanksPortal: React.FC = () => {
   // The shared filterStatus state is reused by the forex, SWIFT and LC
   // dropdowns, whose value domains do not overlap (e.g. a forex value
   // would filter the SWIFT tab to 0 rows). Reset it whenever the active
-  // tab changes so a filter can never leak across tabs.
+  // tab changes so a filter can never leak across tabs. The shared
+  // searchTerm has the same leak: the forex / SWIFT / documents /
+  // payment-release inputs all write one state, so a term typed in one
+  // tab used to keep filtering (and showing in the box of) the next tab.
   React.useEffect(() => {
     setFilterStatus('ALL');
     setAllLcFilterStatus('ALL');
+    setSearchTerm('');
   }, [activeTab]);
+
+  // ?tab=<child tabIndex> deep-link from global search results (e.g.
+  // /portals/banks?tab=10 for All LCs). Maps the flat tabIndex to its
+  // parent/child pair; the sync effect above then derives activeTab.
+  // Waits until the role-based structure is non-empty (userRole loads
+  // async), applies once, and ignores an unknown / invisible tab.
+  const tabFromQueryHandled = React.useRef(false);
+  React.useEffect(() => {
+    if (tabFromQueryHandled.current) return;
+    const structure = getHierarchicalTabStructure();
+    if (structure.length === 0) return;
+    tabFromQueryHandled.current = true;
+    if (typeof window === 'undefined') return;
+    const raw = new URLSearchParams(window.location.search).get('tab');
+    if (raw === null) return;
+    const tabIndex = parseInt(raw, 10);
+    if (Number.isNaN(tabIndex)) return;
+    for (let p = 0; p < structure.length; p++) {
+      const c = structure[p].children.findIndex((child) => child.tabIndex === tabIndex);
+      if (c !== -1) {
+        setActiveParentTab(p);
+        setActiveChildTab(c);
+        return;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabStructure]);
 
   // Legacy compatibility - keep old visibleTabs for backward compatibility
   const getRoleBasedTabs = () => {
@@ -1638,7 +1669,8 @@ const BanksPortal: React.FC = () => {
 
   const toggleAllLCSelection = () => {
     // Select-all applies to the All LCs tab (tab 10) list this button
-    // lives in — getFilteredAllLCs(), not the tab-1 getFilteredLCs().
+    // lives in — getFilteredAllLCs() (the old getFilteredLCs was deleted
+    // as dead code in the 2026-11-12 search audit).
     const requestedLCs = getFilteredAllLCs().filter(lc => lc.status === 'REQUESTED');
     if (selectedLCIds.length === requestedLCs.length) {
       setSelectedLCIds([]);
@@ -2384,47 +2416,33 @@ const BanksPortal: React.FC = () => {
   };
 
   // Filter and Pagination Helper Functions
-  const getFilteredLCs = () => {
-    devLog(`[BANKS] 🔍 getFilteredLCs() called with ${letterOfCredits.length} total LCs`);
-    let filtered = letterOfCredits;
-    if (searchTerm) {
-      filtered = filtered.filter(lc => 
-        lc.lcId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        lc.contractId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        lc.exporterId.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-      devLog(`[BANKS] 🔍 After search filter (term: "${searchTerm}"): ${filtered.length} items`);
-    }
-    if (filterStatus !== 'ALL') {
-      filtered = filtered.filter(lc => lc.status === filterStatus);
-      devLog(`[BANKS] 🔍 After status filter (status: "${filterStatus}"): ${filtered.length} items`);
-    }
-    if (dateFrom) {
-      filtered = filtered.filter(lc => lc.requestDate && new Date(lc.requestDate) >= new Date(dateFrom));
-      devLog(`[BANKS] 🔍 After dateFrom filter: ${filtered.length} items`);
-    }
-    if (dateTo) {
-      filtered = filtered.filter(lc => lc.requestDate && new Date(lc.requestDate) <= new Date(dateTo));
-      devLog(`[BANKS] 🔍 After dateTo filter: ${filtered.length} items`);
-    }
-    if (amountMin) {
-      filtered = filtered.filter(lc => lc.amount >= parseFloat(amountMin));
-      devLog(`[BANKS] 🔍 After amountMin filter: ${filtered.length} items`);
-    }
-    if (amountMax) {
-      filtered = filtered.filter(lc => lc.amount <= parseFloat(amountMax));
-      devLog(`[BANKS] 🔍 After amountMax filter: ${filtered.length} items`);
-    }
-    devLog(`[BANKS] 🔍 Returning ${filtered.length} filtered LCs`);
-    return filtered;
-  };
-
+  // NOTE (2026-11-12 search audit): the old getFilteredLCs() lived here
+  // and filtered letterOfCredits by searchTerm, but no tab ever called
+  // it — the All LCs tab uses getFilteredAllLCs() below. Deleted as dead
+  // code; do not revive it, extend getFilteredAllLCs() instead.
   // All LCs tab (tab 10) filter — the 11 real LC statuses (matrix §3: the 10
   // chaincode states plus PENDING, the letters_of_credit default from
-  // migration 058). Uses the tab-local allLcFilterStatus state.
+  // migration 058). Uses the tab-local allLcFilterStatus state, plus the
+  // shared search box. (The old getFilteredLCs filtered by searchTerm
+  // but was never called — this tab rendered this function, which
+  // ignored the search term, so the LC list was the one Banks list
+  // with no search at all. getFilteredLCs is deleted, not revived:
+  // this is the live path.)
   const getFilteredAllLCs = () => {
-    if (allLcFilterStatus === 'ALL') return letterOfCredits;
-    return letterOfCredits.filter(lc => lc.status === allLcFilterStatus);
+    let filtered =
+      allLcFilterStatus === 'ALL'
+        ? letterOfCredits
+        : letterOfCredits.filter((lc) => lc.status === allLcFilterStatus);
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      filtered = filtered.filter(
+        (lc) =>
+          (lc.lcId || '').toLowerCase().includes(lowerSearch) ||
+          (lc.contractId || '').toLowerCase().includes(lowerSearch) ||
+          (lc.exporterId || '').toLowerCase().includes(lowerSearch),
+      );
+    }
+    return filtered;
   };
 
   const getFilteredForex = () => {
@@ -6212,6 +6230,20 @@ const BanksPortal: React.FC = () => {
             <Typography variant="h6" gutterBottom sx={{ mb: 0 }}>
               All LCs ({getFilteredAllLCs().length})
             </Typography>
+            {/* Search (2026-11-12 audit): this tab had a status filter
+                only — the shared searchTerm was never applied to the LC
+                list. getFilteredAllLCs() now applies it (LC / contract /
+                exporter id). */}
+            <TextField
+              size="small"
+              placeholder="Search LCs..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(0);
+              }}
+              sx={{ minWidth: 280 }}
+            />
             <TextField
               select
               size="small"

@@ -56,6 +56,7 @@ import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import AuditTrailTable from './AuditTrailTable';
 import AuditTrailViewer from './AuditTrailViewer';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 
 // Modern Components - 2026 Design
 import {
@@ -165,6 +166,9 @@ const CustomsPortal: React.FC = () => {
       setTabValue(visibleTabs[0].index);
     }
   }, [tabValue, visibleTabs]);
+
+  // ?tab=<index> deep-link from global search results.
+  useTabFromQuery(setTabValue, visibleTabs.map((tab) => tab.index));
   
   
   // Auto-mapped data for inspection scheduling

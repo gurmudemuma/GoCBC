@@ -58,6 +58,7 @@ import { GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders, API_BASE_URL } from '@/config/api.config';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import UserManagement from '@/components/admin/UserManagement';
@@ -206,6 +207,9 @@ const ShippingPortal: React.FC = () => {
   const visibleMainTabs = mainTabs.filter(tab =>
     tab.index !== 10 || (tab.roles || []).includes(userRole)
   );
+
+  // ?tab=<index> deep-link from global search results.
+  useTabFromQuery(setTabValue, visibleMainTabs.map((tab) => tab.index));
 
   // Lifecycle progress and stage colors used by the per-status tab tables
   const lifecycleProgressMap: { [key: string]: number } = {

@@ -52,6 +52,7 @@ import { SalesContract } from '@/types';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
 import SWIFTMonitoringWrapper from '@/components/nbe/SWIFTMonitoringWrapper';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 import AuditTrailViewer from './AuditTrailViewer';
 import AuditTrailTable from './AuditTrailTable';
 import UserManagement from '@/components/admin/UserManagement';
@@ -909,6 +910,9 @@ const NBEPortal: React.FC = () => {
       setTabValue(visibleTabs[0].index);
     }
   }, [tabValue, visibleTabs]);
+
+  // ?tab=<index> deep-link from global search results.
+  useTabFromQuery(setTabValue, visibleTabs.map((tab) => tab.index));
 
   const contractColumns: GridColDef[] = [
     { field: 'contractId', headerName: 'Contract ID', width: 150 },

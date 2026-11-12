@@ -101,7 +101,6 @@ import {
   StatusChip,
   LoadingSkeleton,
   EmptyState,
-  SearchBar,
   ThemeToggle,
 } from '@/components/modern';
 import UserManagement from '@/components/admin/UserManagement';
@@ -121,6 +120,7 @@ import {
 } from '@/components/shared/portal';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 import { DocumentManagementPanel } from '@/components/documents';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
 import { BlockchainStatusIcon, BlockchainTxChip, BlockchainBadge } from '@/components/blockchain';
@@ -315,7 +315,12 @@ const ECTAPortal: React.FC = () => {
   const [resubmittingContract, setResubmittingContract] = useState(false);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [notificationContent, setNotificationContent] = useState({ title: '', message: '', type: 'success' as 'success' | 'error' });
-  const [searchTerm, setSearchTerm] = useState('');
+  // NOTE: no local search input here on purpose — global search lives in
+  // the shared NavigationBar (GET /api/v1/search) and covers this
+  // portal's contracts / shipments / applications. The old SearchBar
+  // import and searchTerm state were dead (imported, never rendered;
+  // state set, never read) and were removed rather than wired to a
+  // second, portal-local filter.
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
 
   // Audit Trail State
@@ -538,6 +543,9 @@ const ECTAPortal: React.FC = () => {
       setTabValue(visibleTabs[0].index);
     }
   }, [tabValue, visibleTabs]);
+
+  // ?tab=<index> deep-link from global search results.
+  useTabFromQuery(setTabValue, visibleTabs.map((tab) => tab.index));
 
   // 🎯 ROLE-BASED FILTERING: Show only items that need user's action
   const filterContractsForRole = (contracts: any[]) => {

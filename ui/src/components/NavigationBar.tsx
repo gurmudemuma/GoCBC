@@ -1,7 +1,7 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Professional Navigation Bar with Breadcrumbs & Quick Actions
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -19,6 +19,11 @@ import {
   Link,
   Tooltip,
   useScrollTrigger,
+  TextField,
+  InputAdornment,
+  Paper,
+  CircularProgress,
+  ClickAwayListener,
 } from '@mui/material';
 import {
   AccountCircle,
@@ -29,6 +34,7 @@ import {
   Home,
   NavigateNext,
   Search,
+  Clear,
   Add,
   Assessment,
   LocalShipping,
@@ -41,6 +47,23 @@ import { useRouter } from 'next/router';
 import NextLink from 'next/link';
 import NotificationCenter from '@/components/NotificationCenter';
 import OrganizationLogo from '@/components/OrganizationLogo';
+import api from '@/utils/api';
+
+// Global search (GET /api/v1/search) result shape — kept local to this
+// component; the endpoint is the single source of truth.
+interface GlobalSearchItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  status: string;
+  href: string;
+}
+
+interface GlobalSearchGroup {
+  type: string;
+  label: string;
+  items: GlobalSearchItem[];
+}
 
 const NavigationBar: React.FC = () => {
   const { user, logout } = useAuth();
@@ -58,6 +81,68 @@ const NavigationBar: React.FC = () => {
   const handleLogout = () => {
     handleMenuClose();
     logout();
+  };
+
+  // ---- Global search (GET /api/v1/search) ---------------------------
+  // Debounced 300 ms; 2+ chars only (the endpoint answers shorter
+  // queries with an empty groups array). Results are grouped by entity
+  // type; click navigates to the result href (a portal tab deep-link),
+  // Enter opens the first result, Esc / click-away closes.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchGroups, setSearchGroups] = useState<GlobalSearchGroup[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchGroups([]);
+      setSearchLoading(false);
+      setSearchError('');
+      return;
+    }
+    setSearchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await api.get('/search', { params: { q: query } });
+        const groups: GlobalSearchGroup[] = response?.data?.data?.groups || [];
+        setSearchGroups(groups);
+        setSearchError('');
+      } catch (error) {
+        setSearchGroups([]);
+        setSearchError('Search is unavailable right now.');
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const searchHasResults = searchGroups.some((g) => g.items.length > 0);
+  const firstSearchResult: GlobalSearchItem | null =
+    searchGroups.flatMap((g) => g.items)[0] || null;
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+  };
+
+  const goToSearchResult = (href: string) => {
+    closeSearch();
+    setSearchQuery('');
+    setSearchGroups([]);
+    router.push(href);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && firstSearchResult) {
+      event.preventDefault();
+      goToSearchResult(firstSearchResult.href);
+    } else if (event.key === 'Escape') {
+      closeSearch();
+      searchInputRef.current?.blur();
+    }
   };
 
   const handleProfile = () => {
@@ -217,17 +302,165 @@ const NavigationBar: React.FC = () => {
           }}>
             {/* Quick Actions - REMOVED to prevent overlap with title */}
             
-            {/* Search - Desktop Only */}
-            <Tooltip title="Search">
-              <IconButton 
-                sx={{ 
-                  color: 'white',
-                  display: { xs: 'none', md: 'inline-flex' },
+            {/* Search — global search across shipments, contracts, LCs,
+                ECX lots, payments, applications and forex. Was a
+                decorative icon button (no onClick); now a debounced
+                input with grouped results. Rendered on every page: this
+                bar is mounted once in pages/_app.tsx, outside the
+                portals, so it is usable from all 7 portals. */}
+            <ClickAwayListener onClickAway={closeSearch}>
+              <Box
+                sx={{
+                  position: 'relative',
+                  display: { xs: 'none', md: 'block' },
                 }}
               >
-                <Search />
-              </IconButton>
-            </Tooltip>
+                <TextField
+                  size="small"
+                  placeholder="Search shipments, contracts, LCs…"
+                  value={searchQuery}
+                  inputRef={searchInputRef}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  onKeyDown={handleSearchKeyDown}
+                  sx={{
+                    width: 280,
+                    '& .MuiOutlinedInput-root': {
+                      backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                      borderRadius: 2,
+                      color: 'white',
+                      '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.25)' },
+                      '&:hover fieldset': { borderColor: 'rgba(255, 255, 255, 0.5)' },
+                      '&.Mui-focused fieldset': { borderColor: 'white' },
+                    },
+                    '& .MuiInputBase-input': {
+                      color: 'white',
+                      '&::placeholder': { color: 'rgba(255, 255, 255, 0.6)', opacity: 1 },
+                    },
+                  }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search sx={{ color: 'rgba(255, 255, 255, 0.8)' }} />
+                      </InputAdornment>
+                    ),
+                    endAdornment: searchLoading ? (
+                      <InputAdornment position="end">
+                        <CircularProgress size={18} sx={{ color: 'white' }} />
+                      </InputAdornment>
+                    ) : searchQuery ? (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="Clear search"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setSearchGroups([]);
+                            searchInputRef.current?.focus();
+                          }}
+                          sx={{ color: 'rgba(255, 255, 255, 0.8)' }}
+                        >
+                          <Clear fontSize="small" />
+                        </IconButton>
+                      </InputAdornment>
+                    ) : undefined,
+                  }}
+                />
+                {searchOpen && searchQuery.trim().length >= 2 && (
+                  <Paper
+                    elevation={8}
+                    sx={{
+                      position: 'absolute',
+                      top: 'calc(100% + 8px)',
+                      right: 0,
+                      width: 380,
+                      maxWidth: '90vw',
+                      maxHeight: 480,
+                      overflowY: 'auto',
+                      borderRadius: 2,
+                      zIndex: 1300,
+                    }}
+                  >
+                    {searchLoading && !searchHasResults ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 2 }}>
+                        <CircularProgress size={18} />
+                        <Typography variant="body2" color="text.secondary">
+                          Searching…
+                        </Typography>
+                      </Box>
+                    ) : searchError ? (
+                      <Typography variant="body2" color="error" sx={{ px: 2, py: 2 }}>
+                        {searchError}
+                      </Typography>
+                    ) : !searchHasResults ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 2 }}>
+                        No results for &lsquo;{searchQuery.trim()}&rsquo;
+                      </Typography>
+                    ) : (
+                      searchGroups.map((group) =>
+                        group.items.length === 0 ? null : (
+                          <Box key={group.type}>
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                display: 'block',
+                                px: 2,
+                                pt: 1.5,
+                                pb: 0.5,
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.5px',
+                                color: 'text.secondary',
+                              }}
+                            >
+                              {group.label}
+                            </Typography>
+                            {group.items.map((item) => (
+                              <Box
+                                key={`${group.type}-${item.id}`}
+                                onMouseDown={(e) => {
+                                  // Fire before the input blurs / the
+                                  // click-away closes the dropdown.
+                                  e.preventDefault();
+                                  goToSearchResult(item.href);
+                                }}
+                                sx={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  px: 2,
+                                  py: 1,
+                                  cursor: 'pointer',
+                                  '&:hover': { backgroundColor: 'action.hover' },
+                                }}
+                              >
+                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                  <Typography variant="body2" fontWeight={600} noWrap>
+                                    {item.title}
+                                  </Typography>
+                                  {item.subtitle ? (
+                                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                                      {item.subtitle}
+                                    </Typography>
+                                  ) : null}
+                                </Box>
+                                {item.status ? (
+                                  <Chip label={item.status} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+                                ) : null}
+                              </Box>
+                            ))}
+                            <Divider />
+                          </Box>
+                        ),
+                      )
+                    )}
+                  </Paper>
+                )}
+              </Box>
+            </ClickAwayListener>
 
             {/* Notifications */}
             <NotificationCenter userRole={user.role} />

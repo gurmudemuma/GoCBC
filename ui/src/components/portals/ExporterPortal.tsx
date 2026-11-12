@@ -112,6 +112,7 @@ import {
 } from '@/components/shared/portal';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
+import { useTabFromQuery } from '@/hooks/useTabFromQuery';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import SWIFTMessagesViewWrapper from '@/components/exporter/SWIFTMessagesViewWrapper';
@@ -582,6 +583,10 @@ const ExporterPortal: React.FC = () => {
       loadAuditStats();
     }
   }, [tabValue]);
+
+  // ?tab=<index> deep-link from global search results (all 8 tabs are
+  // visible to every exporter, so the full 0–7 range is valid).
+  useTabFromQuery(setTabValue, [0, 1, 2, 3, 4, 5, 6, 7]);
 
   const loadAuditStats = async () => {
     try {
