@@ -519,7 +519,13 @@ router.post('/upload',
       const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
       
       const documentID = `DOC-${Date.now()}${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
-      const finalEntityType = entityType || 'CONTRACT';
+      // LEG3 M-4: normalise the stored entity type to uppercase. Every
+      // reader queries uppercase ('SHIPMENT', 'CONTRACT', 'LC') or
+      // UPPER(entity_type); a lowercase value stored here would be
+      // invisible to the LC payment-release gate (banking.ts) and to the
+      // LC document queries. All values stored so far are already
+      // uppercase, so this changes no existing row.
+      const finalEntityType = (entityType || 'CONTRACT').toUpperCase();
       const finalEntityId = entityId || documentID;
 
       const ownApplicationError = assertOwnApplication(user, finalEntityType, finalEntityId);
