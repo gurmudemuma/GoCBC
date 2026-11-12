@@ -155,10 +155,14 @@ const RepatriationInitiationDialog: React.FC<RepatriationInitiationDialogProps> 
       const result = await response.json();
       
       if (result.success) {
-        // Filter payments that need repatriation
+        // Filter payments that need repatriation. LEG3 M-11: the
+        // chaincode accepts SETTLED or CONFIRMED (repatriation.go) —
+        // CONFIRMED is strictly downstream of SETTLED, so a confirmed
+        // payment could otherwise never be repatriated. (CONFIRMED only
+        // became reachable once M-5 wired the Confirm Settlement UI.)
         const eligible = result.data.filter((p: Payment) =>
           p.amount > 0 && ['USD', 'EUR', 'GBP'].includes(String(p.currency).toUpperCase()) &&
-          String(p.status || '').toUpperCase() === 'SETTLED'
+          ['SETTLED', 'CONFIRMED'].includes(String(p.status || '').toUpperCase())
         );
         setPayments(eligible);
       }
