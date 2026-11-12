@@ -162,6 +162,21 @@ router.post('/initiate',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] Payment initiated successfully: ${paymentID} with auto-mapped data`);
+        // Mirror into Postgres: without a row here, every downstream
+        // mirror is a no-op — settle's UPDATE (below) affects 0 rows and
+        // the payment is chaincode-only. Best-effort, ledger-first: the
+        // initiation already committed on-chain; a PG failure must not
+        // fail the response. Columns mirror POST /payments (same table).
+        try {
+          await postgresDb.run(
+            `INSERT INTO payments (
+              payment_id, lc_number, contract_id, shipment_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [paymentID, lcID || null, finalContractID, (req.body as any).shipmentID || null, finalExporterID, finalAmount, finalCurrency, finalPaymentMethod, new Date().toISOString(), result.txId || null]
+          );
+        } catch (mirrorErr) {
+          logger.warn(`[PAYMENT] Could not mirror initiation of ${paymentID} to Postgres:`, mirrorErr);
+        }
         res.status(201).json({
           success: true,
           message: 'Payment initiated successfully',

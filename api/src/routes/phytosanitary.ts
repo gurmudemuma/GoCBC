@@ -408,6 +408,22 @@ router.post('/:certificateID/issue',
           logger.info(`✅ Phytosanitary certificate issued: ${certificateNumber}`);
           const issuedResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
           const issued: any = issuedResult.success ? issuedResult.data : null;
+          // Mirror into Postgres: the PG-only fallback branch below updates
+          // the row to ISSUED, but this chain-success branch never did, so
+          // the mirror stayed INSPECTED. Best-effort, ledger-first: the
+          // issuance already committed on-chain.
+          try {
+            await postgresDb.run(`
+              UPDATE phytosanitary_certificates
+              SET status = 'ISSUED',
+                  issue_date = $1,
+                  certifying_officer = $2,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE certificate_id = $3
+            `, [new Date().toISOString(), issuingAuthority, certificateID]);
+          } catch (mirrorErr) {
+            logger.warn(`[PHYTO] Could not mirror issuance of ${certificateID} to Postgres:`, mirrorErr);
+          }
           res.json({
             success: true,
             message: 'Phytosanitary certificate issued successfully',
