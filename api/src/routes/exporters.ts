@@ -890,7 +890,14 @@ router.post('/exporter-applications/:applicationId/resubmit',
     // boolean. The old isBoolean validator forced the resubmit page —
     // which has no taster input — to post `false`, and the API wrote
     // the string 'false' into the text column, destroying the name.
-    body('professionalTaster').optional().isString().withMessage('Professional taster must be a name'),
+    // A boolean is still ACCEPTED (older clients post one) but ignored
+    // by the handler, so the stored name survives the resubmit.
+    body('professionalTaster').optional().custom((value) => {
+      if (typeof value !== 'string' && typeof value !== 'boolean') {
+        throw new Error('Professional taster must be a name');
+      }
+      return true;
+    }),
     body('tasterCertificate').optional().isString().withMessage('Taster certificate must be a string'),
     body('laboratoryFacility').optional().isString().withMessage('Laboratory facility must be a string'),
     body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
