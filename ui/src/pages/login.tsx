@@ -1,7 +1,7 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Professional Enterprise Login Page - 2026
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Container,
@@ -58,8 +58,19 @@ const ProfessionalLoginPage: React.FC = () => {
     }
   }, [router.query]);
 
+  // Set when this page's own form submits a login. AuthContext.login()
+  // already pushes the role portal on success; this page's redirect
+  // below must not fire for that same flip (see below).
+  const submittedLogin = useRef(false);
+
   useEffect(() => {
-    if (isAuthenticated) {
+    // Redirect ONLY when the user arrives here already authenticated
+    // (e.g. back-button to /login). After a fresh submit on this page,
+    // AuthContext.login() has already pushed the role portal — pushing
+    // '/' here races that navigation and aborts its component fetch
+    // ("Abort fetching component for route: '/portals/ecta'"), before
+    // '/' bounces straight back to the same portal via index.tsx.
+    if (isAuthenticated && !submittedLogin.current) {
       router.push('/');
     }
   }, [isAuthenticated, router]);
@@ -68,6 +79,7 @@ const ProfessionalLoginPage: React.FC = () => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    submittedLogin.current = true;
 
     if (rememberMe) {
       localStorage.setItem('rememberedUsername', username);

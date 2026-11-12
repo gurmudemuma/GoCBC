@@ -6369,8 +6369,9 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Tooltip title="View Details">
-                            <IconButton 
+                            <IconButton
                               size="small"
+                              aria-label={`View details for LC ${lc.lcId}`}
                               onClick={() => {
                                 setSelectedLC(lc);
                                 setDialogType('lcDetails');
@@ -6382,9 +6383,10 @@ const BanksPortal: React.FC = () => {
                           </Tooltip>
                           {lc.status === 'REQUESTED' && (
                             <Tooltip title="Approve LC">
-                              <IconButton 
+                              <IconButton
                                 size="small"
                                 color="primary"
+                                aria-label={`Approve LC ${lc.lcId}`}
                                 onClick={() => handleApproveLC(lc.lcId, lc.exporterId)}
                               >
                                 <CheckCircle />
@@ -6396,6 +6398,7 @@ const BanksPortal: React.FC = () => {
                               <IconButton
                                 size="small"
                                 color="error"
+                                aria-label={`Reject LC ${lc.lcId}`}
                                 onClick={() => handleRejectLC(lc.lcId)}
                               >
                                 <Cancel />
