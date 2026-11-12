@@ -2543,7 +2543,28 @@ func (c *CoffeeContract) ShipmentExists(ctx contractapi.TransactionContextInterf
 	return shipmentJSON != nil, nil
 }
 func (c *CoffeeContract) GetShipmentHistory(ctx contractapi.TransactionContextInterface, shipmentID string) ([]map[string]interface{}, error) {
-	resultsIterator, err := ctx.GetStub().GetHistoryForKey(shipmentID)
+	// Shipments are stored under the SHIPMENT_ prefix (see ReadShipment
+	// and every PutState in main.go); GetHistoryForKey needs the exact
+	// key, so querying the bare ID always returned an empty iterator —
+	// success with zero entries. The API passes the bare ID
+	// (fabricService.getShipmentHistory), so the prefixing belongs here,
+	// not in every caller. Fall back to the bare key for legacy rows
+	// stored without the prefix, mirroring ReadShipment.
+	history, err := getShipmentHistoryForKey(ctx, "SHIPMENT_"+shipmentID)
+	if err != nil {
+		return nil, err
+	}
+	if len(history) == 0 {
+		history, err = getShipmentHistoryForKey(ctx, shipmentID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return history, nil
+}
+
+func getShipmentHistoryForKey(ctx contractapi.TransactionContextInterface, key string) ([]map[string]interface{}, error) {
+	resultsIterator, err := ctx.GetStub().GetHistoryForKey(key)
 	if err != nil {
 		return nil, err
 	}

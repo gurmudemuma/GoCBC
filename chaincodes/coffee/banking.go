@@ -1007,8 +1007,7 @@ func (c *CoffeeContract) AmendLC(ctx contractapi.TransactionContextInterface,
 func (c *CoffeeContract) QueryLCsByExporter(ctx contractapi.TransactionContextInterface,
 	exporterID string) ([]*LetterOfCredit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
-	return c.queryLCs(ctx, queryString)
+	return c.queryLCs(ctx, fmt.Sprintf(`{"exporterId":"%s"}`, exporterID))
 }
 
 // QueryAllLCs - Get all Letters of Credit (optimized with CouchDB selector)
@@ -1106,8 +1105,7 @@ func (c *CoffeeContract) queryLCsByRange(ctx contractapi.TransactionContextInter
 func (c *CoffeeContract) QueryLCsByStatus(ctx contractapi.TransactionContextInterface,
 	status string) ([]*LetterOfCredit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"status":"%s"}}`, status)
-	return c.queryLCs(ctx, queryString)
+	return c.queryLCs(ctx, fmt.Sprintf(`{"status":"%s"}`, status))
 }
 
 // LCExists - Check if LC exists
@@ -1187,10 +1185,22 @@ func (c *CoffeeContract) DeleteLC(ctx contractapi.TransactionContextInterface, l
 	return nil
 }
 
-// Helper function for querying LCs
+// Helper function for querying LCs.
+//
+// Every rich query is scoped to LC_ keys: a bare {"contractId": ...}
+// selector also matches the contract itself and its forex allocations,
+// and unmarshalling one of those as LetterOfCredit silently yields a
+// zero-value "LC" (encoding/json ignores unknown fields and leaves
+// missing fields at their zero values), so QueryLCsByContract returned
+// ghost records with empty lcId and amount 0 alongside the real LCs.
+// The _id scope follows the pattern already used by QueryAllLCs
+// (banking.go) and the permit queries (permit.go, commit facc5e9d).
+// A row that still fails to unmarshal is skipped, as in QueryAllLCs,
+// so one bad row can never fail the list.
 func (c *CoffeeContract) queryLCs(ctx contractapi.TransactionContextInterface,
-	queryString string) ([]*LetterOfCredit, error) {
+	conditions string) ([]*LetterOfCredit, error) {
 
+	queryString := fmt.Sprintf(`{"selector":{"$and":[{"_id":{"$regex":"^LC_"}},{"lcId":{"$exists":true}},%s]}}`, conditions)
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query LCs: %v", err)
@@ -1207,8 +1217,20 @@ func (c *CoffeeContract) queryLCs(ctx contractapi.TransactionContextInterface,
 		var lc LetterOfCredit
 		err = json.Unmarshal(queryResponse.Value, &lc)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
+			continue // Skip invalid documents
 		}
+
+		// Ensure arrays are never nil (backward compatibility)
+		if lc.Amendments == nil {
+			lc.Amendments = []LCAmendment{}
+		}
+		if lc.Discrepancies == nil {
+			lc.Discrepancies = []LCDiscrepancy{}
+		}
+		if lc.Documents == nil {
+			lc.Documents = []string{}
+		}
+
 		lcs = append(lcs, &lc)
 	}
 
@@ -1562,42 +1584,7 @@ func (c *CoffeeContract) SubmitLCDocuments(ctx contractapi.TransactionContextInt
 func (c *CoffeeContract) QueryLCsByContract(ctx contractapi.TransactionContextInterface,
 	contractID string) ([]*LetterOfCredit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
-
-	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query LCs: %v", err)
-	}
-	defer resultsIterator.Close()
-
-	var lcs []*LetterOfCredit
-	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return nil, fmt.Errorf("failed to iterate: %v", err)
-		}
-
-		var lc LetterOfCredit
-		err = json.Unmarshal(queryResponse.Value, &lc)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal LC: %v", err)
-		}
-
-		// Ensure arrays are never nil
-		if lc.Amendments == nil {
-			lc.Amendments = []LCAmendment{}
-		}
-		if lc.Discrepancies == nil {
-			lc.Discrepancies = []LCDiscrepancy{}
-		}
-		if lc.Documents == nil {
-			lc.Documents = []string{}
-		}
-
-		lcs = append(lcs, &lc)
-	}
-
-	return lcs, nil
+	return c.queryLCs(ctx, fmt.Sprintf(`{"contractId":"%s"}`, contractID))
 }
 
 // ==================== LC DISCREPANCY HANDLING FUNCTIONS ====================
@@ -2061,43 +2048,7 @@ func (c *CoffeeContract) GetLCDiscrepancies(ctx contractapi.TransactionContextIn
 // QueryLCsWithDiscrepancies - Get all LCs that have unresolved discrepancies
 func (c *CoffeeContract) QueryLCsWithDiscrepancies(ctx contractapi.TransactionContextInterface) ([]*LetterOfCredit, error) {
 
-	queryString := `{"selector":{"discrepancyResolved":false,"negotiationStatus":"UNDER_NEGOTIATION"}}`
-
-	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
-	if err != nil {
-		return nil, fmt.Errorf("QueryLCsWithDiscrepancies: query failed: %w", err)
-	}
-	defer resultsIterator.Close()
-
-	var lcs []*LetterOfCredit
-
-	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		var lc LetterOfCredit
-		err = json.Unmarshal(queryResponse.Value, &lc)
-		if err != nil {
-			return nil, err
-		}
-
-		// Ensure arrays are never nil (backward compatibility)
-		if lc.Amendments == nil {
-			lc.Amendments = []LCAmendment{}
-		}
-		if lc.Discrepancies == nil {
-			lc.Discrepancies = []LCDiscrepancy{}
-		}
-		if lc.Documents == nil {
-			lc.Documents = []string{}
-		}
-
-		lcs = append(lcs, &lc)
-	}
-
-	return lcs, nil
+	return c.queryLCs(ctx, `{"discrepancyResolved":false,"negotiationStatus":"UNDER_NEGOTIATION"}`)
 }
 
 // UpdateLC - Full LC update function (for forex allocation and complex updates)

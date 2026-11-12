@@ -141,13 +141,18 @@ func (c *CoffeeContract) IssueCBEExportPermit(ctx contractapi.TransactionContext
 		}
 	}
 
-	// For L/C-based permits, verify L/C exists and is issued
+	// For L/C-based permits, verify L/C exists and is in a state that proves
+	// it was issued and is progressing. A delivered shipment's LC is
+	// necessarily past ISSUED: CreateShipment requires FOREX_ALLOCATED or
+	// later, so accepting only ISSUED/APPROVED made the Banks "Issue Export
+	// Permit" button fail for every delivered shipment (W6, remaining-fixes
+	// round). REQUESTED/REJECTED/EXPIRED LCs are still refused.
 	if paymentMethod == "LC" && lcID != "" {
 		lc, err := c.ReadLC(ctx, lcID)
 		if err != nil {
 			return fmt.Errorf("L/C not found: %v", err)
 		}
-		if lc.Status != "ISSUED" && lc.Status != "APPROVED" {
+		if lc.Status != "ISSUED" && lc.Status != "APPROVED" && lc.Status != "FOREX_ALLOCATED" && lc.Status != "UTILIZED" && lc.Status != "PAYMENT_RELEASED" {
 			return fmt.Errorf("L/C must be issued before permit, current status: %s", lc.Status)
 		}
 	}
