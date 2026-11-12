@@ -649,12 +649,28 @@ router.post('/inspections/:inspectionID/perform',
       // grade below and the chaincode total score agree.
       const resolvedOverall = overall ?? (req.body as any).cuppingScore ?? 0;
 
-      // Calculate grade from overall score
-      let grade = 'Grade 1';
-      if (resolvedOverall >= 85) grade = 'Grade 1';
-      else if (resolvedOverall >= 80) grade = 'Grade 2';
-      else if (resolvedOverall >= 75) grade = 'Grade 3';
-      else grade = 'Below Grade';
+      // Grade the SAME totalScore the chaincode grades (leg2 audit #3):
+      // PerformInspection sums all ten cupping fields (each 0–100) into
+      // totalScore and grades it in determineQualityGrade (quality.go).
+      // The old code graded `overall` alone against 85/80/75, so an
+      // inspection entered on the /10 scale (overall 8.5) was 'Below
+      // Grade' in Postgres and Grade 1 on-chain. The rule below mirrors
+      // determineQualityGrade exactly, including the moisture gate
+      // (moisture > 12% is not exportable — see #19): the same
+      // inspection can no longer be Below Grade in PG and Grade 1
+      // on-chain. Chaincode grades 6–9 collapse to 'Below Grade' here.
+      const cupFields = [fragrance, flavor, aftertaste, acidity, body, balance, uniformity, cleanCup, sweetness, resolvedOverall];
+      const totalScore = cupFields.reduce((sum, v) => sum + (Number(v) || 0), 0);
+      const defects = Number(defectCount) || 0;
+      const moisture = Number(moistureContent);
+      let grade = 'Below Grade';
+      if (Number.isFinite(moisture) && moisture > 12) {
+        grade = 'Below Grade';
+      } else if (defects <= 3 && totalScore >= 80) grade = 'Grade 1';
+      else if (defects <= 12 && totalScore >= 80) grade = 'Grade 2';
+      else if (defects <= 25 && totalScore >= 75) grade = 'Grade 3';
+      else if (defects <= 45 && totalScore >= 70) grade = 'Grade 4';
+      else if (defects <= 100 && totalScore >= 60) grade = 'Grade 5';
 
       // Build cup quality summary with all scores
       const cupQualityScores = {
@@ -688,15 +704,15 @@ QUALITY METRICS:
 - Sample Size: ${sampleSize}g
 
 CUP QUALITY SCORES:
-- Fragrance/Aroma: ${fragrance}/10
-- Flavor: ${flavor}/10
-- Aftertaste: ${aftertaste}/10
-- Acidity: ${acidity}/10
-- Body: ${body}/10
-- Balance: ${balance}/10
-- Uniformity: ${uniformity}/10
-- Clean Cup: ${cleanCup}/10
-- Sweetness: ${sweetness}/10
+- Fragrance/Aroma: ${fragrance}/100
+- Flavor: ${flavor}/100
+- Aftertaste: ${aftertaste}/100
+- Acidity: ${acidity}/100
+- Body: ${body}/100
+- Balance: ${balance}/100
+- Uniformity: ${uniformity}/100
+- Clean Cup: ${cleanCup}/100
+- Sweetness: ${sweetness}/100
 - Overall Score: ${overall}/100
 
 LAB TESTS:
@@ -720,7 +736,7 @@ ${remarks || 'No additional remarks'}
       // database/key (fabricchannel_cecbschannel, `inspection:<id>`)
       // and swallowed failures, then wrote INSPECTED to Postgres
       // regardless — the phantom the approve step then inherited.
-      // Moisture 8–13% is enforced by the chaincode itself
+      // Moisture 8–12% is enforced by the chaincode itself
       // (ValidateMoistureContent, validation.go:300); this route does
       // NOT pre-block any moisture value — an out-of-range value
       // fails here, honestly, with 503. Sparse callers (the
@@ -1377,6 +1393,16 @@ router.post('/inspections/:inspectionID/issue-permit',
         );
         if (lc) lcId = lc.lc_number || '';
       }
+      if (!contractId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Cannot issue export permit: no contract could be resolved from the inspection, shipment or request body (IssueCBEExportPermit requires a contractID)'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
       if (amount == null || !Number.isFinite(amount) || amount <= 0) {
         return res.status(400).json({
           success: false,
@@ -2011,7 +2037,7 @@ router.post('/inspections/:inspectionID/lab-results',
       // already says INSPECTED, the results were already recorded
       // on-chain (via perform or an earlier lab-results call), so the
       // ledger write is skipped and only the Postgres mirror is
-      // refreshed. Moisture 8–13% is enforced by the chaincode
+      // refreshed. Moisture 8–12% is enforced by the chaincode
       // itself; this route does not pre-block any moisture value.
       let labTxId: string | null = null;
       if (inspection.status !== 'INSPECTED') {

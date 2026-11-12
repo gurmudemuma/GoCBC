@@ -143,6 +143,52 @@ async function verifyShipmentOnBlockchain(
  *       500:
  *         description: Internal server error
  */
+// Leg2 #16: validate an ECX lot before a shipment may reference it.
+// The lot must exist in ecx_lots, must not be REJECTED, must have been
+// graded, must be assigned to this contract, and must belong to this
+// exporter. Returns { code, message } on failure, null when the lot may
+// be used. A lot lookup failure (DB down) fails closed — a shipment
+// must not be created against an unverified lot.
+async function validateEcxLotForShipment(
+  ecxLotNumber: string | undefined,
+  contractID: string,
+  exporterID: string
+): Promise<{ code: string; message: string } | null> {
+  if (!ecxLotNumber) {
+    return { code: 'LOT_REQUIRED', message: 'ECX lot number is required when channel is ECX' };
+  }
+  let lot: any;
+  try {
+    lot = await postgresDb.get(
+      `SELECT lot_id, lot_number, status, grade, contract_id, exporter_id
+         FROM ecx_lots WHERE lot_number = $1 OR lot_id = $1`,
+      [ecxLotNumber]
+    );
+  } catch (err: any) {
+    logger.error('[SHIPMENT] ECX lot lookup failed:', err.message);
+    return { code: 'LOT_UNVERIFIED', message: `Could not verify ECX lot ${ecxLotNumber}; shipment not created` };
+  }
+  if (!lot) {
+    return { code: 'LOT_NOT_FOUND', message: `ECX lot ${ecxLotNumber} does not exist` };
+  }
+  if (String(lot.status || '').toUpperCase() === 'REJECTED') {
+    return { code: 'LOT_REJECTED', message: `ECX lot ${ecxLotNumber} was REJECTED and cannot be shipped` };
+  }
+  if (!lot.grade) {
+    return { code: 'LOT_NOT_GRADED', message: `ECX lot ${ecxLotNumber} has not been graded yet (status ${lot.status})` };
+  }
+  if (!lot.contract_id) {
+    return { code: 'LOT_NOT_ASSIGNED', message: `ECX lot ${ecxLotNumber} has not been assigned to a contract yet` };
+  }
+  if (lot.contract_id !== contractID) {
+    return { code: 'LOT_CONTRACT_MISMATCH', message: `ECX lot ${ecxLotNumber} is assigned to contract ${lot.contract_id}, not ${contractID}` };
+  }
+  if (lot.exporter_id && lot.exporter_id !== exporterID) {
+    return { code: 'LOT_EXPORTER_MISMATCH', message: `ECX lot ${ecxLotNumber} belongs to exporter ${lot.exporter_id}, not ${exporterID}` };
+  }
+  return null;
+}
+
 router.post('/',
   requireRole('EXPORTER', 'ECTA', 'ECTA_ADMIN'),
   [
@@ -189,6 +235,23 @@ router.post('/',
         eudrCompliant,
         documents,
       } = req.body;
+
+      // Leg2 #16: an ECX-channel shipment references an ECX lot — the
+      // old code passed the lot number straight into CreateShipment, so
+      // a shipment could reference a lot that does not exist, was
+      // REJECTED for moisture, was never graded, was never assigned, or
+      // belongs to another contract/exporter. Validate the lot in
+      // Postgres (the ECX mirror of record) before creating anything.
+      if (String(channel || '').toUpperCase() === 'ECX') {
+        const lotError = await validateEcxLotForShipment(ecxLotNumber, contractID, exporterID);
+        if (lotError) {
+          return res.status(400).json({
+            success: false,
+            error: { code: lotError.code, message: lotError.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
 
       // DUPLICATE PREVENTION: Check if shipment already exists for this contract
       try {
@@ -1828,12 +1891,20 @@ router.post('/:shipmentID/book-freight',
 
       const shipment = shipmentResult.data;
       const currentStatus = shipment.Status || shipment.status;
-      
-      if (currentStatus !== 'CUSTOMS_CLEARED') {
+
+      // Leg2 #7: the canonical booking route is POST /shipping/bookings
+      // (it creates the booking record and mirrors the status); this
+      // route is the shipping-portal path to the same move, so its gate
+      // must match the status machine: FREIGHT_BOOKED is reachable from
+      // CREATED (book early) and from CUSTOMS_CLEARED (book after
+      // clearance — the literal order). The old gate required
+      // CUSTOMS_CLEARED only, so an early booking was refused here
+      // while the bookings endpoint allowed it.
+      if (currentStatus !== 'CUSTOMS_CLEARED' && currentStatus !== 'CREATED') {
         return res.status(400).json({
           success: false,
-          error: { 
-            message: `Shipment must be customs cleared before booking freight. Current status: ${currentStatus}` 
+          error: {
+            message: `Shipment must be in CREATED or CUSTOMS_CLEARED status before booking freight. Current status: ${currentStatus}`
           }
         });
       }

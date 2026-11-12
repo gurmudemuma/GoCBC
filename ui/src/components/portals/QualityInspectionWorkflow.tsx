@@ -84,7 +84,11 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
   const [exporterTaster, setExporterTaster] = useState<string>('');
   const [loadingExporter, setLoadingExporter] = useState(true);
 
-  // Perform Inspection Form Data
+  // Perform Inspection Form Data — cupping fields are on the 0–100
+  // scale (leg2 #3): the chaincode allows 0–100 per field and sums all
+  // ten into totalScore, and the API grades that sum. The old defaults
+  // were on a /10 scale (fragrance 8.5 … overall 8.5), which the API
+  // used to grade as 'Below Grade' while the chaincode graded Grade 1.
   const [inspectionForm, setInspectionForm] = useState<InspectionFormData>({
     scheduledDate: new Date().toISOString().split('T')[0],
     inspectorName: '',
@@ -95,16 +99,16 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     beanSize: '17',
     color: 'Green',
     odor: 'Clean',
-    fragrance: '8.5',
-    flavor: '8.5',
-    aftertaste: '8.0',
-    acidity: '8.5',
-    body: '8.0',
-    balance: '8.0',
-    uniformity: '10',
-    cleanCup: '10',
-    sweetness: '10',
-    overall: '8.5',
+    fragrance: '85',
+    flavor: '85',
+    aftertaste: '80',
+    acidity: '85',
+    body: '80',
+    balance: '80',
+    uniformity: '100',
+    cleanCup: '100',
+    sweetness: '100',
+    overall: '85',
     classification: 'WASHED',
     pesticideTest: 'PASSED',
     heavyMetalTest: 'PASSED',
@@ -112,7 +116,11 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     remarks: '',
   });
 
-  // Note: Approve/Reject/Permit handling moved to InspectionManagement component
+  // Note: Approve/Reject/Permit are handled by ECTAPortal's inline
+  // handlers (handleApproveInspection / handleRejectInspection /
+  // handleIssueExportPermit). The never-rendered InspectionManagement
+  // component that used to own them was deleted (leg2 #4) — it
+  // duplicated those handlers and was imported but never rendered.
 
   // Fetch exporter's registered taster (for information only - not official inspector)
   useEffect(() => {
@@ -155,14 +163,31 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
       // unreachable by the perform/approve/reject routes.
       const inspectionId = `${shipment.shipmentId}_${Date.now()}`;
 
-      // Create inspection request first
-      await api.post('/quality/inspections', {
+      // Create inspection request first. Leg2 #4: the old payload
+      // ({inspectionID, shipmentID, contractID, exporterID,
+      // scheduledDate}) 400d — the API requires coffeeType + numeric
+      // quantity and reads requestedDate, not scheduledDate — and the
+      // result was never checked, so perform then 404d on the inspection
+      // that was never created. Check the create result before
+      // performing.
+      const createResponse = await api.post('/quality/inspections', {
         inspectionID: inspectionId,
         shipmentID: shipment.shipmentId,
         contractID: shipment.contractId || 'CONTRACT_' + shipment.exporterId,
         exporterID: shipment.exporterId,
-        scheduledDate: inspectionForm.scheduledDate,
+        coffeeType: shipment.coffeeType || shipment.coffee_type || 'Arabica',
+        quantity: shipment.quantity,
+        requestedDate: inspectionForm.scheduledDate,
       });
+      if (!createResponse.data?.success) {
+        showError(
+          'Inspection Request Failed',
+          createResponse.data?.error?.message || 'Could not create the quality inspection request',
+          'Check that the shipment, contract and exporter are set, then try again.'
+        );
+        setLoading(false);
+        return;
+      }
 
       // Perform inspection
       const response = await api.post(`/quality/inspections/${inspectionId}/perform`, {
@@ -195,7 +220,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
         setInspectionData({ ...response.data.data, inspectionId });
         showSuccess(
           'Inspection Recorded',
-          `Physical & cupping inspection completed for ${shipment.shipmentId}. Score: ${calculateTotalScore()}/100 — ${getQualityGrade()}`,
+          `Physical & cupping inspection completed for ${shipment.shipmentId}. Score: ${calculateTotalScore()}/1000 — ${getQualityGrade()}`,
           'The inspection record is now on the blockchain. Go to the Quality Control tab → All Inspections to Approve or Reject this inspection and then issue the Export Permit.'
         );
         setStep('done');
@@ -209,7 +234,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     }
   };
 
-  // Note: Approve/Reject/Permit handlers moved to InspectionManagement component
+  // Note: Approve/Reject/Permit live in ECTAPortal's inline handlers.
 
   const calculateTotalScore = () => {
     const scores = [
@@ -219,13 +244,21 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
     return scores.reduce((sum, key) => sum + parseFloat(inspectionForm[key] || '0'), 0);
   };
 
+  // Leg2 #3: grades the summed totalScore (ten 0–100 fields, max
+  // 1000) with the same defect/moisture rule as the chaincode
+  // determineQualityGrade and the API perform route — including the
+  // unified <= 12% moisture rule (leg2 #19).
   const getQualityGrade = () => {
     const totalScore = calculateTotalScore();
     const defects = parseInt(inspectionForm.defectCount);
-    
+    const moisture = parseFloat(inspectionForm.moistureContent);
+
+    if (Number.isFinite(moisture) && moisture > 12) return 'Below Export Standard';
     if (defects <= 3 && totalScore >= 80) return 'Grade 1';
     if (defects <= 12 && totalScore >= 80) return 'Grade 2';
     if (defects <= 25 && totalScore >= 75) return 'Grade 3';
+    if (defects <= 45 && totalScore >= 70) return 'Grade 4';
+    if (defects <= 100 && totalScore >= 60) return 'Grade 5';
     return 'Below Export Standard';
   };
 
@@ -476,7 +509,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
 
                 <Grid item xs={12}>
                   <Alert severity="info">
-                    <strong>Total Score:</strong> {calculateTotalScore()}/100 • <strong>Quality Grade:</strong> {getQualityGrade()} •{' '}
+                    <strong>Total Score:</strong> {calculateTotalScore()}/1000 • <strong>Quality Grade:</strong> {getQualityGrade()} •{' '}
                     <strong>Cupping Grade:</strong> {getCuppingGrade()}
                   </Alert>
                 </Grid>
@@ -551,7 +584,7 @@ export const QualityInspectionWorkflow: React.FC<QualityInspectionWorkflowProps>
               <Alert severity="success" sx={{ mb: 3 }}>
                 <strong>✅ Inspection Recorded on Blockchain!</strong>
                 <br />
-                Shipment: {shipment.shipmentId} • Total Score: {calculateTotalScore()}/100 • Grade: {getQualityGrade()}
+                Shipment: {shipment.shipmentId} • Total Score: {calculateTotalScore()}/1000 • Grade: {getQualityGrade()}
                 <br />
                 Scheduled for: {inspectionForm.scheduledDate}
                 <br />

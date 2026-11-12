@@ -1,7 +1,8 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Border Crossing Documentation API Routes
 
-import express from 'express';
+import express, { Request, Response } from 'express';
+import { body, validationResult } from 'express-validator';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { authMiddleware, requireRole } from '../middleware/auth';
@@ -10,6 +11,22 @@ import { logger } from '../utils/logger';
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 const postgresDb = DatabaseService.getInstance();
+
+// Leg2 #17: the old route had no validator at all, so a missing or
+// mistyped field surfaced as a chain 500 (ValidateID / parseFloat on
+// "undefined"). Missing/invalid values are a 400 here; a genuine
+// ledger refusal stays a 500.
+const validateRequest = (req: Request, res: Response, next: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid border crossing data', details: errors.array() },
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+};
 
 // ==================== BORDER CROSSING ROUTES ====================
 
@@ -146,7 +163,27 @@ router.get('/status/:status', authMiddleware, async (req, res) => {
 
 // POST /api/v1/bordercrossing/initiate — Initiate border crossing
 router.post('/initiate', authMiddleware,
-  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
+  [
+    body('crossingId').notEmpty().withMessage('Crossing ID is required'),
+    body('shipmentId').notEmpty().withMessage('Shipment ID is required'),
+    body('contractId').notEmpty().withMessage('Contract ID is required'),
+    body('exporterId').notEmpty().withMessage('Exporter ID is required'),
+    body('borderPost').notEmpty().withMessage('Border post is required'),
+    body('borderCountry').notEmpty().withMessage('Border country is required'),
+    body('crossingType').notEmpty().withMessage('Crossing type is required'),
+    body('finalDestination').notEmpty().withMessage('Final destination is required'),
+    body('exitPermitNumber').notEmpty().withMessage('Exit permit number is required'),
+    body('customsDeclaration').notEmpty().withMessage('Customs declaration is required'),
+    body('transportMode').notEmpty().withMessage('Transport mode is required'),
+    body('vehicleNumber').notEmpty().withMessage('Vehicle number is required'),
+    body('driverName').notEmpty().withMessage('Driver name is required'),
+    body('sealNumber').notEmpty().withMessage('Seal number is required'),
+    body('cargoWeight').isNumeric().withMessage('Cargo weight must be a number'),
+    body('numberOfBags').isNumeric().withMessage('Number of bags must be a number'),
+  ],
+  validateRequest,
+  async (req, res) => {
   try {
     const {
       crossingId,

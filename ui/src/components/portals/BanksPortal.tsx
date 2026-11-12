@@ -2051,14 +2051,17 @@ const BanksPortal: React.FC = () => {
 
   // Issue Export Permit — POST /permits (slice-6 fix: the permit step had
   // no UI caller anywhere in the app; API_ENDPOINTS.permits existed but
-  // was never used). The route only requires permitID + shipmentID and
-  // defaults the rest; the caller supplies contract/exporter/LC when known.
+  // was never used). The API resolves the commercial terms from the
+  // contract (leg2 #1/#2 — no 85000/'Germany' defaults), so send the
+  // contract's own amount/currency/destination when known; the API
+  // still 400s honestly if no contract can be resolved.
   const handleIssueExportPermit = async (shipment: any) => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
     const shipmentId = shipment.shipmentId || shipment.shipmentID;
     const contractId = shipment.contractId || shipment.contractID || '';
     const lc = letterOfCredits.find((l: any) => l.contractId === contractId);
+    const contract = contracts.find((c: any) => c.contractId === contractId);
 
     try {
       const response = await apiFetch('/permits', {
@@ -2070,6 +2073,9 @@ const BanksPortal: React.FC = () => {
           exporterID: shipment.exporterId || shipment.exporterID || lc?.exporterId || '',
           lcID: lc?.lcId || '',
           paymentMethod: 'LC',
+          amount: contract?.totalValue,
+          currency: contract?.currency,
+          destination: contract?.buyerCountry,
         }),
       });
 

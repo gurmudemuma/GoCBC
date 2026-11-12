@@ -3461,7 +3461,12 @@ func (c *CoffeeContract) ConfirmDelivery(ctx contractapi.TransactionContextInter
 // ==================== COMPLETE SHIPPING WORKFLOW FUNCTIONS ====================
 
 // StartLandTransport - Begin land transport from Addis to Djibouti
-// Updates status from CUSTOMS_CLEARED to LAND_TRANSPORT
+// Updates status from CUSTOMS_CLEARED (or FREIGHT_BOOKED — leg2 #7) to
+// LAND_TRANSPORT. FREIGHT_BOOKED is accepted because the literal order
+// is customs cleared → book freight → land transport: a shipment booked
+// after clearance must still be able to start land transport, and the
+// status machine (statusManager.ts) now lists FREIGHT_BOOKED as a
+// from-state for LAND_TRANSPORT.
 func (c *CoffeeContract) StartLandTransport(ctx contractapi.TransactionContextInterface,
 	shipmentID, transportCompany, truckPlate, driverName, sealNumber string) error {
 
@@ -3474,8 +3479,8 @@ func (c *CoffeeContract) StartLandTransport(ctx contractapi.TransactionContextIn
 		return fmt.Errorf("StartLandTransport: %w", err)
 	}
 
-	if shipment.Status != "CUSTOMS_CLEARED" {
-		return fmt.Errorf("shipment must be CUSTOMS_CLEARED to start land transport, current status: %s", shipment.Status)
+	if shipment.Status != "CUSTOMS_CLEARED" && shipment.Status != "FREIGHT_BOOKED" {
+		return fmt.Errorf("shipment must be CUSTOMS_CLEARED or FREIGHT_BOOKED to start land transport, current status: %s", shipment.Status)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()

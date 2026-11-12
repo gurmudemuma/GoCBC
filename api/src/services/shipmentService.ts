@@ -197,16 +197,25 @@ export class ShipmentService {
       // Import CustomsService dynamically to avoid circular dependency
       const { customsService } = await import('./customsService');
 
+      // Leg2 #9/#18: the value is the contract's total_value — never an
+      // invented per-kg price (the old fallback was quantity × $5) — and
+      // the HS code is the one code used everywhere, '090111' (green
+      // coffee). No contract value means no auto-declaration: throwing
+      // here only fails the trigger (the caller returns success:false),
+      // it never fabricates a declaration.
+      if (!contract || !Number.isFinite(Number(contract.total_value)) || Number(contract.total_value) <= 0) {
+        throw new Error(`Cannot auto-create a customs declaration for shipment ${shipmentID}: contract ${shipment.contract_id} carries no total_value`);
+      }
       const declarationID = `DECL-${Date.now()}`;
-      
+
       await customsService.submitDeclaration({
         declarationID,
         shipmentID,
         exporterID: shipment.exporter_id,
         exporterName: exporter?.company_name || 'Unknown Exporter',
-        hsCode: '0901.21', // Coffee HS code
+        hsCode: '090111', // Coffee HS code (green coffee, unroasted)
         quantity: shipment.quantity,
-        value: contract?.total_value || shipment.quantity * 5, // Fallback calculation
+        value: Number(contract.total_value),
         currency: 'USD',
         destination: shipment.destination || contract?.buyer_country || 'Unknown',
         contractId: contract?.contract_id || shipment.contract_id,

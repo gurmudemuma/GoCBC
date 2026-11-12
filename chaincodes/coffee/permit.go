@@ -130,8 +130,15 @@ func (c *CoffeeContract) IssueCBEExportPermit(ctx contractapi.TransactionContext
 		approvalLevel = "STANDARD"
 	}
 
-	// Verify contract exists and is approved
-	if contractID != "" {
+	// Verify contract exists and is approved. A contractID is required
+	// (leg2 audit #1/#2): with an empty contract the old code skipped
+	// both the contract and LC checks and the cascade below found no
+	// shipment to move, so the permit existed while the shipment stayed
+	// CREATED/INSPECTION_COMPLETE and customs refused it.
+	if contractID == "" {
+		return fmt.Errorf("contractID is required to issue an export permit: the permit amount, currency and destination are taken from the approved contract")
+	}
+	{
 		contract, err := c.ReadSalesContract(ctx, contractID)
 		if err != nil {
 			return fmt.Errorf("contract not found: %v", err)

@@ -121,16 +121,11 @@ export const PhytosanitaryCertificates: React.FC = () => {
 
       // The fields the form collects (placeOfOrigin, pointOfEntry,
       // packagingType, numberOfPackages, distinguishingMarks,
-      // meansOfConveyance, validityPeriod) are sent with every step, so no
-      // collected value is silently dropped by this component. NOTE: the API
-      // routes currently do NOT read them (phytosanitary.ts request reads
-      // only certificateID/shipmentID/exporterID/plantDescription/quantity/
-      // treatmentApplied; inspect/issue read only their own fields) and the
-      // chaincode RequestPhytosanitaryCertificate takes only those six
-      // arguments — so today the API drops these fields before they reach
-      // the ledger, and the issue route can only pass back what the ledger
-      // already stored. Sending them here is necessary but not sufficient;
-      // persisting them needs an API (and chaincode) change — see report.
+      // meansOfConveyance, validityPeriod) are sent with every step and
+      // are now read by the API (leg2 #10): the request route passes
+      // them to RequestPhytosanitaryCertificate (which stores them
+      // on-chain) and mirrors them to Postgres (migration 073), and the
+      // issue route prefers the body values over the stored ones.
       const collectedFields = {
         placeOfOrigin: formData.placeOfOrigin,
         pointOfEntry: formData.pointOfEntry,

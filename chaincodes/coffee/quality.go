@@ -546,15 +546,19 @@ func (c *CoffeeContract) RejectQualityInspection(ctx contractapi.TransactionCont
 
 // Determine quality grade based on Ethiopian coffee grading standards
 func (c *CoffeeContract) determineQualityGrade(defectCount int, cuppingScore, moistureContent float64) string {
-	// Ethiopian grading standards:
+	// Ethiopian grading standards (leg2 audit #19 — ONE moisture rule
+	// everywhere: moisture must be <= 12% for export. The old rule let
+	// 12–13% through as Grade 4/5 here while ECX grading rejected the
+	// same lot at > 12%, so a 12.5% lot was rejected at the warehouse
+	// but could pass quality inspection as Grade 4/5):
 	// Grade 1: 0-3 defects, >80 cupping score, <12% moisture
 	// Grade 2: 4-12 defects, >80 cupping score, <12% moisture
 	// Grade 3: 13-25 defects, 75-80 cupping score, <12% moisture
-	// Grade 4: 26-45 defects, 70-75 cupping score, <13% moisture
-	// Grade 5: 46-100 defects, 60-70 cupping score, <13% moisture
+	// Grade 4: 26-45 defects, 70-75 cupping score, <12% moisture
+	// Grade 5: 46-100 defects, 60-70 cupping score, <12% moisture
 	// Grade 6-9: Higher defects or lower scores (not suitable for export)
 
-	if moistureContent > 13 {
+	if moistureContent > 12 {
 		return "Grade 9" // Excessive moisture
 	}
 
@@ -564,9 +568,9 @@ func (c *CoffeeContract) determineQualityGrade(defectCount int, cuppingScore, mo
 		return "Grade 2"
 	} else if defectCount <= 25 && cuppingScore >= 75 && moistureContent <= 12 {
 		return "Grade 3"
-	} else if defectCount <= 45 && cuppingScore >= 70 && moistureContent <= 13 {
+	} else if defectCount <= 45 && cuppingScore >= 70 && moistureContent <= 12 {
 		return "Grade 4"
-	} else if defectCount <= 100 && cuppingScore >= 60 && moistureContent <= 13 {
+	} else if defectCount <= 100 && cuppingScore >= 60 && moistureContent <= 12 {
 		return "Grade 5"
 	} else if defectCount <= 150 {
 		return "Grade 6"

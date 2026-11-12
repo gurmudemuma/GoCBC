@@ -481,11 +481,15 @@ router.post('/bookings', authMiddleware,
     // transport mode support it (M2/M3):
     //  - FROM-STATE: the audited SHIPMENT table
     //    (api/src/utils/statusManager.ts) lists FREIGHT_BOOKED as a target
-    //    from CREATED only. Mirroring from CUSTOMS_CLEARED destroys the
-    //    exact state StartLandTransport requires
-    //    (chaincodes/coffee/main.go:3202), so a booked shipment could
-    //    never start land transport; mirroring from DELIVERED (or any
-    //    later state) moves the shipment backwards. The chaincode setter
+    //    from CREATED and from CUSTOMS_CLEARED (leg2 #7 reconciliation:
+    //    the literal order is customs cleared → book freight, and the
+    //    book-freight route always allowed that move). Mirroring from
+    //    CUSTOMS_CLEARED used to destroy the exact state
+    //    StartLandTransport requires — the chaincode now accepts
+    //    FREIGHT_BOOKED there too (main.go), so a booked shipment can
+    //    still start land transport. Mirroring from DELIVERED (or any
+    //    later state) still moves the shipment backwards and stays
+    //    refused. The chaincode setter
     //    (UpdateShipmentStatus, main.go:2104) has deliberately NO
     //    from-state guard, so this API gate is the only thing stopping a
     //    regressing chain write.
@@ -537,16 +541,21 @@ router.post('/bookings', authMiddleware,
         logger.warn(`[SHIPPING] ${blockchainWarning}`);
       } else {
         // Gate on the ledger status when known, else the Postgres status.
-        // statusManager.validateTransition is fail-closed: only CREATED
-        // lists FREIGHT_BOOKED as a target (DELIVERED/CUSTOMS_REJECTED/
-        // CANCELLED have no exits; unknown/PG-only states are rejected).
+        // statusManager.validateTransition is fail-closed: FREIGHT_BOOKED
+        // is reachable from CREATED (book early) and from CUSTOMS_CLEARED
+        // (book after clearance — the literal order; leg2 #7). The old
+        // gate allowed CREATED only, so a booking after customs clearance
+        // silently skipped the mirror while the book-freight route moved
+        // the same shipment — the two paths now agree. (Moving
+        // CUSTOMS_CLEARED → FREIGHT_BOOKED used to strand land transport;
+        // StartLandTransport now accepts FREIGHT_BOOKED, see main.go.)
         const gateStatus = (ledgerStatus || pgStatus) as string;
         const isAir = ledgerMode ? ledgerMode.trim().toUpperCase() === 'AIR' : false;
         const mayMirror = !isAir && statusManager.validateTransition('SHIPMENT', gateStatus, 'FREIGHT_BOOKED');
         if (!mayMirror) {
           const reason = isAir
             ? 'transport mode is AIR (a sea-freight booking does not apply to air shipments)'
-            : `status is ${gateStatus} (FREIGHT_BOOKED is only mirrored from CREATED)`;
+            : `status is ${gateStatus} (FREIGHT_BOOKED is only mirrored from CREATED or CUSTOMS_CLEARED)`;
           blockchainWarning = `Shipment ${shipmentID} ${reason}, so its status was left unchanged; the booking itself was still recorded`;
           logger.warn(`[SHIPPING] ${blockchainWarning}`);
         } else {
@@ -556,11 +565,11 @@ router.post('/bookings', authMiddleware,
             const updated = await dbService.run(
               `UPDATE shipments
                SET status = 'FREIGHT_BOOKED', updated_at = NOW()
-               WHERE shipment_id = $1 AND status = 'CREATED'`,
+               WHERE shipment_id = $1 AND status IN ('CREATED', 'CUSTOMS_CLEARED')`,
               [shipmentID]
             );
             if ((updated as any)?.rowCount === 0) {
-              blockchainWarning = `Shipment ${shipmentID} left CREATED before the mirror ran, so its Postgres status was not moved to FREIGHT_BOOKED`;
+              blockchainWarning = `Shipment ${shipmentID} left CREATED/CUSTOMS_CLEARED before the mirror ran, so its Postgres status was not moved to FREIGHT_BOOKED`;
               logger.warn(`[SHIPPING] ${blockchainWarning}`);
             }
           } catch (statusError: any) {

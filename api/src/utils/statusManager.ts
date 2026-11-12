@@ -147,13 +147,20 @@ export const StatusTransitions = {
     // table accepts both spellings so the generic status routes and
     // the PG-mirror reads agree.
     CREATED: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'IN_TRANSIT', 'CANCELLED', 'INSPECTION_PENDING'],
-    FREIGHT_BOOKED: ['CUSTOMS_CLEARED', 'LOADED', 'INSPECTION_PENDING'],
+    FREIGHT_BOOKED: ['CUSTOMS_CLEARED', 'LOADED', 'INSPECTION_PENDING', 'LAND_TRANSPORT'],
     PERMIT_ISSUED: ['IN_TRANSIT', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING'],
     CUSTOMS_DECLARED: ['CUSTOMS_CLEARED', 'CUSTOMS_REJECTED'],
     CUSTOMS_REJECTED: [],
     INSPECTION_PENDING: ['INSPECTION_COMPLETE', 'CUSTOMS_DECLARED', 'CUSTOMS_CLEARED', 'IN_TRANSIT'],
     INSPECTION_COMPLETE: ['PERMIT_ISSUED'],
-    CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT'],
+    // Leg2 #7: CUSTOMS_CLEARED → FREIGHT_BOOKED is a legal booking
+    // (the book-freight route has always allowed it and the literal
+    // order is customs cleared → book freight). It used to break land
+    // transport because StartLandTransport required CUSTOMS_CLEARED
+    // exactly; the chaincode now accepts FREIGHT_BOOKED too, and
+    // FREIGHT_BOOKED lists LAND_TRANSPORT above, so the booking no
+    // longer strands the shipment.
+    CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT', 'FREIGHT_BOOKED'],
     LAND_TRANSPORT: ['PORT_ARRIVED'],
     PORT_ARRIVED: ['CONTAINER_STUFFED'],
     CONTAINER_STUFFED: ['VESSEL_LOADED'],
