@@ -440,21 +440,13 @@ router.post('/',
       if (blockchainWriteSuccessful) {
         logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
         
-        // AUTO-CREATE QUALITY INSPECTION TASK using ShipmentService
-        try {
-          await shipmentService.createQualityInspectionTask({
-            shipmentID,
-            contractID,
-            exporterID: finalExporterID,
-            coffeeType: finalGrade,
-            quantity: finalQuantity
-          });
-          logger.info(`✅ Quality inspection task auto-created for shipment ${shipmentID}`);
-        } catch (qualityError: any) {
-          logger.warn(`⚠️ Failed to auto-create quality inspection task: ${qualityError.message}`);
-          // Non-fatal - shipment is still created
-        }
-        
+        // NOTE: no quality inspection is auto-created on shipment creation.
+        // A shipment has NO inspection row until an explicit quality request
+        // runs RequestInspection on-chain (POST /quality/inspections). The old
+        // auto-create inserted a Postgres-only PENDING inspection (NULL tx id)
+        // that the quality-request guard returned as "already exists", making
+        // the explicit quality step vacuous. Removed 2026-11-12.
+
         // DON'T link shipment to LC yet - this will be done after ECTA quality approval
         // The LC status should only change to SHIPPED after quality inspection is approved
         logger.info(`[SHIPMENT] Shipment ${shipmentID} created for contract ${contractID}. LC linking will happen after ECTA quality approval.`);

@@ -438,16 +438,21 @@ async function testWorkflowTriggers() {
       'triggerForexAutoRequest() method exists and is called');
   }
 
-  // Trigger 3: Shipment registration → Quality inspection
+  // Trigger 3: Shipment registration → Quality inspection (explicit, on-chain).
+  // Shipment creation must NOT auto-create a PG-only inspection (removed
+  // 2026-11-12: the auto-created INS- row with NULL tx id made the
+  // flagship's quality step vacuous). The real flow is an explicit
+  // RequestInspection on-chain via quality.ts.
   const shipmentServicePath = path.join(__dirname, '../api/src/services/shipmentService.ts');
-  if (fs.existsSync(shipmentServicePath)) {
-    const content = fs.readFileSync(shipmentServicePath, 'utf8');
-    const hasTrigger = content.includes('createQualityInspectionTask');
-    const hasCalled = content.includes('createQualityInspectionTask(') || 
-                      content.includes('createQualityInspectionTaskInternal');
-    
-    test('Trigger 3: Shipment registration → Quality inspection', hasTrigger && hasCalled,
-      'Quality inspection auto-creation implemented');
+  const qualityRoutePath = path.join(__dirname, '../api/src/routes/quality.ts');
+  if (fs.existsSync(shipmentServicePath) && fs.existsSync(qualityRoutePath)) {
+    const svcContent = fs.readFileSync(shipmentServicePath, 'utf8');
+    const qualityContent = fs.readFileSync(qualityRoutePath, 'utf8');
+    const noAutoCreate = !svcContent.includes('createQualityInspectionTask');
+    const hasOnChainRequest = qualityContent.includes('RequestInspection');
+
+    test('Trigger 3: Shipment registration → Quality inspection (explicit on-chain)', noAutoCreate && hasOnChainRequest,
+      'No PG-only auto-created inspection; explicit RequestInspection on-chain exists');
   }
 
   // Trigger 4: Customs clearance → Shipment update

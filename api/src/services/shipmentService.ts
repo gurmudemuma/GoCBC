@@ -27,7 +27,14 @@ export class ShipmentService {
   }
 
   /**
-   * Create new shipment - 🔥 TRIGGERS QUALITY INSPECTION TASK
+   * Create new shipment. NOTE: shipment creation does NOT create a quality
+   * inspection. Inspections are created only by an explicit quality request
+   * (POST /quality/inspections), which writes RequestInspection to the ledger
+   * first and mirrors to Postgres only on success (see quality.ts). The old
+   * auto-create here inserted a Postgres-only PENDING inspection (INS-<ts>,
+   * NULL tx id) that the quality-request guard then returned as "already
+   * exists", so the explicit quality step never exercised a real on-chain
+   * inspection. Removed 2026-11-12.
    */
   async createShipment(shipmentData: {
     shipmentID: string;
@@ -110,8 +117,11 @@ export class ShipmentService {
         metadata: { contractID: shipmentData.contractID, quantity: shipmentData.quantity },
       });
 
-      // 🔥 WORKFLOW TRIGGER: Create quality inspection task
-      await this.createQualityInspectionTaskInternal(shipmentData.shipmentID, shipmentData);
+      // NOTE: no quality inspection is auto-created here. A shipment has NO
+      // inspection row until an explicit quality request runs RequestInspection
+      // on-chain (see routes/quality.ts). The old auto-create inserted a
+      // Postgres-only PENDING inspection (INS-<ts>, NULL tx id) that made the
+      // explicit quality step vacuous. Removed 2026-11-12.
 
       logger.info(`✅ [ShipmentService] Shipment created: ${shipmentData.shipmentID}`);
       return { success: true, shipmentID: shipmentData.shipmentID, txId: result.txId };
@@ -122,60 +132,16 @@ export class ShipmentService {
   }
 
   /**
-   * 🔥 WORKFLOW FIX: Auto-create quality inspection task
-   * Public method for external callers (routes)
+   * REMOVED 2026-11-12: createQualityInspectionTask / createQualityInspectionTaskInternal.
+   * These auto-created a Postgres-only PENDING inspection (INS-<Date.now()>,
+   * NULL blockchain_tx_id, no ledger write) on every shipment creation and
+   * flipped the shipment to QUALITY_PENDING. That phantom row tripped the
+   * "shipment already has a pending inspection" guard in routes/quality.ts,
+   * so an explicit quality request returned 200 with the phantom's ID instead
+   * of running RequestInspection on-chain. Inspections are now created ONLY
+   * by the explicit quality flow (POST /quality/inspections), which writes to
+   * the ledger first and mirrors to Postgres only on success.
    */
-  async createQualityInspectionTask(taskData: {
-    shipmentID: string;
-    contractID?: string;
-    exporterID: string;
-    coffeeType: string;
-    quantity: number;
-  }) {
-    try {
-      const inspectionID = `INS-${Date.now()}`;
-
-      await this.dbService.run(
-        `INSERT INTO quality_inspections (
-          inspection_id, shipment_id, exporter_id, coffee_type,
-          quantity, grade, status, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [
-          inspectionID,
-          taskData.shipmentID,
-          taskData.exporterID,
-          taskData.coffeeType || 'ARABICA', // Default
-          taskData.quantity,
-          taskData.coffeeType, // Use coffeeType as grade fallback
-          'PENDING',
-        ]
-      );
-
-      // Update shipment status to QUALITY_PENDING
-      await this.dbService.run(
-        `UPDATE shipments SET status = $1, updated_at = NOW() WHERE shipment_id = $2`,
-        ['QUALITY_PENDING', taskData.shipmentID]
-      );
-
-      logger.info(`✅ [ShipmentService] Quality inspection task created: ${inspectionID} for shipment: ${taskData.shipmentID}`);
-      return { success: true, inspectionID };
-    } catch (error: any) {
-      logger.error(`❌ [ShipmentService] Quality task creation failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Internal helper for creating quality task from shipment creation
-   */
-  private async createQualityInspectionTaskInternal(shipmentID: string, shipmentData: any) {
-    return this.createQualityInspectionTask({
-      shipmentID,
-      exporterID: shipmentData.exporterID,
-      coffeeType: 'ARABICA',
-      quantity: shipmentData.quantity,
-    });
-  }
 
   /**
    * 🔥 WORKFLOW TRIGGER: Auto-create customs declaration after quality approval

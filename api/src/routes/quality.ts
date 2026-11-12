@@ -416,14 +416,23 @@ router.post('/inspections',
         });
       }
 
-      // Check if shipment already has a pending inspection
+      // Check if shipment already has a pending inspection. Only a REAL
+      // inspection counts: one created by this endpoint via RequestInspection
+      // on-chain, whose Postgres mirror carries a blockchain_tx_id. Shipment
+      // creation no longer auto-creates an inspection (removed 2026-11-12),
+      // so a fresh shipment has no row here and this query returns nothing.
+      // The `blockchain_tx_id IS NOT NULL` filter also keeps legacy phantom
+      // rows (PG-only PENDING inspections with NULL tx id, created by the old
+      // auto-create before its removal) from tripping the guard: an explicit
+      // request for such a shipment proceeds to a real on-chain inspection.
       const pendingInspection = await postgresDb.get(
-        'SELECT inspection_id FROM quality_inspections WHERE shipment_id = $1 AND status = $2',
+        'SELECT inspection_id FROM quality_inspections WHERE shipment_id = $1 AND status = $2 AND blockchain_tx_id IS NOT NULL',
         [shipmentID, 'PENDING']
       );
 
       if (pendingInspection) {
-        // Return the existing inspection instead of an error (shipment auto-creates inspections)
+        // Return the existing inspection instead of an error — a genuine
+        // duplicate while a real on-chain inspection is PENDING.
         logger.info(`Shipment ${shipmentID} already has inspection ${pendingInspection.inspection_id}, returning existing`);
         return res.status(200).json({
           success: true,
