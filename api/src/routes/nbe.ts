@@ -132,7 +132,7 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
         forexId,
         user?.username || 'NBE Officer',
         new Date().toISOString()
-      ]);
+      ], 'NBEMSP');
       if (chainResult.success) {
         blockchainSynced = true;
       } else {

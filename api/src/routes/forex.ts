@@ -583,7 +583,7 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
         await fabricService.connectAsOrg('BanksMSP');
         result = await fabricService.invokeChaincode('RequestForex', [
           forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency,
-        ]);
+        ], 'BanksMSP');
         
         if (result.success) {
           logger.info(`✅ Forex request created: ${forexId} with auto-mapped data (attempt ${attempt})`);

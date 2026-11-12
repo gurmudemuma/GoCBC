@@ -700,7 +700,8 @@ router.post('/:certificateId/revoke',
       const result = await fabricService.revokePhytosanitaryCertificate(
         certificateId,
         revokedBy,
-        reason
+        reason,
+        user.org || 'ECTAMSP'
       );
       
       if (result.success) {

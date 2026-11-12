@@ -1396,7 +1396,8 @@ router.post('/:contractID/approve',
                 advisingBank,
                 amount.toFixed(2),
                 currency,
-                expiryDate
+                expiryDate,
+                'ECTAMSP'
               );
               if (!requestResult.success) {
                 throw new Error(requestResult.error || 'The ledger rejected the generated LC request.');

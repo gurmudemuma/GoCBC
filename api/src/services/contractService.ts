@@ -169,12 +169,17 @@ export class ContractService {
         throw new Error(`Invalid status transition from ${contract.status} to APPROVED`);
       }
 
-      // 3. Approve on blockchain
+      // 3. Approve on blockchain — pin the signing MSP to the caller's org
+      // (ApproveSalesContract requires ECTAMSP). The shared gateway
+      // otherwise signs with whatever org the previous concurrent request
+      // connected as, and the chaincode rejects with "only ECTA and Admin
+      // can approve sales contracts, got: BanksMSP". invokeChaincode
+      // reconnects inside the gateway lock, so the explicit MSP is race-free.
       const result = await this.fabricService.invokeChaincode('ApproveSalesContract', [
         approvalData.contractID,
         approvalData.approvedBy,
         approvalData.reason || 'Contract approved by ECTA',
-      ]);
+      ], approvalData.approverOrg);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to approve contract on blockchain');
@@ -245,11 +250,14 @@ export class ContractService {
         throw new Error('Contract not found');
       }
 
+      // Pin the signing MSP to the caller's org (RejectSalesContract
+      // requires ECTAMSP) — see approveContract above for why the ambient
+      // gateway identity is not safe under concurrent requests.
       const result = await this.fabricService.invokeChaincode('RejectSalesContract', [
         rejectionData.contractID,
         rejectionData.rejectedBy,
         rejectionData.reason,
-      ]);
+      ], rejectionData.rejectorOrg);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to reject contract on blockchain');

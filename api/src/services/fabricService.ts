@@ -1197,10 +1197,14 @@ export class FabricService {
     bankName: string,
     amount: string,
     currency: string,
-    expiryDate: string
+    expiryDate: string,
+    mspId?: string
   ): Promise<ChaincodeResponse> {
     // RequestLC validates the exporter from ledger state inside the same
     // transaction, avoiding a separate preflight query and TOCTOU gap.
+    // mspId pins the signing identity (RequestLC requires ECTAMSP): the
+    // shared gateway otherwise signs with whatever org the previous
+    // concurrent request connected as, and the chaincode rejects the call.
     return this.invokeChaincode('RequestLC', [
       lcId,
       contractId,
@@ -1209,25 +1213,26 @@ export class FabricService {
       amount,
       currency,
       expiryDate,
-    ]);
+    ], mspId);
   }
 
   public async approveLC(
     lcId: string,
     issuingBank: string,
     advisingBank: string,
-    beneficiary: string
+    beneficiary: string,
+    mspId?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('ApproveLC', [
       lcId,
       issuingBank,
       advisingBank,
       beneficiary,
-    ]);
+    ], mspId);
   }
 
-  public async issueLC(lcId: string, terms: string): Promise<ChaincodeResponse> {
-    return this.invokeChaincode('IssueLC', [lcId, terms]);
+  public async issueLC(lcId: string, terms: string, mspId?: string): Promise<ChaincodeResponse> {
+    return this.invokeChaincode('IssueLC', [lcId, terms], mspId);
   }
 
   public async queryAllLCs(): Promise<ChaincodeResponse> {
@@ -2350,13 +2355,14 @@ export class FabricService {
   public async revokePhytosanitaryCertificate(
     certificateID: string,
     revokedBy: string,
-    reason: string
+    reason: string,
+    mspId?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('RevokePhytosanitaryCertificate', [
       certificateID,
       revokedBy,
       reason,
-    ]);
+    ], mspId);
   }
 
   // ==================== INSURANCE CERTIFICATE OPERATIONS ====================
@@ -2523,13 +2529,14 @@ export class FabricService {
   public async rejectCustomsDeclaration(
     declarationId: string,
     rejectedBy: string,
-    rejectionReason: string
+    rejectionReason: string,
+    mspId?: string
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('RejectCustomsDeclaration', [
       declarationId,
       rejectedBy,
       rejectionReason,
-    ]);
+    ], mspId);
   }
 
   public async getCustomsDeclaration(declarationId: string): Promise<ChaincodeResponse> {
@@ -2876,6 +2883,17 @@ export class FabricService {
     if (!result.success) {
       // Let the API route's error handler run. Several older routes used this
       // method without checking the response and would otherwise claim success.
+      throw new Error(result.error || `Fabric rejected transaction ${functionName}`);
+    }
+    return { ...result, transactionId: result.txId };
+  }
+
+  /** submitTransaction with a pinned signing MSP (same race guard as the
+   *  explicit-msp invokeChaincode calls: the shared gateway otherwise signs
+   *  with whatever org the previous concurrent request connected as). */
+  public async submitTransactionAs(mspId: string, functionName: string, ...args: string[]): Promise<ChaincodeResponse> {
+    const result = await this.invokeChaincode(functionName, args, mspId);
+    if (!result.success) {
       throw new Error(result.error || `Fabric rejected transaction ${functionName}`);
     }
     return { ...result, transactionId: result.txId };

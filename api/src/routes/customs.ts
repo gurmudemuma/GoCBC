@@ -1957,7 +1957,8 @@ router.post('/declaration/:declarationId/reject',
       const result = await fabricService.rejectCustomsDeclaration(
         declarationId,
         officer,
-        rejectionReason
+        rejectionReason,
+        user.org || 'CustomsMSP'
       );
 
       if (!result.success) {

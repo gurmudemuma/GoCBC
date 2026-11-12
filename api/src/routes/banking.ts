@@ -331,7 +331,8 @@ router.post('/lc/:lcID/approve',
         lcID,
         issuingBank,
         advisingBank,
-        beneficiary
+        beneficiary,
+        'BanksMSP'
       );
 
       logger.info(`[LC APPROVE] Result received:`, {
@@ -601,7 +602,7 @@ router.post('/lc/:lcID/reject',
       // Sign with the authenticated bank identity. Chaincode independently
       // checks the signer MSP and does not trust the organization in the body.
       await fabricService.connectAsOrg('BanksMSP');
-      const result = await fabricService.invokeChaincode('RejectLC', [lcID, rejectionReason]);
+      const result = await fabricService.invokeChaincode('RejectLC', [lcID, rejectionReason], 'BanksMSP');
 
       if (result.success) {
         logger.info(`LC rejected: ${lcID} by ${user.org}`);
@@ -685,12 +686,14 @@ router.post('/forex/:forexID/reject',
         });
       }
 
-      // Best-effort chain sync first (RejectForex: REQUESTED/CONFIRMED
-      // -> REJECTED, forex.go). The PG mirror below is authoritative
-      // off-chain, mirroring the NBE approve route (nbe.ts), which also
-      // writes CONFIRMED to PG even when the chain call fails: without
-      // the mirror a rejected allocation would keep showing in the NBE
-      // portal's pendingForexRequests (pending = status REQUESTED).
+      // Ledger-first: RejectForex (REQUESTED/CONFIRMED -> REJECTED,
+      // forex.go) must commit on-chain before anything is mirrored. The
+      // old code returned success:true and wrote REJECTED to Postgres even
+      // when the chain call failed, so the portal showed REJECTED while
+      // the ledger still said REQUESTED (and the allocation stayed in the
+      // NBE pending list on-chain). Fail honestly instead, like the
+      // quality perform route (503 INSPECTION_PERFORM_FAILED) — a
+      // rejected-on-paper forex is a phantom.
       let blockchainSynced = false;
       let blockchainWarning: string | undefined;
       try {
@@ -698,7 +701,7 @@ router.post('/forex/:forexID/reject',
           forexID,
           rejectionReason,
           user.org,
-        ]);
+        ], user.org);
         if (chainResult.success) {
           blockchainSynced = true;
         } else {
@@ -710,9 +713,20 @@ router.post('/forex/:forexID/reject',
         logger.warn(`[BANKING] ${blockchainWarning}`);
       }
 
+      if (!blockchainSynced) {
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'FOREX_REJECT_FAILED',
+            message: blockchainWarning || `Failed to reject forex request ${forexID} on the ledger; no status change was recorded.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // Mirror the rejection to Postgres (REJECTED is in
-      // chk_forex_allocations_status since migration 060). Best-effort:
-      // the allocation may exist on-chain only.
+      // chk_forex_allocations_status since migration 060) — only after
+      // the ledger commit above.
       try {
         await dbService.run(`
           UPDATE forex_allocations
@@ -945,7 +959,7 @@ router.post('/lc/:lcID/issue',
       await fabricService.connectAsOrg('BanksMSP');
       logger.info(`[LC ISSUE] Connected as BanksMSP for issuing LC ${lcID}`);
 
-      const result = await fabricService.issueLC(lcID, terms);
+      const result = await fabricService.issueLC(lcID, terms, 'BanksMSP');
 
       if (result.success) {
         logger.info(`[${user?.org}] ✅ LC issued successfully: ${lcID}`);
@@ -989,7 +1003,7 @@ router.post('/lc/:lcID/issue',
               lcExporterID,
               lcAmount.toString(),
               lcCurrency,
-            ]);
+            ], 'BanksMSP');
             
             if (forexResult.success) {
               logger.info(`✅ Forex request auto-created on blockchain: ${forexId} for LC ${lcID}`);

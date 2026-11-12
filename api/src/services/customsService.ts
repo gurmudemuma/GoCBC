@@ -326,7 +326,8 @@ export class CustomsService {
         // clearedBy, clearanceNumber, dutiesAmountStr — customs.go:682).
         // The old call passed 7 (adding taxes, clearanceNotes and a date),
         // which the chaincode dispatcher rejects.
-        const blockchainResult = await this.fabricService.submitTransaction(
+        const blockchainResult = await this.fabricService.submitTransactionAs(
+          'CustomsMSP',
           'ClearCustomsDeclaration',
           clearanceData.declarationID,
           clearanceData.clearedBy,
@@ -341,7 +342,13 @@ export class CustomsService {
       if (blockchainSynced) {
         logger.info(`[CustomsService] ✅ Declaration cleared on blockchain: ${clearanceData.declarationID}, TX: ${blockchainTxId}`);
       } else {
-        logger.warn(`[CustomsService] Declaration ${clearanceData.declarationID} NOT recorded on blockchain (PG CLEARED row kept): ${blockchainError}`);
+        // Ledger-first: a PG-only CLEARED row with no on-chain clear is a
+        // phantom — the shipment never moves to CUSTOMS_CLEARED on the
+        // ledger (the cascade lives in ClearCustomsDeclaration) and the
+        // portal would show CLEARED for a declaration the ledger still
+        // holds as SUBMITTED/REJECTED. Fail honestly instead of keeping
+        // the PG row, like the quality perform route.
+        throw new Error(`Failed to clear declaration ${clearanceData.declarationID} on the ledger: ${blockchainError || 'no transaction id'}; no status change was recorded.`);
       }
 
       // Update database (blockchain_tx_id is the ledger-confirmed txId,

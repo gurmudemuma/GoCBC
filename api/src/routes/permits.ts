@@ -84,7 +84,8 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
         commercialInvoice,
         bankBranch,
         approvedBy
-      ]
+      ],
+      "BanksMSP"
     );
 
     if (result.success) {
@@ -179,7 +180,8 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
         commercialInvoice,
         bankBranch,
         approvedBy
-      ]
+      ],
+      "BanksMSP"
     );
 
     if (result.success) {
@@ -248,7 +250,8 @@ router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async 
         commercialInvoice,
         bankBranch,
         approvedBy
-      ]
+      ],
+      "BanksMSP"
     );
 
     if (result.success) {
@@ -279,7 +282,7 @@ router.post('/utilize', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), asyn
   try {
     const { permitId } = req.body;
 
-    const result = await fabricService.invokeChaincode('UtilizeExportPermit', [permitId]);
+    const result = await fabricService.invokeChaincode('UtilizeExportPermit', [permitId], 'BanksMSP');
 
     if (result.success) {
       res.json({ success: true, message: 'Export permit utilized successfully' });
