@@ -110,7 +110,11 @@ func isBankMSP(mspID string) bool {
 // RequestLC - Exporter requests Letter of Credit from bank
 // AUTO-MAPS: Contract details, issuing bank (buyer's bank), advising bank (exporter's bank)
 func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
-	lcID, contractID, exporterID, bankName, amountStr, currency, expiryDate string) error {
+	lcID, contractID, exporterID, bankName, amountStr, currency, expiryDate string,
+	// LEG 1 (F6a): trailing beneficiary + terms. The API always passes
+	// all 9 args; the 17-field LC form's beneficiary/terms were silently
+	// dropped before (ledger stored '' for both).
+	beneficiary, terms string) error {
 
 	fmt.Printf("=== RequestLC called: lcID=%s, contractID=%s ===\n", lcID, contractID)
 	requesterMSP, err := ctx.GetClientIdentity().GetMSPID()
@@ -264,16 +268,24 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
 
 	// Create LC with properly mapped banks
+	// LEG 1 (F6a): beneficiary defaults to the exporter's company name
+	// when the caller does not supply one, so the ledger never stores
+	// an empty beneficiary for a requested LC.
+	if strings.TrimSpace(beneficiary) == "" {
+		beneficiary = exporter.CompanyName
+	}
 	lc := LetterOfCredit{
 		LCID:         lcID,
 		ContractID:   contractID,
 		ExporterID:   mappedExporterID,
 		IssuingBank:  issuingBank,  // Buyer's bank
 		AdvisingBank: advisingBank, // Exporter's bank
+		Beneficiary:  beneficiary,
 		Amount:       mappedAmount,
 		Currency:     mappedCurrency,
 		Status:       "REQUESTED",
 		ExpiryDate:   expiryDate,
+		Terms:        terms,
 		RequestDate:  txTime,
 		Documents:    []string{},
 		CreatedAt:    txTime,

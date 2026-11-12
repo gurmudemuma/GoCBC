@@ -134,6 +134,20 @@ type SalesContract struct {
 	PaymentMethod         string    `json:"paymentMethod"` // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE (default: LC)
 	MinimumPriceCompliant bool      `json:"minimumPriceCompliant"`
 	EUDRRequired          bool      `json:"eudrRequired"`
+	// LEG 1 (F3): trade/contact fields the exporter form collects. They
+	// were silently dropped at creation (no struct fields, no PG
+	// columns for the contact pair) and PATCH wrote them PG-only, so the
+	// ledger diverged. Plain json tags (no omitempty): the fields always
+	// marshal, so the response schema stays valid for legacy docs.
+	BuyerEmail          string `json:"buyerEmail"`
+	BuyerPhone          string `json:"buyerPhone"`
+	OrganicCertified    bool   `json:"organicCertified"`
+	FairTradeCertified  bool   `json:"fairTradeCertified"`
+	PortOfLoading       string `json:"portOfLoading"`
+	PortOfDestination   string `json:"portOfDestination"`
+	DeliveryDate        string `json:"deliveryDate"`
+	Incoterm            string `json:"incoterm"`
+	SpecialInstructions string `json:"specialInstructions"`
 	Documents             []string  `json:"documents"` // Document IDs linked to this contract
 	ContractStatus        string    `json:"contractStatus"`
 	RegistrationDate      string    `json:"registrationDate"` // ISO date format
@@ -522,7 +536,11 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 // Added: Payment method support for LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
 func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.TransactionContextInterface,
 	contractID, exporterID, buyerID, buyerName, buyerCountry, coffeeType, quantityStr,
-	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, paymentMethod, documentsJSON string) error {
+	pricePerKgStr, currency, eudrRequiredStr, buyerBank, exporterBank, paymentMethod, documentsJSON string,
+	// LEG 1 (F3): trailing trade/contact args (15-23). The API always
+	// passes all 23; there is no other caller of this function.
+	buyerEmail, buyerPhone, organicCertifiedStr, fairTradeCertifiedStr,
+	portOfLoading, portOfDestination, deliveryDate, incoterm, specialInstructions string) error {
 
 	log.Printf("=== RegisterSalesContractWithPaymentMethod called: contractID=%s, buyerName=%s, paymentMethod=%s ===", contractID, buyerName, paymentMethod)
 
@@ -598,6 +616,23 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid EUDR required flag: %w", err)
 	}
 
+	// LEG 1 (F3): trade/contact fields. Empty means "not provided" —
+	// never fail registration for an absent optional field.
+	organicCertified := false
+	if organicCertifiedStr != "" {
+		organicCertified, err = strconv.ParseBool(organicCertifiedStr)
+		if err != nil {
+			return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid organicCertified flag: %w", err)
+		}
+	}
+	fairTradeCertified := false
+	if fairTradeCertifiedStr != "" {
+		fairTradeCertified, err = strconv.ParseBool(fairTradeCertifiedStr)
+		if err != nil {
+			return fmt.Errorf("RegisterSalesContractWithPaymentMethod: invalid fairTradeCertified flag: %w", err)
+		}
+	}
+
 	// Parse documents array
 	var documents []string
 	if documentsJSON != "" && documentsJSON != "[]" {
@@ -670,6 +705,15 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 		PaymentMethod:         paymentMethod,
 		MinimumPriceCompliant: minimumPriceCompliant,
 		EUDRRequired:          eudrRequired,
+		BuyerEmail:            buyerEmail,
+		BuyerPhone:            buyerPhone,
+		OrganicCertified:      organicCertified,
+		FairTradeCertified:    fairTradeCertified,
+		PortOfLoading:         portOfLoading,
+		PortOfDestination:     portOfDestination,
+		DeliveryDate:          deliveryDate,
+		Incoterm:              incoterm,
+		SpecialInstructions:   specialInstructions,
 		Documents:             documents,
 		ContractStatus:        "REGISTERED",
 		RegistrationDate:      timestamp.Format(time.RFC3339),
@@ -1406,6 +1450,182 @@ func (c *CoffeeContract) UpdateSalesContractBuyer(ctx contractapi.TransactionCon
 	ctx.GetStub().SetEvent("ContractBuyerUpdated", eventJSON)
 
 	log.Printf("✅ Contract %s buyer ID updated from %s to %s", contractID, previousBuyerID, newBuyerID)
+	return nil
+}
+
+// UpdateSalesContract - Ledger write-through for PATCH /contracts/:id
+// (LEG 1, F3). PATCH used to write trade fields PG-only, so the ledger
+// diverged from the database. The API read-modify-writes through this
+// function first and only mirrors to PG after the ledger accepts.
+//
+// Only REGISTERED and APPROVED contracts may be amended: a REJECTED
+// contract goes through ResubmitRejectedContract, and CANCELLED /
+// COMPLETED contracts are terminal. Identity (contractID, exporterID)
+// and status are never changed here — only the mutable commercial
+// fields, each applied only when present in the JSON payload.
+type salesContractUpdate struct {
+	BuyerID             *string   `json:"buyerId"`
+	BuyerName           *string   `json:"buyerName"`
+	BuyerCountry        *string   `json:"buyerCountry"`
+	BuyerBank           *string   `json:"buyerBank"`
+	ExporterBank        *string   `json:"exporterBank"`
+	CoffeeType          *string   `json:"coffeeType"`
+	Quantity            *float64  `json:"quantity"`
+	PricePerKg          *float64  `json:"pricePerKg"`
+	Currency            *string   `json:"currency"`
+	PaymentMethod       *string   `json:"paymentMethod"`
+	EUDRRequired        *bool     `json:"eudrRequired"`
+	Documents           *[]string `json:"documents"`
+	BuyerEmail          *string   `json:"buyerEmail"`
+	BuyerPhone          *string   `json:"buyerPhone"`
+	OrganicCertified    *bool     `json:"organicCertified"`
+	FairTradeCertified  *bool     `json:"fairTradeCertified"`
+	PortOfLoading       *string   `json:"portOfLoading"`
+	PortOfDestination   *string   `json:"portOfDestination"`
+	DeliveryDate        *string   `json:"deliveryDate"`
+	Incoterm            *string   `json:"incoterm"`
+	SpecialInstructions *string   `json:"specialInstructions"`
+}
+
+func (c *CoffeeContract) UpdateSalesContract(ctx contractapi.TransactionContextInterface,
+	contractID, updatedJSON string) error {
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+	updaterID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		updaterID = mspID
+	}
+
+	contract, err := c.ReadSalesContract(ctx, contractID)
+	if err != nil {
+		return err
+	}
+
+	if contract.ContractStatus != "REGISTERED" && contract.ContractStatus != "APPROVED" {
+		return fmt.Errorf("contract %s cannot be amended in status %s (only REGISTERED or APPROVED contracts may be updated)", contractID, contract.ContractStatus)
+	}
+
+	var update salesContractUpdate
+	if err := json.Unmarshal([]byte(updatedJSON), &update); err != nil {
+		return fmt.Errorf("UpdateSalesContract: invalid update JSON: %v", err)
+	}
+
+	var changes []FieldChange
+	applyString := func(name string, dst *string, src *string) {
+		if src != nil && *src != *dst {
+			changes = append(changes, FieldChange{FieldName: name, OldValue: *dst, NewValue: *src, DataType: "string"})
+			*dst = *src
+		}
+	}
+	applyBool := func(name string, dst *bool, src *bool) {
+		if src != nil && *src != *dst {
+			changes = append(changes, FieldChange{FieldName: name, OldValue: fmt.Sprintf("%v", *dst), NewValue: fmt.Sprintf("%v", *src), DataType: "boolean"})
+			*dst = *src
+		}
+	}
+
+	if update.BuyerID != nil {
+		if *update.BuyerID == "" {
+			return fmt.Errorf("buyer ID cannot be empty")
+		}
+		if *update.BuyerID == contract.ExporterID {
+			return fmt.Errorf("buyer ID cannot be same as exporter ID: %s", *update.BuyerID)
+		}
+	}
+	applyString("buyerId", &contract.BuyerID, update.BuyerID)
+	applyString("buyerName", &contract.BuyerName, update.BuyerName)
+	applyString("buyerCountry", &contract.BuyerCountry, update.BuyerCountry)
+	applyString("buyerBank", &contract.BuyerBank, update.BuyerBank)
+	applyString("exporterBank", &contract.ExporterBank, update.ExporterBank)
+	applyString("coffeeType", &contract.CoffeeType, update.CoffeeType)
+	applyString("currency", &contract.Currency, update.Currency)
+	applyString("buyerEmail", &contract.BuyerEmail, update.BuyerEmail)
+	applyString("buyerPhone", &contract.BuyerPhone, update.BuyerPhone)
+	applyString("portOfLoading", &contract.PortOfLoading, update.PortOfLoading)
+	applyString("portOfDestination", &contract.PortOfDestination, update.PortOfDestination)
+	applyString("deliveryDate", &contract.DeliveryDate, update.DeliveryDate)
+	applyString("incoterm", &contract.Incoterm, update.Incoterm)
+	applyString("specialInstructions", &contract.SpecialInstructions, update.SpecialInstructions)
+	applyBool("eudrRequired", &contract.EUDRRequired, update.EUDRRequired)
+	applyBool("organicCertified", &contract.OrganicCertified, update.OrganicCertified)
+	applyBool("fairTradeCertified", &contract.FairTradeCertified, update.FairTradeCertified)
+	if update.PaymentMethod != nil {
+		if err := validatePaymentMethod(*update.PaymentMethod); err != nil {
+			return fmt.Errorf("UpdateSalesContract: %w", err)
+		}
+		applyString("paymentMethod", &contract.PaymentMethod, update.PaymentMethod)
+	}
+	if update.Quantity != nil {
+		if err := ValidateQuantity(*update.Quantity, "quantity"); err != nil {
+			return fmt.Errorf("UpdateSalesContract: %w", err)
+		}
+		if *update.Quantity != contract.Quantity {
+			changes = append(changes, FieldChange{FieldName: "quantity", OldValue: fmt.Sprintf("%v", contract.Quantity), NewValue: fmt.Sprintf("%v", *update.Quantity), DataType: "number"})
+			contract.Quantity = *update.Quantity
+		}
+	}
+	if update.PricePerKg != nil {
+		if err := ValidateAmount(*update.PricePerKg, "pricePerKg"); err != nil {
+			return fmt.Errorf("UpdateSalesContract: %w", err)
+		}
+		if *update.PricePerKg != contract.PricePerKg {
+			changes = append(changes, FieldChange{FieldName: "pricePerKg", OldValue: fmt.Sprintf("%v", contract.PricePerKg), NewValue: fmt.Sprintf("%v", *update.PricePerKg), DataType: "number"})
+			contract.PricePerKg = *update.PricePerKg
+		}
+	}
+	if update.Documents != nil {
+		contract.Documents = *update.Documents
+	}
+	if update.Currency != nil {
+		if err := ValidateCurrency(contract.Currency); err != nil {
+			return fmt.Errorf("UpdateSalesContract: %w", err)
+		}
+	}
+
+	contract.TotalValue = contract.Quantity * contract.PricePerKg
+	contract.MinimumPriceCompliant = contract.PricePerKg >= 5.0
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+	}
+	contract.UpdatedAt = time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
+
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState("CONTRACT_"+contractID, contractJSON); err != nil {
+		return err
+	}
+
+	if err := c.CreateAuditLog(ctx, "UPDATE", "CONTRACT", contractID, contract.ContractStatus, contract.ContractStatus, changes,
+		fmt.Sprintf("Contract amended by %s (MSP: %s)", updaterID, mspID), ComplianceMetadata{
+			ECTACompliance: false,
+			NBECompliance:  true,
+			UCP600Check:    false,
+			EUDRCompliance: contract.EUDRRequired,
+			ICOCompliance:  false,
+			ComplianceNote: fmt.Sprintf("Contract %s amended by %s", contractID, mspID),
+		}); err != nil {
+		return fmt.Errorf("UpdateSalesContract: failed to create audit log: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":  "ContractUpdated",
+		"contractID": contractID,
+		"exporterID": contract.ExporterID,
+		"timestamp":  contract.UpdatedAt.Format(time.RFC3339),
+		"updatedBy":  updaterID,
+		"updatedByMSP": mspID,
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("ContractUpdated", eventJSON)
+
+	log.Printf("✅ Contract %s amended by %s (MSP: %s)", contractID, updaterID, mspID)
 	return nil
 }
 
