@@ -4,6 +4,7 @@
 import { FabricService } from './fabricService';
 import { DatabaseService } from './databaseService';
 import { AuditService } from './auditService';
+import { ExchangeRateService } from './exchangeRateService';
 import { logger } from '../utils/logger';
 
 /**
@@ -19,11 +20,13 @@ export class PaymentService {
   private fabricService: FabricService;
   private dbService: DatabaseService;
   private auditService: AuditService;
+  private exchangeRateService: ExchangeRateService;
 
   private constructor() {
     this.fabricService = FabricService.getInstance();
     this.dbService = DatabaseService.getInstance();
     this.auditService = AuditService.getInstance();
+    this.exchangeRateService = ExchangeRateService.getInstance();
   }
 
   public static getInstance(): PaymentService {
@@ -350,6 +353,25 @@ export class PaymentService {
         throw new Error(`Payment already released: ${releaseData.paymentID}`);
       }
 
+      // F1: SettlePayment (chaincode payment.go) accepts VERIFIED and
+      // SWIFT_RECEIVED only — calling it for an already-SETTLED payment
+      // is rejected on-chain, which is why the NBE 60% release failed.
+      // Read the on-chain status first and settle ONLY when the payment
+      // is still settleable; when it is already settled (or beyond),
+      // skip the chain call and go straight to the PG release update
+      // below. Any other status is refused here without invoking the
+      // chain (the chaincode would reject it the same way).
+      const onChain = await this.fabricService.queryChaincode('ReadPayment', [releaseData.paymentID]);
+      if (!onChain.success || !onChain.data) {
+        throw new Error(`Cannot release payment ${releaseData.paymentID}: could not read its on-chain status (${onChain.error || 'payment not found on ledger'})`);
+      }
+      const onChainStatus = onChain.data.status || onChain.data.Status || '';
+      const alreadySettled = ['SETTLED', 'CONFIRMED', 'DOCUMENTS_RELEASED', 'COMPLETED'].includes(onChainStatus);
+      const settleable = ['VERIFIED', 'SWIFT_RECEIVED'].includes(onChainStatus);
+      if (!alreadySettled && !settleable) {
+        throw new Error(`Cannot release payment ${releaseData.paymentID}: on-chain status is ${onChainStatus || 'unknown'} — only VERIFIED or SWIFT_RECEIVED payments can be settled`);
+      }
+
       // Connect as Banks MSP
       await this.fabricService.connectAsOrg('BanksMSP');
 
@@ -357,18 +379,35 @@ export class PaymentService {
       // canonical helper (§17 #14) — same 7 args the settle route uses.
       // settleOnChain returns the raw result (unlike submitTransaction,
       // it does not throw), so a rejection is turned into an error here
-      // to preserve the old throw-on-failure behaviour.
-      const blockchainResult = await this.settleOnChain({
-        paymentID: releaseData.paymentID,
-        exchangeRate: '120.5',  // Exchange rate (USD to Birr)
-        retentionRate: '40',     // NBE retention rate (40%)
-        payingBank: 'Commercial Bank of Ethiopia',
-        payingBankBIC: 'CBETETAA',
-        swiftReference: releaseData.releaseRef,
-        nbeApprovalRef: `NBE-APPROVAL-${releaseData.paymentID}`,
-      });
-      if (!blockchainResult.success) {
-        throw new Error(blockchainResult.error || 'Fabric rejected transaction SettlePayment');
+      // to preserve the old throw-on-failure behaviour. Skipped entirely
+      // when the payment is already settled on-chain (F1 above).
+      // The exchange rate is the LIVE NBE mid-rate from the ledger
+      // (QueryExchangeRate via ExchangeRateService — the same reader
+      // payments.ts GET / uses), NOT a hardcoded constant: the old
+      // '120.5' was a stale hardcode. NOTE: no allocate path reads the
+      // ledger rate to follow — banking.ts allocate-forex and
+      // forexService.allocateForex both take the rate from the caller —
+      // so the ledger reader is ExchangeRateService.getCurrentRate.
+      // It throws when no active rate is recorded: fail honestly rather
+      // than settle at a fabricated rate.
+      let blockchainTxId: string | null = null;
+      if (settleable) {
+        const liveRate = await this.exchangeRateService.getCurrentRate(payment.currency || 'USD');
+        const blockchainResult = await this.settleOnChain({
+          paymentID: releaseData.paymentID,
+          exchangeRate: liveRate.toString(),
+          retentionRate: '40',     // NBE retention rate (40%)
+          payingBank: 'Commercial Bank of Ethiopia',
+          payingBankBIC: 'CBETETAA',
+          swiftReference: releaseData.releaseRef,
+          nbeApprovalRef: `NBE-APPROVAL-${releaseData.paymentID}`,
+        });
+        if (!blockchainResult.success) {
+          throw new Error(blockchainResult.error || 'Fabric rejected transaction SettlePayment');
+        }
+        blockchainTxId = typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId || null;
+      } else {
+        logger.info(`[PaymentService] Payment ${releaseData.paymentID} already ${onChainStatus} on-chain; skipping SettlePayment and releasing the 60% in Postgres only`);
       }
 
       // Update database — SettlePayment settles the payment on-chain, so
@@ -408,7 +447,7 @@ export class PaymentService {
           retentionStatus: 'RELEASED',
           releaseAmount: payment.release_amount,
           exporterAccount: releaseData.exporterAccount,
-          blockchainTxId: typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId
+          blockchainTxId: blockchainTxId
         }
       });
 

@@ -70,7 +70,11 @@ export class RealBlockchainSignatureService {
         if (typeof txId === 'string' && txId) txIds.add(txId);
       }
 
-      const historyResult = await this.fabricService.queryChaincode('GetHistory', [entityId]);
+      // State keys are prefixed per entity type (ECX lots live under
+      // ECXLOT_<lotId>); GetHistory must query the state key, not the bare ID.
+      const historyKeyPrefixes: Record<string, string> = { ECXLOT: 'ECXLOT_' };
+      const historyKey = `${historyKeyPrefixes[entityType] || ''}${entityId}`;
+      const historyResult = await this.fabricService.queryChaincode('GetHistory', [historyKey]);
       for (const record of Array.isArray(historyResult.data) ? historyResult.data : []) {
         const txId = record.TxId || record.txId || record.tx_id;
         if (typeof txId === 'string' && txId) txIds.add(txId);
@@ -152,6 +156,7 @@ export class RealBlockchainSignatureService {
       CONTRACT: "ReadSalesContract",
       SHIPMENT: "ReadShipment",
       CUSTOMS_DECLARATION: "ReadDeclaration",
+      ECXLOT: "ReadECXLot",
       EXPORTER: "ReadExporter",
       EXPORTER_APPLICATION: "ReadExporter",
       APPLICATION: "ReadExporter",

@@ -7,6 +7,56 @@ import { AuditService } from './auditService';
 import { statusManager } from '../utils/statusManager';
 import { logger } from '../utils/logger';
 
+/**
+ * Classify a chaincode invoke failure from the message invokeChaincode
+ * returns in `result.error`.
+ *
+ * - A suspended / revoked / expired exporter licence is a business-rule
+ *   refusal from the ledger ("exporter license is SUSPENDED ...") — 400.
+ * - "Fabric rejected the proposal before ordering" is the suffix
+ *   invokeChaincode appends to a pre-ordering endorsement failure, i.e.
+ *   the chaincode itself refused (validation, duplicate, wrong state) —
+ *   400, unless the message carries an infrastructure marker
+ *   (endorsement/discovery/connectivity/timeout), which is a 503.
+ * - Anything else returns null: the caller keeps its existing 500 for
+ *   genuine server errors.
+ */
+export function classifyChaincodeError(message: string): { status: number; code: string } | null {
+  const msg = message || '';
+  if (/licen[cs]e is (SUSPENDED|REVOKED|EXPIRED)/i.test(msg)) {
+    return { status: 400, code: 'EXPORTER_LICENCE_SUSPENDED' };
+  }
+  if (/Fabric rejected the proposal before ordering/i.test(msg)) {
+    if (/endorsement has failed|endorsements do not match|failed to connect|discovery|timed out|not connected/i.test(msg)) {
+      return { status: 503, code: 'FABRIC_UNAVAILABLE' };
+    }
+    return { status: 400, code: 'CHAINCODE_REJECTED' };
+  }
+  if (/outcome is unknown|timed out|not connected|failed to connect|discovery/i.test(msg)) {
+    return { status: 503, code: 'FABRIC_UNAVAILABLE' };
+  }
+  return null;
+}
+
+/** Throw an Error tagged with the HTTP status/code of a chaincode refusal. */
+function throwChaincodeError(message: string, fallback: string): never {
+  const error: any = new Error(message || fallback);
+  const classified = classifyChaincodeError(message || '');
+  if (classified) {
+    error.statusCode = classified.status;
+    error.code = classified.code;
+  }
+  throw error;
+}
+
+/** Throw an Error tagged with an explicit HTTP status/code. */
+function throwWithStatus(message: string, status: number, code: string): never {
+  const error: any = new Error(message);
+  error.statusCode = status;
+  error.code = code;
+  throw error;
+}
+
 export class ContractService {
   private static instance: ContractService;
   private fabricService: FabricService;
@@ -82,7 +132,10 @@ export class ContractService {
       );
 
       if (!result.success) {
-        throw new Error(result.error || 'Failed to register contract on blockchain');
+        // A1: a chaincode refusal (e.g. the exporter licence is
+        // SUSPENDED) must reach the route as a tagged 4xx, not surface
+        // as a 500 — see classifyChaincodeError above.
+        throwChaincodeError(result.error || '', 'Failed to register contract on blockchain');
       }
 
       // 2. Save to PostgreSQL
@@ -159,14 +212,16 @@ export class ContractService {
       );
 
       if (!contract) {
-        throw new Error('Contract not found');
+        throwWithStatus('Contract not found', 404, 'NOT_FOUND');
       }
 
       // 2. Validate status transition
       // 2. Validate status transition
       const isValid = statusManager.validateTransition('CONTRACT', contract.status, 'APPROVED');
       if (!isValid) {
-        throw new Error(`Invalid status transition from ${contract.status} to APPROVED`);
+        // F-8: an invalid transition (e.g. re-approving a REJECTED
+        // contract) is a client/state error, not a server error.
+        throwWithStatus(`Invalid status transition from ${contract.status} to APPROVED`, 400, 'INVALID_TRANSITION');
       }
 
       // 3. Approve on blockchain — pin the signing MSP to the caller's org
@@ -182,7 +237,7 @@ export class ContractService {
       ], approvalData.approverOrg);
 
       if (!result.success) {
-        throw new Error(result.error || 'Failed to approve contract on blockchain');
+        throwChaincodeError(result.error || '', 'Failed to approve contract on blockchain');
       }
 
       // 4. Update status (this will cascade to related entities)
@@ -247,7 +302,7 @@ export class ContractService {
       );
 
       if (!contract) {
-        throw new Error('Contract not found');
+        throwWithStatus('Contract not found', 404, 'NOT_FOUND');
       }
 
       // Pin the signing MSP to the caller's org (RejectSalesContract
@@ -260,7 +315,7 @@ export class ContractService {
       ], rejectionData.rejectorOrg);
 
       if (!result.success) {
-        throw new Error(result.error || 'Failed to reject contract on blockchain');
+        throwChaincodeError(result.error || '', 'Failed to reject contract on blockchain');
       }
 
       await statusManager.updateEntityStatus('CONTRACT', rejectionData.contractID, contract.status, 'REJECTED');

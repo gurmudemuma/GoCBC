@@ -703,23 +703,59 @@ router.post('/declaration/submit',
 
       logger.info(`[CUSTOMS] Submitting declaration ${declarationID} for shipment ${shipmentID}`);
 
-      // Check if declaration already exists for this shipment
-      const existingDeclaration = await postgresDb.get(
-        `SELECT declaration_number FROM customs_declarations WHERE shipment_id = $1`,
-        [shipmentID]
+      // F-7: a REJECTED (or CANCELLED) declaration is terminal and no
+      // longer blocks a fresh declaration for the same shipment — the
+      // old behaviour blocked every re-submit with DECLARATION_EXISTS
+      // and left the shipment stuck at CUSTOMS_REJECTED. Any live
+      // declaration (SUBMITTED / UNDER_INSPECTION / UNDER_REVIEW /
+      // CLEARED) still blocks, as before. The declaration_number match
+      // is included so a resubmission that reuses an old ID fails fast
+      // below instead of as a 503 from the chain call.
+      const existingDeclarations = await postgresDb.all(
+        `SELECT declaration_number, shipment_id, status FROM customs_declarations
+         WHERE shipment_id = $1 OR declaration_number = $2
+         ORDER BY created_at DESC`,
+        [shipmentID, declarationID]
+      );
+      const shipmentDeclarations = existingDeclarations.filter((d: any) => d.shipment_id === shipmentID);
+      const liveDeclaration = shipmentDeclarations.find((d: any) =>
+        !['REJECTED', 'CANCELLED'].includes(String(d.status || '').toUpperCase())
       );
 
-      if (existingDeclaration) {
-        logger.warn(`[CUSTOMS] Declaration for shipment ${shipmentID} already exists (${existingDeclaration.declaration_number})`);
+      if (liveDeclaration) {
+        logger.warn(`[CUSTOMS] Declaration for shipment ${shipmentID} already exists (${liveDeclaration.declaration_number}, status ${liveDeclaration.status})`);
         return res.status(400).json({
           success: false,
-          error: { 
-            code: 'DECLARATION_EXISTS', 
-            message: 'A customs declaration has already been submitted for this shipment. Please contact customs if you need to update it.' 
+          error: {
+            code: 'DECLARATION_EXISTS',
+            message: 'A customs declaration has already been submitted for this shipment. Please contact customs if you need to update it.'
           },
           timestamp: new Date().toISOString()
         });
       }
+
+      // The ledger keys declarations by DECL_<declarationID> and refuses
+      // a reused ID, so a resubmission MUST use a new declaration ID —
+      // fail fast with a 400 instead of letting the chain call fail
+      // with a 503 (the f258dc0e chain-failure behaviour below is
+      // preserved for genuine ledger refusals).
+      if (existingDeclarations.some((d: any) => d.declaration_number === declarationID)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'DECLARATION_ID_REUSED',
+            message: `Declaration ID ${declarationID} was already used. Submit the corrected declaration with a new declaration ID.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // The resubmission supersedes this rejected declaration (its row
+      // stays REJECTED for history).
+      const supersededDeclaration = shipmentDeclarations.find((d: any) =>
+        String(d.status || '').toUpperCase() === 'REJECTED'
+      );
+      const isResubmission = !!supersededDeclaration;
 
       // Chaincode sync is ledger-first, not best-effort: the Postgres
       // SUBMITTED row must only exist for a declaration the ledger
@@ -727,7 +763,10 @@ router.post('/declaration/submit',
       // the old behaviour kept a PG SUBMITTED row and returned
       // success:true for a declaration that does not exist on-chain
       // (W2 run 3, step 5b), which then blocked any re-submit via the
-      // DECLARATION_EXISTS guard.
+      // DECLARATION_EXISTS guard. The guard above now admits a
+      // resubmission when every prior declaration for the shipment is
+      // REJECTED/CANCELLED; the chaincode admits it too (customs.go
+      // SubmitCustomsDeclaration allows a CUSTOMS_REJECTED shipment).
       let blockchainResult: any = null;
       let blockchainError: string | null = null;
       try {
@@ -802,12 +841,29 @@ router.post('/declaration/submit',
 
       logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
 
+      // F-7: the ledger cascade moves the shipment PERMIT_ISSUED (or
+      // CUSTOMS_REJECTED on a resubmission) -> CUSTOMS_DECLARED on
+      // submit (customs.go SubmitCustomsDeclaration); mirror it in
+      // Postgres so the shipment leaves CUSTOMS_REJECTED in the portals
+      // too. Best-effort: the declaration is already committed — a
+      // mirror failure must not turn a successful submit into an error.
+      try {
+        await postgresDb.run(
+          `UPDATE shipments SET status = 'CUSTOMS_DECLARED', updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $1`,
+          [shipmentID]
+        );
+      } catch (mirrorError) {
+        logger.warn(`[CUSTOMS] Shipment ${shipmentID} PG mirror to CUSTOMS_DECLARED failed after declaration ${declarationID} committed:`, mirrorError);
+      }
+
       res.json({
         success: true,
         data: {
           declarationID,
           shipmentID,
           status: 'SUBMITTED',
+          resubmission: isResubmission,
+          supersededDeclarationId: supersededDeclaration?.declaration_number || null,
           blockchain_tx_id,
           blockchainSynced,
           blockchainError,
@@ -2078,6 +2134,45 @@ router.post('/declaration/:declarationId/clear',
         });
       }
 
+      // F-8: the ledger refuses to clear a declaration that is not
+      // UNDER_REVIEW (customs.go ClearCustomsDeclaration) — a REJECTED
+      // (or already CLEARED / CANCELLED) declaration is a client/state
+      // error, not a server error. Fail fast with 409 instead of
+      // letting the chaincode refusal surface as a 500 from the catch
+      // below. (PG REJECTED is trustworthy here: rejectDeclaration
+      // writes it only after the ledger reject commits.)
+      const declarationStatus = String(declaration.status || '').toUpperCase();
+      if (declarationStatus === 'REJECTED') {
+        return res.status(409).json({
+          success: false,
+          error: {
+            code: 'DECLARATION_REJECTED',
+            message: `Declaration ${declarationId} was rejected and cannot be cleared. Submit a new declaration for shipment ${declaration.shipment_id || ''} instead.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (declarationStatus === 'CLEARED') {
+        return res.status(409).json({
+          success: false,
+          error: {
+            code: 'DECLARATION_ALREADY_CLEARED',
+            message: `Declaration ${declarationId} is already cleared.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (declarationStatus === 'CANCELLED') {
+        return res.status(409).json({
+          success: false,
+          error: {
+            code: 'DECLARATION_CANCELLED',
+            message: `Declaration ${declarationId} was cancelled and cannot be cleared.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Use CustomsService to clear declaration
       const result = await customsService.clearDeclaration({
         declarationID: declarationId,
@@ -2127,6 +2222,16 @@ router.post('/declaration/:declarationId/clear',
       });
     } catch (error: any) {
       logger.error('[CUSTOMS] Error clearing declaration:', error);
+      // F-8: a ledger state refusal (e.g. PG said UNDER_REVIEW but the
+      // ledger holds REJECTED) is a 409, not a 500. Only the state
+      // refusal is remapped — infrastructure failures keep the 500.
+      if (/cannot be cleared, current status/i.test(error?.message || '')) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'CLEAR_FAILED', message: error.message },
+          timestamp: new Date().toISOString()
+        });
+      }
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },

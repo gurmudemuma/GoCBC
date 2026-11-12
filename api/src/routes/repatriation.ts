@@ -214,8 +214,12 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
 
     logger.info(`[REPATRIATION] 📝 Initiating repatriation: ${repatriationId}`);
 
-    await fabricService.connectAsOrg('BanksMSP');
-    const result = await fabricService.submitTransaction('InitiateRepatriation',
+    // Pinned to BanksMSP: InitiateRepatriation enforces a bank MSP
+    // (repatriation.go: isBankMSP) and the shared gateway otherwise signs
+    // as whatever org the previous concurrent request connected as
+    // (cb12f0b4 precedent). submitTransactionAs throws on chain failure,
+    // exactly like submitTransaction did here.
+    const result = await fabricService.submitTransactionAs('BanksMSP', 'InitiateRepatriation',
       repatriationId,
       paymentId,
       contractId,
@@ -268,8 +272,7 @@ router.post('/:id/record', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_A
 
     logger.info(`[REPATRIATION] 💰 Recording repatriation: ${id}`);
 
-    await fabricService.connectAsOrg('BanksMSP');
-    const result = await fabricService.submitTransaction('RecordRepatriation',
+    const result = await fabricService.submitTransactionAs('BanksMSP', 'RecordRepatriation',
       id,
       String(repatriatedAmount),
       String(convertedAmount),
@@ -302,6 +305,21 @@ router.post('/:id/record', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_A
   }
 });
 
+// Map a VerifyRepatriation chain failure to its client-error HTTP status.
+// submitTransaction throws on chain failure (fabricService.ts:2881-2889),
+// so the classification must live in the catch as well as the !success
+// branch: a missing record or a record in the wrong state (e.g. already
+// COMPLIED) is a client-side state failure, not a server error (F-8).
+// Non-existent -> 400, wrong state -> 409, missing reference -> 400,
+// wrong signing MSP -> 403; anything else stays 500.
+function verifyFailureStatus(error: string): number | null {
+  if (error.includes('does not exist')) return 400;
+  if (error.includes('not ready for compliance verification')) return 409;
+  if (error.includes('verification reference is required')) return 400;
+  if (error.includes('only NBE can verify')) return 403;
+  return null;
+}
+
 // POST /api/v1/repatriation/:id/verify — NBE verify repatriation
 router.post('/:id/verify', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFICER']), async (req, res) => {
   try {
@@ -310,8 +328,7 @@ router.post('/:id/verify', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE
 
     logger.info(`[REPATRIATION] ✅ NBE verifying: ${id}`);
 
-    await fabricService.connectAsOrg('NBEMSP');
-    const result = await fabricService.submitTransaction('VerifyRepatriation',
+    const result = await fabricService.submitTransactionAs('NBEMSP', 'VerifyRepatriation',
       id,
       verificationRef || '',
       verificationNotes || ''
@@ -319,9 +336,10 @@ router.post('/:id/verify', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE
 
     if (!result.success) {
       logger.error(`[REPATRIATION] ❌ Failed to verify: ${result.error}`);
-      return res.status(500).json({ 
-        success: false, 
-        error: result.error 
+      const status = verifyFailureStatus(result.error || '');
+      return res.status(status ?? 500).json({
+        success: false,
+        error: result.error
       });
     }
 
@@ -334,9 +352,10 @@ router.post('/:id/verify', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE
     });
   } catch (error: any) {
     logger.error('[REPATRIATION] ❌ Error verifying:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    const status = verifyFailureStatus(error.message || '');
+    res.status(status ?? 500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -349,8 +368,7 @@ router.post('/:id/penalty', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NB
 
     logger.info(`[REPATRIATION] ⚠️  Applying penalty: ${id}`);
 
-    await fabricService.connectAsOrg('NBEMSP');
-    const result = await fabricService.submitTransaction('ApplyNonCompliancePenalty',
+    const result = await fabricService.submitTransactionAs('NBEMSP', 'ApplyNonCompliancePenalty',
       id,
       String(penaltyAmount),
       penaltyCurrency,
@@ -401,8 +419,7 @@ router.post('/:id/waiver/request', authMiddleware, requireRole(['EXPORTER']), as
 
     logger.info(`[REPATRIATION] 📄 Requesting waiver: ${id}`);
 
-    await fabricService.connectAsOrg('ECTAMSP');
-    const result = await fabricService.submitTransaction('RequestWaiver',
+    const result = await fabricService.submitTransactionAs('ECTAMSP', 'RequestWaiver',
       id,
       waiverReason
     );
@@ -439,8 +456,7 @@ router.post('/:id/waiver/approve', authMiddleware, requireRole(['NBE', 'NBE_ADMI
 
     logger.info(`[REPATRIATION] 📋 NBE approving waiver: ${id}`);
 
-    await fabricService.connectAsOrg('NBEMSP');
-    const result = await fabricService.submitTransaction('ApproveWaiver',
+    const result = await fabricService.submitTransactionAs('NBEMSP', 'ApproveWaiver',
       id,
       String(approved),
       reason || ''

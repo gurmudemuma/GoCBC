@@ -1256,6 +1256,28 @@ router.post('/lc/:lcID/allocate-forex',
         });
       } catch (allocErr: any) {
         if (allocErr?.code === 'FOREX_ALLOCATE_FAILED') {
+          // F-8: a chain failure caused by the entity being in the wrong
+          // state is a client state conflict (409), not a service outage
+          // (503). The service surfaces the chaincode's own gate text
+          // inside the message (AllocateForex, chaincodes/coffee/forex.go:
+          // "forex cannot be allocated, current status: REJECTED",
+          // "LC must be ISSUED or FOREX_REQUESTED, current status: ...",
+          // "forex request is already linked to LC ..."), so match on it.
+          // This is the path a REJECTED forex takes when Postgres still
+          // says CONFIRMED (stale/polluted row): the service's PG-side
+          // guard passes, the ledger refuses, and without this branch the
+          // route reported 503 for a state conflict. Every other ledger
+          // failure (unavailable, endorsement, timeout) keeps 503.
+          if (/cannot be allocated, current status|LC must be .*current status|already linked to LC/i.test(allocErr?.message || '')) {
+            return res.status(409).json({
+              success: false,
+              error: {
+                code: 'FOREX_INVALID_STATUS',
+                message: allocErr.message || 'Forex cannot be allocated from its current status',
+              },
+              timestamp: new Date().toISOString(),
+            });
+          }
           return res.status(503).json({
             success: false,
             error: {
@@ -2621,6 +2643,58 @@ router.get('/payment/by-method/:method',
   }
 );
 
+// C1: never settle against a REJECTED SWIFT message. Chaincode
+// SettlePayment never looks at any SWIFT message — it only stores the
+// supplied swiftReference — so the API must check first. Same rule as
+// checkSwiftForSettle() in api/src/routes/payments.ts: resolve the
+// reference two ways (by reference, and by the messages linked to this
+// payment, so a caller cannot dodge a rejected message by supplying a
+// fresh reference). Any REJECTED message → 400 SWIFT_MESSAGE_REJECTED;
+// a failed lookup itself → 503 SWIFT_LOOKUP_FAILED (fail closed, do
+// not settle blind). The SWIFT_RECEIVED corroboration from payments.ts
+// (SWIFT_MESSAGE_NOT_FOUND) is deliberately not ported here: it needs
+// the payment's current status and stored swiftDetails, which this
+// handler does not read, and the task rule is REJECTED/lookup-only.
+async function checkSwiftForBankingSettle(
+  paymentID: string,
+  swiftReference: string,
+): Promise<{ ok: true } | { ok: false; status: number; code: string; message: string }> {
+  const byReference = await fabricService.queryChaincode('QuerySWIFTMessagesByReference', [swiftReference]);
+  if (!byReference.success) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'SWIFT_LOOKUP_FAILED',
+      message: `Could not verify SWIFT message for reference ${swiftReference} on the ledger: ${byReference.error || 'query failed'}`,
+    };
+  }
+  const byPayment = await fabricService.queryChaincode('QuerySWIFTMessagesByPayment', [paymentID]);
+  if (!byPayment.success) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'SWIFT_LOOKUP_FAILED',
+      message: `Could not verify SWIFT messages for payment ${paymentID} on the ledger: ${byPayment.error || 'query failed'}`,
+    };
+  }
+  const messages: any[] = [
+    ...(Array.isArray(byReference.data) ? byReference.data : []),
+    ...(Array.isArray(byPayment.data) ? byPayment.data : []),
+  ];
+  const rejected = messages.find((m: any) => (m?.status || m?.Status) === 'REJECTED');
+  if (rejected) {
+    const rejectedId = rejected.messageId || rejected.MessageID || rejected.messageID || swiftReference;
+    const reason = rejected.rejectionReason || rejected.RejectionReason;
+    return {
+      ok: false,
+      status: 400,
+      code: 'SWIFT_MESSAGE_REJECTED',
+      message: `Cannot settle payment: SWIFT message ${rejectedId} (reference ${swiftReference}) is REJECTED${reason ? `: ${reason}` : ''}`,
+    };
+  }
+  return { ok: true };
+}
+
 /**
  * POST /api/v1/banking/payment/:paymentID/settle
  * Settle payment with retention and exchange rate
@@ -2652,6 +2726,23 @@ router.post('/payment/:paymentID/settle',
 
       // Connect as Banks MSP since only banks can settle payments
       await fabricService.connectAsOrg('BanksMSP');
+
+      // C1: refuse to settle against a REJECTED SWIFT message (see
+      // checkSwiftForBankingSettle above). Runs before any chain write.
+      // No SWIFT reference at all → no message to check; settle proceeds.
+      if (swiftReference) {
+        const swiftGuard = await checkSwiftForBankingSettle(paymentID, swiftReference);
+        if (!swiftGuard.ok) {
+          return res.status(swiftGuard.status).json({
+            success: false,
+            error: {
+              code: swiftGuard.code,
+              message: swiftGuard.message,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
 
       const result = await fabricService.settlePayment(
         paymentID,
@@ -3591,6 +3682,38 @@ router.post('/lc/:lcId/discrepancy/report', authMiddleware, requireRole(['BANKS'
   }
 });
 
+// F-8: a discrepancy that is no longer OPEN (already resolved/waived)
+// or does not exist is a client state error, not a 500. The chaincode
+// gates both ResolveLCDiscrepancy and WaiveLCDiscrepancy on status OPEN
+// (chaincodes/coffee/banking.go: "discrepancy %s is not open" /
+// "discrepancy %s not found in LC %s"), so map its text. A Postgres
+// pre-check gives the same answer without a chain round-trip when the
+// mirror row exists; when it does not, the ledger decides (PG mirrors
+// are best-effort and may lag, so a missing row is never a 404 here).
+async function getDiscrepancyPgStatus(lcId: string, discrepancyId: string): Promise<string | undefined> {
+  try {
+    const row = await dbService.get(
+      `SELECT status FROM lc_discrepancies WHERE lc_id = $1 AND discrepancy_id = $2`,
+      [lcId, discrepancyId]
+    );
+    return row?.status;
+  } catch (pgErr: any) {
+    logger.warn(`[BANKING] Postgres discrepancy lookup failed for ${lcId} / ${discrepancyId}:`, pgErr?.message);
+    return undefined;
+  }
+}
+
+function mapDiscrepancyChainError(error: string | undefined): { status: number; message: string } | null {
+  const msg = error || '';
+  if (/is not open/i.test(msg)) {
+    return { status: 400, message: msg || 'Discrepancy is not open' };
+  }
+  if (/not found|does not exist/i.test(msg)) {
+    return { status: 404, message: msg || 'Discrepancy not found' };
+  }
+  return null;
+}
+
 // POST /api/v1/banking/lc/:lcId/discrepancy/:discrepancyId/resolve — Resolve discrepancy
 router.post('/lc/:lcId/discrepancy/:discrepancyId/resolve', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN']), [
   param('lcId').notEmpty(),
@@ -3604,6 +3727,16 @@ router.post('/lc/:lcId/discrepancy/:discrepancyId/resolve', authMiddleware, requ
 
     logger.info(`[BANKING] ✅ Resolving LC discrepancy: ${lcId} / ${discrepancyId}`);
 
+    // F-8: PG mirror already says this discrepancy is closed — fail fast
+    // with 400 instead of letting the chaincode reject it as a 500.
+    const pgStatus = await getDiscrepancyPgStatus(lcId, discrepancyId);
+    if (pgStatus && pgStatus !== 'OPEN') {
+      return res.status(400).json({
+        success: false,
+        error: `Discrepancy ${discrepancyId} is not open (current status: ${pgStatus})`
+      });
+    }
+
     await fabricService.connectAsOrg('BanksMSP');
     const result = await fabricService.submitTransaction('ResolveLCDiscrepancy',
       lcId,
@@ -3613,9 +3746,19 @@ router.post('/lc/:lcId/discrepancy/:discrepancyId/resolve', authMiddleware, requ
 
     if (!result.success) {
       logger.error(`[BANKING] ❌ Failed to resolve discrepancy: ${result.error}`);
-      return res.status(500).json({ 
-        success: false, 
-        error: result.error 
+      // F-8: re-resolve of a closed discrepancy ("is not open") → 400,
+      // missing discrepancy/LC ("not found" / "does not exist") → 404.
+      // Any other ledger failure stays 500.
+      const mapped = mapDiscrepancyChainError(result.error);
+      if (mapped) {
+        return res.status(mapped.status).json({
+          success: false,
+          error: mapped.message
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: result.error
       });
     }
 
@@ -3661,6 +3804,16 @@ router.post('/lc/:lcId/discrepancy/:discrepancyId/waive', authMiddleware, requir
 
     logger.info(`[BANKING] 📋 Waiving LC discrepancy: ${lcId} / ${discrepancyId}`);
 
+    // F-8: same pre-check as resolve — a PG mirror that already says
+    // closed fails fast with 400 instead of a chaincode 500.
+    const pgStatus = await getDiscrepancyPgStatus(lcId, discrepancyId);
+    if (pgStatus && pgStatus !== 'OPEN') {
+      return res.status(400).json({
+        success: false,
+        error: `Discrepancy ${discrepancyId} is not open (current status: ${pgStatus})`
+      });
+    }
+
     await fabricService.connectAsOrg('BanksMSP');
     const result = await fabricService.submitTransaction('WaiveLCDiscrepancy',
       lcId,
@@ -3670,9 +3823,18 @@ router.post('/lc/:lcId/discrepancy/:discrepancyId/waive', authMiddleware, requir
 
     if (!result.success) {
       logger.error(`[BANKING] ❌ Failed to waive discrepancy: ${result.error}`);
-      return res.status(500).json({ 
-        success: false, 
-        error: result.error 
+      // F-8: same mapping as resolve — "is not open" → 400,
+      // "not found" / "does not exist" → 404; anything else stays 500.
+      const mapped = mapDiscrepancyChainError(result.error);
+      if (mapped) {
+        return res.status(mapped.status).json({
+          success: false,
+          error: mapped.message
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: result.error
       });
     }
 

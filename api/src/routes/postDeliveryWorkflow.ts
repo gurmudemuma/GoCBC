@@ -32,9 +32,9 @@ const validateRequest = (req: Request, res: Response, next: Function) => {
 // Map a service failure to its HTTP status: 'Post-delivery record not
 // found' (no tracking row for this shipment) is a 404; any other failure
 // (e.g. close refused for incomplete steps) stays a 400.
-function failureResponse(result: { error?: string }, fallbackCode: string): { status: number; code: string } {
+function failureResponse(result: { error?: string; status?: number; code?: string }, fallbackCode: string): { status: number; code: string } {
   if (result.error === 'Post-delivery record not found') return { status: 404, code: 'NOT_FOUND' };
-  return { status: 400, code: fallbackCode };
+  return { status: result.status ?? 400, code: result.code ?? fallbackCode };
 }
 
 /**
@@ -385,6 +385,7 @@ router.post('/:shipmentId/close-contract',
             shipmentId,
             blockchainSynced: result.blockchainSynced ?? false,
             blockchainWarning: result.blockchainWarning ?? null,
+            alreadyClosed: result.alreadyClosed ?? false,
           },
           timestamp: new Date().toISOString()
         });

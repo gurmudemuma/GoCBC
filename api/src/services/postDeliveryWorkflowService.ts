@@ -506,7 +506,7 @@ export class PostDeliveryWorkflowService {
   async closeContract(
     shipmentId: string,
     userId: string
-  ): Promise<{ success: boolean; error?: string; blockchainSynced?: boolean; blockchainWarning?: string | null }> {
+  ): Promise<{ success: boolean; error?: string; blockchainSynced?: boolean; blockchainWarning?: string | null; status?: number; code?: string; alreadyClosed?: boolean }> {
     try {
       logger.info(`📋 Closing contract for shipment: ${shipmentId}`);
 
@@ -514,6 +514,19 @@ export class PostDeliveryWorkflowService {
       const statusResult = await this.getPostDeliveryStatus(shipmentId);
       if (!statusResult) {
         return { success: false, error: 'Post-delivery record not found' };
+      }
+
+      // Re-close is idempotent: an already-closed contract returns its
+      // current state honestly with no new chain write, PG write,
+      // checklist change or notification claimed.
+      if (statusResult.contractClosed) {
+        logger.info(`📋 Contract for ${shipmentId} is already closed; returning current state without re-running the close`);
+        return {
+          success: true,
+          alreadyClosed: true,
+          blockchainSynced: false,
+          blockchainWarning: 'Contract was already closed; no new chain transaction was submitted',
+        };
       }
 
       // Verify every required step before closing. The old code set
@@ -539,12 +552,16 @@ export class PostDeliveryWorkflowService {
         };
       }
 
-      // Mark the contract completed on-chain (TEST-STATUS-MATRIX §17 #7).
-      // CompleteContract takes (contractID, completedBy); UpdateContractStatus
-      // takes (contractID, newStatus) and is tried as a fallback if
-      // CompleteContract is not committed yet. Both are best-effort — a chain
-      // failure must not fail the PG close, and is reported honestly in the
-      // response.
+      // Mark the contract completed on-chain FIRST (ledger-first honesty,
+      // TEST-STATUS-MATRIX §17 #7). CompleteContract takes (contractID,
+      // completedBy); UpdateContractStatus takes (contractID, newStatus) and
+      // is tried as a fallback if CompleteContract is not committed yet.
+      // Both attempts are pinned to ECTAMSP: close is ECTA-only (the route
+      // requires ECTA/ECTA_ADMIN) and both chaincode functions enforce
+      // "only ECTA and Admin" (main.go: CompleteContract, UpdateContractStatus).
+      // If neither chain write succeeds the close FAILS (503) and PG is left
+      // untouched — a PG COMPLETED row with the contract still APPROVED
+      // on-chain must never be written again.
       let blockchainSynced = false;
       let blockchainWarning: string | null = null;
       const syncAttempts: Array<{ fn: string; args: string[] }> = [
@@ -553,7 +570,7 @@ export class PostDeliveryWorkflowService {
       ];
       for (const attempt of syncAttempts) {
         try {
-          const chainResult = await this.fabricService.invokeChaincode(attempt.fn, attempt.args);
+          const chainResult = await this.fabricService.invokeChaincode(attempt.fn, attempt.args, 'ECTAMSP');
           if (chainResult.success) {
             blockchainSynced = true;
             logger.info(`📋 Contract ${statusResult.contractId} marked COMPLETED on-chain via ${attempt.fn}`);
@@ -565,6 +582,18 @@ export class PostDeliveryWorkflowService {
           blockchainWarning = `Could not complete ${statusResult.contractId} on the ledger via ${attempt.fn} (no Fabric here?): ${chainError.message}`;
           logger.warn(`📋 ${blockchainWarning}`);
         }
+      }
+
+      if (!blockchainSynced) {
+        logger.error(`📋 Cannot close contract for ${shipmentId}: chain write failed: ${blockchainWarning}`);
+        return {
+          success: false,
+          error: `Failed to close contract on-chain: ${blockchainWarning}`,
+          status: 503,
+          code: 'CONTRACT_CLOSURE_CHAIN_FAILED',
+          blockchainSynced: false,
+          blockchainWarning,
+        };
       }
 
       // Update post-delivery tracking

@@ -18,6 +18,123 @@ const postgresDb = DatabaseService.getInstance();
 const paymentService = PaymentService.getInstance();
 
 /**
+ * Best-effort PG mirror of a payment's settlement-machine status.
+ * Ledger-first: only called after the chaincode call succeeded, and a
+ * PG failure never fails the response (same pattern as the initiate
+ * mirror at POST /initiate and the settle mirror below). A no-op when
+ * the payment has no PG row yet — e.g. LC-release-path payments are
+ * chaincode-only (banking.ts ReleaseLCPayment writes no PG row), so
+ * their mirrors affect 0 rows until a PG row exists.
+ */
+async function mirrorPaymentStatus(
+  paymentID: string,
+  status: string,
+  swiftReference?: string,
+): Promise<void> {
+  try {
+    if (swiftReference !== undefined) {
+      await postgresDb.run(
+        `UPDATE payments SET status = $1, swift_reference = $2 WHERE payment_id = $3`,
+        [status, swiftReference, paymentID],
+      );
+    } else {
+      await postgresDb.run(
+        `UPDATE payments SET status = $1 WHERE payment_id = $2`,
+        [status, paymentID],
+      );
+    }
+  } catch (mirrorErr) {
+    logger.warn(`[PAYMENT] Could not mirror ${status} of ${paymentID} to Postgres:`, mirrorErr);
+  }
+}
+
+type SwiftSettleGuard =
+  | { ok: true }
+  | { ok: false; status: number; code: string; message: string };
+
+/**
+ * C1 guard for the settle handler: never settle against a REJECTED SWIFT
+ * message. Chaincode SettlePayment (payment.go) never looks at any SWIFT
+ * message — it only stores the supplied swiftReference — so the API must
+ * check. swiftReference is a *field* on a SWIFT message (swift.go
+ * QuerySWIFTMessagesByReference selects on `swiftReference`), not a
+ * message ID, so resolve it two ways: by reference, and by the messages
+ * linked to this payment (catches a caller supplying a fresh reference
+ * to dodge a rejected one).
+ *
+ * Exact rule:
+ * - Any collected message with status REJECTED → 400 SWIFT_MESSAGE_REJECTED.
+ * - SWIFT_RECEIVED payments must be corroborated: the reference has to
+ *   resolve to a SWIFT message (by reference or by payment link) OR match
+ *   the reference the SWIFT flow itself recorded on the payment
+ *   (payment.swiftDetails.swiftReference — InitiateSWIFTTransfer writes
+ *   it there and creates no SWIFT message doc, so "no doc" alone must
+ *   NOT block that flow; the missing-steps suite settles SWIFT_RECEIVED
+ *   payments this way with SWIFT-$TS). Otherwise → 400
+ *   SWIFT_MESSAGE_NOT_FOUND: the payment claims SWIFT was received yet
+ *   the reference matches nothing the ledger knows.
+ * - VERIFIED payments need no SWIFT message at all: SettlePayment
+ *   accepts VERIFIED directly, and the crud suite settles VERIFIED
+ *   payments with invented references (SWIFT-SETTLE-<ts>) that resolve
+ *   to no message. Only a REJECTED message (above) blocks them.
+ * - A failed SWIFT lookup itself (ledger error, not "no message") →
+ *   503 SWIFT_LOOKUP_FAILED: fail closed, do not settle blind.
+ */
+async function checkSwiftForSettle(
+  paymentID: string,
+  swiftReference: string,
+  paymentStatus: string,
+  payment: any,
+): Promise<SwiftSettleGuard> {
+  const byReference = await fabricService.queryChaincode('QuerySWIFTMessagesByReference', [swiftReference]);
+  if (!byReference.success) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'SWIFT_LOOKUP_FAILED',
+      message: `Could not verify SWIFT message for reference ${swiftReference} on the ledger: ${byReference.error || 'query failed'}`,
+    };
+  }
+  const byPayment = await fabricService.queryChaincode('QuerySWIFTMessagesByPayment', [paymentID]);
+  if (!byPayment.success) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'SWIFT_LOOKUP_FAILED',
+      message: `Could not verify SWIFT messages for payment ${paymentID} on the ledger: ${byPayment.error || 'query failed'}`,
+    };
+  }
+  const messages: any[] = [
+    ...(Array.isArray(byReference.data) ? byReference.data : []),
+    ...(Array.isArray(byPayment.data) ? byPayment.data : []),
+  ];
+  const rejected = messages.find((m: any) => (m?.status || m?.Status) === 'REJECTED');
+  if (rejected) {
+    const rejectedId = rejected.messageId || rejected.MessageID || rejected.messageID || swiftReference;
+    const reason = rejected.rejectionReason || rejected.RejectionReason;
+    return {
+      ok: false,
+      status: 400,
+      code: 'SWIFT_MESSAGE_REJECTED',
+      message: `Cannot settle payment: SWIFT message ${rejectedId} (reference ${swiftReference}) is REJECTED${reason ? `: ${reason}` : ''}`,
+    };
+  }
+  if (paymentStatus === 'SWIFT_RECEIVED') {
+    const swiftDetails = payment?.swiftDetails || payment?.SWIFTDetails;
+    const storedRef = swiftDetails?.swiftReference || swiftDetails?.SWIFTReference;
+    if (messages.length === 0 && storedRef !== swiftReference) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'SWIFT_MESSAGE_NOT_FOUND',
+        message: `Cannot settle payment: no SWIFT message found for reference ${swiftReference} and it does not match the reference recorded on the payment`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * @swagger
  * /api/v1/payments/initiate:
  *   post:
@@ -397,6 +514,9 @@ router.post('/:paymentID/documents',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] Documents submitted for: ${paymentID}`);
+        // M4: mirror the intermediate state to PG (ledger-first,
+        // best-effort — the chain call above already succeeded).
+        await mirrorPaymentStatus(paymentID, 'DOCUMENTS_SUBMITTED');
         res.json({
           success: true,
           message: 'Payment documents submitted successfully',
@@ -489,6 +609,9 @@ router.post('/:paymentID/verify',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] Documents verified for: ${paymentID}`);
+        // M4: mirror the intermediate state to PG (ledger-first,
+        // best-effort — the chain call above already succeeded).
+        await mirrorPaymentStatus(paymentID, 'VERIFIED');
         res.json({
           success: true,
           message: 'Payment documents verified successfully',
@@ -607,6 +730,11 @@ router.post('/:paymentID/swift/initiate',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] SWIFT transfer initiated: ${paymentID}`);
+        // M4: mirror the intermediate state to PG (ledger-first,
+        // best-effort). The reference is mirrored too: this is the first
+        // point an initiate-path payment carries one (the initiate
+        // mirror stores no swift_reference).
+        await mirrorPaymentStatus(paymentID, 'SWIFT_INITIATED', swiftReference);
         res.json({
           success: true,
           message: 'SWIFT transfer initiated successfully',
@@ -694,6 +822,9 @@ router.post('/:paymentID/swift/confirm',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] SWIFT receipt confirmed: ${paymentID}`);
+        // M4: mirror the intermediate state to PG (ledger-first,
+        // best-effort — the chain call above already succeeded).
+        await mirrorPaymentStatus(paymentID, 'SWIFT_RECEIVED');
         res.json({
           success: true,
           message: 'SWIFT receipt confirmed successfully',
@@ -819,6 +950,21 @@ router.post('/:paymentID/settle',
       }
 
       await fabricService.connectAsOrg('BanksMSP'); // Banks settle payments
+
+      // C1: refuse to settle against a REJECTED SWIFT message (see
+      // checkSwiftForSettle above for the exact rule). This runs before
+      // any chain write: SettlePayment itself never checks the message.
+      const swiftGuard = await checkSwiftForSettle(paymentID, swiftReference, currentStatus, paymentData.data);
+      if (!swiftGuard.ok) {
+        return res.status(swiftGuard.status).json({
+          success: false,
+          error: {
+            code: swiftGuard.code,
+            message: swiftGuard.message,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Settle on-chain via the canonical helper (TEST-STATUS-MATRIX
       // §17 #14) — the same SettlePayment call releasePayment makes.
@@ -1736,6 +1882,16 @@ router.post('/',
       });
     } catch (error: any) {
       logger.error('Payment creation error:', error);
+      // F-8: re-creating an existing payment violates the
+      // payments.payment_id UNIQUE constraint — a client error (409),
+      // not a server error.
+      if (/duplicate key/i.test(error?.message || '')) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'PAYMENT_ALREADY_EXISTS', message: error.message },
+          timestamp: new Date().toISOString()
+        });
+      }
       res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: error.message },
@@ -1865,11 +2021,44 @@ router.post('/:paymentID/release',
       });
     } catch (error: any) {
       logger.error('[PAYMENTS] Error releasing payment:', error);
+      const message = error?.message || 'Internal server error';
+      // F-8: releasePayment throws client-state failures (payment not
+      // found, already released, on-chain status not releasable) and a
+      // missing-ledger-rate failure — those are 4xx/503, not 500. Only
+      // genuine server failures stay 500.
+      if (/not found/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (/already released/i.test(message)) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'ALREADY_RELEASED', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (/cannot be released/i.test(message)) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_STATUS', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (/no active .* exchange rate/i.test(message)) {
+        return res.status(503).json({
+          success: false,
+          error: { code: 'NO_ACTIVE_EXCHANGE_RATE', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
       res.status(500).json({
         success: false,
         error: {
           code: 'SERVER_ERROR',
-          message: error.message || 'Internal server error',
+          message,
         },
         timestamp: new Date().toISOString(),
       });

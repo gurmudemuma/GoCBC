@@ -7,6 +7,7 @@ import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
+import { statusManager } from '../utils/statusManager';
 
 const router = Router();
 const dbService = DatabaseService.getInstance();
@@ -462,38 +463,116 @@ router.post('/bookings', authMiddleware,
     // The booking is stored in shipping_bookings (status BOOKED), but
     // the shipping portal's freightBookings list reads shipments WHERE
     // status = 'FREIGHT_BOOKED' — and nothing ever moved the real shipment
-    // there, so bookings were invisible in the portal. Move the booked
-    // shipment to FREIGHT_BOOKED, and best-effort mirror the status on
-    // the chain. A chain failure must not fail the booking: the Postgres
-    // status is what the portal reads.
+    // there, so bookings were invisible in the portal. Mirror the booked
+    // shipment to FREIGHT_BOOKED ONLY when the shipment's lifecycle and
+    // transport mode support it (M2/M3):
+    //  - FROM-STATE: the audited SHIPMENT table
+    //    (api/src/utils/statusManager.ts) lists FREIGHT_BOOKED as a target
+    //    from CREATED only. Mirroring from CUSTOMS_CLEARED destroys the
+    //    exact state StartLandTransport requires
+    //    (chaincodes/coffee/main.go:3202), so a booked shipment could
+    //    never start land transport; mirroring from DELIVERED (or any
+    //    later state) moves the shipment backwards. The chaincode setter
+    //    (UpdateShipmentStatus, main.go:2104) has deliberately NO
+    //    from-state guard, so this API gate is the only thing stopping a
+    //    regressing chain write.
+    //  - TRANSPORT MODE: a freight booking is a sea-freight booking
+    //    (vessel/voyage/container). An AIR shipment never takes
+    //    FREIGHT_BOOKED — its air paperwork is the airway bill (LOADED).
+    //    The ledger's TransportMode (SEA/AIR) is authoritative: the
+    //    Postgres transport_mode column is the migration-029 default
+    //    'LAND_SEA' (the create-shipment insert never writes it), so it
+    //    cannot tell SEA from AIR.
+    // The ledger is the source of truth for both checks (Postgres
+    // shipments.status is known-stale, O-1). When the ledger cannot be
+    // read, the Postgres status gates the PG mirror only; the chain write
+    // is skipped — never write to the chain from an unverified
+    // from-state. A skipped mirror never fails the booking: the booking
+    // row itself is still created (status BOOKED).
     let blockchainSynced = false;
     let blockchainWarning: string | null = null;
     if (shipmentID) {
+      // Ledger state first: status + transport mode (authoritative).
+      let ledgerStatus: string | null = null;
+      let ledgerMode: string | null = null;
       try {
-        const updated = await dbService.run(
-          `UPDATE shipments
-           SET status = 'FREIGHT_BOOKED', updated_at = NOW()
-           WHERE shipment_id = $1`,
+        const ledgerShipment = await fabricService.getShipment(shipmentID);
+        if (ledgerShipment?.success && ledgerShipment?.data) {
+          ledgerStatus = String(ledgerShipment.data.status || ledgerShipment.data.Status || '');
+          ledgerMode = String(ledgerShipment.data.transportMode || ledgerShipment.data.TransportMode || '');
+        } else {
+          logger.warn(`[SHIPPING] Could not read shipment ${shipmentID} from the ledger: ${ledgerShipment?.error || 'not found'}; Postgres status will gate the PG mirror only`);
+        }
+      } catch (ledgerError: any) {
+        logger.warn(`[SHIPPING] Ledger read failed for shipment ${shipmentID}: ${ledgerError.message}; Postgres status will gate the PG mirror only`);
+      }
+
+      // Postgres status (fallback signal for the PG mirror only).
+      let pgStatus: string | null = null;
+      try {
+        const pgRow: any = await dbService.get(
+          'SELECT status FROM shipments WHERE shipment_id = $1',
           [shipmentID]
         );
-        if ((updated as any)?.rowCount === 0) {
-          blockchainWarning = `Shipment ${shipmentID} was not found in PostgreSQL, so its status could not be moved to FREIGHT_BOOKED`;
-          logger.warn(`[SHIPPING] ${blockchainWarning}`);
-        }
-      } catch (statusError: any) {
-        blockchainWarning = `Failed to move shipment ${shipmentID} to FREIGHT_BOOKED: ${statusError.message}`;
-        logger.warn(`[SHIPPING] ${blockchainWarning}`);
+        pgStatus = pgRow?.status ? String(pgRow.status) : null;
+      } catch (pgError: any) {
+        logger.warn(`[SHIPPING] Postgres shipment lookup failed for ${shipmentID}: ${pgError.message}`);
       }
-      try {
-        const chainResult = await fabricService.updateShipmentStatus(shipmentID, 'FREIGHT_BOOKED');
-        blockchainSynced = !!chainResult?.success;
-        if (!blockchainSynced) {
-          blockchainWarning = `Chaincode status update did not succeed: ${chainResult?.error || 'unknown error'}`;
-          logger.warn(`[SHIPPING] ${blockchainWarning}`);
-        }
-      } catch (chainError: any) {
-        blockchainWarning = `Fabric unavailable, shipment status mirrored in PostgreSQL only: ${chainError.message}`;
+
+      if (!ledgerStatus && !pgStatus) {
+        blockchainWarning = `Shipment ${shipmentID} was not found in PostgreSQL or on the ledger, so its status could not be moved to FREIGHT_BOOKED`;
         logger.warn(`[SHIPPING] ${blockchainWarning}`);
+      } else {
+        // Gate on the ledger status when known, else the Postgres status.
+        // statusManager.validateTransition is fail-closed: only CREATED
+        // lists FREIGHT_BOOKED as a target (DELIVERED/CUSTOMS_REJECTED/
+        // CANCELLED have no exits; unknown/PG-only states are rejected).
+        const gateStatus = (ledgerStatus || pgStatus) as string;
+        const isAir = ledgerMode ? ledgerMode.trim().toUpperCase() === 'AIR' : false;
+        const mayMirror = !isAir && statusManager.validateTransition('SHIPMENT', gateStatus, 'FREIGHT_BOOKED');
+        if (!mayMirror) {
+          const reason = isAir
+            ? 'transport mode is AIR (a sea-freight booking does not apply to air shipments)'
+            : `status is ${gateStatus} (FREIGHT_BOOKED is only mirrored from CREATED)`;
+          blockchainWarning = `Shipment ${shipmentID} ${reason}, so its status was left unchanged; the booking itself was still recorded`;
+          logger.warn(`[SHIPPING] ${blockchainWarning}`);
+        } else {
+          // PG mirror, guarded in the UPDATE as well as in code, so a
+          // concurrent status change cannot reintroduce the regression.
+          try {
+            const updated = await dbService.run(
+              `UPDATE shipments
+               SET status = 'FREIGHT_BOOKED', updated_at = NOW()
+               WHERE shipment_id = $1 AND status = 'CREATED'`,
+              [shipmentID]
+            );
+            if ((updated as any)?.rowCount === 0) {
+              blockchainWarning = `Shipment ${shipmentID} left CREATED before the mirror ran, so its Postgres status was not moved to FREIGHT_BOOKED`;
+              logger.warn(`[SHIPPING] ${blockchainWarning}`);
+            }
+          } catch (statusError: any) {
+            blockchainWarning = `Failed to move shipment ${shipmentID} to FREIGHT_BOOKED: ${statusError.message}`;
+            logger.warn(`[SHIPPING] ${blockchainWarning}`);
+          }
+          // Chain mirror — ONLY from a verified ledger from-state. If the
+          // ledger could not be read, no chain write happens at all.
+          if (ledgerStatus) {
+            try {
+              const chainResult = await fabricService.updateShipmentStatus(shipmentID, 'FREIGHT_BOOKED');
+              blockchainSynced = !!chainResult?.success;
+              if (!blockchainSynced) {
+                blockchainWarning = `Chaincode status update did not succeed: ${chainResult?.error || 'unknown error'}`;
+                logger.warn(`[SHIPPING] ${blockchainWarning}`);
+              }
+            } catch (chainError: any) {
+              blockchainWarning = `Fabric unavailable, shipment status mirrored in PostgreSQL only: ${chainError.message}`;
+              logger.warn(`[SHIPPING] ${blockchainWarning}`);
+            }
+          } else {
+            blockchainWarning = `Ledger status for shipment ${shipmentID} could not be verified, so no chaincode status update was attempted`;
+            logger.warn(`[SHIPPING] ${blockchainWarning}`);
+          }
+        }
       }
     } else {
       blockchainWarning = 'No shipmentID was supplied, so no shipment status was updated';

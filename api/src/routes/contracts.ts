@@ -529,10 +529,15 @@ router.post('/',
         
       } catch (error: any) {
         logger.error(`❌ Failed to register contract ${contractID}: ${error.message}`);
-        return res.status(500).json({
+        // A1: a chaincode refusal (e.g. the exporter licence is
+        // SUSPENDED) is a 4xx business-rule failure, not a 500. The
+        // service tags those errors with statusCode/code; anything
+        // untagged is a genuine server error.
+        const statusCode = error?.statusCode === 400 || error?.statusCode === 503 ? error.statusCode : 500;
+        return res.status(statusCode).json({
           success: false,
           error: {
-            code: 'REGISTRATION_ERROR',
+            code: error?.code || 'REGISTRATION_ERROR',
             message: error.message || 'Failed to register contract'
           },
           timestamp: new Date().toISOString(),
@@ -1329,7 +1334,15 @@ router.post('/:contractID/approve',
         });
       }
       
-      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
+      // The chaincode SalesContract carries its status as `contractStatus`
+      // (main.go:138), not `status`/`Status` — reading only the latter
+      // always fell back to 'REGISTERED', so re-approving a REJECTED
+      // contract passed this gate and died as a 500 in the service
+      // (F-8). Read every spelling and normalise to upper case.
+      const currentStatus = String(
+        contractData.data?.contractStatus || contractData.data?.ContractStatus ||
+        contractData.data?.status || contractData.data?.Status || 'REGISTERED'
+      ).toUpperCase();
       
       // Validate status transition
       const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'APPROVED');
@@ -1597,11 +1610,18 @@ router.post('/:contractID/approve',
       }
     } catch (error) {
       logger.error('Error approving contract:', error);
-      res.status(500).json({
+      // F-8: a state refusal (e.g. re-approving a REJECTED contract) or
+      // a chaincode refusal is a 4xx, not a 500. The service tags those
+      // errors with statusCode/code; anything untagged is a genuine
+      // server error.
+      const classified = error as any;
+      const statusCode = classified?.statusCode === 400 || classified?.statusCode === 404 || classified?.statusCode === 503
+        ? classified.statusCode : 500;
+      res.status(statusCode).json({
         success: false,
         error: {
-          code: 'INTERNAL_ERROR',
-          message: 'Internal server error',
+          code: classified?.code || 'INTERNAL_ERROR',
+          message: statusCode === 500 ? 'Internal server error' : (classified?.message || 'Failed to approve contract'),
         },
         timestamp: new Date().toISOString(),
       });
@@ -1710,7 +1730,12 @@ router.post('/:contractID/reject',
         });
       }
       
-      const currentStatus = contractData.data?.status || contractData.data?.Status || 'REGISTERED';
+      // Same contractStatus read as the approve route (F-8): the
+      // chaincode JSON carries `contractStatus`, not `status`/`Status`.
+      const currentStatus = String(
+        contractData.data?.contractStatus || contractData.data?.ContractStatus ||
+        contractData.data?.status || contractData.data?.Status || 'REGISTERED'
+      ).toUpperCase();
       
       // Validate status transition
       const isValid = statusManager.validateTransition('CONTRACT', currentStatus, 'REJECTED');
@@ -1797,11 +1822,173 @@ router.post('/:contractID/reject',
       }
     } catch (error) {
       logger.error('Error rejecting contract:', error);
-      res.status(500).json({
+      // Same F-8 classification as the approve catch: a state refusal
+      // or chaincode refusal is a 4xx, not a 500.
+      const classified = error as any;
+      const statusCode = classified?.statusCode === 400 || classified?.statusCode === 404 || classified?.statusCode === 503
+        ? classified.statusCode : 500;
+      res.status(statusCode).json({
         success: false,
         error: {
-          code: 'INTERNAL_ERROR',
-          message: 'Internal server error',
+          code: classified?.code || 'INTERNAL_ERROR',
+          message: statusCode === 500 ? 'Internal server error' : (classified?.message || 'Failed to reject contract'),
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/contracts/:contractId/resubmit
+ * Resubmit a REJECTED contract for re-evaluation (F-1). The chaincode
+ * ResubmitRejectedContract (main.go:1185) takes (contractID,
+ * resubmissionNote) and moves REJECTED → REGISTERED; it accepts an
+ * ECTAMSP/AdminMSP signer (the owning exporter may also resubmit
+ * on-chain, but this route is ECTA-only, mirroring approve/reject).
+ * Ledger-first with the signing MSP pinned (cb12f0b4 precedent), then
+ * PG mirrors to REGISTERED. Mounted at /api/v1/contracts (server.ts),
+ * so the full path is POST /api/v1/contracts/:contractId/resubmit.
+ */
+router.post('/:contractId/resubmit',
+  authMiddleware,
+  [
+    param('contractId').notEmpty().withMessage('Contract ID is required'),
+    body('resubmissionNote').optional().isString(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { contractId } = req.params;
+      const resubmissionNote = typeof req.body?.resubmissionNote === 'string'
+        ? req.body.resubmissionNote
+        : (typeof req.body?.note === 'string' ? req.body.note
+          : (typeof req.body?.reason === 'string' ? req.body.reason : ''));
+      const user = (req as any).user;
+      const userOrg = String(user?.org || '').toUpperCase();
+      const userRole = String(user?.role || '').toUpperCase();
+
+      // Only ECTA can resubmit via this route (mirrors approve/reject).
+      if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA') {
+        logger.warn(`Unauthorized contract resubmission attempt by ${user?.org || 'UNKNOWN'}: ${contractId}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only ECTA users can resubmit sales contracts',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Read the ledger state: only a REJECTED contract can be resubmitted.
+      const contractData = await fabricService.getSalesContract(contractId);
+      if (!contractData.success) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Contract not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const currentStatus = String(
+        contractData.data?.contractStatus || contractData.data?.ContractStatus ||
+        contractData.data?.status || contractData.data?.Status || ''
+      ).toUpperCase();
+
+      if (currentStatus !== 'REJECTED') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_TRANSITION',
+            message: `Cannot resubmit contract: only REJECTED contracts can be resubmitted, current status: ${currentStatus || 'UNKNOWN'}`,
+            allowedStatuses: statusManager.getNextStatuses('CONTRACT', currentStatus),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Ledger-first, signing MSP pinned to the caller's org
+      // (ResubmitRejectedContract accepts ECTAMSP/AdminMSP; the shared
+      // gateway otherwise signs as whatever org connected last).
+      const result = await fabricService.invokeChaincode(
+        'ResubmitRejectedContract',
+        [contractId, resubmissionNote],
+        user?.org || 'ECTAMSP'
+      );
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'RESUBMIT_FAILED',
+            message: result.error || 'Failed to resubmit contract on the ledger',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Mirror to Postgres: REGISTERED, keeping the rejection fields —
+      // the chaincode keeps RejectionReason on the resubmitted contract
+      // too (it is cited in the resubmission audit note). No
+      // resubmission columns exist on the contracts table.
+      const { DatabaseService } = await import('../services/databaseService');
+      const db = DatabaseService.getInstance();
+      await db.run(
+        `UPDATE contracts SET status = 'REGISTERED', updated_at = CURRENT_TIMESTAMP WHERE contract_id = $1`,
+        [contractId]
+      );
+
+      // Audit trail (best-effort — must not fail the resubmission).
+      try {
+        await db.run(
+          `INSERT INTO audit_trail (
+            entity_type, entity_id, action, performed_by, performed_by_org,
+            old_value, new_value, reason, metadata, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            'CONTRACT',
+            contractId,
+            'RESUBMIT',
+            user?.sub || user?.username || 'ECTA',
+            user?.org || 'ECTAMSP',
+            JSON.stringify({ status: currentStatus }),
+            JSON.stringify({ status: 'REGISTERED' }),
+            resubmissionNote || 'Contract resubmitted for re-evaluation',
+            JSON.stringify({
+              contractId,
+              resubmittedBy: user?.username,
+              role: user?.role,
+              organization: user?.org,
+              transactionId: result.txId,
+              action: 'Contract Resubmission after Rejection',
+              timestamp: new Date().toISOString()
+            }),
+            req.ip || (req as any).connection?.remoteAddress || 'unknown'
+          ]
+        );
+      } catch (auditError) {
+        logger.error('Failed to create audit log for contract resubmission:', auditError);
+      }
+
+      logger.info(`[${user?.org}] ✅ Sales contract resubmitted by ECTA: ${contractId}`);
+      res.json({
+        success: true,
+        contractId,
+        status: 'REGISTERED',
+        txId: result.txId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('Error resubmitting contract:', error);
+      const classified = error as any;
+      const statusCode = classified?.statusCode === 400 || classified?.statusCode === 404 || classified?.statusCode === 503
+        ? classified.statusCode : 500;
+      res.status(statusCode).json({
+        success: false,
+        error: {
+          code: classified?.code || 'INTERNAL_ERROR',
+          message: statusCode === 500 ? 'Internal server error' : (classified?.message || 'Failed to resubmit contract'),
         },
         timestamp: new Date().toISOString(),
       });

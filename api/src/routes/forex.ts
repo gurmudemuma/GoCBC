@@ -106,6 +106,21 @@ router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFIC
     }
   } catch (error: any) {
     logger.error('[FOREX] Error creating forex request:', error);
+    // A2: ForexService.requestForex throws the chaincode refusal
+    // ("RequestForex: ..." / "exporter license is SUSPENDED ...") —
+    // that is a 400 business-rule failure, not a 500. Anything else
+    // (Fabric down, DB failure) stays a 500.
+    const message = error?.message || '';
+    if (/RequestForex:|licen[cs]e is (SUSPENDED|REVOKED|EXPIRED)/i.test(message)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: /licen[cs]e is (SUSPENDED|REVOKED|EXPIRED)/i.test(message) ? 'EXPORTER_LICENCE_SUSPENDED' : 'REQUEST_FAILED',
+          message,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
     res.status(500).json({
       success: false,
       error: {
@@ -666,6 +681,13 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
         }
         
         lastError = result.error;
+
+        // A2: a licence refusal is final — never retry it (the
+        // chaincode refuses suspended exporters deterministically, so
+        // retrying only burns 5 attempts of backoff before the 400).
+        if (result.error && /licen[cs]e is (SUSPENDED|REVOKED|EXPIRED)/i.test(result.error)) {
+          break;
+        }
         
         // If error is about peer endorsement mismatch or LC not found, wait and retry
         if (result.error && (
@@ -693,13 +715,17 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
       }
     }
     
-    // All retries failed
+    // All retries failed — a chaincode refusal (including a suspended
+    // exporter licence) is a 400, not a 500 (A2).
+    const licenceRefused = /licen[cs]e is (SUSPENDED|REVOKED|EXPIRED)/i.test(String(lastError || ''));
     res.status(400).json({ 
       success: false, 
       error: { 
-        code: 'REQUEST_FAILED', 
+        code: licenceRefused ? 'EXPORTER_LICENCE_SUSPENDED' : 'REQUEST_FAILED', 
         message: lastError,
-        hint: 'Peers may not be synchronized. Wait a few seconds and try again, or check that the LC exists and blockchain peers are healthy.'
+        hint: licenceRefused
+          ? 'The exporter licence is not active. ECTA must reactivate the licence before a forex request can be submitted.'
+          : 'Peers may not be synchronized. Wait a few seconds and try again, or check that the LC exists and blockchain peers are healthy.'
       }, 
       timestamp: new Date().toISOString() 
     });
@@ -853,6 +879,24 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
     }
   } catch (error: any) {
     logger.error('[FOREX] Error allocating forex:', error);
+    // W2 3i: allocating from a non-allocatable state (e.g. REJECTED) is
+    // a state conflict, not a server error. allocateForex's from-state
+    // guard throws a plain Error with no .code ("Cannot allocate forex:
+    // invalid status transition from REJECTED to ALLOCATED ...",
+    // forexService.ts:159) — and the same phrase in a ledger refusal
+    // means the same thing. Map it to 409; genuine failures
+    // (unavailable, endorsement, timeout, rate/policy mismatch) keep
+    // the 503 below and genuine server errors the 500.
+    if (/invalid status transition/i.test(error?.message || '')) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'FOREX_INVALID_STATUS',
+          message: error.message
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
     // Ledger-first failure (forexService.allocateForex): the chain call
     // failed, so NO allocation was recorded on-chain, in CouchDB, or in
     // Postgres — report 503, never a 200 with a phantom ALLOCATED row.
@@ -942,6 +986,19 @@ router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_AD
     }
   } catch (error: any) {
     logger.error('[FOREX] Error allocating forex:', error);
+    // W2 3i: allocating from a non-allocatable state (e.g. REJECTED) is
+    // a state conflict, not a server error — see the identical mapping
+    // in the POST /allocate catch above.
+    if (/invalid status transition/i.test(error?.message || '')) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'FOREX_INVALID_STATUS',
+          message: error.message
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
     // Ledger-first failure (forexService.allocateForex): the chain call
     // failed, so NO allocation was recorded on-chain, in CouchDB, or in
     // Postgres — report 503, never a 200 with a phantom ALLOCATED row.

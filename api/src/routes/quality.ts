@@ -1233,7 +1233,7 @@ router.post('/inspections/:inspectionID/issue-permit',
 
       // Check inspection exists and is approved
       const inspection = await postgresDb.get(
-        'SELECT id, status, shipment_id, exporter_id, passed, certification_number FROM quality_inspections WHERE inspection_id = $1',
+        'SELECT id, status, shipment_id, exporter_id, contract_id, passed, certification_number FROM quality_inspections WHERE inspection_id = $1',
         [inspectionID]
       );
 
@@ -1267,38 +1267,158 @@ router.post('/inspections/:inspectionID/issue-permit',
         });
       }
 
+      // Resolve the IssueCBEExportPermit inputs from Postgres (request-body
+      // values override). IssueCBEExportPermit (permit.go:48) requires an
+      // ACTIVE exporter licence, an APPROVED contract (when a contract id
+      // is given) and an ISSUED/APPROVED LC (when the payment method is LC
+      // and an LC id is given). No invented defaults: an amount that cannot
+      // be resolved from the contract or the body is a 400, not a
+      // fabricated permit.
+      let contractId: string =
+        (inspection as any).contract_id || req.body.contractId || req.body.contractID || '';
+      let exporterId: string =
+        inspection.exporter_id || req.body.exporterId || req.body.exporterID || '';
+      let amount: number | null = req.body.amount != null ? Number(req.body.amount) : null;
+      let currency: string = req.body.currency || '';
+      let destination: string = req.body.destination || '';
+      const paymentMethod: string = req.body.paymentMethod || 'LC';
+      let lcId: string = req.body.lcId || req.body.lcID || '';
+
+      if (inspection.shipment_id) {
+        const shipment = await postgresDb.get(
+          'SELECT contract_id, exporter_id, destination FROM shipments WHERE shipment_id = $1',
+          [inspection.shipment_id]
+        );
+        if (shipment) {
+          if (!contractId) contractId = shipment.contract_id || '';
+          if (!exporterId) exporterId = shipment.exporter_id || '';
+          if (!destination) destination = shipment.destination || '';
+        }
+      }
+      if (contractId) {
+        const contract = await postgresDb.get(
+          'SELECT exporter_id, total_value, currency, buyer_country FROM contracts WHERE contract_id = $1',
+          [contractId]
+        );
+        if (contract) {
+          if (!exporterId) exporterId = contract.exporter_id || '';
+          if (amount == null && contract.total_value != null) amount = Number(contract.total_value);
+          if (!currency) currency = contract.currency || 'USD';
+          if (!destination) destination = contract.buyer_country || '';
+        }
+      }
+      if (!currency) currency = 'USD';
+      if (paymentMethod === 'LC' && !lcId && inspection.shipment_id) {
+        const lc = await postgresDb.get(
+          `SELECT lc_number FROM letters_of_credit
+            WHERE shipment_id = $1 AND status IN ('ISSUED', 'APPROVED')
+            ORDER BY created_at DESC LIMIT 1`,
+          [inspection.shipment_id]
+        );
+        if (lc) lcId = lc.lc_number || '';
+      }
+      if (amount == null || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Cannot issue export permit: no positive permit amount could be resolved from the contract or request body'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const permitId = `PERMIT-${Date.now()}`;
       const permitNumber = exportPermitNo || `PERMIT${Date.now()}`;
+      const description = `Export Permit for shipment ${inspection.shipment_id}`;
+      const commercialInvoice = inspection.certification_number || `CI-${permitId}`;
+      const bankBranch = req.body.bankBranch || 'CBE Main Branch';
+      const approvedBy = issuedBy || 'Bank Officer';
 
-      // ⚠️ SKIP BLOCKCHAIN - IssueExportPermit function doesn't exist in chaincode
-      // Store permit directly in PostgreSQL database only
-      logger.info(`[PERMIT] Issuing export permit ${permitNumber} (PostgreSQL only)`);
+      // ✅ LEDGER FIRST: IssueCBEExportPermit exists in chaincode
+      // (permit.go:48) — the old "function doesn't exist" comment was
+      // stale — and it is BanksMSP-only on-chain (permit.go:64-66), so
+      // pin BanksMSP per invoke (cb12f0b4 precedent, as in permits.ts).
+      // A chain failure fails honestly with 503 and writes nothing to
+      // Postgres. NOTE: no customs declaration is auto-created here;
+      // the "customs declaration workflow has been automatically
+      // initiated" message lives in the UI
+      // (ui/src/components/portals/ECTAPortal.tsx:1490), not in this
+      // route — autoCreateCustomsDeclaration is accepted but ignored.
+      await fabricService.connectAsOrg('BanksMSP');
+      const chainResult = await fabricService.invokeChaincode(
+        'IssueCBEExportPermit',
+        [
+          permitId,
+          permitNumber,
+          contractId,
+          exporterId,
+          lcId,
+          paymentMethod,
+          amount.toString(),
+          currency,
+          description,
+          destination,
+          commercialInvoice,
+          bankBranch,
+          approvedBy
+        ],
+        'BanksMSP'
+      );
+      if (!chainResult.success) {
+        logger.error(`[PERMIT] IssueCBEExportPermit failed for inspection ${inspectionID}: ${chainResult.error}`);
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'PERMIT_ISSUE_FAILED',
+            message: chainResult.error || 'Failed to issue export permit on the ledger'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const blockchain_tx_id = chainResult.txId || null;
 
-      // Update inspection status to permit_issued in PostgreSQL
+      // Postgres mirror, only after the ledger write committed.
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'PERMIT_ISSUED',
           remarks = COALESCE(remarks, '') || '\n\nEXPORT PERMIT ISSUED: ' || $2 || ' by ' || $3,
-          blockchain_tx_id = NULL,
+          blockchain_tx_id = $4,
+          export_permit_no = $5,
           updated_at = NOW()
         WHERE inspection_id = $1`,
-        [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office']
+        [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office', blockchain_tx_id, permitNumber]
       );
 
-      logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}`);
+      // Best-effort: mirror into export_permits (the table the portals
+      // read) — same INSERT as permits.ts mirrorPermitPG. A mirror
+      // failure must never fail a committed issuance.
+      try {
+        await postgresDb.run(
+          `INSERT INTO export_permits (permit_id, contract_id, status, approved_by)
+           VALUES ($1, $2, 'ISSUED', $3)
+           ON CONFLICT (permit_id) DO NOTHING`,
+          [permitId, contractId || null, approvedBy]
+        );
+      } catch (mirrorErr) {
+        logger.warn(`[PERMIT] Could not mirror permit ${permitId} to Postgres:`, mirrorErr);
+      }
 
-      // TODO: If autoCreateCustomsDeclaration is true, trigger customs workflow
-      // This would create a customs declaration record for the shipment
+      logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}, TX: ${blockchain_tx_id}`);
 
       res.json({
         success: true,
-        data: { 
+        data: {
           inspectionID,
           shipmentID: inspection.shipment_id,
           exportPermitNo: permitNumber,
+          permitNumber,
+          permitId,
           certificateNo: inspection.certification_number,
           status: 'PERMIT_ISSUED',
-          blockchain_tx_id: null
+          blockchain_tx_id
         },
+        txId: blockchain_tx_id,
         message: 'Export permit issued successfully. Shipment ready for customs clearance.',
         timestamp: new Date().toISOString()
       });

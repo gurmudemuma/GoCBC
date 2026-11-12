@@ -72,8 +72,8 @@ export class ShipmentService {
         shipmentData.icoNumber || '',
         '', // ecxLotNumber
         'EXPORT', // channel
-        '120.5', // forexRate
-        '135000', // valueUSD
+        '0', // forexRate: 0 = auto-map from the ALLOCATED forex for this contract (CreateShipment, main.go); a hardcoded rate defeats that lookup
+        '0', // valueUSD: 0 = auto-map from contract TotalValue (CreateShipment, main.go)
         'true', // eudrCompliant
         '[]', // documents JSON
       ]);

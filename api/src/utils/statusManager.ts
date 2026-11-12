@@ -137,7 +137,11 @@ export const StatusTransitions = {
     // on-chain it can be entered from any state; the table lists the
     // states an inspection is actually requested from (CREATED,
     // FREIGHT_BOOKED, PERMIT_ISSUED) and the continuations after the
-    // inspection completes. ARRIVED is the Postgres-side state the
+    // inspection completes. INSPECTION_COMPLETE is set by
+    // ApproveQualityInspection (quality.go) on APPROVED, moving the
+    // shipment out of INSPECTION_PENDING; the IssueCBEExportPermit
+    // cascade (permit.go) then advances it to PERMIT_ISSUED.
+    // ARRIVED is the Postgres-side state the
     // booking arrive handler mirrors onto the real shipment row
     // (shipping.ts) while the chain holds DESTINATION_ARRIVED; the
     // table accepts both spellings so the generic status routes and
@@ -147,7 +151,8 @@ export const StatusTransitions = {
     PERMIT_ISSUED: ['IN_TRANSIT', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING'],
     CUSTOMS_DECLARED: ['CUSTOMS_CLEARED', 'CUSTOMS_REJECTED'],
     CUSTOMS_REJECTED: [],
-    INSPECTION_PENDING: ['PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'CUSTOMS_CLEARED', 'IN_TRANSIT'],
+    INSPECTION_PENDING: ['INSPECTION_COMPLETE', 'CUSTOMS_DECLARED', 'CUSTOMS_CLEARED', 'IN_TRANSIT'],
+    INSPECTION_COMPLETE: ['PERMIT_ISSUED'],
     CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT'],
     LAND_TRANSPORT: ['PORT_ARRIVED'],
     PORT_ARRIVED: ['CONTAINER_STUFFED'],

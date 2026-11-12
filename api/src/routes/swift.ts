@@ -614,7 +614,10 @@ router.post('/messages/:messageID/nbe-approve',
         });
       }
 
-      // Submit NBE approval to blockchain
+      // Submit NBE approval to blockchain, pinned to NBEMSP: the chaincode
+      // enforces "only NBE can approve SWIFT messages" (swift.go) and the
+      // shared gateway otherwise signs as whatever org the previous
+      // concurrent request connected as (cb12f0b4 precedent).
       const result = await fabricService.invokeChaincode('NBEApproveSWIFTMessage', [
         messageID,
         approvedBy,
@@ -622,7 +625,7 @@ router.post('/messages/:messageID/nbe-approve',
         sanctionScreening,
         comments || 'NBE approved after compliance review',
         new Date().toISOString(),
-      ]);
+      ], 'NBEMSP');
 
       if (result.success) {
         logger.info(`✅ NBE approved SWIFT message: ${messageID}`);
