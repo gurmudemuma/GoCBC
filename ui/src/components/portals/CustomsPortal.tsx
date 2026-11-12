@@ -136,6 +136,9 @@ const CustomsPortal: React.FC = () => {
   const [newDeclarationDialogOpen, setNewDeclarationDialogOpen] = useState(false);
   const [customsDocUploadOpen, setCustomsDocUploadOpen] = useState(false);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
+  
+  // Border crossing stats for dynamic KPIs
+  const [borderCrossingStats, setBorderCrossingStats] = useState({ total: 0, active: 0, cleared: 0 });
 
   // Get current user role from local storage (matching other portals)
   const userRole = JSON.parse(localStorage.getItem('user') || '{}')?.role || '';
@@ -1084,6 +1087,7 @@ ${solution}`);
   useEffect(() => {
     loadData();
     loadCustomsOfficers();
+    loadBorderCrossingStats();
   }, []);
 
   useEffect(() => {
@@ -1138,6 +1142,31 @@ ${solution}`);
       // Pass a flag to skip validation since we already know this is permit-ready
       handleShipmentIdChange(shipmentId, true);
     }, 100);
+  };
+
+  // Load border crossing stats for dynamic KPIs
+  const loadBorderCrossingStats = async () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    try {
+      const response = await apiFetch('/bordercrossing', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      
+      if (result.success && result.data) {
+        const data = result.data || [];
+        setBorderCrossingStats({
+          total: data.length,
+          active: data.filter((c: any) => ['PENDING', 'INSPECTED', 'INSPECTION_FAILED', 'CLEARED_EXIT', 'IN_TRANSIT'].includes(c.status)).length,
+          cleared: data.filter((c: any) => c.status === 'CLEARED' || c.status === 'CLEARED_EXIT').length,
+        });
+      }
+    } catch (error) {
+      console.error('[CUSTOMS] Failed to load border crossing stats:', error);
+    }
   };
 
   const loadData = async () => {
@@ -2142,18 +2171,78 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
   const brandPrimary = getPortalBrand('CUSTOMS').primary;
   const brandSecondary = getPortalBrand('CUSTOMS').secondary
 
-  return (
-    <PortalShell brand="CUSTOMS" title="Customs Portal" subtitle="Ethiopian Customs Commission">
-      {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        {[
+  // Dynamic KPIs based on active tab
+  const getDynamicKpis = () => {
+    switch (tabValue) {
+      case 0: // Submitted
+        return [
+          { icon: <LocalShipping />, label: 'Total Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
+          { icon: <Security />, label: 'Awaiting Inspection', value: declarations.filter(d => d.status === 'SUBMITTED').length, color: '#ff9800', index: 0 },
+          { icon: <Assignment />, label: 'Total Value', value: `$${declarations.filter(d => d.status === 'SUBMITTED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 0 },
+        ];
+      case 1: // Inspecting
+        return [
+          { icon: <Security />, label: 'Under Inspection', value: declarations.filter(d => d.status === 'UNDER_INSPECTION').length, color: '#ff9800', index: 1 },
+          { icon: <Assignment />, label: 'Inspection Required', value: declarations.filter(d => d.inspectionRequired).length, color: '#9c27b0', index: 1 },
+          { icon: <CheckCircle />, label: 'EUDR Compliant', value: declarations.filter(d => d.eudrCompliant && d.status === 'UNDER_INSPECTION').length, color: '#4caf50', index: 1 },
+        ];
+      case 2: // Under Review
+        return [
+          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
+          { icon: <Assignment />, label: 'Pending Clearance', value: declarations.filter(d => d.status === 'UNDER_REVIEW').length, color: '#ff5722', index: 2 },
+          { icon: <Security />, label: 'High Value', value: declarations.filter(d => d.status === 'UNDER_REVIEW' && d.value > 50000).length, color: '#e91e63', index: 2 },
+        ];
+      case 3: // Cleared
+        return [
+          { icon: <CheckCircle />, label: 'Total Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
+          { icon: <Assignment />, label: 'Total Value', value: `$${declarations.filter(d => d.status === 'CLEARED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 3 },
+          { icon: <LocalShipping />, label: 'Ready to Ship', value: declarations.filter(d => d.status === 'CLEARED' && !d.dutyPaid).length, color: '#2196f3', index: 3 },
+        ];
+      case 4: // Rejected
+        return [
+          { icon: <Cancel />, label: 'Total Rejected', value: stats.rejected, color: '#f44336', index: 4 },
+          { icon: <Warning />, label: 'Documentation Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('DOCUMENTATION')).length, color: '#ff9800', index: 4 },
+          { icon: <Security />, label: 'Compliance Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('COMPLIANCE')).length, color: '#9c27b0', index: 4 },
+        ];
+      case 5: // Border Crossing
+        return [
+          { icon: <DirectionsBoat />, label: 'Total Crossings', value: borderCrossingStats.total, color: '#2196f3', index: 5 },
+          { icon: <LocalShipping />, label: 'Active Crossings', value: borderCrossingStats.active, color: '#ff9800', index: 5 },
+          { icon: <CheckCircle />, label: 'Cleared', value: borderCrossingStats.cleared, color: '#4caf50', index: 5 },
+        ];
+      case 6: // User Management
+        return [
+          { icon: <Person />, label: 'Total Users', value: customsOfficers.length, color: '#2196f3', index: 6 },
+          { icon: <Security />, label: 'Active Officers', value: customsOfficers.filter(o => o.status === 'ACTIVE').length, color: '#4caf50', index: 6 },
+          { icon: <Assignment />, label: 'Pending Approvals', value: 0, color: '#ff9800', index: 6 },
+        ];
+      case 7: // Audit Trail
+        return [
+          { icon: <Assessment />, label: 'Total Activities', value: '—', color: '#2196f3', index: 7 },
+          { icon: <Security />, label: 'Security Events', value: '—', color: '#ff9800', index: 7 },
+          { icon: <Assignment />, label: 'Today\'s Actions', value: '—', color: '#4caf50', index: 7 },
+        ];
+      default:
+        return [
           { icon: <LocalShipping />, label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
           { icon: <Security />, label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 1 },
           { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
           { icon: <CheckCircle />, label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
           { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 4 },
-        ].map((kpi, idx) => (
-          <Grid item xs={12} sm={6} md={2} key={idx}>
+        ];
+    }
+  };
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+  };
+
+  return (
+    <PortalShell brand="CUSTOMS" title="Customs Portal" subtitle="Ethiopian Customs Commission">
+      {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        {getDynamicKpis().map((kpi, idx) => (
+          <Grid item xs={12} sm={6} md={4} key={idx}>
             <PortalKpiCard brand="CUSTOMS" icon={kpi.icon} label={kpi.label} value={kpi.value} color={kpi.color} onClick={() => setTabValue(kpi.index)} selected={tabValue === kpi.index} />
           </Grid>
         ))}
@@ -2171,7 +2260,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         <PortalTabBar
           brand="CUSTOMS"
           value={tabValue}
-          onChange={(e, newValue) => setTabValue(newValue)}
+          onChange={handleTabChange}
           fullWidth
           tabs={visibleTabs.map((tab) => ({ label: tab.label, icon: tab.icon, value: tab.index }))}
         />

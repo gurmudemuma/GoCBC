@@ -171,13 +171,8 @@ const BorderCrossingTab: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Total Crossings" value={stats.total} icon={<Assessment />} brandColor={CUSTOMS_COLORS.navy} /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Active Crossings" value={stats.active} icon={<LocalShipping />} brandColor="#ff9800" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Cleared" value={stats.cleared} icon={<CheckCircle />} brandColor={CUSTOMS_COLORS.success} /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Avg Processing" value={`${stats.avgTime.toFixed(1)}h`} icon={<Warning />} brandColor="#f57c00" /></Grid>
-      </Grid>
-
+      {/* KPIs now shown at portal level, not duplicated here */}
+      
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Grid container spacing={2} alignItems="center">
