@@ -505,6 +505,106 @@ else
 fi
 
 # ==================================================================================
+# PHASE 7A: QUALITY INSPECTION — PERFORM & APPROVE
+# ==================================================================================
+# (M6) The flagship previously had no perform/approve step: the inspection
+# stayed REQUESTED, so the shipment never reached a post-inspection state
+# and customs submit (which requires PERMIT_ISSUED) failed honestly after
+# f258dc0e. Chaincode-enforced order: perform (PENDING/REQUESTED ->
+# INSPECTED, quality.ts:563) then approve (INSPECTED -> APPROVED,
+# quality.ts:746 + decideQualityInspection guard). Perform runs on the SAME
+# inspection created in Phase 7 — it is still fresh, so the perform gate
+# passes. (Missing-steps uses a second inspection only because its first
+# already went through sample + lab-results.) Payload mirrors
+# missing-workflow-steps-test.sh PERFORM_DATA; moisture 10.5% is under the
+# 12% ECX reject threshold.
+
+log_step "QUALITY INSPECTION - Perform & Approve"
+
+log_action "Performing quality inspection (moisture 10.5%, grade GRADE_1)"
+PERFORM_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections/$NEW_INSPECTION_ID/perform \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{
+    \"inspectorName\": \"Abebe Inspector\",
+    \"moistureContent\": 10.5,
+    \"defectCount\": 2,
+    \"grade\": \"GRADE_1\",
+    \"cuppingScore\": 86,
+    \"remarks\": \"Flagship test perform\"
+  }")
+
+if echo "$PERFORM_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Quality inspection performed: $NEW_INSPECTION_ID (INSPECTED)"
+else
+    log_fail "Quality inspection perform failed"
+    log_info "Response: $PERFORM_RESPONSE"
+fi
+
+log_action "Approving quality inspection"
+APPROVE_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections/$NEW_INSPECTION_ID/approve \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{}")
+
+if echo "$APPROVE_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Quality inspection approved: $NEW_INSPECTION_ID (APPROVED)"
+else
+    log_fail "Quality inspection approve failed"
+    log_info "Response: $APPROVE_RESPONSE"
+fi
+
+# ==================================================================================
+# PHASE 7B: EXPORT PERMIT ISSUANCE (BANKS)
+# ==================================================================================
+# (M6) The flagship previously had NO permit-issue step: its shipment was
+# INSPECTION_PENDING when customs submit ran, and customs requires
+# PERMIT_ISSUED, so the honest-failure fix (f258dc0e) correctly refused it.
+# Chaincode-enforced order: permit AFTER quality perform/approve, BEFORE
+# customs submit. Endpoint/role/payload follow
+# missing-workflow-steps-test.sh: POST /permits/export with the BANKS token
+# (permits.ts:30, requireRole BANKS/BANK_ADMIN) invoking chaincode
+# IssueCBEExportPermit; the permit is ISSUED on-chain and the route mirrors
+# it into Postgres export_permits.
+
+log_step "EXPORT PERMIT - Issue CBE Export Permit (Banks)"
+
+log_action "Issuing export permit via /permits/export (bank_admin)"
+NEW_PERMIT_ID="PERMIT-$(date +%Y%m%d%H%M%S)"
+
+PERMIT_RESPONSE=$(curl -s -X POST ${API_BASE}/permits/export \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_BANK" \
+  -d "{
+    \"permitID\": \"$NEW_PERMIT_ID\",
+    \"shipmentID\": \"$NEW_SHIPMENT_ID\",
+    \"contractID\": \"$NEW_CONTRACT_ID\",
+    \"exporterID\": \"$NEW_EXPORTER_ID\",
+    \"quantity\": 50000,
+    \"certificateID\": \"CERT-$TIMESTAMP\"
+  }")
+
+if echo "$PERMIT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Export permit issued: $NEW_PERMIT_ID"
+else
+    log_fail "Export permit issuance failed"
+    log_info "Response: $PERMIT_RESPONSE"
+fi
+
+# Read-back verification: the issued permit must be retrievable from the
+# ledger (GET /permits/:permitId, permits.ts:320 — returns the raw permit
+# object, NOT a {success, data} wrapper, so check for its own fields).
+log_action "Verifying issued permit (GET /permits/$NEW_PERMIT_ID)"
+PERMIT_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_BANK" \
+  "${API_BASE}/permits/$NEW_PERMIT_ID" 2>/dev/null || echo '{}')
+if echo "$PERMIT_CHECK" | jq -e '.permitID // .permitId // .status' > /dev/null 2>&1; then
+    log_pass "Banks: Export permit record verified"
+else
+    log_warn "Export permit read-back unclear"
+    log_info "Response: $PERMIT_CHECK"
+fi
+
+# ==================================================================================
 # PHASE 8: CUSTOMS DECLARATION
 # ==================================================================================
 
@@ -620,6 +720,7 @@ echo "  - Exporter ID: $NEW_EXPORTER_ID" | tee -a $TEST_OUTPUT
 echo "  - Contract: $NEW_CONTRACT_ID" | tee -a $TEST_OUTPUT
 echo "  - Shipment: $NEW_SHIPMENT_ID" | tee -a $TEST_OUTPUT
 echo "  - Quality Inspection: $NEW_INSPECTION_ID" | tee -a $TEST_OUTPUT
+echo "  - Export Permit: $NEW_PERMIT_ID" | tee -a $TEST_OUTPUT
 echo "  - LC Number: $NEW_LC_NUMBER" | tee -a $TEST_OUTPUT
 echo "  - Forex Request: $NEW_FOREX_ID" | tee -a $TEST_OUTPUT
 echo "  - Customs Declaration: $NEW_DECLARATION_ID" | tee -a $TEST_OUTPUT
