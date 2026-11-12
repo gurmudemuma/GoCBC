@@ -409,7 +409,18 @@ router.get('/tracking', authMiddleware, async (req: Request, res: Response) => {
  * Create a new shipping booking
  */
 router.post('/bookings', authMiddleware,
-  requireRole('EXPORTER', 'SHIPPING', 'SHIPPING_ADMIN', 'ECTA', 'ECTA_ADMIN'), async (req: Request, res: Response) => {
+  requireRole('EXPORTER', 'SHIPPING', 'SHIPPING_ADMIN', 'ECTA', 'ECTA_ADMIN'),
+  [
+    // shipmentID is REQUIRED: shipping_bookings.shipment_id is NOT NULL,
+    // so a missing/empty value used to leak the Postgres not-null
+    // constraint as a 500 INTERNAL_ERROR. Fail fast with 400 instead.
+    body('shipmentID').isString().withMessage('shipmentID must be a string').trim().notEmpty().withMessage('shipmentID is required'),
+    // bookingID is OPTIONAL (generated as BOOK-<Date.now()> when absent),
+    // but a provided value must not be empty.
+    body('bookingID').optional().isString().withMessage('bookingID must be a string').trim().notEmpty().withMessage('bookingID must not be empty'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
   try {
     const {
       bookingID: providedBookingID, // Accept bookingID from request
@@ -444,7 +455,9 @@ router.post('/bookings', authMiddleware,
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
     `, [
       bookingID,
-      shipmentID || null,
+      // shipmentID is validated non-empty above (400 VALIDATION_ERROR),
+      // so this can never be null — never leak the NOT NULL constraint.
+      shipmentID,
       exporterID || null,
       shippingLine || 'Maersk Line',
       vesselName || null,
@@ -927,6 +940,24 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
       const user = (req as any).user;
 
       logger.info(`[SHIPPING] Issuing ${blType} Bill of Lading: ${blNumber}`);
+
+      // A bill of lading must reference a real booking: bookings live in
+      // PostgreSQL (shipping_bookings) — there is no booking object on the
+      // ledger (booking-create only mirrors the linked shipment's status
+      // on-chain), and the B/L itself is stored in PG (bills_of_lading).
+      // So PG is the source of truth here, matching the amend/cancel
+      // routes' existence check. Unknown booking -> 404, never issue.
+      const booking = await dbService.get(
+        'SELECT booking_id FROM shipping_bookings WHERE booking_id = $1',
+        [bookingId]
+      );
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'BOOKING_NOT_FOUND', message: 'Booking not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
 
       const blId = `BL-${Date.now()}`;
 
