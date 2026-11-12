@@ -4,6 +4,7 @@ import { DatabaseService } from '../services/databaseService';
 import { ShipmentService } from '../services/shipmentService';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
@@ -277,6 +278,16 @@ router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async 
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'permit_issued',
+        title: `Export permit ${permitId} issued`,
+        message: `Export permit ${permitId} was issued for contract ${contractId}.`,
+        entityType: 'permit', entityId: permitId, severity: 'success',
+        roles: ['ECTA', 'CUSTOMS'], exporterId, lcId,
+        actionUrl: '/portals/exporter?tab=permits',
+        actionUrls: { ECTA: '/portals/ecta?tab=permits', CUSTOMS: '/portals/customs?tab=permits' },
+      });
       res.json({ 
         success: true, 
         message: 'Export permit issued successfully',

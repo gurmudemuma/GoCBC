@@ -10,6 +10,7 @@ import { requireRole } from '../middleware/rbac';
 import { body, param } from 'express-validator';
 import { validateRequest } from '../middleware/validation';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { dedupeById, isValidForex } from '../utils/dataFilters';
 import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 
@@ -849,6 +850,16 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
 
     if (result.success) {
       logger.info(`✅ Forex allocated: ${forexId}, Retention Amount: ${result.retentionAmount}, Release Amount: ${result.releaseAmount}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'forex_allocated',
+        title: `Forex ${forexId} allocated`,
+        message: `Forex ${forexId} has been allocated for LC ${lcId} (USD ${Number(amount || 0).toLocaleString()}).`,
+        entityType: 'forex', entityId: forexId, severity: 'success',
+        roles: ['BANKS', 'NBE'], lcId,
+        actionUrl: '/portals/exporter?tab=contracts',
+        actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+      });
       
       res.status(200).json({
         success: true,
@@ -956,6 +967,16 @@ router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_AD
 
     if (result.success) {
       logger.info(`✅ Forex allocated: ${forexID}, Retention Amount: ${result.retentionAmount}, Release Amount: ${result.releaseAmount}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'forex_allocated',
+        title: `Forex ${forexID} allocated`,
+        message: `Forex ${forexID} has been allocated for LC ${lcId} (USD ${Number(amount || 0).toLocaleString()}).`,
+        entityType: 'forex', entityId: forexID, severity: 'success',
+        roles: ['BANKS', 'NBE'], lcId,
+        actionUrl: '/portals/exporter?tab=contracts',
+        actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+      });
       
       res.status(200).json({
         success: true,

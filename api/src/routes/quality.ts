@@ -5,6 +5,7 @@ import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { ShipmentService } from '../services/shipmentService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { resolveDocumentPath } from '../utils/fileUtils';
 
 const router = Router();
@@ -66,7 +67,7 @@ async function decideQualityInspection(
   | { ok: false; status: number; error: { code: string; message: string } }
 > {
   const inspection = await postgresDb.get(
-    'SELECT id, status, shipment_id FROM quality_inspections WHERE inspection_id = $1',
+    'SELECT id, status, shipment_id, exporter_id FROM quality_inspections WHERE inspection_id = $1',
     [inspectionID]
   );
 
@@ -142,6 +143,23 @@ async function decideQualityInspection(
     );
   }
 
+  // In-app notification (persisted feed + live WS broadcast). This helper
+  // serves all four approve/reject routes, so one hook covers them all.
+  // Best-effort inside emitWorkflowEvent: never fails the decision.
+  await notificationService.emitWorkflowEvent({
+    type: decision === 'APPROVED' ? 'inspection_passed' : 'inspection_failed',
+    title: decision === 'APPROVED'
+      ? `Inspection ${inspectionID} approved`
+      : `Inspection ${inspectionID} rejected`,
+    message: decision === 'APPROVED'
+      ? `Quality inspection ${inspectionID} was approved (certificate ${certificateNumber}, ${grade}).`
+      : `Quality inspection ${inspectionID} was rejected. Reason: ${opts.reason || 'quality requirements not met'}`,
+    entityType: 'inspection', entityId: inspectionID,
+    severity: decision === 'APPROVED' ? 'success' : 'warning',
+    roles: ['ECTA'], exporterId: (inspection as any).exporter_id || undefined,
+    actionUrl: '/portals/exporter?tab=quality',
+    actionUrls: { ECTA: '/portals/ecta?tab=quality' },
+  });
   return { ok: true, chainSync, certificateNumber, grade };
 }
 
@@ -532,6 +550,16 @@ router.post('/inspections',
       );
 
       logger.info(`Quality inspection requested: ${inspectionID}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'inspection_required',
+        title: `Quality inspection requested for shipment ${shipmentID}`,
+        message: `Quality inspection ${inspectionID} was requested for shipment ${shipmentID} (scheduled ${scheduledDate}). ECTA quality lab to inspect.`,
+        entityType: 'inspection', entityId: inspectionID, severity: 'info',
+        roles: ['ECTA'], exporterId: exporterID,
+        actionUrl: '/portals/exporter?tab=quality',
+        actionUrls: { ECTA: '/portals/ecta?tab=quality' },
+      });
 
       res.json({
         success: true,
@@ -592,7 +620,7 @@ router.post('/inspections/:inspectionID/perform',
 
       // Check inspection exists and is in correct status
       const inspection = await postgresDb.get(
-        'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
+        'SELECT id, status, exporter_id, shipment_id FROM quality_inspections WHERE inspection_id = $1',
         [inspectionID]
       );
 
@@ -771,6 +799,17 @@ ${remarks || 'No additional remarks'}
       );
 
       logger.info(`Quality inspection performed: ${inspectionID}, Overall: ${resolvedOverall}, Grade: ${grade}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'inspection_completed',
+        title: `Inspection ${inspectionID} completed`,
+        message: `Quality inspection ${inspectionID} was performed (overall ${resolvedOverall}, grade ${grade}).`,
+        entityType: 'inspection', entityId: inspectionID,
+        severity: grade === 'Below Grade' ? 'warning' : 'success',
+        roles: ['ECTA'], exporterId: (inspection as any).exporter_id || undefined,
+        actionUrl: '/portals/exporter?tab=quality',
+        actionUrls: { ECTA: '/portals/ecta?tab=quality' },
+      });
 
       res.json({
         success: true,
@@ -1438,6 +1477,16 @@ router.post('/inspections/:inspectionID/issue-permit',
       }
 
       logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}, TX: ${blockchain_tx_id}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'permit_issued',
+        title: `Export permit ${permitId} issued`,
+        message: `Export permit ${permitId} (${permitNumber}) was issued for shipment ${inspection.shipment_id}.`,
+        entityType: 'permit', entityId: permitId, severity: 'success',
+        roles: ['CUSTOMS', 'BANKS'], exporterId: exporterId || undefined,
+        actionUrl: '/portals/exporter?tab=permits',
+        actionUrls: { CUSTOMS: '/portals/customs?tab=permits', BANKS: '/portals/banks?tab=contracts' },
+      });
 
       res.json({
         success: true,

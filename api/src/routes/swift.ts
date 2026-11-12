@@ -4,6 +4,7 @@
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param, query } from 'express-validator';
@@ -227,6 +228,16 @@ router.post('/messages',
 
       if (result.success) {
         logger.info(`✅ SWIFT message created: ${messageID} (${messageType})`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'swift_message_created',
+          title: `SWIFT ${messageType} message ${messageID} created`,
+          message: `SWIFT message ${messageID} (${messageType}, ref ${swiftReference}) was created.`,
+          entityType: 'swift', entityId: messageID, severity: 'info',
+          roles: ['BANKS', 'NBE'], lcId: linkedLcId,
+          actionUrl: '/portals/banks?tab=swift-messages',
+          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts' },
+        });
         res.status(201).json({
           success: true,
           data: { messageID, messageType, swiftReference },
@@ -725,6 +736,16 @@ router.post('/messages/:messageID/receive',
 
       if (result.success) {
         logger.info(`✅ SWIFT message received: ${messageID}`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'swift_received',
+          title: `SWIFT message ${messageID} received`,
+          message: `SWIFT message ${messageID} was received.`,
+          entityType: 'swift', entityId: messageID, severity: 'info',
+          roles: ['BANKS', 'NBE'],
+          actionUrl: '/portals/banks?tab=swift-messages',
+          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts' },
+        });
         res.json({
           success: true,
           data: { messageID, status: 'RECEIVED' },

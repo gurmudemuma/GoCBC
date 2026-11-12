@@ -6,6 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { CustomsService } from '../services/customsService';
 import { ShipmentService } from '../services/shipmentService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
@@ -842,6 +843,16 @@ router.post('/declaration/submit',
       );
 
       logger.info(`[CUSTOMS] Declaration ${declarationID} submitted successfully with status SUBMITTED`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'customs_submitted',
+        title: `Customs declaration ${declarationID} submitted`,
+        message: `Customs declaration ${declarationID} was submitted for shipment ${shipmentID}.`,
+        entityType: 'customs_declaration', entityId: declarationID, severity: 'info',
+        roles: ['CUSTOMS'], exporterId: exporterID,
+        actionUrl: '/portals/exporter?tab=customs',
+        actionUrls: { CUSTOMS: '/portals/customs?tab=customs' },
+      });
 
       // F-7: the ledger cascade moves the shipment PERMIT_ISSUED (or
       // CUSTOMS_REJECTED on a resubmission) -> CUSTOMS_DECLARED on
@@ -1869,6 +1880,16 @@ const inspectHandler = async (req: Request, res: Response) => {
       }
 
       logger.info(`[CUSTOMS] ✅ Declaration ${declId} inspection started: status=UNDER_INSPECTION`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'customs_inspection_started',
+        title: `Customs inspection started for declaration ${declId}`,
+        message: `Customs inspection has started for declaration ${declId} (status UNDER_INSPECTION).`,
+        entityType: 'customs_declaration', entityId: declId, severity: 'info',
+        roles: ['CUSTOMS'],
+        actionUrl: '/portals/exporter?tab=customs',
+        actionUrls: { CUSTOMS: '/portals/customs?tab=customs' },
+      });
 
       res.json({
         success: true,
@@ -2062,6 +2083,18 @@ router.post('/declaration/:declarationId/reject',
         logger.warn(`[CUSTOMS] Could not mirror CUSTOMS_REJECTED for declaration ${declarationId}:`, mirrorLookupError);
       }
 
+      // In-app notification (persisted feed + live WS broadcast). The
+      // ledger rejection has committed at this point, so one hook here
+      // covers both the 200 and the 202 (mirror-failed) responses below.
+      await notificationService.emitWorkflowEvent({
+        type: 'customs_rejected',
+        title: `Customs declaration ${declarationId} rejected`,
+        message: `Customs declaration ${declarationId} was rejected. Reason: ${rejectionReason}`,
+        entityType: 'customs_declaration', entityId: declarationId, severity: 'warning',
+        roles: ['CUSTOMS'],
+        actionUrl: '/portals/exporter?tab=customs',
+        actionUrls: { CUSTOMS: '/portals/customs?tab=customs' },
+      });
       try {
         await postgresDb.run(
           `UPDATE customs_declarations
@@ -2238,6 +2271,16 @@ router.post('/declaration/:declarationId/clear',
         logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId} — no shipment cascade to run`);
       }
 
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'customs_cleared',
+        title: `Customs declaration ${declarationId} cleared`,
+        message: `Customs declaration ${declarationId} has been cleared (clearance ${clearanceNumber}).`,
+        entityType: 'customs_declaration', entityId: declarationId, severity: 'success',
+        roles: ['SHIPPING', 'BANKS'],
+        actionUrl: '/portals/exporter?tab=customs',
+        actionUrls: { SHIPPING: '/portals/shipping?tab=shipments', BANKS: '/portals/banks?tab=contracts' },
+      });
       res.json({
         success: true,
         data: {

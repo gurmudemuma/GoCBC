@@ -7,6 +7,7 @@ import { DatabaseService } from '../services/databaseService';
 import { EmailService } from '../services/emailService';
 import { AuditService } from '../services/auditService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { dedupeById, isValidContract, isValidForex, isValidLC, isValidShipment } from '../utils/dataFilters';
@@ -511,6 +512,16 @@ router.post('/exporter-applications/:applicationId/approve',
         loginUrl: `${loginUrl}/login`,
       });
       
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'application_approved',
+        title: 'Exporter application approved',
+        message: `Exporter application ${applicationId} has been approved. Licence number: ${ectaLicenseNumber}.`,
+        entityType: 'application', entityId: applicationId, severity: 'success',
+        roles: ['ECTA'], exporterId,
+        actionUrl: '/portals/exporter',
+        actionUrls: { ECTA: '/portals/ecta?tab=contracts' },
+      });
       res.json({ 
         success: true, 
         data: { 
@@ -637,6 +648,16 @@ router.post('/exporter-applications/:applicationId/reject',
         resubmitUrl: `${loginUrl}/login`,
       });
       
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'application_rejected',
+        title: 'Exporter application rejected',
+        message: `Exporter application ${applicationId} was not approved. Reason: ${reason}`,
+        entityType: 'application', entityId: applicationId, severity: 'warning',
+        roles: ['ECTA'], exporterId: (application as any)?.exporter_id || (application as any)?.temp_username || undefined,
+        actionUrl: '/portals/exporter',
+        actionUrls: { ECTA: '/portals/ecta?tab=contracts' },
+      });
       res.json({ 
         success: true, 
         data: { 

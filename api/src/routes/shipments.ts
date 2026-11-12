@@ -6,6 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { ShipmentService } from '../services/shipmentService';
 import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { body, param, query } from 'express-validator';
 import { dedupeById, isValidShipment } from '../utils/dataFilters';
@@ -434,6 +435,16 @@ router.post('/',
 
       if (blockchainWriteSuccessful) {
         logger.info(`✅ Shipment created successfully: ${shipmentID} with auto-mapped data and ${documentIDs.length} documents`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'shipment_created',
+          title: `Shipment ${shipmentID} created`,
+          message: `Shipment ${shipmentID} was created for contract ${contractID} (${finalQuantity} kg, ${finalGrade}).`,
+          entityType: 'shipment', entityId: shipmentID, severity: 'info',
+          roles: ['ECTA', 'SHIPPING'], exporterId: finalExporterID,
+          actionUrl: '/portals/exporter?tab=shipments',
+          actionUrls: { ECTA: '/portals/ecta?tab=shipments', SHIPPING: '/portals/shipping?tab=shipments' },
+        });
         
         // NOTE: no quality inspection is auto-created on shipment creation.
         // A shipment has NO inspection row until an explicit quality request
@@ -1088,6 +1099,18 @@ async function updateShipmentStatusHandler(req: Request, res: Response) {
     await mirrorShipmentStatusPG(shipmentID, status);
 
     logger.info(`Shipment status updated successfully: ${shipmentID} - ${currentStatus} → ${status}`);
+    // In-app notification (persisted feed + live WS broadcast). This
+    // handler serves both PUT and POST /:shipmentID/status, so one hook
+    // covers every generic status change.
+    await notificationService.emitWorkflowEvent({
+      type: 'shipment_status_updated',
+      title: `Shipment ${shipmentID} is now ${status}`,
+      message: `Shipment ${shipmentID} status changed from ${currentStatus} to ${status}.`,
+      entityType: 'shipment', entityId: shipmentID, severity: 'info',
+      roles: ['SHIPPING'],
+      actionUrl: '/portals/exporter?tab=shipments',
+      actionUrls: { SHIPPING: '/portals/shipping?tab=shipments' },
+    });
     return res.json({
       success: true,
       data: { shipmentID, status, blockchain_tx_id: result.txId || null },
@@ -2582,6 +2605,16 @@ router.post('/:shipmentID/delivery/complete',
           // Don't fail the delivery completion if workflow initialization fails
         }
         
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'shipment_delivered',
+          title: `Shipment ${shipmentID} delivered`,
+          message: `Shipment ${shipmentID} has been delivered. Post-delivery workflow (payment, forex, closure) is now open.`,
+          entityType: 'shipment', entityId: shipmentID, severity: 'success',
+          roles: ['BANKS', 'NBE'],
+          actionUrl: '/portals/exporter?tab=shipments',
+          actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+        });
         res.json({
           success: true,
           message: 'Delivery completed',

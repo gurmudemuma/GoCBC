@@ -5,6 +5,7 @@ import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
 import { ContractService } from '../services/contractService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { body, param } from 'express-validator';
@@ -546,6 +547,17 @@ router.post('/',
 
       if (blockchainWriteSuccessful) {
         logger.info(`✅ Sales contract registered successfully: ${contractID}, paymentMethod: ${paymentMethod || 'LC (default)'}, txId: ${result.blockchainTxId}, documents: ${documentIDs.length}`);
+        // In-app notification (persisted feed + live WS broadcast).
+        // Best-effort inside emitWorkflowEvent: never fails this request.
+        await notificationService.emitWorkflowEvent({
+          type: 'contract_registered',
+          title: `Contract ${contractID} registered`,
+          message: `Contract ${contractID} was registered by ${exporterID} (${quantity} kg ${coffeeType} to ${buyerCountry}). Awaiting ECTA approval.`,
+          entityType: 'contract', entityId: contractID, severity: 'info',
+          roles: ['ECTA', 'NBE'], exporterId: exporterID,
+          actionUrl: '/portals/exporter?tab=contracts',
+          actionUrls: { ECTA: '/portals/ecta?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+        });
         
         res.status(201).json({
           success: true,
@@ -1586,6 +1598,16 @@ router.post('/:contractID/approve',
         }
         
         logger.info(`[${user?.org}] ✅ Sales contract approved by ECTA for export compliance: ${contractID}`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'contract_approved',
+          title: `Contract ${contractID} approved`,
+          message: `Contract ${contractID} has been approved by ECTA. The bank can now issue a Letter of Credit.`,
+          entityType: 'contract', entityId: contractID, severity: 'success',
+          roles: ['BANKS'],
+          actionUrl: '/portals/exporter?tab=contracts',
+          actionUrls: { BANKS: '/portals/banks?tab=contracts' },
+        });
         res.json({
           success: true,
           contractID: result.contractID,
@@ -1804,6 +1826,14 @@ router.post('/:contractID/reject',
         }
         
         logger.info(`[${user?.org}] ✅ Sales contract rejected by ECTA: ${contractID}, Reason: ${rejectionFeedback}`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'contract_rejected',
+          title: `Contract ${contractID} rejected`,
+          message: `Contract ${contractID} was rejected by ECTA. Reason: ${rejectionFeedback}`,
+          entityType: 'contract', entityId: contractID, severity: 'warning',
+          actionUrl: '/portals/exporter?tab=contracts',
+        });
         res.json({
           success: true,
           contractID: result.contractID,
@@ -1972,6 +2002,16 @@ router.post('/:contractId/resubmit',
       }
 
       logger.info(`[${user?.org}] ✅ Sales contract resubmitted by ECTA: ${contractId}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'contract_resubmitted',
+        title: `Contract ${contractId} resubmitted`,
+        message: `Contract ${contractId} was resubmitted for re-evaluation after rejection.`,
+        entityType: 'contract', entityId: contractId, severity: 'info',
+        roles: ['ECTA'],
+        actionUrl: '/portals/exporter?tab=contracts',
+        actionUrls: { ECTA: '/portals/ecta?tab=contracts' },
+      });
       res.json({
         success: true,
         contractId,

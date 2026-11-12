@@ -8,6 +8,7 @@ import { ForexService } from '../services/forexService';
 import { BlockchainSignatureService } from '../services/blockchainSignatureService';
 import { DatabaseService } from '../services/databaseService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
@@ -899,6 +900,16 @@ router.post('/lc/issue',
         // Non-fatal — LC issuance already succeeded
       }
       
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'lc_issued',
+        title: `Letter of Credit ${_lcId} issued`,
+        message: `Letter of Credit ${_lcId} has been issued for contract ${_contractId || ''} (${currency || 'USD'} ${Number(amount || 0).toLocaleString()}).`,
+        entityType: 'lc', entityId: _lcId, severity: 'success',
+        roles: ['BANKS'], exporterId: _exporterId, lcId: _lcId,
+        actionUrl: '/portals/exporter?tab=contracts',
+        actionUrls: { BANKS: '/portals/banks?tab=contracts' },
+      });
       res.status(201).json({
         success: true,
         data: {
@@ -1065,6 +1076,16 @@ router.post('/lc/:lcID/issue',
           logger.warn(`⚠️  Failed to sync LC issuance to PostgreSQL:`, syncErr);
         }
 
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'lc_issued',
+          title: `Letter of Credit ${lcID} issued`,
+          message: `Letter of Credit ${lcID} has been issued for contract ${contractID || ''} (${currency || 'USD'} ${Number(amount || 0).toLocaleString()}).`,
+          entityType: 'lc', entityId: lcID, severity: 'success',
+          roles: ['BANKS'], exporterId: exporterID, lcId: lcID,
+          actionUrl: '/portals/exporter?tab=contracts',
+          actionUrls: { BANKS: '/portals/banks?tab=contracts' },
+        });
         res.json({
           success: true,
           data: result.data,
@@ -1305,6 +1326,16 @@ router.post('/lc/:lcID/allocate-forex',
       }
 
       logger.info(`✅ Forex ${result.forexId} allocated on-chain for LC ${lcID}, tx ${result.txId}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'forex_allocated',
+        title: `Forex allocated for LC ${lcID}`,
+        message: `Forex ${result.forexId} has been allocated on-chain for LC ${lcID}.`,
+        entityType: 'forex', entityId: result.forexId, severity: 'success',
+        roles: ['BANKS', 'NBE'], exporterId: (lc as any)?.exporterId || (lc as any)?.ExporterID || (lc as any)?.exporter_id || undefined, lcId: lcID,
+        actionUrl: '/portals/exporter?tab=contracts',
+        actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+      });
 
       // Success response shape unchanged from before, except txId is now
       // the real ledger transaction id instead of null.

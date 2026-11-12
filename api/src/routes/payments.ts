@@ -6,6 +6,7 @@ import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { PaymentService } from '../services/paymentService';
 import { logger } from '../utils/logger';
+import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
 import { body, param } from 'express-validator';
 import { statusManager } from '../utils/statusManager';
@@ -423,6 +424,16 @@ router.post('/record',
       const result = await paymentService.recordPayment(paymentData);
 
       logger.info(`✅ [PAYMENT] Payment recorded: ${result.paymentID}, Total: $${result.totalAmount}, Retention: $${result.retentionAmount} (40%), Release: $${result.releaseAmount} (60%)`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'payment_received',
+        title: `Payment ${paymentData.paymentID} recorded`,
+        message: `Payment ${paymentData.paymentID} was recorded for shipment ${paymentData.shipmentID} (USD ${Number(paymentData.amountUSD || 0).toLocaleString()}; 40% NBE retention applied).`,
+        entityType: 'payment', entityId: paymentData.paymentID, severity: 'success',
+        roles: ['BANKS', 'NBE'], exporterId: paymentData.exporterID,
+        actionUrl: '/portals/exporter?tab=payments',
+        actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+      });
       
       res.status(201).json({
         success: true,
@@ -995,6 +1006,16 @@ router.post('/:paymentID/settle',
         }
         
         logger.info(`✅ [PAYMENT] Payment settled: ${paymentID} (${currentStatus} → SETTLED)`);
+        // In-app notification (persisted feed + live WS broadcast).
+        await notificationService.emitWorkflowEvent({
+          type: 'payment_settled',
+          title: `Payment ${paymentID} settled`,
+          message: `Payment ${paymentID} has been settled (${currentStatus} → SETTLED).`,
+          entityType: 'payment', entityId: paymentID, severity: 'success',
+          roles: ['BANKS', 'NBE'],
+          actionUrl: '/portals/exporter?tab=payments',
+          actionUrls: { BANKS: '/portals/banks?tab=contracts', NBE: '/portals/nbe?tab=contracts' },
+        });
         res.json({
           success: true,
           message: 'Payment settled successfully',
@@ -2003,6 +2024,16 @@ router.post('/:paymentID/release',
       });
 
       logger.info(`✅ Payment ${paymentID} released: ${result.releaseAmount} USD to exporter ${exporterID}`);
+      // In-app notification (persisted feed + live WS broadcast).
+      await notificationService.emitWorkflowEvent({
+        type: 'payment_released',
+        title: `Payment ${paymentID} released`,
+        message: `Payment ${paymentID} was released: ${result.releaseAmount} USD to exporter ${exporterID} (60% NBE release).`,
+        entityType: 'payment', entityId: paymentID, severity: 'success',
+        roles: ['NBE'], exporterId: exporterID,
+        actionUrl: '/portals/exporter?tab=payments',
+        actionUrls: { NBE: '/portals/nbe?tab=contracts' },
+      });
 
       res.json({
         success: true,
