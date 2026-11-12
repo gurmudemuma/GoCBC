@@ -418,6 +418,13 @@ else
 fi
 
 # Test 4: Standby LC - Issue
+# KNOWN API DEFECT (2026-11-12, verified live): this endpoint is shadowed
+# by POST /banking/lc/:lcID/issue — banking.ts:948 registers the :lcID
+# route before /lc/standby/issue at :4209, so Express matches "standby"
+# as :lcID and the chaincode answers "LC standby does not exist"
+# (400 LC_ISSUE_FAILED). The standby handler itself is never reached.
+# The test is left calling the real endpoint and failing honestly until
+# the route order is fixed in the API (W2/coordinator scope).
 log_test "Standby LC - Issue new standby LC"
 STANDBY_LC=$(curl -s -X POST "$API_URL/banking/lc/standby/issue" \
     -H "Authorization: Bearer $BANK_TOKEN" \
@@ -827,6 +834,10 @@ else
 fi
 
 # Test 23: Booking Cancellation - Cancel booking
+# KNOWN API DEFECT (2026-11-12, verified live): the cancel handler sets
+# status='CANCELLED', but the shipping_bookings CHECK constraint
+# chk_shipping_bookings_status does not list CANCELLED, so the UPDATE
+# fails with 23514. Needs a migration adding CANCELLED (api/ scope).
 log_test "Booking Cancellation - Cancel booking"
 BOOKING_CANCEL=$(curl -s -X DELETE "$API_URL/shipping/bookings/$BK007/cancel" \
     -H "Authorization: Bearer $SHIPPING_TOKEN" \
@@ -839,7 +850,7 @@ BOOKING_CANCEL=$(curl -s -X DELETE "$API_URL/shipping/bookings/$BK007/cancel" \
 if echo "$BOOKING_CANCEL" | jq -e '.success == true and .data.status == "CANCELLED"' > /dev/null 2>&1; then
     log_pass "Booking cancelled successfully"
 else
-    log_fail "Booking cancellation failed"
+    log_fail "Booking cancellation failed: $(echo "$BOOKING_CANCEL" | jq -r '.error.message // "Unknown error"')"
 fi
 
 # Test 24: Booking Cancellation - Validation (missing reason)
@@ -1037,6 +1048,10 @@ fi
 log_category "CATEGORY 3: CUSTOMS EXTENDED ENDPOINTS (12 tests)"
 
 # Test 35: Declaration Amendment - Submit amendment
+# KNOWN API DEFECT (2026-11-12, verified live): the amend handler
+# INSERTs into declaration_amendments with columns that do not exist
+# (amended_by, old_quantity, new_quantity, ... — 500 AMENDMENT_FAILED).
+# Needs a migration adding the columns or a route fix (api/ scope).
 log_test "Declaration Amendment - Submit amendment request"
 # Use declaration $DECL_AMEND (a live SUBMITTED declaration, resolved above)
 # which should be in amendable status
@@ -1102,6 +1117,9 @@ fi
 
 # Test 38: Declaration Cancellation - Cancel declaration
 log_test "Declaration Cancellation - Cancel declaration"
+# KNOWN API DEFECT (2026-11-12, verified live): the cancel handler
+# UPDATEs customs_declarations.cancellation_date, a column that does not
+# exist (42703). Needs a migration adding it (api/ scope).
 # Try with declaration that's not yet cleared
 DECL_CANCEL_RESP=$(curl -s -X DELETE "$API_URL/customs/declaration/$DECL_CANCEL/cancel" \
     -H "Authorization: Bearer $CUSTOMS_TOKEN" \
@@ -1282,8 +1300,20 @@ RETENTION_ACCOUNT=$(curl -s -X POST "$API_URL/nbe/retention-accounts" \
     }")
 
 if echo "$RETENTION_ACCOUNT" | jq -e '.success == true' > /dev/null 2>&1; then
-    ACCOUNT_ID=$(echo "$RETENTION_ACCOUNT" | jq -r '.data.accountId')
-    log_pass "Retention account created with ID: $ACCOUNT_ID"
+    # NOTE: the create response does NOT carry the account id — the
+    # handler reads result?.lastID || result?.account_id from a pg
+    # QueryResult, where the id lives at rows[0].account_id, so
+    # .data.accountId is always omitted (api/ bug, nbe.ts). Resolve the
+    # id from GET /nbe/compliance-tracking, which lists accounts with
+    # account_id + account_number.
+    ACCOUNT_ID=$(curl -s "$API_URL/nbe/compliance-tracking" \
+        -H "Authorization: Bearer $NBE_TOKEN" \
+        | jq -r --arg n "RET-ACC-TEST-${RUN_ID}" '.data.accounts[] | select(.account_number == $n) | .account_id' | head -1)
+    if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "null" ]; then
+        log_pass "Retention account created with ID: $ACCOUNT_ID"
+    else
+        log_fail "Retention account created but its id could not be resolved (create response omits accountId)"
+    fi
 else
     log_fail "Retention account creation failed"
 fi
@@ -1417,6 +1447,17 @@ fi
 
 # Test 55: Waiver Request - PENALTY_WAIVER
 log_test "Waiver Request - Submit PENALTY_WAIVER request"
+# NOTE: the penalty endpoint omits .data.penaltyId the same way the
+# retention create omits accountId (handler reads result?.penalty_id
+# off a pg QueryResult; the id is at rows[0].penalty_id), so PENALTY_ID
+# is usually null. The waiver route treats penaltyId as optional, but a
+# JSON null fails its isInt check — so the field is sent only when we
+# actually have an id.
+if [ -n "$PENALTY_ID" ] && [ "$PENALTY_ID" != "null" ]; then
+    PENALTY_ID_FRAGMENT="\"penaltyId\": $PENALTY_ID,"
+else
+    PENALTY_ID_FRAGMENT=""
+fi
 WAIVER_PENALTY=$(curl -s -X POST "$API_URL/nbe/waiver-requests" \
     -H "Authorization: Bearer $EXPORTER_TOKEN" \
     -H "Content-Type: application/json" \
@@ -1424,7 +1465,7 @@ WAIVER_PENALTY=$(curl -s -X POST "$API_URL/nbe/waiver-requests" \
         \"requestType\": \"PENALTY_WAIVER\",
         \"exporterId\": $EXPORTER_USER_ID,
         \"accountId\": $ACCOUNT_ID,
-        \"penaltyId\": $PENALTY_ID,
+        $PENALTY_ID_FRAGMENT
         \"waiverAmount\": 500.00,
         \"justification\": \"Force majeure - political unrest delayed repatriation\",
         \"supportingDocuments\": [

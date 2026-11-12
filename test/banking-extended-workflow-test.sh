@@ -189,6 +189,32 @@ register_approved_contract() {
     return 0
 }
 
+# Registers + approves a contract and drives its handoff LC all the way to
+# ISSUED (approve + issue as the bank), then prints the LC id. Needed
+# because the chaincode only amends an ISSUED LC (AmendLC: "cannot amend
+# LC in status AMENDED - must be ISSUED"), so each amendment test needs
+# its own freshly issued LC.
+fresh_issued_lc() {
+    local suffix=$1
+    local contract_id lc_id approve_resp issue_resp
+    read -r contract_id lc_id <<< "$(register_approved_contract "$suffix" || true)"
+    if [ -z "$contract_id" ] || [ -z "$lc_id" ]; then
+        return 1
+    fi
+    approve_resp=$(api_post "/banking/lc/$lc_id/approve" "$BANK_TOKEN" '{}')
+    if ! assert_success "$approve_resp" "Approve LC $lc_id"; then
+        log_fail "Failed to approve LC $lc_id: $(echo "$approve_resp" | jq -r '.error.message // "unknown error"')"
+        return 1
+    fi
+    issue_resp=$(api_post "/banking/lc/$lc_id/issue" "$BANK_TOKEN" '{"terms": "Payment at sight"}')
+    if ! assert_success "$issue_resp" "Issue LC $lc_id"; then
+        log_fail "Failed to issue LC $lc_id: $(echo "$issue_resp" | jq -r '.error.message // "unknown error"')"
+        return 1
+    fi
+    echo "$lc_id"
+    return 0
+}
+
 log_test "Login as Bank admin"
 BANK_TOKEN=$(login_user "bank_admin" "password123" "BANKS" || true)
 if [ -n "$BANK_TOKEN" ]; then
@@ -206,11 +232,20 @@ log_test "Open and issue base LC"
 # "open" step is therefore the handoff LC itself; this test issues it.
 # POST /banking/lc/:lcID/issue — BANKS only, required: terms.
 LC_ID="$HANDOFF_LC_ID"
-ISSUE_RESPONSE=$(api_post "/banking/lc/$LC_ID/issue" "$BANK_TOKEN" '{"terms": "Payment at sight"}')
-if assert_success "$ISSUE_RESPONSE" "Issue LC"; then
-    log_pass "LC opened and issued: $LC_ID"
+# The handoff LC is REQUESTED and the chaincode only issues an APPROVED LC
+# (banking.go: IssueLC), so approve first, then issue.
+# POST /banking/lc/:lcID/approve — BANKS only, no body.
+APPROVE_LC_RESPONSE=$(api_post "/banking/lc/$LC_ID/approve" "$BANK_TOKEN" '{}')
+if assert_success "$APPROVE_LC_RESPONSE" "Approve LC"; then
+    ISSUE_RESPONSE=$(api_post "/banking/lc/$LC_ID/issue" "$BANK_TOKEN" '{"terms": "Payment at sight"}')
+    if assert_success "$ISSUE_RESPONSE" "Issue LC"; then
+        log_pass "LC opened and issued: $LC_ID"
+    else
+        log_fail "Failed to issue LC: $(echo "$ISSUE_RESPONSE" | jq -r '.error.message // "unknown error"')"
+        exit 1
+    fi
 else
-    log_fail "Failed to issue LC: $(echo "$ISSUE_RESPONSE" | jq -r '.error.message // "unknown error"')"
+    log_fail "Failed to approve LC: $(echo "$APPROVE_LC_RESPONSE" | jq -r '.error.message // "unknown error"')"
     exit 1
 fi
 
@@ -236,27 +271,41 @@ else
 fi
 
 log_test "Request LC amendment - Expiry extension"
-EXPIRY_AMENDMENT=$(api_post "/lc/$LC_ID/amendments" "$BANK_TOKEN" '{
-    "reason": "Shipment delay due to weather conditions",
-    "newExpiryDate": "2028-03-31"
-}')
-
-if assert_success "$EXPIRY_AMENDMENT" "Expiry extension amendment"; then
-    log_pass "LC amendment requested (expiry extension)"
+# AmendLC only accepts an ISSUED LC — test #6 already moved the base LC
+# to AMENDED, so this test uses its own freshly issued LC.
+AMEND_LC_ID_2=$(fresh_issued_lc "AMEND2" || true)
+if [ -z "$AMEND_LC_ID_2" ]; then
+    log_fail "Failed to create a fresh issued LC for the expiry-extension amendment"
 else
-    log_fail "Failed to request LC amendment (expiry extension)"
+    EXPIRY_AMENDMENT=$(api_post "/lc/$AMEND_LC_ID_2/amendments" "$BANK_TOKEN" '{
+        "reason": "Shipment delay due to weather conditions",
+        "newExpiryDate": "2028-03-31"
+    }')
+
+    if assert_success "$EXPIRY_AMENDMENT" "Expiry extension amendment"; then
+        log_pass "LC amendment requested (expiry extension) for LC: $AMEND_LC_ID_2"
+    else
+        log_fail "Failed to request LC amendment (expiry extension)"
+    fi
 fi
 
 log_test "Request LC amendment - Document changes"
-DOC_AMENDMENT=$(api_post "/lc/$LC_ID/amendments" "$BANK_TOKEN" '{
-    "reason": "Updated regulatory requirements for destination country",
-    "newTerms": "Additional certificates required as per FDA regulations: Fumigation Certificate, Organic Certification"
-}')
-
-if assert_success "$DOC_AMENDMENT" "Document change amendment"; then
-    log_pass "LC amendment requested (document changes)"
+# Same as test #7: a fresh ISSUED LC, because the chaincode only amends
+# an ISSUED LC and the base LC is already AMENDED.
+AMEND_LC_ID_3=$(fresh_issued_lc "AMEND3" || true)
+if [ -z "$AMEND_LC_ID_3" ]; then
+    log_fail "Failed to create a fresh issued LC for the document-changes amendment"
 else
-    log_fail "Failed to request LC amendment (document changes)"
+    DOC_AMENDMENT=$(api_post "/lc/$AMEND_LC_ID_3/amendments" "$BANK_TOKEN" '{
+        "reason": "Updated regulatory requirements for destination country",
+        "newTerms": "Additional certificates required as per FDA regulations: Fumigation Certificate, Organic Certification"
+    }')
+
+    if assert_success "$DOC_AMENDMENT" "Document change amendment"; then
+        log_pass "LC amendment requested (document changes) for LC: $AMEND_LC_ID_3"
+    else
+        log_fail "Failed to request LC amendment (document changes)"
+    fi
 fi
 
 log_test "Approve LC amendment"
@@ -362,6 +411,13 @@ else
 fi
 
 log_test "Issue standby LC"
+# KNOWN API DEFECT (2026-11-12, verified live): this endpoint is shadowed
+# by POST /banking/lc/:lcID/issue — banking.ts:948 registers the :lcID
+# route before /lc/standby/issue at :4209, so Express matches "standby"
+# as :lcID and the chaincode answers "LC standby does not exist"
+# (400 LC_ISSUE_FAILED). The standby handler itself is never reached.
+# The test is left calling the real endpoint and failing honestly until
+# the route order is fixed in the API (W2/coordinator scope).
 STANDBY_RESPONSE=$(api_post "/banking/lc/standby/issue" "$BANK_TOKEN" '{
     "standbyLCNumber": "SBLC-'$(date +%s)'",
     "contractId": "'$CONTRACT_ID'",
@@ -393,9 +449,12 @@ if [ -z "$DEFERRED_CONTRACT_ID" ] || [ -z "$DEFERRED_LC_ID" ]; then
     log_fail "Failed to create a contract/LC for the deferred payment test"
 else
     # Process the deferred payment
+    # NOTE: the route validates deferredDays (positive integer) — the
+    # original payload omitted it and was refused with a 400.
     DEFERRED_PAYMENT=$(api_post "/banking/lc/$DEFERRED_LC_ID/deferred-payment/record" "$BANK_TOKEN" '{
         "documentPresentationDate": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
         "maturityDate": "'$(date -u -d "+90 days" +"%Y-%m-%dT%H:%M:%SZ")'",
+        "deferredDays": 90,
         "deferredAmount": 75000,
         "acceptanceBy": "bank_admin",
         "acceptanceDate": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
@@ -437,14 +496,22 @@ read -r SIGHT_CONTRACT_ID SIGHT_LC_ID <<< "$(register_approved_contract "SIGHT" 
 if [ -z "$SIGHT_CONTRACT_ID" ] || [ -z "$SIGHT_LC_ID" ]; then
     log_fail "Failed to create a contract/LC for the sight payment test"
 else
-    # Issue the LC
+    # Issue the LC (approve first — the chaincode only issues an APPROVED LC)
+    api_post "/banking/lc/$SIGHT_LC_ID/approve" "$BANK_TOKEN" '{}' > /dev/null
     api_post "/banking/lc/$SIGHT_LC_ID/issue" "$BANK_TOKEN" '{"terms": "Payment upon presentation of compliant documents"}' > /dev/null
+    # Release requires the LC to be UTILIZED, so examine the documents as
+    # compliant first (POST /lc/:lcID/examine-documents moves ISSUED ->
+    # UTILIZED when compliant=true).
+    api_post "/banking/lc/$SIGHT_LC_ID/examine-documents" "$BANK_TOKEN" '{"compliant": true}' > /dev/null
 
     # POST /banking/lc/:lcID/payment/process does not exist. The closest
     # real endpoint is POST /banking/lc/:lcID/release-payment (BANKS;
     # required: amount, currency) — it releases the sight payment.
+    # NOTE: the handoff LC's amount is the contract value (1000 kg x
+    # $5.50 = $5,500), so the release must not exceed it — the chaincode
+    # refuses "payment amount exceeds LC amount". Release $5,000.
     SIGHT_PAYMENT=$(api_post "/banking/lc/$SIGHT_LC_ID/release-payment" "$BANK_TOKEN" '{
-        "amount": 45000,
+        "amount": 5000,
         "currency": "USD",
         "paymentDate": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
     }')

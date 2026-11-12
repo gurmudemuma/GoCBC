@@ -288,7 +288,8 @@ assert_greater_than() {
     
     local actual_value=$(echo "$response" | jq -r ".$field // 0")
     
-    if (( $(echo "$actual_value > $min_value" | bc -l) )); then
+    # NOTE (2026-11-12): bc is not installed on this VM — use awk instead.
+    if awk -v a="$actual_value" -v b="$min_value" 'BEGIN { exit !(a > b) }'; then
         return 0
     else
         log_debug "Field '$field': value $actual_value is not greater than $min_value"
@@ -409,7 +410,8 @@ print_test_summary() {
     fi
     
     if [ $TOTAL_TESTS -gt 0 ]; then
-        local success_rate=$(echo "scale=2; $PASSED_TESTS * 100 / $TOTAL_TESTS" | bc)
+        # NOTE (2026-11-12): bc is not installed on this VM — use awk instead.
+        local success_rate=$(awk -v p="$PASSED_TESTS" -v t="$TOTAL_TESTS" 'BEGIN { printf "%.2f", p * 100 / t }')
         echo "Success Rate: ${success_rate}%" | tee -a "$LOG_FILE"
     fi
     
