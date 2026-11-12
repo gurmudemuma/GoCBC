@@ -219,21 +219,30 @@ func (c *CoffeeContract) IssueCBEExportPermit(ctx contractapi.TransactionContext
 		return err
 	}
 
-	// CASCADE (status-transition audit §17 #4): the export permit has no
+	// CASCADE (status-transition audit §17 #4, M1): the export permit has no
 	// ShipmentID field — it links to shipments through ContractID — so
-	// set every CREATED shipment under this contract to PERMIT_ISSUED.
+	// set every shipment under this contract that is waiting for a
+	// permit to PERMIT_ISSUED. Eligible states: CREATED (permit issued
+	// before any inspection, the documented flow) and INSPECTION_COMPLETE
+	// (set by ApproveQualityInspection, quality.go — the literal order
+	// shipment → inspection → permit). INSPECTION_PENDING is deliberately
+	// NOT eligible: a permit must not issue while inspection is still
+	// pending. Every other shipment state is excluded — PERMIT_ISSUED
+	// (already issued), FREIGHT_BOOKED, CUSTOMS_DECLARED, CUSTOMS_CLEARED,
+	// CUSTOMS_REJECTED, LAND_TRANSPORT, PORT_ARRIVED, CONTAINER_STUFFED,
+	// VESSEL_LOADED, DEPARTED, IN_TRANSIT, DESTINATION_ARRIVED, DELIVERED,
+	// LOADED, CANCELLED, ARRIVED (full set: validShipmentStatuses,
+	// main.go) — moving one of those to PERMIT_ISSUED would regress it.
 	// Best-effort: the permit is already issued, and in the documented
 	// flow the permit is usually issued before any shipment exists, so
-	// finding no shipments is the normal case. Shipments past CREATED
-	// (e.g. FREIGHT_BOOKED) are left alone — moving one backwards to
-	// PERMIT_ISSUED would regress it.
+	// finding no shipments is the normal case.
 	if contractID != "" {
 		shipments, qErr := c.QueryShipmentsByContract(ctx, contractID)
 		if qErr != nil {
 			fmt.Printf("IssueCBEExportPermit: WARNING: could not list shipments for contract %s: %v\n", contractID, qErr)
 		} else {
 			for _, shipment := range shipments {
-				if shipment.Status != "CREATED" {
+				if shipment.Status != "CREATED" && shipment.Status != "INSPECTION_COMPLETE" {
 					continue
 				}
 				if err := c.UpdateShipmentStatus(ctx, shipment.ShipmentID, "PERMIT_ISSUED"); err != nil {

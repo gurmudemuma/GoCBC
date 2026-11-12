@@ -161,6 +161,20 @@ func (c *CoffeeContract) RequestForex(ctx contractapi.TransactionContextInterfac
 	if amount > contract.TotalValue {
 		return fmt.Errorf("RequestForex: requested amount %.2f exceeds contract value %.2f", amount, contract.TotalValue)
 	}
+	// ✅ FIX (A2): refuse a forex request unless the exporter holds an
+	// ACTIVE licence. LicenseStatus values (main.go): ACTIVE at
+	// registration (:257), SUSPENDED by SuspendExporter (:1531), REVOKED
+	// by RevokeExporterLicense (:1619, terminal), EXPIRED via
+	// UpdateExporterStatus (:1445-1451). Same != "ACTIVE" gate as
+	// RequestLC (banking.go:242) and IssueCBEExportPermit (permit.go:88).
+	// This file previously made no ReadExporter call at all.
+	exporter, err := c.ReadExporter(ctx, exporterID)
+	if err != nil {
+		return fmt.Errorf("RequestForex: failed to read exporter: %w", err)
+	}
+	if exporter.LicenseStatus != "ACTIVE" {
+		return fmt.Errorf("RequestForex: exporter license is %s, cannot request forex", exporter.LicenseStatus)
+	}
 	existingForex, err := ctx.GetStub().GetState("FOREX_" + forexID)
 	if err != nil {
 		return fmt.Errorf("RequestForex: failed to check duplicate forex ID: %w", err)

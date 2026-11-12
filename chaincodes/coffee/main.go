@@ -430,6 +430,20 @@ func (c *CoffeeContract) RegisterSalesContract(ctx contractapi.TransactionContex
 		return fmt.Errorf("RegisterSalesContract: exporter %s is not registered in the system", exporterID)
 	}
 
+	// ✅ FIX (A1): refuse contract registration unless the exporter holds
+	// an ACTIVE licence. LicenseStatus values (main.go): ACTIVE at
+	// registration (:257), SUSPENDED by SuspendExporter (:1531), REVOKED
+	// by RevokeExporterLicense (:1619, terminal), EXPIRED via
+	// UpdateExporterStatus (:1445-1451). Same != "ACTIVE" gate as
+	// RequestLC (banking.go:242) and IssueCBEExportPermit (permit.go:88).
+	exporter, err := c.ReadExporter(ctx, exporterID)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContract: failed to read exporter: %w", err)
+	}
+	if exporter.LicenseStatus != "ACTIVE" {
+		return fmt.Errorf("RegisterSalesContract: exporter license is %s, cannot register a sales contract", exporter.LicenseStatus)
+	}
+
 	// Check if contract already exists
 	exists, err := c.SalesContractExists(ctx, contractID)
 	if err != nil {
@@ -603,6 +617,18 @@ func (c *CoffeeContract) RegisterSalesContractWithPaymentMethod(ctx contractapi.
 	}
 	if !exporterExists {
 		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: exporter %s is not registered in the system", exporterID)
+	}
+
+	// ✅ FIX (A1): refuse contract registration unless the exporter holds
+	// an ACTIVE licence — same gate as RegisterSalesContract (see above).
+	// A suspended/revoked/expired exporter must not register via this
+	// entry point either (contractService.ts calls this function).
+	exporter, err := c.ReadExporter(ctx, exporterID)
+	if err != nil {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: failed to read exporter: %w", err)
+	}
+	if exporter.LicenseStatus != "ACTIVE" {
+		return fmt.Errorf("RegisterSalesContractWithPaymentMethod: exporter license is %s, cannot register a sales contract", exporter.LicenseStatus)
 	}
 
 	// Check if contract already exists
@@ -2084,11 +2110,19 @@ func (c *CoffeeContract) ReadShipment(ctx contractapi.TransactionContextInterfac
 // UpdateShipmentLocation validate their target against it (see below).
 // CUSTOMS_DECLARED is produced by SubmitCustomsDeclaration;
 // INSPECTION_PENDING by RequestInspection (quality.go);
+// INSPECTION_COMPLETE by ApproveQualityInspection (quality.go) — the
+// post-inspection state the permit cascade advances to PERMIT_ISSUED.
+// No pre-existing shipment status means "inspection passed and ready
+// for a permit" (CREATED would regress an inspected shipment, and
+// PERMIT_ISSUED is the cascade's output, not its input), so this is a
+// new value, not a reuse. It must also be added to the API
+// statusManager SHIPMENT table and the PG chk_shipments_status CHECK
+// (migrations) before anything mirrors it to Postgres.
 // CUSTOMS_REJECTED by RejectDeclaration/RejectCustomsDeclaration.
 var validShipmentStatuses = map[string]bool{
 	"CREATED": true, "FREIGHT_BOOKED": true, "PERMIT_ISSUED": true,
 	"CUSTOMS_DECLARED": true, "CUSTOMS_CLEARED": true, "CUSTOMS_REJECTED": true,
-	"INSPECTION_PENDING": true, "LAND_TRANSPORT": true, "PORT_ARRIVED": true,
+	"INSPECTION_PENDING": true, "INSPECTION_COMPLETE": true, "LAND_TRANSPORT": true, "PORT_ARRIVED": true,
 	"CONTAINER_STUFFED": true, "VESSEL_LOADED": true, "DEPARTED": true,
 	"IN_TRANSIT": true, "DESTINATION_ARRIVED": true, "DELIVERED": true,
 	"LOADED": true, "CANCELLED": true, "ARRIVED": true,

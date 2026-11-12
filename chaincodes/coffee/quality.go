@@ -428,6 +428,26 @@ func (c *CoffeeContract) ApproveQualityInspection(ctx contractapi.TransactionCon
 		return fmt.Errorf("ApproveQualityInspection: failed to update state: %w", err)
 	}
 
+	// ✅ M1(a): an APPROVED inspection moves the linked shipment out of
+	// INSPECTION_PENDING (set by RequestInspection, quality.go:172) into
+	// INSPECTION_COMPLETE — the post-inspection state the
+	// IssueCBEExportPermit cascade advances to PERMIT_ISSUED
+	// (permit.go). The move happens here, at approval, not in
+	// PerformInspection: only APPROVED means the shipment passed
+	// quality. A performed-but-unapproved inspection, and a rejected
+	// one (RejectQualityInspection), must not unlock a permit, so the
+	// shipment stays INSPECTION_PENDING in those cases (fail-closed).
+	// Best-effort like the RequestInspection and permit cascades: the
+	// approval itself is already committed, so a failed shipment move
+	// is logged, not fatal.
+	if inspection.ShipmentID != "" {
+		if err := c.UpdateShipmentStatus(ctx, inspection.ShipmentID, "INSPECTION_COMPLETE"); err != nil {
+			fmt.Printf("ApproveQualityInspection: WARNING: failed to update shipment %s to INSPECTION_COMPLETE: %v\n", inspection.ShipmentID, err)
+		} else {
+			fmt.Printf("ApproveQualityInspection: Shipment %s status updated to INSPECTION_COMPLETE\n", inspection.ShipmentID)
+		}
+	}
+
 	changes := []FieldChange{
 		{FieldName: "status", OldValue: "INSPECTED", NewValue: "APPROVED", DataType: "string"},
 		{FieldName: "approvedBy", OldValue: "", NewValue: approvedBy, DataType: "string"},

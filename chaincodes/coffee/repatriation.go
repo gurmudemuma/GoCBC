@@ -154,8 +154,14 @@ func (c *CoffeeContract) InitiateRepatriation(ctx contractapi.TransactionContext
 	if err != nil {
 		return fmt.Errorf("InitiateRepatriation: %w", err)
 	}
-	if payment.Status != "SETTLED" || payment.ContractID != contractID || payment.ExporterID != exporterID || !strings.EqualFold(payment.Currency, currency) {
-		return fmt.Errorf("InitiateRepatriation: payment must be settled and match contract, exporter, and currency")
+	// D1a: accept SETTLED or CONFIRMED. ConfirmSettlement
+	// (payment.go:911,921) moves SETTLED -> CONFIRMED, so CONFIRMED is
+	// strictly downstream of SETTLED — the funds were settled first —
+	// and a confirmed payment could otherwise never be repatriated.
+	// Same gate as RecordForexRepatriation (payment.go:1013), which
+	// records repatriation evidence for SETTLED or CONFIRMED payments.
+	if (payment.Status != "SETTLED" && payment.Status != "CONFIRMED") || payment.ContractID != contractID || payment.ExporterID != exporterID || !strings.EqualFold(payment.Currency, currency) {
+		return fmt.Errorf("InitiateRepatriation: payment must be settled or confirmed and match contract, exporter, and currency")
 	}
 	paymentIndexKey, err := ctx.GetStub().CreateCompositeKey("repatriationPayment", []string{paymentID})
 	if err != nil {
@@ -166,20 +172,20 @@ func (c *CoffeeContract) InitiateRepatriation(ctx contractapi.TransactionContext
 		return fmt.Errorf("InitiateRepatriation: failed to check payment uniqueness: %w", err)
 	}
 	if existingPaymentIndex != nil {
-		return fmt.Errorf("InitiateRepatriation: settled payment %s already has a repatriation record", paymentID)
+		return fmt.Errorf("InitiateRepatriation: payment %s already has a repatriation record", paymentID)
 	}
 	legacyPaymentRecords, err := c.QueryRepatriationsByPayment(ctx, paymentID)
 	if err != nil {
 		return fmt.Errorf("InitiateRepatriation: failed to verify existing payment repatriation: %w", err)
 	}
 	if len(legacyPaymentRecords) > 0 {
-		return fmt.Errorf("InitiateRepatriation: settled payment %s already has a repatriation record", paymentID)
+		return fmt.Errorf("InitiateRepatriation: payment %s already has a repatriation record", paymentID)
 	}
 	if payment.ShipmentID != "" && payment.ShipmentID != shipmentID {
-		return fmt.Errorf("InitiateRepatriation: shipment does not match settled payment")
+		return fmt.Errorf("InitiateRepatriation: shipment does not match payment")
 	}
 	if exportAmount > payment.Amount {
-		return fmt.Errorf("InitiateRepatriation: export amount %.2f exceeds settled payment amount %.2f", exportAmount, payment.Amount)
+		return fmt.Errorf("InitiateRepatriation: export amount %.2f exceeds payment amount %.2f", exportAmount, payment.Amount)
 	}
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {

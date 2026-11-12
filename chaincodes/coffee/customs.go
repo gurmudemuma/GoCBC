@@ -272,9 +272,17 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 		if err == nil && shipmentJSON != nil {
 			var shipment CoffeeShipment
 			if json.Unmarshal(shipmentJSON, &shipment) == nil {
-				// Check shipment status - must have PERMIT_ISSUED from ECTA
-				if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" {
-					return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED)", shipmentID, shipment.Status)
+				// Check shipment status - must have PERMIT_ISSUED from ECTA.
+				// F-7: CUSTOMS_REJECTED is also admissible — a shipment
+				// whose declaration was rejected is resubmitted with a
+				// NEW declaration ID (DECL_<id> is unique per
+				// declaration, so the duplicate check below still
+				// blocks reusing the rejected ID). The cascade below
+				// moves the shipment CUSTOMS_REJECTED -> CUSTOMS_DECLARED;
+				// UpdateShipmentStatus has no from-state guard (main.go),
+				// so the move is permitted.
+				if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" && shipment.Status != "CUSTOMS_REJECTED" {
+					return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED, CUSTOMS_DECLARED, or CUSTOMS_REJECTED for a resubmission after rejection)", shipmentID, shipment.Status)
 				}
 			}
 		}
@@ -343,10 +351,11 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 	}
 
 	// CASCADE (status-transition audit §17 #4): submitting the declaration
-	// moves the linked shipment PERMIT_ISSUED -> CUSTOMS_DECLARED,
-	// completing the documented path (the guard above already requires
-	// PERMIT_ISSUED or CUSTOMS_DECLARED, so this is a forward move or a
-	// no-op). Best-effort: the declaration is already stored.
+	// moves the linked shipment PERMIT_ISSUED / CUSTOMS_REJECTED ->
+	// CUSTOMS_DECLARED, completing the documented path (the guard above
+	// already requires PERMIT_ISSUED, CUSTOMS_DECLARED or CUSTOMS_REJECTED,
+	// so this is a forward move or a no-op). Best-effort: the declaration
+	// is already stored.
 	if shipmentID != "" {
 		if err := c.UpdateShipmentStatus(ctx, shipmentID, "CUSTOMS_DECLARED"); err != nil {
 			log.Printf("WARNING: Failed to update shipment status: %v", err)
