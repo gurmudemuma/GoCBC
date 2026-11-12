@@ -12,10 +12,8 @@ export { StatusChip } from './StatusChip';
 export { LoadingSkeleton } from './LoadingSkeleton';
 export { EmptyState } from './EmptyState';
 export { SearchBar } from './SearchBar';
-export { FilterPanel } from './FilterPanel';
 export { ThemeToggle } from './ThemeToggle';
 
 // Re-export types if needed
 export type { StatusType } from './StatusChip';
 export type { EmptyStateType } from './EmptyState';
-export type { FilterOption, FilterConfig } from './FilterPanel';
