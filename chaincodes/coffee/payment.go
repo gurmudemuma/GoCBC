@@ -25,6 +25,17 @@ type PaymentSettlement struct {
 	RetentionRate        float64      `json:"retentionRate"`   // NBE retention percentage (NBE FXD/01/2024: 100% allowed)
 	RetainedAmount       float64      `json:"retainedAmount"`  // Amount retained in forex
 	ConvertedAmount      float64      `json:"convertedAmount"` // Amount converted to Birr
+	// ==================== RETENTION CONVERSION FIELDS ====================
+	// Set by ConvertRetention (LEG3 M-5): the retained (40%) USD converted
+	// to birr. The service had a convertRetention that called a
+	// ConvertRetention chaincode function which did not exist, and a PG
+	// update against columns that did not exist either (migration 073).
+	// PG mirrors these in payments.exchange_rate / amount_birr /
+	// converted_by / conversion_ref / conversion_date.
+	RetentionConverted      bool    `json:"retentionConverted"`
+	RetentionConvertedBy    string  `json:"retentionConvertedBy"`
+	RetentionConversionRef  string  `json:"retentionConversionRef"`
+	RetentionConversionDate string  `json:"retentionConversionDate"`
 	Status               string       `json:"status"`          // PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED, CONFIRMED
 	PaymentMethod        string       `json:"paymentMethod"`   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
 	PaymentDate          string       `json:"paymentDate"`
@@ -962,6 +973,103 @@ func (c *CoffeeContract) ConfirmSettlement(ctx contractapi.TransactionContextInt
 	if err := c.CreateAuditLog(ctx, "CONFIRM", "PAYMENT", paymentID, previousStatus, "CONFIRMED", changes,
 		fmt.Sprintf("Settlement confirmed by %s (%s)", confirmedBy, confirmationType), compliance); err != nil {
 		return fmt.Errorf("ConfirmSettlement: failed to create audit log: %w", err)
+	}
+	return nil
+}
+
+// ConvertRetention - Convert the retained (NBE 40%) portion of a payment
+// from USD to Birr (LEG3 M-5). The PaymentService.convertRetention
+// caller existed with no chaincode function to call and no route to call
+// it from, so RETENTION_CONVERTED was unreachable end to end. The
+// retention machine itself lives in Postgres (retention_status); this
+// records the conversion evidence on the ledger and refuses a second
+// conversion. Allowed once the payment is VERIFIED or beyond — the
+// retention was split at record time, so conversion does not need to
+// wait for settlement.
+func (c *CoffeeContract) ConvertRetention(ctx contractapi.TransactionContextInterface,
+	paymentID, exchangeRateStr, amountBirrStr, convertedBy, conversionRef, conversionDate string) error {
+	if err := ValidateID(paymentID, "paymentID"); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+	if err := ValidateNonEmptyString(convertedBy, "convertedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+	if err := ValidateNonEmptyString(conversionRef, "conversionRef", MaxStringLen); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+	if err := ValidateNonEmptyString(conversionDate, "conversionDate", MaxStringLen); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+
+	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
+	if err != nil {
+		return fmt.Errorf("ConvertRetention: invalid exchangeRate: %w", err)
+	}
+	if err := ValidateExchangeRate(exchangeRate); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+	amountBirr, err := strconv.ParseFloat(amountBirrStr, 64)
+	if err != nil {
+		return fmt.Errorf("ConvertRetention: invalid amountBirr: %w", err)
+	}
+	if err := ValidateAmount(amountBirr, "amountBirr"); err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+
+	payment, err := c.ReadPayment(ctx, paymentID)
+	if err != nil {
+		return fmt.Errorf("ConvertRetention: %w", err)
+	}
+	if payment.RetentionConverted {
+		return fmt.Errorf("ConvertRetention: retention already converted for payment %s", paymentID)
+	}
+	switch payment.Status {
+	case "VERIFIED", "SWIFT_RECEIVED", "SETTLED", "CONFIRMED":
+	default:
+		return fmt.Errorf("ConvertRetention: payment %s cannot have its retention converted, current status: %s", paymentID, payment.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("ConvertRetention: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	payment.ExchangeRate = exchangeRate
+	payment.AmountBirr = amountBirr
+	payment.ConvertedAmount = amountBirr
+	payment.RetentionConverted = true
+	payment.RetentionConvertedBy = convertedBy
+	payment.RetentionConversionRef = conversionRef
+	payment.RetentionConversionDate = conversionDate
+	payment.UpdatedAt = txTime
+
+	paymentJSON, err := json.Marshal(payment)
+	if err != nil {
+		return fmt.Errorf("ConvertRetention: failed to marshal payment: %w", err)
+	}
+	if err := ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON); err != nil {
+		return fmt.Errorf("ConvertRetention: failed to save payment: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":     "RetentionConverted",
+		"paymentID":     paymentID,
+		"amountBirr":    amountBirr,
+		"exchangeRate":  exchangeRate,
+		"conversionRef": conversionRef,
+		"timestamp":     txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("RetentionConverted", eventJSON)
+
+	if err := c.CreateAuditLog(ctx, "CONVERT_RETENTION", "PAYMENT", paymentID, payment.Status, payment.Status,
+		[]FieldChange{
+			{FieldName: "retentionConverted", OldValue: "false", NewValue: "true", DataType: "bool"},
+			{FieldName: "amountBirr", OldValue: "", NewValue: amountBirrStr, DataType: "number"},
+		},
+		fmt.Sprintf("Retention converted for payment %s: %.2f Birr @ %.4f", paymentID, amountBirr, exchangeRate),
+		ComplianceMetadata{NBECompliance: true, ComplianceNote: "NBE retention conversion"}); err != nil {
+		return fmt.Errorf("ConvertRetention: failed to create audit log: %w", err)
 	}
 	return nil
 }
