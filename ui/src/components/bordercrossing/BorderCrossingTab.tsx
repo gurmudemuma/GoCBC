@@ -138,7 +138,7 @@ const BorderCrossingTab: React.FC = () => {
       </Box>
     )},
     { field: 'status', headerName: 'Status', width: 140, renderCell: (p: GridRenderCellParams) => getStatusChip(p.value) },
-    { field: 'arrivalTime', headerName: 'Arrival', width: 140, valueFormatter: (p: any) => new Date(p.value).toLocaleString() },
+    { field: 'arrivalTime', headerName: 'Arrival', width: 140, valueFormatter: (p: any) => (p.value ? new Date(p.value).toLocaleString() : '—') },
     { field: 'actions', headerName: 'Actions', width: 150, sortable: false, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         {p.row.status === 'PENDING' && (

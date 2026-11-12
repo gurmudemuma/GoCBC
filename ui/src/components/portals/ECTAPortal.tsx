@@ -729,6 +729,27 @@ const ECTAPortal: React.FC = () => {
           setShipments(ectaRelevantShipments);
           setAllShipments(ectaRelevantShipments);
           setDeliveredShipments(delivered);
+          // Enrich delivered shipments with their real ECTA audit state.
+          // The shipments list never carries post_delivery_audit_status,
+          // so without this the tab-9 "Audits Completed" KPI could only
+          // ever read 0. Source of truth is the post-delivery tracker:
+          // GET /post-delivery/:id/status (ectaAuditCompleted /
+          // ectaAuditResult). No tracking row (404) means the audit has
+          // not started yet, so the shipment stays PENDING.
+          Promise.all(delivered.map(async (s: any) => {
+            const shipmentId = s.shipmentId || s.ShipmentID || s.shipmentID;
+            let auditStatus: CoffeeShipment['post_delivery_audit_status'] = 'PENDING';
+            try {
+              const statusRes = await api.get(`/post-delivery/${shipmentId}/status`);
+              const pd = statusRes?.data?.data;
+              if (pd?.ectaAuditCompleted) {
+                auditStatus = pd.ectaAuditResult === 'FAILED' ? 'FAILED' : 'COMPLETED';
+              }
+            } catch {
+              // No post-delivery tracking row (or fetch failed) — audit pending.
+            }
+            return { ...s, post_delivery_audit_status: auditStatus };
+          })).then(setDeliveredShipments);
         }
       })
       .catch(err => {
@@ -1713,8 +1734,21 @@ The exporter can reapply once all requirements are met.`,
     ? allApplications
     : allApplications.filter((a) => a.status === applicationFilterTab);
 
-  // Dynamic KPIs based on active tab
-  const getDynamicKpis = () => {
+  // Dynamic KPIs based on active tab.
+  // One shared shape: onClick/selected are optional because tabs without
+  // a filter (e.g. tab 9 audits) render non-clickable cards. Without the
+  // annotation the literal infers a union of the clickable and the plain
+  // variants and kpi.onClick / kpi.selected fail to type-check.
+  interface EctaKpi {
+    icon: React.ReactElement;
+    label: string;
+    value: number | string;
+    color: string;
+    onClick?: () => void;
+    selected?: boolean;
+  }
+
+  const getDynamicKpis = (): EctaKpi[] => {
     switch (tabValue) {
       case 0: // Pending Applications
         return [

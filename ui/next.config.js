@@ -16,13 +16,9 @@ const nextConfig = {
   },
   reactStrictMode: false,
   swcMinify: true,
-  typescript: {
-    // !! WARN !!
-    // Dangerously allow production builds to successfully complete even if
-    // your project has type errors.
-    // !! WARN !!
-    ignoreBuildErrors: true,
-  },
+  // No typescript.ignoreBuildErrors: tsc --noEmit is clean (0 errors as of
+  // the W1 UI-fixes round), so the build must fail honestly on type errors
+  // instead of shipping them silently.
   eslint: {
     // Warning: This allows production builds to successfully complete even if
     // your project has ESLint errors.

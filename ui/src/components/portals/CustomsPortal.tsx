@@ -1,7 +1,7 @@
 // Ethiopian Coffee Export Consortium Blockchain System (CECBS)
 // Customs Portal - Export Declaration & Clearance Management
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { viewDocument, downloadDocument } from '@/utils/documentHelpers';
 import {
   Box,
@@ -126,6 +126,17 @@ const normalizeShipmentId = (id: string): string => {
 
 const CustomsPortal: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
+  // Which KPI card is selected on the current tab. Every KPI on a tab used
+  // to share the tab index as its selection key, so all three rendered as
+  // selected at once. Each KPI now has its own key (see getDynamicKpis);
+  // null means "no click yet", and the first KPI of the tab reads selected.
+  const [selectedKpiKey, setSelectedKpiKey] = useState<string | null>(null);
+  // Shipment IDs known to exist (populated by loadData). The per-declaration
+  // enrichment used to GET /shipments/:id for every declaration, including
+  // references to shipments that do not exist (e.g. SHP-A and stale test
+  // refs) — 10× 404s + console noise on every tab-0 load. A null set means
+  // "list not loaded yet" — enrichment then falls back to fetching per ref.
+  const knownShipmentIdsRef = useRef<Set<string> | null>(null);
   const [declarations, setDeclarations] = useState<CustomsDeclaration[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedDeclaration, setSelectedDeclaration] = useState<CustomsDeclaration | null>(null);
@@ -881,13 +892,16 @@ ${solution}`);
         }
       }
       
-      // Fetch shipment data to get location/warehouse info
-      if (declaration.shipmentId && declaration.shipmentId.trim() !== '') {
+      // Fetch shipment data to get location/warehouse info — but only for
+      // refs known to exist (see knownShipmentIdsRef in loadData). A
+      // placeholder/stale ref such as SHP-A used to fire a 404 here too.
+      const knownIds = knownShipmentIdsRef.current;
+      if (declaration.shipmentId && declaration.shipmentId.trim() !== '' && (!knownIds || knownIds.has(declaration.shipmentId))) {
         const shipmentResponse = await apiFetch(`/shipments/${declaration.shipmentId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        
-        if (shipmentResponse) {
+
+        if (shipmentResponse && shipmentResponse.ok) {
           const shipmentResult = await shipmentResponse.json();
           if (shipmentResult.success && shipmentResult.data) {
             const shipment = shipmentResult.data;
@@ -1187,7 +1201,22 @@ ${solution}`);
       
       if (result.success && result.data) {
         console.log(`[CUSTOMS] Loaded ${result.data.length} declarations from blockchain`);
-        
+
+        // One list fetch tells us which shipment refs actually exist, so
+        // the per-declaration enrichment below never requests a 404.
+        // (Live data: 10 of 68 declarations reference shipments the API
+        // does not have — SHP-A plus stale test refs.) If this fails the
+        // ref stays null and enrichment falls back to fetching per ref.
+        try {
+          const shipsRes = await api.getShipments();
+          const rows = shipsRes?.data ?? [];
+          knownShipmentIdsRef.current = new Set(
+            rows.map((s: any) => s.shipmentId || s.ShipmentID || s.shipmentID).filter(Boolean)
+          );
+        } catch {
+          knownShipmentIdsRef.current = null;
+        }
+
         // Map blockchain data to UI format and enrich with shipment data
         const enrichmentPromises = result.data.map(async (d: any) => {
           const baseDeclaration = {
@@ -1213,15 +1242,22 @@ ${solution}`);
             eudrCompliant: d.eudrCompliant || d.EUDRCompliant || false,
           };
 
-          // ENRICHMENT: Try to fetch shipment data if shipmentId exists
-          if (baseDeclaration.shipmentId && baseDeclaration.shipmentId.trim() !== '') {
+          // ENRICHMENT: fetch shipment data only when the shipment is
+          // known to exist. Skipping unknown refs avoids a 404 per
+          // stale/placeholder reference — the browser logs those as failed
+          // requests even when the code catches them, which was the noise
+          // on every tab-0 load. A null set means the list did not load,
+          // so fetch as before rather than dropping real enrichments.
+          const knownIds = knownShipmentIdsRef.current;
+          if (baseDeclaration.shipmentId && baseDeclaration.shipmentId.trim() !== '' && (!knownIds || knownIds.has(baseDeclaration.shipmentId))) {
             try {
               const shipmentResponse = await apiFetch(`/shipments/${baseDeclaration.shipmentId}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
               }).catch(() => null); // Silently catch 404 and network errors
               
-              // Skip if fetch failed or returned null
-              if (!shipmentResponse) {
+              // Skip if fetch failed, returned null, or was not OK (the
+              // known-set can go stale if a shipment is deleted mid-load).
+              if (!shipmentResponse || !shipmentResponse.ok) {
                 return baseDeclaration;
               }
               
@@ -2176,74 +2212,86 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
     switch (tabValue) {
       case 0: // Submitted
         return [
-          { icon: <LocalShipping />, label: 'Total Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
-          { icon: <Security />, label: 'Awaiting Inspection', value: declarations.filter(d => d.status === 'SUBMITTED').length, color: '#ff9800', index: 0 },
-          { icon: <Assignment />, label: 'Total Value', value: `$${declarations.filter(d => d.status === 'SUBMITTED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 0 },
+          { icon: <LocalShipping />, key: 'total-submitted-0', label: 'Total Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
+          { icon: <Security />, key: 'awaiting-inspection-0', label: 'Awaiting Inspection', value: declarations.filter(d => d.status === 'SUBMITTED').length, color: '#ff9800', index: 0 },
+          { icon: <Assignment />, key: 'total-value-0', label: 'Total Value', value: `$${declarations.filter(d => d.status === 'SUBMITTED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 0 },
         ];
       case 1: // Inspecting
         return [
-          { icon: <Security />, label: 'Under Inspection', value: declarations.filter(d => d.status === 'UNDER_INSPECTION').length, color: '#ff9800', index: 1 },
-          { icon: <Assignment />, label: 'Inspection Required', value: declarations.filter(d => d.inspectionRequired).length, color: '#9c27b0', index: 1 },
-          { icon: <CheckCircle />, label: 'EUDR Compliant', value: declarations.filter(d => d.eudrCompliant && d.status === 'UNDER_INSPECTION').length, color: '#4caf50', index: 1 },
+          { icon: <Security />, key: 'under-inspection-1', label: 'Under Inspection', value: declarations.filter(d => d.status === 'UNDER_INSPECTION').length, color: '#ff9800', index: 1 },
+          { icon: <Assignment />, key: 'inspection-required-1', label: 'Inspection Required', value: declarations.filter(d => d.inspectionRequired).length, color: '#9c27b0', index: 1 },
+          { icon: <CheckCircle />, key: 'eudr-compliant-1', label: 'EUDR Compliant', value: declarations.filter(d => d.eudrCompliant && d.status === 'UNDER_INSPECTION').length, color: '#4caf50', index: 1 },
         ];
       case 2: // Under Review
         return [
-          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
-          { icon: <Assignment />, label: 'Pending Clearance', value: declarations.filter(d => d.status === 'UNDER_REVIEW').length, color: '#ff5722', index: 2 },
-          { icon: <Security />, label: 'High Value', value: declarations.filter(d => d.status === 'UNDER_REVIEW' && d.value > 50000).length, color: '#e91e63', index: 2 },
+          { icon: <Warning />, key: 'under-review-2', label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
+          { icon: <Assignment />, key: 'pending-clearance-2', label: 'Pending Clearance', value: declarations.filter(d => d.status === 'UNDER_REVIEW').length, color: '#ff5722', index: 2 },
+          { icon: <Security />, key: 'high-value-2', label: 'High Value', value: declarations.filter(d => d.status === 'UNDER_REVIEW' && d.value > 50000).length, color: '#e91e63', index: 2 },
         ];
       case 3: // Cleared
         return [
-          { icon: <CheckCircle />, label: 'Total Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
-          { icon: <Assignment />, label: 'Total Value', value: `$${declarations.filter(d => d.status === 'CLEARED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 3 },
-          { icon: <LocalShipping />, label: 'Ready to Ship', value: declarations.filter(d => d.status === 'CLEARED' && !d.dutyPaid).length, color: '#2196f3', index: 3 },
+          { icon: <CheckCircle />, key: 'total-cleared-3', label: 'Total Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
+          { icon: <Assignment />, key: 'total-value-3', label: 'Total Value', value: `$${declarations.filter(d => d.status === 'CLEARED').reduce((sum, d) => sum + d.value, 0).toLocaleString()}`, color: '#00bcd4', index: 3 },
+          { icon: <LocalShipping />, key: 'ready-to-ship-3', label: 'Ready to Ship', value: declarations.filter(d => d.status === 'CLEARED' && !d.dutyPaid).length, color: '#2196f3', index: 3 },
         ];
       case 4: // Rejected
         return [
-          { icon: <Cancel />, label: 'Total Rejected', value: stats.rejected, color: '#f44336', index: 4 },
-          { icon: <Warning />, label: 'Documentation Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('DOCUMENTATION')).length, color: '#ff9800', index: 4 },
-          { icon: <Security />, label: 'Compliance Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('COMPLIANCE')).length, color: '#9c27b0', index: 4 },
+          { icon: <Cancel />, key: 'total-rejected-4', label: 'Total Rejected', value: stats.rejected, color: '#f44336', index: 4 },
+          { icon: <Warning />, key: 'documentation-issues-4', label: 'Documentation Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('DOCUMENTATION')).length, color: '#ff9800', index: 4 },
+          { icon: <Security />, key: 'compliance-issues-4', label: 'Compliance Issues', value: declarations.filter(d => d.status === 'REJECTED' && d.rejectionReason?.includes('COMPLIANCE')).length, color: '#9c27b0', index: 4 },
         ];
       case 5: // Border Crossing
         return [
-          { icon: <DirectionsBoat />, label: 'Total Crossings', value: borderCrossingStats.total, color: '#2196f3', index: 5 },
-          { icon: <LocalShipping />, label: 'Active Crossings', value: borderCrossingStats.active, color: '#ff9800', index: 5 },
-          { icon: <CheckCircle />, label: 'Cleared', value: borderCrossingStats.cleared, color: '#4caf50', index: 5 },
+          { icon: <DirectionsBoat />, key: 'total-crossings-5', label: 'Total Crossings', value: borderCrossingStats.total, color: '#2196f3', index: 5 },
+          { icon: <LocalShipping />, key: 'active-crossings-5', label: 'Active Crossings', value: borderCrossingStats.active, color: '#ff9800', index: 5 },
+          { icon: <CheckCircle />, key: 'cleared-5', label: 'Cleared', value: borderCrossingStats.cleared, color: '#4caf50', index: 5 },
         ];
       case 6: // User Management
         return [
-          { icon: <Person />, label: 'Total Users', value: customsOfficers.length, color: '#2196f3', index: 6 },
-          { icon: <Security />, label: 'Active Officers', value: customsOfficers.filter(o => o.status === 'ACTIVE').length, color: '#4caf50', index: 6 },
-          { icon: <Assignment />, label: 'Pending Approvals', value: 0, color: '#ff9800', index: 6 },
+          { icon: <Person />, key: 'total-users-6', label: 'Total Users', value: customsOfficers.length, color: '#2196f3', index: 6 },
+          { icon: <Security />, key: 'active-officers-6', label: 'Active Officers', value: customsOfficers.filter(o => o.status === 'ACTIVE').length, color: '#4caf50', index: 6 },
+          { icon: <Assignment />, key: 'pending-approvals-6', label: 'Pending Approvals', value: 0, color: '#ff9800', index: 6 },
         ];
       case 7: // Audit Trail
         return [
-          { icon: <Assessment />, label: 'Total Activities', value: '—', color: '#2196f3', index: 7 },
-          { icon: <Security />, label: 'Security Events', value: '—', color: '#ff9800', index: 7 },
-          { icon: <Assignment />, label: 'Today\'s Actions', value: '—', color: '#4caf50', index: 7 },
+          { icon: <Assessment />, key: 'total-activities-7', label: 'Total Activities', value: '—', color: '#2196f3', index: 7 },
+          { icon: <Security />, key: 'security-events-7', label: 'Security Events', value: '—', color: '#ff9800', index: 7 },
+          { icon: <Assignment />, key: 'todays-actions-7', label: 'Today\'s Actions', value: '—', color: '#4caf50', index: 7 },
         ];
       default:
         return [
-          { icon: <LocalShipping />, label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
-          { icon: <Security />, label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 1 },
-          { icon: <Warning />, label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
-          { icon: <CheckCircle />, label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
-          { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 4 },
+          { icon: <LocalShipping />, key: 'submitted-0', label: 'Submitted', value: stats.submitted, color: '#2196f3', index: 0 },
+          { icon: <Security />, key: 'inspecting-1', label: 'Inspecting', value: stats.underInspection, color: '#ff9800', index: 1 },
+          { icon: <Warning />, key: 'under-review-2', label: 'Under Review', value: stats.underReview, color: '#ffc107', index: 2 },
+          { icon: <CheckCircle />, key: 'cleared-3', label: 'Cleared', value: stats.cleared, color: '#4caf50', index: 3 },
+          { icon: <Cancel />, key: 'rejected-4', label: 'Rejected', value: stats.rejected, color: '#f44336', index: 4 },
         ];
     }
   };
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
+    // Tab-bar navigation is not a KPI click — fall back to the new tab's first KPI.
+    setSelectedKpiKey(null);
   };
+
+  // KPI cards for the active tab, plus the key that reads selected.
+  // Default (no KPI clicked yet on this tab) is the first KPI. A key left
+  // over from another tab (tab-bar / query / programmatic navigation does
+  // not go through a KPI click) matches nothing here, so it also falls
+  // back to the first KPI of the new tab.
+  const visibleKpis = getDynamicKpis();
+  const activeKpiKey = visibleKpis.some((k) => k.key === selectedKpiKey)
+    ? selectedKpiKey
+    : visibleKpis[0]?.key ?? null;
 
   return (
     <PortalShell brand="CUSTOMS" title="Customs Portal" subtitle="Ethiopian Customs Commission">
       {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        {getDynamicKpis().map((kpi, idx) => (
+        {visibleKpis.map((kpi, idx) => (
           <Grid item xs={12} sm={6} md={4} key={idx}>
-            <PortalKpiCard brand="CUSTOMS" icon={kpi.icon} label={kpi.label} value={kpi.value} color={kpi.color} onClick={() => setTabValue(kpi.index)} selected={tabValue === kpi.index} />
+            <PortalKpiCard brand="CUSTOMS" icon={kpi.icon} label={kpi.label} value={kpi.value} color={kpi.color} onClick={() => { if (kpi.index !== tabValue) { setSelectedKpiKey(null); } else { setSelectedKpiKey(kpi.key); } setTabValue(kpi.index); }} selected={activeKpiKey === kpi.key} />
           </Grid>
         ))}
       </Grid>
