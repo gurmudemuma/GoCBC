@@ -2873,12 +2873,18 @@ router.post('/payment/:paymentID/settle',
   requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
-    body('exchangeRate').isFloat({ min: 0 }).withMessage('Exchange rate must be positive'),
-    body('retentionRate').isFloat({ min: 0, max: 100 })
+    body('exchangeRate').isFloat({ gt: 0 }).withMessage('Exchange rate must be greater than 0'),
+    body('retentionRate').isFloat({ gt: 0, max: 100 })
       .withMessage('Retention rate must be between 0 and 100'),
     body('payingBank').notEmpty().withMessage('Paying bank is required'),
     body('payingBankBIC').notEmpty().withMessage('Paying bank BIC is required'),
     body('swiftReference').notEmpty().withMessage('SWIFT reference is required'),
+    // LEG3 M-9: nbeApprovalRef is required on the /payments/:id/settle
+    // route — require it here too so the two settle routes agree. The
+    // chaincode stores it but does not require it; the API requires it
+    // because settlement without an NBE approval reference is a
+    // compliance gap. Callers updated: test/helpers/api-client.ts.
+    body('nbeApprovalRef').notEmpty().withMessage('NBE approval reference is required'),
   ],
   validateRequest,
   async (req, res) => {
@@ -2920,7 +2926,7 @@ router.post('/payment/:paymentID/settle',
         payingBank,
         payingBankBIC,
         swiftReference,
-        nbeApprovalRef || ''
+        nbeApprovalRef
       );
 
       if (result.success) {
@@ -3673,28 +3679,53 @@ router.post('/lc/:lcID/release-payment',
       });
 
       // ✅ DOCUMENT VERIFICATION: Check shipping documents before payment release
+      // LEG3 M-4: the gate as written could never fire, twice over.
+      // (1) It read lc.ShipmentID, but the LetterOfCredit struct
+      // (chaincodes/coffee/banking.go) has no ShipmentID field and nothing
+      // ever sets one — the `if (shipmentID)` was always false, so the
+      // check was dead code and release proceeded unchecked.
+      // (2) It queried entity_type = 'shipping' (lowercase) while the
+      // upload stores the value verbatim uppercase ('SHIPMENT', 32 rows
+      // live; 0 rows lowercase) — had the gate ever run, it would have
+      // found 0 documents and 400'd every release.
+      // Fixed: resolve the LC's shipments via its contract (shipments
+      // carry contract_id) and match entity_type case-insensitively, so
+      // the gate finds the documents the upload actually stored. When
+      // the LC's contract has no shipments yet, there is nothing to
+      // verify and the release proceeds (previous behaviour for
+      // shipment-less LCs).
       try {
         const { DatabaseService } = await import('../services/databaseService');
-        
-        // Get LC details to find associated shipment
+
+        // Get LC details to find associated shipments via its contract
         const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
         if (lcResult.success && lcResult.data) {
           const lc = lcResult.data;
-          const shipmentID = lc.ShipmentID || lc.shipmentID || lc.shipmentId;
-          
-          if (shipmentID) {
-            const db = DatabaseService.getInstance();
+          const contractID = lc.ContractID || lc.contractID || lc.contractId;
+
+          const db = DatabaseService.getInstance();
+          const shipmentRows: any[] = contractID
+            ? await db.all(
+                `SELECT shipment_id FROM shipments WHERE contract_id = $1`,
+                [contractID]
+              )
+            : [];
+          const shipmentIDs = shipmentRows
+            .map((r: any) => r.shipment_id)
+            .filter(Boolean);
+
+          if (shipmentIDs.length > 0) {
             const documents = await db.all(
-              `SELECT document_type, verification_status FROM documents 
-               WHERE entity_type = 'shipping' AND entity_id = $1 AND status = 'active'`,
-              [shipmentID]
+              `SELECT document_type, verification_status FROM documents
+               WHERE UPPER(entity_type) = 'SHIPMENT' AND entity_id = ANY($1) AND status = 'active'`,
+              [shipmentIDs]
             );
-            
+
             // Required shipping documents for payment release
             const requiredDocs = ['BILL_OF_LADING', 'COMMERCIAL_INVOICE', 'PACKING_LIST'];
             const docTypes = documents.map((d: any) => d.document_type);
             const missing = requiredDocs.filter(type => !docTypes.includes(type));
-            
+
             if (missing.length > 0) {
               logger.warn(`Payment release ${lcID} blocked: Missing ${missing.length} shipping documents`);
               return res.status(400).json({
@@ -3707,12 +3738,12 @@ router.post('/lc/:lcID/release-payment',
                 }
               });
             }
-            
+
             // Check if all required documents are verified
-            const unverifiedRequired = documents.filter((d: any) => 
+            const unverifiedRequired = documents.filter((d: any) =>
               requiredDocs.includes(d.document_type) && d.verification_status !== 'verified'
             );
-            
+
             if (unverifiedRequired.length > 0) {
               logger.warn(`Payment release ${lcID} blocked: ${unverifiedRequired.length} unverified shipping documents`);
               return res.status(400).json({
@@ -3725,7 +3756,7 @@ router.post('/lc/:lcID/release-payment',
                 }
               });
             }
-            
+
             logger.info(`✅ Payment ${lcID}: All required shipping documents verified`);
           }
         }

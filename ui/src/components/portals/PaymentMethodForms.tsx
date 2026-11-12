@@ -289,17 +289,23 @@ export const PaymentMethodForms: React.FC<PaymentMethodFormsProps> = ({
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Beneficiary Account"
+                  label="Beneficiary Account *"
+                  required
                   value={advanceForm.beneficiaryAccount}
                   onChange={(e) => setAdvanceForm({ ...advanceForm, beneficiaryAccount: e.target.value })}
-                  helperText="Exporter's account number"
+                  helperText={advanceForm.beneficiaryAccount ? "Exporter's account number" : 'Required — the API rejects an advance payment with a blank beneficiary account.'}
+                  error={!advanceForm.beneficiaryAccount}
                 />
               </Grid>
             </Grid>
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="contained" onClick={handleSubmit}>
+            <Button
+              variant="contained"
+              onClick={handleSubmit}
+              disabled={!advanceForm.beneficiaryAccount || !advanceForm.payingBank || !advanceForm.payingBankBIC || !advanceForm.swiftReference}
+            >
               Record Payment & Issue Permit
             </Button>
           </DialogActions>

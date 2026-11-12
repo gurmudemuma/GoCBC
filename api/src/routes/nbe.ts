@@ -2,6 +2,8 @@
 // National Bank of Ethiopia (NBE) Routes - Forex Management
 
 import { Router, Request, Response } from 'express';
+import { body, param } from 'express-validator';
+import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
@@ -364,7 +366,15 @@ async function syncRepatriationToChain(
  * POST /api/v1/nbe/forex/:forexId/repatriation
  * Record forex repatriation
  */
-router.post('/forex/:forexId/repatriation', authMiddleware, requireRole('NBE'), async (req: Request, res: Response) => {
+router.post('/forex/:forexId/repatriation', authMiddleware, requireRole('NBE'), [
+  // LEG3 M-5: this route had zero validation — an empty body reached the
+  // chain sync and failed as a 500. Reject bad input up front.
+  param('forexId').notEmpty().withMessage('Forex allocation ID is required'),
+  body('repatriationAmount').isFloat({ gt: 0 }).withMessage('Repatriation amount must be greater than 0'),
+  body('repatriationDate').optional().isISO8601().withMessage('Repatriation date must be a valid date'),
+  body('bankReference').optional().isString(),
+  body('repatriationMethod').optional().isString(),
+], validateRequest, async (req: Request, res: Response) => {
   try {
     const { forexId } = req.params;
     const { repatriationAmount, repatriationDate, bankReference, repatriationMethod } = req.body;

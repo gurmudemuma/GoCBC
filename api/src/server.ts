@@ -258,7 +258,8 @@ class CECBSServer {
     apiV1.use('/files', authMiddleware, fileRoutes);
     
     // V1.4 New routes
-    apiV1.use('/banking', authMiddleware, bankingRoutes);
+    // LEG3 M-9: /banking was mounted twice (here and above) — harmless
+    // duplicate, removed so each route is registered once.
     apiV1.use('/forex', authMiddleware, forexRoutes);
     apiV1.use('/nbe', authMiddleware, nbeRoutes); // NBE forex approval and repatriation endpoints
     apiV1.use('/customs', authMiddleware, customsRoutes);

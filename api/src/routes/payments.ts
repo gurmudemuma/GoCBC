@@ -264,6 +264,61 @@ router.post('/initiate',
       const finalBeneficiaryAccount = beneficiaryAccount || `${finalExporterID}-001`;
       const finalPaymentMethod = paymentMethod || 'LC';
 
+      // LEG3 M-8a: do not trust the client-computed amount. Recompute it
+      // server-side as shipment quantity x contract pricePerKg — the exact
+      // formula the Exporter portal uses — and reject a provable mismatch.
+      // Best-effort reads: if the shipment or contract cannot be read, the
+      // check is skipped (logged) rather than blocking initiation; a
+      // mismatch that CAN be proven is a 400.
+      const shipmentIDForAmount = (req.body as any).shipmentID;
+      if (shipmentIDForAmount) {
+        try {
+          const [shipRes, contractRes] = await Promise.all([
+            fabricService.queryChaincode('ReadShipment', [shipmentIDForAmount]),
+            fabricService.queryChaincode('ReadSalesContract', [finalContractID]),
+          ]);
+          const qty = Number(shipRes?.data?.Quantity ?? shipRes?.data?.quantity);
+          const price = Number(contractRes?.data?.PricePerKg ?? contractRes?.data?.pricePerKg);
+          if (Number.isFinite(qty) && Number.isFinite(price) && qty > 0 && price > 0) {
+            const expectedAmount = Math.round(qty * price * 100) / 100;
+            const suppliedAmount = Number(finalAmount);
+            if (Number.isFinite(suppliedAmount) && Math.abs(suppliedAmount - expectedAmount) > 0.01) {
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'AMOUNT_MISMATCH',
+                  message: `Payment amount ${suppliedAmount} does not match the shipment value ${expectedAmount} (${qty} kg x $${price}/kg)`,
+                  expectedAmount,
+                  suppliedAmount,
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (amountCheckErr) {
+          logger.warn(`[PAYMENT] Could not verify initiate amount for ${paymentID}:`, amountCheckErr);
+        }
+      }
+
+      // LEG3 M-8b: re-initiate is idempotent. paymentID is PAY-<shipmentId>,
+      // so a re-click on the same shipment used to fail on-chain with a
+      // duplicate-ID error. If the payment already exists, return it
+      // (200, alreadyExists) instead of submitting a duplicate.
+      try {
+        const existingPayment = await fabricService.queryChaincode('ReadPayment', [paymentID]);
+        if (existingPayment.success && existingPayment.data) {
+          return res.status(200).json({
+            success: true,
+            alreadyExists: true,
+            message: 'Payment already initiated for this shipment',
+            data: existingPayment.data,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (existingErr) {
+        logger.warn(`[PAYMENT] Could not check for existing payment ${paymentID}, proceeding:`, existingErr);
+      }
+
       const result = await fabricService.invokeChaincode('InitiatePayment', [
         paymentID,
         finalContractID,
@@ -286,11 +341,27 @@ router.post('/initiate',
         // initiation already committed on-chain; a PG failure must not
         // fail the response. Columns mirror POST /payments (same table).
         try {
+          // LEG3 M-5: fill the retention-split columns, not just amount.
+          // The old mirror left amount_usd / retention_amount /
+          // release_amount NULL, so a release of an initiate-path payment
+          // reported releaseAmount: null / totalAmount: null (the
+          // notification said "released: null USD"). The NBE split is
+          // 40% retention / 60% release — the same split recordPayment
+          // (paymentService.ts) applies.
+          const initiatedTotal = Number(finalAmount) || 0;
+          const initiatedRetention = Math.round(initiatedTotal * 0.4 * 100) / 100;
+          const initiatedRelease = Math.round((initiatedTotal - initiatedRetention) * 100) / 100;
           await postgresDb.run(
             `INSERT INTO payments (
-              payment_id, lc_number, contract_id, shipment_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [paymentID, lcID || null, finalContractID, (req.body as any).shipmentID || null, finalExporterID, finalAmount, finalCurrency, finalPaymentMethod, new Date().toISOString(), result.txId || null]
+              payment_id, lc_number, contract_id, shipment_id, exporter_id, amount, currency, payment_method, payment_date, blockchain_tx_id,
+              amount_usd, retention_amount, release_amount, retention_status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (payment_id) DO UPDATE SET
+              amount_usd = EXCLUDED.amount_usd,
+              retention_amount = EXCLUDED.retention_amount,
+              release_amount = EXCLUDED.release_amount`,
+            [paymentID, lcID || null, finalContractID, (req.body as any).shipmentID || null, finalExporterID, finalAmount, finalCurrency, finalPaymentMethod, new Date().toISOString(), result.txId || null,
+             initiatedTotal, initiatedRetention, initiatedRelease, 'RECEIVED']
           );
         } catch (mirrorErr) {
           logger.warn(`[PAYMENT] Could not mirror initiation of ${paymentID} to Postgres:`, mirrorErr);
@@ -595,12 +666,17 @@ router.post('/:paymentID/documents',
  *       500:
  *         description: Internal server error
  */
+// LEG3 M-9: comments is optional here, matching the banking route
+// (POST /banking/payment/:id/verify-documents, the only UI caller) which
+// requires only verifiedBy. Both routes call VerifyPaymentDocuments; the
+// stricter requirement here made this route unusable without a comment
+// for no functional reason.
 router.post('/:paymentID/verify',
   requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('verifiedBy').notEmpty().withMessage('Verified by is required'),
-    body('comments').notEmpty().withMessage('Comments are required'),
+    body('comments').optional().isString(),
   ],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -615,7 +691,7 @@ router.post('/:paymentID/verify',
       const result = await fabricService.invokeChaincode('VerifyPaymentDocuments', [
         paymentID,
         verifiedBy,
-        comments,
+        comments || 'Documents verified against LC terms',
       ]);
 
       if (result.success) {
@@ -919,8 +995,8 @@ router.post('/:paymentID/settle',
   requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
-    body('exchangeRate').notEmpty().withMessage('Exchange rate is required'),
-    body('retentionRate').notEmpty().withMessage('Retention rate is required'),
+    body('exchangeRate').isFloat({ gt: 0 }).withMessage('Exchange rate must be greater than 0'),
+    body('retentionRate').isFloat({ gt: 0, max: 100 }).withMessage('Retention rate must be between 0 and 100'),
     body('payingBank').notEmpty().withMessage('Paying bank is required'),
     body('payingBankBIC').notEmpty().withMessage('Paying bank BIC is required'),
     body('swiftReference').notEmpty().withMessage('SWIFT reference is required'),
@@ -1145,6 +1221,80 @@ router.put('/:paymentID/confirm',
           code: 'INTERNAL_ERROR',
           message: 'Internal server error',
         },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/payments/:paymentID/convert-retention
+ * LEG3 M-5: convert the retained (NBE 40%) portion of a payment from USD
+ * to Birr. PaymentService.convertRetention existed with NO route and NO
+ * UI caller, so RETENTION_CONVERTED was unreachable — and its PG update
+ * referenced columns that did not exist (migration 073) while the
+ * chaincode function it called did not exist either (payment.go
+ * ConvertRetention, seq 8). All three layers now exist.
+ */
+router.post('/:paymentID/convert-retention',
+  authMiddleware,
+  requireRole(['NBE', 'NBE_ADMIN', 'ADMIN']),
+  [
+    param('paymentID').notEmpty().withMessage('Payment ID is required'),
+    body('exchangeRate').isFloat({ gt: 0 }).withMessage('Exchange rate must be greater than 0'),
+    body('amountBirr').isFloat({ gt: 0 }).withMessage('Converted amount (Birr) must be greater than 0'),
+    body('convertedBy').notEmpty().withMessage('Converted by is required'),
+    body('conversionRef').notEmpty().withMessage('Conversion reference is required'),
+    body('conversionDate').notEmpty().withMessage('Conversion date is required'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentID } = req.params;
+      const { exchangeRate, amountBirr, convertedBy, conversionRef, conversionDate } = req.body;
+      const user = (req as any).user;
+
+      logger.info(`[PAYMENT] Converting retention for payment: ${paymentID}`);
+
+      const result = await paymentService.convertRetention({
+        paymentID,
+        exchangeRate: Number(exchangeRate),
+        amountBirr: Number(amountBirr),
+        convertedBy,
+        conversionRef,
+        conversionDate,
+        userId: String(user?.userId || user?.sub || convertedBy),
+        userOrg: user?.organization || user?.org || 'NBE',
+      });
+
+      res.json({
+        success: true,
+        message: 'Retention converted successfully',
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[PAYMENT] Error converting retention:', error);
+      const message = error?.message || 'Internal server error';
+      // F-8: client-state failures (not found, already converted, wrong
+      // on-chain status) are 4xx, not 500.
+      if (/not found/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (/already converted/i.test(message) || /cannot have its retention converted/i.test(message)) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_STATE', message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message },
         timestamp: new Date().toISOString(),
       });
     }

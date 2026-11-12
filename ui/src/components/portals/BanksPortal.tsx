@@ -328,6 +328,7 @@ const BanksPortal: React.FC = () => {
     linkedPaymentId: '',
     applicant: '',
     lcExpiryDate: '',
+    documents: [],
   });
   const [documentExaminationFilter, setDocumentExaminationFilter] = useState<'PENDING_EXAMINATION' | 'VERIFIED'>('PENDING_EXAMINATION');
   const [paymentReleaseFilter, setPaymentReleaseFilter] = useState<'READY_FOR_PAYMENT' | 'RELEASED_TODAY' | 'TOTAL_RELEASED'>('READY_FOR_PAYMENT');
@@ -2253,11 +2254,15 @@ const BanksPortal: React.FC = () => {
   // message as DRAFT on the ledger — it does not send it. Sending an
   // existing message is handleSwiftLifecycleAction('send') below, which
   // calls POST /swift/messages/:id/send (chaincode APPROVED → SENT).
-  const handleCreateSwiftMessage = async (msg: any) => {
+  // LEG3 M-7: returns true only when the message was created, so the
+  // caller can close the compose dialog on success and KEEP it (with the
+  // form contents) on failure. It used to return undefined and the
+  // dialog closed either way.
+  const handleCreateSwiftMessage = async (msg: any): Promise<boolean> => {
     const token = localStorage.getItem('authToken');
     if (!token) {
       showError('Authentication Required', 'You are not authenticated');
-      return;
+      return false;
     }
 
     try {
@@ -2280,6 +2285,9 @@ const BanksPortal: React.FC = () => {
         expiryDate: msg.lcExpiryDate || '',
         valueDate: msg.valueDate || '',
         remittanceInfo: msg.remittanceInfo || '',
+        // LEG3 M-2: forward attached documents so the generic create
+        // route calls AddSWIFTDocuments with them.
+        documents: msg.documents && msg.documents.length > 0 ? msg.documents : undefined,
       };
 
       // Choose endpoint based on message type
@@ -2295,11 +2303,14 @@ const BanksPortal: React.FC = () => {
       if (result.success) {
         showSuccess('SWIFT Message Created', `Message ${payload.messageID} created as DRAFT. Approve it from the SWIFT tab, then send it.`);
         loadBankingData();
+        return true;
       } else {
         showError('SWIFT Creation Failed', result.error?.message || 'Failed to create SWIFT message');
+        return false;
       }
     } catch (error: any) {
       showError('Network Error', error.message || 'Failed to create SWIFT message');
+      return false;
     }
   };
 
@@ -4871,7 +4882,7 @@ const BanksPortal: React.FC = () => {
           <PrimaryButton brand="BANKS"
             variant="contained"
             onClick={handleSettlePayment}
-            disabled={settling || !settleForm.exchangeRate || !settleForm.retentionRate || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
+            disabled={settling || !(Number(settleForm.exchangeRate) > 0) || !(Number(settleForm.retentionRate) > 0) || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
           >
             {settling ? 'Settling...' : 'Settle Payment'}
           </PrimaryButton>
@@ -4887,6 +4898,8 @@ const BanksPortal: React.FC = () => {
                   onChange={(e) => setSettleForm({ ...settleForm, exchangeRate: e.target.value })}
                   fullWidth
                   required
+                  error={settleForm.exchangeRate !== '' && !(Number(settleForm.exchangeRate) > 0)}
+                  helperText={settleForm.exchangeRate !== '' && !(Number(settleForm.exchangeRate) > 0) ? 'Rate must be greater than 0 — a 0 rate is rejected, never settled at a default rate.' : 'Use the live NBE rate; 0 is not accepted.'}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -4897,6 +4910,8 @@ const BanksPortal: React.FC = () => {
                   onChange={(e) => setSettleForm({ ...settleForm, retentionRate: e.target.value })}
                   fullWidth
                   required
+                  error={settleForm.retentionRate !== '' && !(Number(settleForm.retentionRate) > 0 && Number(settleForm.retentionRate) <= 100)}
+                  helperText={settleForm.retentionRate !== '' && !(Number(settleForm.retentionRate) > 0 && Number(settleForm.retentionRate) <= 100) ? 'Retention must be greater than 0 and at most 100.' : undefined}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -5699,8 +5714,11 @@ const BanksPortal: React.FC = () => {
             showError('Validation', 'Linked LC ID is required for MT700');
             return;
           }
-          await handleCreateSwiftMessage(f);
-          setSwiftComposeOpen(false);
+          // LEG3 M-7: close ONLY on success — on failure the dialog
+          // stays open with the form contents intact so the user can
+          // fix the error instead of retyping everything.
+          const created = await handleCreateSwiftMessage(f);
+          if (created) setSwiftComposeOpen(false);
         }}
       />
 

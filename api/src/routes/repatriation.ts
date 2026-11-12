@@ -2,6 +2,8 @@
 // Export Proceeds Repatriation API Routes
 
 import express from 'express';
+import { body, param } from 'express-validator';
+import { validateRequest } from '../middleware/validation';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
 import { authMiddleware } from '../middleware/auth';
@@ -206,7 +208,28 @@ function initiateFailureStatus(error: string): number | null {
 }
 
 // POST /api/v1/repatriation/initiate — Initiate new repatriation
-router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADMIN', 'BANK OFFICER']), async (req, res) => {
+// LEG3 M-11: this route had ZERO validation — an empty body reached
+// submitTransactionAs and failed at the Fabric layer as a 500/409.
+// Validation now rejects bad input up front (400 VALIDATION_ERROR, the
+// codebase standard — see middleware/validation.ts — rather than a
+// one-off 422). shipmentDate must be YYYY-MM-DD: the chaincode parses
+// exactly that format (repatriation.go).
+router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADMIN', 'BANK OFFICER']), [
+  body('repatriationId').notEmpty().withMessage('Repatriation ID is required'),
+  body('paymentId').notEmpty().withMessage('Payment ID is required'),
+  body('contractId').notEmpty().withMessage('Contract ID is required'),
+  body('shipmentId').notEmpty().withMessage('Shipment ID is required'),
+  body('exporterId').notEmpty().withMessage('Exporter ID is required'),
+  body('exportAmount').isFloat({ gt: 0 }).withMessage('Export amount must be greater than 0'),
+  body('currency').notEmpty().withMessage('Currency is required'),
+  body('fcyAccountNumber').notEmpty().withMessage('FCY account number is required'),
+  body('fcyBank').notEmpty().withMessage('FCY bank is required'),
+  body('fcyBankBIC').notEmpty().withMessage('FCY bank BIC is required'),
+  body('shipmentDate').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('Shipment date must be YYYY-MM-DD'),
+  body('swiftReference').optional().isString(),
+  body('bankStatementRef').optional().isString(),
+  body('notes').optional().isString(),
+], validateRequest, async (req, res) => {
   try {
     const {
       repatriationId,
@@ -219,7 +242,13 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
       fcyAccountNumber,
       fcyBank,
       fcyBankBIC,
-      shipmentDate
+      shipmentDate,
+      // LEG3 M-11: these three used to be silently discarded — the
+      // dialog sent them and the handler destructured only the 11
+      // chaincode args. They are now stored in the PG mirror below.
+      swiftReference,
+      bankStatementRef,
+      notes
     } = req.body;
 
     logger.info(`[REPATRIATION] 📝 Initiating repatriation: ${repatriationId}`);
@@ -254,10 +283,46 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
 
     logger.info(`[REPATRIATION] ✅ Initiated: ${repatriationId}`);
 
+    // LEG3 M-11: mirror the initiation to Postgres, INCLUDING the three
+    // form extras the old handler dropped (swiftReference -> the
+    // swift_references evidence array, bankStatementRef -> bank
+    // certificate, notes -> comments). Ledger-first and best-effort: the
+    // chain write already committed; a mirror failure is logged, never
+    // failed. compliance_deadline mirrors the chaincode's shipment date
+    // + 120 days (repatriation.go); status PENDING matches the ledger.
+    try {
+      const deadline = new Date(`${shipmentDate}T00:00:00.000Z`);
+      deadline.setUTCDate(deadline.getUTCDate() + 120);
+      await postgresDb.run(
+        `INSERT INTO export_proceeds_repatriation (
+          repatriation_id, payment_id, contract_id, shipment_id, exporter_id,
+          export_amount, currency, fcy_account_number, fcy_bank, fcy_bank_bic,
+          shipment_date, compliance_deadline, status,
+          swift_references, bank_certificate, comments
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PENDING', $13, $14, $15)
+        ON CONFLICT (repatriation_id) DO NOTHING`,
+        [
+          repatriationId, paymentId, contractId, shipmentId, exporterId,
+          Number(exportAmount), currency, fcyAccountNumber, fcyBank, fcyBankBIC,
+          shipmentDate, deadline.toISOString(),
+          swiftReference ? JSON.stringify([swiftReference]) : '[]',
+          bankStatementRef || null,
+          notes || null,
+        ]
+      );
+    } catch (mirrorErr) {
+      logger.warn(`[REPATRIATION] Could not mirror initiation of ${repatriationId} to Postgres:`, mirrorErr);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Repatriation initiated successfully',
-      data: { repatriationId },
+      data: {
+        repatriationId,
+        swiftReference: swiftReference || undefined,
+        bankStatementRef: bankStatementRef || undefined,
+        notes: notes || undefined,
+      },
       txId: result.transactionId
     });
   } catch (error: any) {
@@ -271,7 +336,16 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
 });
 
 // POST /api/v1/repatriation/:id/record — Record actual repatriation
-router.post('/:id/record', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADMIN', 'BANK OFFICER']), async (req, res) => {
+// LEG3 M-11 (same class as /initiate): no validation — an empty body
+// failed at the Fabric layer as a 500.
+router.post('/:id/record', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADMIN', 'BANK OFFICER']), [
+  param('id').notEmpty().withMessage('Repatriation ID is required'),
+  body('repatriatedAmount').isFloat({ gt: 0 }).withMessage('Repatriated amount must be greater than 0'),
+  body('convertedAmount').isFloat({ gt: 0 }).withMessage('Converted amount must be greater than 0'),
+  body('exchangeRate').isFloat({ gt: 0 }).withMessage('Exchange rate must be greater than 0'),
+  body('swiftReference').optional().isString(),
+  body('bankCertificate').optional().isString(),
+], validateRequest, async (req, res) => {
   try {
     const { id } = req.params;
     const {

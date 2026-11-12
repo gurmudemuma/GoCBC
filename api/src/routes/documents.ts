@@ -200,12 +200,16 @@ router.post('/',
       }
 
       // ✅ Cache in PostgreSQL
+      // LEG3 M-9: the old INSERT omitted entity_type/entity_id (added to
+      // the table by migration 032), so hash-registered documents were
+      // invisible to every entity query (unlike /documents/upload, which
+      // stores them). Store the resolved entity type/id.
       await postgresDb.run(
         `INSERT INTO documents (
-          document_id, shipment_id, contract_id, exporter_id, document_type,
+          document_id, entity_type, entity_id, shipment_id, contract_id, exporter_id, document_type,
           file_name, file_hash, ipfs_cid, uploaded_by, blockchain_tx_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [documentID, shipmentID || null, contractID || null, exporterID,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [documentID, documentEntityType, documentEntityId, shipmentID || null, contractID || null, exporterID,
          documentType, fileName, fileHash, ipfsCID || null, user.username, blockchainResult.txId]
       );
 
@@ -519,7 +523,13 @@ router.post('/upload',
       const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
       
       const documentID = `DOC-${Date.now()}${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
-      const finalEntityType = entityType || 'CONTRACT';
+      // LEG3 M-4: normalise the stored entity type to uppercase. Every
+      // reader queries uppercase ('SHIPMENT', 'CONTRACT', 'LC') or
+      // UPPER(entity_type); a lowercase value stored here would be
+      // invisible to the LC payment-release gate (banking.ts) and to the
+      // LC document queries. All values stored so far are already
+      // uppercase, so this changes no existing row.
+      const finalEntityType = (entityType || 'CONTRACT').toUpperCase();
       const finalEntityId = entityId || documentID;
 
       const ownApplicationError = assertOwnApplication(user, finalEntityType, finalEntityId);

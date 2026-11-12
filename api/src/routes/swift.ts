@@ -559,7 +559,12 @@ router.post('/messages/mt752',
  */
 router.post('/messages/:messageID/approve',
   authMiddleware,
-  requireRole('BANKS', 'BANK_ADMIN'),
+  // LEG3 M-1: the NBE_APPROVED -> APPROVED step is the completion of the
+  // NBE approval flow (chaincode ApproveSWIFTMessage accepts DRAFT or
+  // NBE_APPROVED and performs no MSP check — the API role is the gate),
+  // so the NBE user who did the nbe-approve must be able to do it. The
+  // NBE portal's approve button 403'd for its own user until now.
+  requireRole('BANKS', 'BANK_ADMIN', 'NBE', 'NBE_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -590,6 +595,64 @@ router.post('/messages/:messageID/approve',
       }
     } catch (error: any) {
       logger.error('[SWIFT] Error approving message:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/swift/messages/:messageID/documents
+ * LEG3 M-2: attach documents to an existing SWIFT message. There was no
+ * attach path at all — the compose dialog had no documents field and the
+ * only AddSWIFTDocuments call rode along with message creation
+ * (swift.ts create route). The chaincode accepts a JSON array of bare
+ * strings (document names) or objects {id, name, hash}, and only for
+ * DRAFT or NBE_APPROVED messages.
+ */
+router.post('/messages/:messageID/documents',
+  authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
+  [
+    param('messageID').notEmpty().withMessage('Message ID is required'),
+    body('documents').isArray({ min: 1 }).withMessage('documents must be a non-empty array'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { messageID } = req.params;
+      const { documents } = req.body;
+
+      logger.info(`[SWIFT] Attaching ${documents.length} document(s) to message: ${messageID}`);
+
+      const result = await fabricService.invokeChaincode('AddSWIFTDocuments', [
+        messageID,
+        JSON.stringify(documents),
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ SWIFT documents attached to message: ${messageID}`);
+        res.status(201).json({
+          success: true,
+          data: { messageID, attachedCount: documents.length },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        const message = result.error || 'Failed to attach documents';
+        // F-8: a missing message is a client error (404); a message in
+        // the wrong state (already APPROVED/SENT) is a conflict (409).
+        const status = /not found/i.test(message) ? 404
+          : /can only be added to/i.test(message) ? 409 : 400;
+        res.status(status).json({
+          success: false,
+          error: { code: 'ATTACH_DOCUMENTS_FAILED', message },
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SWIFT] Error attaching documents:', error);
       res.status(500).json({
         success: false,
         error: { code: 'INTERNAL_ERROR', message: error.message },
@@ -1031,7 +1094,10 @@ router.get('/messages',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      const { type, status, lcId, paymentId, reference, bic, direction } = req.query;
+      // LEG3 M-9: startDate/endDate were accepted by the NBE
+      // SWIFTMonitoring UI (YYYY-MM-DD) but never read here — the
+      // date-range filter was dead server-side.
+      const { type, status, lcId, paymentId, reference, bic, direction, startDate, endDate } = req.query;
 
       let result;
 
@@ -1065,10 +1131,26 @@ router.get('/messages',
       }
 
       if (result.success) {
+        // LEG3 M-9: apply the NBE date-range filter server-side. The
+        // filter is inclusive on both ends (a bare YYYY-MM-DD covers
+        // the whole day); rows without a parseable createdAt are kept
+        // when no range is given and dropped when a range is given.
+        let messages = Array.isArray(result.data) ? result.data : [];
+        if (startDate || endDate) {
+          const start = startDate ? new Date(`${startDate}T00:00:00.000Z`).getTime() : NaN;
+          const end = endDate ? new Date(`${endDate}T23:59:59.999Z`).getTime() : NaN;
+          messages = messages.filter((m: any) => {
+            const created = new Date(m.createdAt || m.CreatedAt || m.created_at || '').getTime();
+            if (Number.isNaN(created)) return false;
+            if (!Number.isNaN(start) && created < start) return false;
+            if (!Number.isNaN(end) && created > end) return false;
+            return true;
+          });
+        }
         res.json({
           success: true,
-          data: result.data || [],
-          count: Array.isArray(result.data) ? result.data.length : 0,
+          data: messages,
+          count: messages.length,
           timestamp: new Date().toISOString(),
         });
       } else {
