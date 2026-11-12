@@ -45,6 +45,12 @@ router.post('/',
         destination,
         status
       } = req.body;
+      // SubmitCustomsDeclaration takes 11 args (customs.go); the three
+      // the wrapper body does not name get the same defaults as the
+      // /declaration/submit route (customs.ts).
+      const declarationType = req.body.declarationType || 'STANDARD';
+      const portOfExit = req.body.portOfExit || 'Djibouti Port';
+      const eudrCompliant = req.body.eudrCompliant || false;
 
       logger.info(`[CUSTOMS] 📝 Submitting customs declaration: ${customsID}`);
 
@@ -64,65 +70,100 @@ router.post('/',
         });
       }
 
-      // ⚠️ WRITE TO COUCHDB DIRECTLY to bypass blockchain propagation delays
-      logger.info(`[CUSTOMS] Writing declaration ${declarationNumber} directly to CouchDB`);
-      
-      const customsDoc = {
-        _id: `customs:${declarationNumber}`,
-        docType: 'customs',
-        declarationNumber,
-        shipmentID: shipmentId,
-        contractID: contractId,
-        exporterID: exporterId,
-        hsCode: hsCode || '0901.21',
-        quantity: quantity || 10000,
-        value: value || 85000,
-        currency: currency || 'USD',
-        destination: destination || 'Germany',
-        submissionDate: new Date().toISOString().split('T')[0],
-        status: 'SUBMITTED',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
+      // Ledger-first (remaining-fixes #3): the old code PUT a
+      // `customs:<id>` doc straight into ONE peer's CouchDB, which the
+      // chaincode never reads — SubmitCustomsDeclaration keys
+      // declarations DECL_<id> and cascades the shipment to
+      // CUSTOMS_DECLARED — so the declaration was invisible to every
+      // other peer, to ReadCustomsDeclaration, and to the review flow,
+      // while the API still returned 201 success. Route it through the
+      // chaincode like /declaration/submit does (customs.ts). No
+      // chaincode change was needed: the function takes exactly the
+      // eleven args below. A failed chain call returns 503 and inserts
+      // no PG row; the PG row is written only after on-chain success.
+      // NOTE: no explicit connectAsOrg here, matching /declaration/submit
+      // — invokeChaincode resolves the signing MSP from the request
+      // context (fabricService.ts); the sticky-gateway identity work is
+      // W1's scope.
+      let blockchainResult: any = null;
+      let blockchainError: string | null = null;
       try {
-        const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
-        const axios = require('axios');
-        await axios.put(
-          `${couchDbUrl}/coffeechannel_coffee/${customsDoc._id}`,
-          customsDoc,
-          {
-            auth: { username: 'admin', password: 'adminpw' },
-            headers: { 'Content-Type': 'application/json' }
-          }
+        blockchainResult = await fabricService.invokeChaincode(
+          'SubmitCustomsDeclaration',
+          [
+            declarationNumber,
+            shipmentId,
+            exporterId,
+            declarationType,
+            hsCode || '0901.21',
+            String(quantity ?? 10000),
+            String(value ?? 85000),
+            currency || 'USD',
+            destination || 'Germany',
+            portOfExit,
+            String(eudrCompliant)
+          ]
         );
-        logger.info(`✅ [CUSTOMS] Declaration ${declarationNumber} written to CouchDB`);
-      } catch (couchError: any) {
-        if (couchError.response?.status === 409) {
-          logger.warn(`[CUSTOMS] Declaration ${declarationNumber} already exists in CouchDB (409 conflict)`);
-        } else {
-          throw couchError;
+        if (!blockchainResult?.success) {
+          blockchainError = blockchainResult?.error || 'Chaincode call did not succeed';
         }
+      } catch (chainError: any) {
+        blockchainError = chainError?.message || 'Chaincode call failed';
+        blockchainResult = null;
       }
+      const blockchain_tx_id = !blockchainError && blockchainResult?.success === true
+        ? (blockchainResult?.txId || null)
+        : null;
+      if (!blockchain_tx_id) {
+        logger.warn(`[CUSTOMS] Declaration ${declarationNumber} NOT recorded on blockchain, no PG row written: ${blockchainError}`);
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'CUSTOMS_SUBMIT_FAILED',
+            message: `Customs declaration ${declarationNumber} could not be recorded on the ledger: ${blockchainError}. No status change was recorded.`
+          },
+          data: { declarationID: declarationNumber, shipmentID: shipmentId, blockchainSynced: false, blockchainError },
+          timestamp: new Date().toISOString()
+        });
+      }
+      logger.info(`✅ [CUSTOMS] Declaration ${declarationNumber} recorded on blockchain, TX: ${blockchain_tx_id}`);
 
-      // Insert to PostgreSQL
+      // Insert to PostgreSQL (only after on-chain success)
       await postgresDb.run(
         `INSERT INTO customs_declarations (
           declaration_id, declaration_number, shipment_id, contract_id, exporter_id,
-          hs_code, quantity, declared_value, currency, destination, submitted_date, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          hs_code, quantity, declared_value, currency, destination, submitted_date, status,
+          blockchain_tx_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (declaration_id) DO NOTHING`,
         [declarationNumber, declarationNumber, shipmentId, contractId, exporterId,
          hsCode || '0901.21', quantity || 10000, value || 85000, currency || 'USD',
-         destination || 'Germany', new Date().toISOString().split('T')[0], 'SUBMITTED']
+         destination || 'Germany', new Date().toISOString().split('T')[0], 'SUBMITTED',
+         blockchain_tx_id]
       );
 
       logger.info(`✅ [CUSTOMS] Declaration submitted: ${declarationNumber}`);
+
+      // The ledger cascade moves the shipment PERMIT_ISSUED (or
+      // CUSTOMS_REJECTED on a resubmission) -> CUSTOMS_DECLARED on
+      // submit (customs.go SubmitCustomsDeclaration); mirror it in
+      // Postgres so the portals see it too, as /declaration/submit
+      // does. Best-effort: the declaration is already committed — a
+      // mirror failure must not turn a successful submit into an error.
+      try {
+        await postgresDb.run(
+          `UPDATE shipments SET status = 'CUSTOMS_DECLARED', updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $1`,
+          [shipmentId]
+        );
+      } catch (mirrorError) {
+        logger.warn(`[CUSTOMS] Shipment ${shipmentId} PG mirror to CUSTOMS_DECLARED failed after declaration ${declarationNumber} committed:`, mirrorError);
+      }
+
       res.status(201).json({
         success: true,
         message: 'Customs declaration submitted successfully',
         data: { customsID: declarationNumber, declarationNumber, status: 'SUBMITTED' },
-        txId: null,
+        txId: blockchain_tx_id,
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

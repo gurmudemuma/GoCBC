@@ -51,22 +51,27 @@ export class CustomsService {
       // Connect as ECTA (submitting on behalf of exporter after quality pass)
       await this.fabricService.connectAsOrg('ECTAMSP');
 
-      // Submit to blockchain
+      // Submit to blockchain. SubmitCustomsDeclaration takes exactly 11
+      // args (customs.go:244-247); the old call passed 14 (exporterName,
+      // invoiceNumber, packingListNumber, certificateOfOrigin and a
+      // timestamp), which the Fabric Go dispatcher rejects, so the
+      // quality-pass auto-declaration (shipmentService.
+      // triggerCustomsDeclaration, called from quality.ts) could never
+      // land on-chain and always fell into its silent best-effort catch.
+      // The dropped values stay PG-only (see the INSERT below).
       const blockchainResult = await this.fabricService.submitTransaction(
         'SubmitCustomsDeclaration',
         declarationData.declarationID,
         declarationData.shipmentID,
         declarationData.exporterID,
-        declarationData.exporterName,
+        'STANDARD',
         declarationData.hsCode,
         declarationData.quantity.toString(),
         declarationData.value.toString(),
         declarationData.currency,
         declarationData.destination,
-        declarationData.invoiceNumber || '',
-        declarationData.packingListNumber || '',
-        declarationData.certificateOfOrigin || '',
-        new Date().toISOString()
+        'Djibouti Port',
+        'false'
       );
 
       // Update database

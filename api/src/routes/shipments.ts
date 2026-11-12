@@ -1530,63 +1530,64 @@ router.post('/:shipmentID/bill-of-lading',
 
       logger.info(`[SHIPPING] Recording B/L for shipment: ${shipmentID}`);
 
-      // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
-      // Blockchain state propagation causes delays that break E2E test flow
+      // Ledger-first (remaining-fixes #3): the old code wrote the B/L
+      // fields straight into ONE peer's CouchDB (db.insert on
+      // SHIPMENT_<id>), so the other five peers never saw the B/L and
+      // the ledger had no LOADED transition at all. RecordBillOfLading
+      // (main.go) writes the same fields via PutState under the
+      // endorsement policy, so every peer commits it. No chaincode
+      // change was needed: the function takes exactly the seven args
+      // below and sets Status LOADED. PG mirror only after on-chain
+      // success; a failed chain call returns 503 and mirrors nothing.
+      let chainResult: any = null;
+      let chainError: string | null = null;
       try {
-        const couchDbUrl = new URL(process.env.COUCHDB_URL || 'http://127.0.0.1:5984');
-        if (!couchDbUrl.username) {
-          couchDbUrl.username = process.env.COUCHDB_USERNAME || 'admin';
+        await fabricService.connectAsOrg('ShippingMSP');
+        chainResult = await fabricService.invokeChaincode('RecordBillOfLading', [
+          shipmentID,
+          billOfLadingNo,
+          vesselName,
+          departurePort,
+          destinationPort,
+          estimatedArrival,
+          trackingNumber || '',
+        ]);
+        if (!chainResult?.success) {
+          chainError = chainResult?.error || 'Chaincode call did not succeed';
         }
-        if (!couchDbUrl.password) {
-          couchDbUrl.password = process.env.COUCHDB_PASSWORD || 'adminpw';
-        }
-        const CouchDB = require('nano')(couchDbUrl.toString());
-        const db = CouchDB.use('coffeechannel_coffee');
-        
-        // Read and update shipment document
-        const shipmentDocKey = `SHIPMENT_${shipmentID}`;
-        const shipmentDoc = await db.get(shipmentDocKey);
-        
-        // Update shipment with B/L details
-        shipmentDoc.BillOfLadingNo = billOfLadingNo;
-        shipmentDoc.VesselName = vesselName;
-        shipmentDoc.DeparturePort = departurePort;
-        shipmentDoc.DestinationPort = destinationPort;
-        shipmentDoc.EstimatedArrival = estimatedArrival;
-        shipmentDoc.TrackingNumber = trackingNumber || '';
-        shipmentDoc.Status = 'LOADED';
-        shipmentDoc.UpdatedAt = new Date().toISOString();
-        
-        await db.insert(shipmentDoc);
-
-        // Mirror into Postgres (chaincode RecordBillOfLading sets LOADED).
-        await mirrorShipmentStatusPG(shipmentID, 'LOADED');
-        
-        logger.info(`✅ [SHIPPING] B/L recorded successfully in CouchDB: ${billOfLadingNo}`);
-        
-        res.json({
-          success: true,
-          message: 'Bill of Lading recorded successfully',
-          data: {
-            shipmentID,
-            billOfLadingNo,
-            vesselName,
-            status: 'LOADED'
-          },
-          txId: null, // CouchDB direct write
-          timestamp: new Date().toISOString(),
-        });
-      } catch (couchErr: any) {
-        logger.error(`❌ [SHIPPING] Failed to record B/L in CouchDB: ${couchErr.message}`);
-        res.status(400).json({
+      } catch (err: any) {
+        chainError = err?.message || 'Chaincode call failed';
+        chainResult = null;
+      }
+      if (chainError || !chainResult?.success) {
+        logger.error(`❌ [SHIPPING] Failed to record B/L on the ledger for shipment ${shipmentID}: ${chainError}`);
+        return res.status(503).json({
           success: false,
           error: {
-            code: 'RECORDING_FAILED',
-            message: couchErr.message || 'Failed to record Bill of Lading',
+            code: 'BILL_OF_LADING_FAILED',
+            message: `Bill of Lading for shipment ${shipmentID} could not be recorded on the ledger: ${chainError}. No status change was recorded.`,
           },
           timestamp: new Date().toISOString(),
         });
       }
+
+      // Mirror into Postgres (chaincode RecordBillOfLading sets LOADED).
+      await mirrorShipmentStatusPG(shipmentID, 'LOADED');
+
+      logger.info(`✅ [SHIPPING] B/L recorded on the ledger for shipment ${shipmentID}: ${billOfLadingNo}, TX: ${chainResult.txId}`);
+
+      res.json({
+        success: true,
+        message: 'Bill of Lading recorded successfully',
+        data: {
+          shipmentID,
+          billOfLadingNo,
+          vesselName,
+          status: 'LOADED'
+        },
+        txId: chainResult.txId || null,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       logger.error('[SHIPPING] Error recording Bill of Lading:', error);
       res.status(500).json({
