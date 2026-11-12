@@ -97,7 +97,7 @@ const DiscrepancyResolutionDialog: React.FC<DiscrepancyResolutionDialogProps> = 
 
         {resolutionMethod === 'reject' && (
           <Grid container spacing={2}>
-            <Grid item xs={12}><Alert severity="error">Rejecting documents moves the LC to a terminal state and prevents payment release.</Alert></Grid>
+            <Grid item xs={12}><Alert severity="error">Rejecting documents marks the LC EXPIRED on the ledger and in the database, and prevents payment release.</Alert></Grid>
           </Grid>
         )}
 

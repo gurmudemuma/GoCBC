@@ -1094,7 +1094,10 @@ router.get('/messages',
   authMiddleware,
   async (req: Request, res: Response) => {
     try {
-      const { type, status, lcId, paymentId, reference, bic, direction } = req.query;
+      // LEG3 M-9: startDate/endDate were accepted by the NBE
+      // SWIFTMonitoring UI (YYYY-MM-DD) but never read here — the
+      // date-range filter was dead server-side.
+      const { type, status, lcId, paymentId, reference, bic, direction, startDate, endDate } = req.query;
 
       let result;
 
@@ -1128,10 +1131,26 @@ router.get('/messages',
       }
 
       if (result.success) {
+        // LEG3 M-9: apply the NBE date-range filter server-side. The
+        // filter is inclusive on both ends (a bare YYYY-MM-DD covers
+        // the whole day); rows without a parseable createdAt are kept
+        // when no range is given and dropped when a range is given.
+        let messages = Array.isArray(result.data) ? result.data : [];
+        if (startDate || endDate) {
+          const start = startDate ? new Date(`${startDate}T00:00:00.000Z`).getTime() : NaN;
+          const end = endDate ? new Date(`${endDate}T23:59:59.999Z`).getTime() : NaN;
+          messages = messages.filter((m: any) => {
+            const created = new Date(m.createdAt || m.CreatedAt || m.created_at || '').getTime();
+            if (Number.isNaN(created)) return false;
+            if (!Number.isNaN(start) && created < start) return false;
+            if (!Number.isNaN(end) && created > end) return false;
+            return true;
+          });
+        }
         res.json({
           success: true,
-          data: result.data || [],
-          count: Array.isArray(result.data) ? result.data.length : 0,
+          data: messages,
+          count: messages.length,
           timestamp: new Date().toISOString(),
         });
       } else {

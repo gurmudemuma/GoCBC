@@ -2741,6 +2741,12 @@ router.post('/payment/:paymentID/settle',
     body('payingBank').notEmpty().withMessage('Paying bank is required'),
     body('payingBankBIC').notEmpty().withMessage('Paying bank BIC is required'),
     body('swiftReference').notEmpty().withMessage('SWIFT reference is required'),
+    // LEG3 M-9: nbeApprovalRef is required on the /payments/:id/settle
+    // route — require it here too so the two settle routes agree. The
+    // chaincode stores it but does not require it; the API requires it
+    // because settlement without an NBE approval reference is a
+    // compliance gap. Callers updated: test/helpers/api-client.ts.
+    body('nbeApprovalRef').notEmpty().withMessage('NBE approval reference is required'),
   ],
   validateRequest,
   async (req, res) => {
@@ -2782,7 +2788,7 @@ router.post('/payment/:paymentID/settle',
         payingBank,
         payingBankBIC,
         swiftReference,
-        nbeApprovalRef || ''
+        nbeApprovalRef
       );
 
       if (result.success) {

@@ -305,6 +305,9 @@ export class BanksAPI extends GoCBCApiClient {
       payingBank: 'Commercial Bank of Ethiopia',
       payingBankBIC: 'CBETETAA',
       swiftReference: `SWIFT-${Date.now()}`,
+      // LEG3 M-9: /banking/payment/:id/settle now requires
+      // nbeApprovalRef, like /payments/:id/settle.
+      nbeApprovalRef: `NBE-APPR-${Date.now()}`,
       ...settleData,
     });
   }

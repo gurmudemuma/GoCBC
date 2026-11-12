@@ -666,12 +666,17 @@ router.post('/:paymentID/documents',
  *       500:
  *         description: Internal server error
  */
+// LEG3 M-9: comments is optional here, matching the banking route
+// (POST /banking/payment/:id/verify-documents, the only UI caller) which
+// requires only verifiedBy. Both routes call VerifyPaymentDocuments; the
+// stricter requirement here made this route unusable without a comment
+// for no functional reason.
 router.post('/:paymentID/verify',
   requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
     body('verifiedBy').notEmpty().withMessage('Verified by is required'),
-    body('comments').notEmpty().withMessage('Comments are required'),
+    body('comments').optional().isString(),
   ],
   validateRequest,
   async (req: Request, res: Response) => {
@@ -686,7 +691,7 @@ router.post('/:paymentID/verify',
       const result = await fabricService.invokeChaincode('VerifyPaymentDocuments', [
         paymentID,
         verifiedBy,
-        comments,
+        comments || 'Documents verified against LC terms',
       ]);
 
       if (result.success) {
