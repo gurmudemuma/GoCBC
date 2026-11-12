@@ -847,7 +847,13 @@ func (c *CoffeeContract) QueryRepatriationsByPayment(ctx contractapi.Transaction
 	if err := ValidateID(paymentID, "paymentID"); err != nil {
 		return nil, err
 	}
-	queryBytes, err := json.Marshal(map[string]interface{}{"selector": map[string]string{"paymentId": paymentID}})
+	// D1 fix: the selector MUST discriminate repatriation records from the
+	// payment document itself. Payment carries json:"paymentId"
+	// (payment.go:17) but no "repatriationId", so a bare {"paymentId": …}
+	// selector matched the payment doc and InitiateRepatriation's
+	// uniqueness check (len > 0) could never pass. Same $exists pattern
+	// as QueryAllRepatriations below.
+	queryBytes, err := json.Marshal(map[string]interface{}{"selector": map[string]interface{}{"paymentId": paymentID, "repatriationId": map[string]bool{"$exists": true}}})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payment repatriation query: %w", err)
 	}
