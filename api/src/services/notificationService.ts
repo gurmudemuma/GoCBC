@@ -35,8 +35,12 @@ export interface InAppNotificationInput {
    *  exporterId when omitted. */
   userId?: number | string;
   /** LC id to resolve the exporter through when exporterId is unknown
-   *  (letters_of_credit -> shipment -> exporter). */
+   *  (letters_of_credit.exporter_id, else contract/shipment -> exporter). */
   lcId?: string;
+  /** Payment id to resolve the exporter through when exporterId is unknown
+   *  (payments.exporter_id, else contract/shipment/LC -> exporter) —
+   *  e.g. an MT103 SWIFT message linked to a payment but no LC. */
+  paymentId?: string;
 }
 
 export interface InAppNotificationRow {
@@ -278,11 +282,37 @@ export class NotificationService {
   private async resolveExporterFromLc(lcId: string | null | undefined): Promise<string | null> {
     if (!lcId) return null;
     try {
+      // letters_of_credit carries exporter_id directly (101/101 rows live)
+      // and contract_id; shipment_id is NULL on every live LC — the old
+      // shipment-only lookup therefore resolved nothing. Fall back
+      // through the contract, then the shipment, for legacy rows.
       const row = await this.db.get(
-        'SELECT shipment_id FROM letters_of_credit WHERE lc_number = $1',
+        'SELECT exporter_id, contract_id, shipment_id FROM letters_of_credit WHERE lc_number = $1 OR lc_id = $1',
         [lcId]
       );
-      return this.resolveExporterFromShipment(row?.shipment_id);
+      if (!row) return null;
+      return row.exporter_id
+        || (await this.resolveExporterFromContract(row.contract_id))
+        || (await this.resolveExporterFromShipment(row.shipment_id));
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveExporterFromPayment(paymentId: string | null | undefined): Promise<string | null> {
+    if (!paymentId) return null;
+    try {
+      // payments carries exporter_id directly (7/7 rows live) and
+      // contract_id; shipment_id is NULL on 6/7 rows.
+      const row = await this.db.get(
+        'SELECT exporter_id, contract_id, shipment_id, lc_number FROM payments WHERE payment_id = $1',
+        [paymentId]
+      );
+      if (!row) return null;
+      return row.exporter_id
+        || (await this.resolveExporterFromContract(row.contract_id))
+        || (await this.resolveExporterFromShipment(row.shipment_id))
+        || (await this.resolveExporterFromLc(row.lc_number));
     } catch {
       return null;
     }
@@ -303,16 +333,21 @@ export class NotificationService {
 
   /**
    * Resolve the exporter audience for an entity id from the Postgres
-   * read model, following the entity's own linkage (payment/declaration/
-   * forex -> shipment -> exporter, permit -> contract -> exporter,
-   * LC -> shipment -> exporter). Returns null when the entity has no
-   * exporter linkage (e.g. SWIFT messages are not mirrored in Postgres)
-   * — the caller then emits role-only rows.
+   * read model, following the entity's own linkage. Each table's own
+   * exporter_id column is tried first (letters_of_credit, payments and
+   * forex_allocations all carry it, populated on every live row), then
+   * the contract link, then shipment/LC links for legacy rows with a
+   * NULL exporter_id. SWIFT messages are NOT mirrored in Postgres (no
+   * swift_messages table), so a 'swift' entity resolves only through
+   * the linked LC / payment ids the caller passes (request body at
+   * create time, ledger ReadSWIFTMessage at receive time) — with
+   * neither link it genuinely has no exporter and stays role-only.
    */
   async resolveExporterIdForEntity(
     entityType: string | undefined,
     entityId: string | undefined,
-    lcId?: string
+    lcId?: string,
+    paymentId?: string
   ): Promise<string | null> {
     try {
       const type = String(entityType || '').toLowerCase();
@@ -334,21 +369,26 @@ export class NotificationService {
         case 'forex': {
           if (!entityId && !lcId) return null;
           const row = entityId ? await this.db.get(
-            'SELECT lc_id, shipment_id FROM forex_allocations WHERE forex_id = $1 OR allocation_id = $1',
+            'SELECT exporter_id, contract_id, lc_id, shipment_id FROM forex_allocations WHERE forex_id = $1 OR allocation_id = $1',
             [entityId]
           ) : null;
-          return (await this.resolveExporterFromShipment(row?.shipment_id))
-            || (await this.resolveExporterFromLc(row?.lc_id || lcId));
+          return row?.exporter_id
+            || (await this.resolveExporterFromContract(row?.contract_id))
+            || (await this.resolveExporterFromLc(row?.lc_id || lcId))
+            || (await this.resolveExporterFromShipment(row?.shipment_id));
         }
         case 'payment': {
-          if (!entityId && !lcId) return null;
-          const row = entityId ? await this.db.get(
-            'SELECT shipment_id, lc_number FROM payments WHERE payment_id = $1',
-            [entityId]
-          ) : null;
-          return (await this.resolveExporterFromShipment(row?.shipment_id))
-            || (await this.resolveExporterFromLc(row?.lc_number || lcId));
+          if (!entityId && !lcId && !paymentId) return null;
+          if (!entityId) {
+            return (await this.resolveExporterFromLc(lcId))
+              || (await this.resolveExporterFromPayment(paymentId));
+          }
+          return this.resolveExporterFromPayment(entityId);
         }
+        case 'swift':
+          // No PG mirror: resolve through the caller's linked ids only.
+          return (await this.resolveExporterFromLc(lcId))
+            || (await this.resolveExporterFromPayment(paymentId));
         case 'customs_declaration': {
           if (!entityId) return null;
           const row = await this.db.get(
@@ -377,7 +417,8 @@ export class NotificationService {
           return row?.exporter_id || row?.temp_username || null;
         }
         default:
-          return this.resolveExporterFromLc(lcId);
+          return (await this.resolveExporterFromLc(lcId))
+            || (await this.resolveExporterFromPayment(paymentId));
       }
     } catch (error) {
       logger.warn('Failed to resolve notification exporter audience:', error);
@@ -488,7 +529,7 @@ export class NotificationService {
   async emitWorkflowEvent(input: InAppNotificationInput): Promise<InAppNotificationRow[]> {
     try {
       const exporterId = input.exporterId
-        || await this.resolveExporterIdForEntity(input.entityType, input.entityId, input.lcId)
+        || await this.resolveExporterIdForEntity(input.entityType, input.entityId, input.lcId, input.paymentId)
         || undefined;
       return this.createInAppNotification({ ...input, exporterId });
     } catch (error) {

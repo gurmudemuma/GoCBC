@@ -229,14 +229,18 @@ router.post('/messages',
       if (result.success) {
         logger.info(`✅ SWIFT message created: ${messageID} (${messageType})`);
         // In-app notification (persisted feed + live WS broadcast).
+        // The linked LC / payment ids resolve the exporter audience
+        // (notificationService.resolveExporterIdForEntity, 'swift'):
+        // without them the row is BANKS/NBE-only and the exporter
+        // never sees their own SWIFT message.
         await notificationService.emitWorkflowEvent({
           type: 'swift_message_created',
           title: `SWIFT ${messageType} message ${messageID} created`,
           message: `SWIFT message ${messageID} (${messageType}, ref ${swiftReference}) was created.`,
           entityType: 'swift', entityId: messageID, severity: 'info',
-          roles: ['BANKS', 'NBE'], lcId: linkedLcId,
+          roles: ['BANKS', 'NBE'], lcId: linkedLcId, paymentId: linkedPaymentId,
           actionUrl: '/portals/banks?tab=swift-messages',
-          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts' },
+          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts', EXPORTER: '/portals/exporter?tab=5' },
         });
         res.status(201).json({
           success: true,
@@ -306,6 +310,18 @@ router.post('/messages/mt700',
 
       if (result.success) {
         logger.info(`✅ MT700 created for LC: ${lcID}`);
+        // In-app notification (persisted feed + live WS broadcast).
+        // This route previously emitted nothing, so an MT700 created
+        // here notified nobody; lcId resolves the exporter audience.
+        await notificationService.emitWorkflowEvent({
+          type: 'swift_message_created',
+          title: `SWIFT MT700 message ${messageID} created`,
+          message: `SWIFT message ${messageID} (MT700, ref ${swiftReference}) was created for LC ${lcID}.`,
+          entityType: 'swift', entityId: messageID, severity: 'info',
+          roles: ['BANKS', 'NBE'], lcId: lcID,
+          actionUrl: '/portals/banks?tab=swift-messages',
+          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts', EXPORTER: '/portals/exporter?tab=5' },
+        });
         res.status(201).json({
           success: true,
           data: { messageID, lcID, messageType: 'MT700' },
@@ -737,14 +753,32 @@ router.post('/messages/:messageID/receive',
       if (result.success) {
         logger.info(`✅ SWIFT message received: ${messageID}`);
         // In-app notification (persisted feed + live WS broadcast).
+        // SWIFT rows are not mirrored in Postgres, so resolve the
+        // exporter audience from the ledger message itself (its
+        // linkedLcId / linkedPaymentId, swift.go). Best-effort: a
+        // failed ledger read falls back to the role-only rows and
+        // never fails the receive.
+        let swiftLcId: string | undefined;
+        let swiftPaymentId: string | undefined;
+        try {
+          const msgResult = await fabricService.queryChaincode('ReadSWIFTMessage', [messageID]);
+          const raw = (msgResult as any)?.data;
+          const doc = typeof raw === 'string'
+            ? JSON.parse(raw)
+            : (raw?.data ?? raw);
+          swiftLcId = doc?.linkedLcId || doc?.linkedLCID || undefined;
+          swiftPaymentId = doc?.linkedPaymentId || doc?.linkedPaymentID || undefined;
+        } catch (lookupError) {
+          logger.warn(`[SWIFT] Could not read message ${messageID} for notification audience (role-only notification):`, lookupError);
+        }
         await notificationService.emitWorkflowEvent({
           type: 'swift_received',
           title: `SWIFT message ${messageID} received`,
           message: `SWIFT message ${messageID} was received.`,
           entityType: 'swift', entityId: messageID, severity: 'info',
-          roles: ['BANKS', 'NBE'],
+          roles: ['BANKS', 'NBE'], lcId: swiftLcId, paymentId: swiftPaymentId,
           actionUrl: '/portals/banks?tab=swift-messages',
-          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts' },
+          actionUrls: { BANKS: '/portals/banks?tab=swift-messages', NBE: '/portals/nbe?tab=contracts', EXPORTER: '/portals/exporter?tab=5' },
         });
         res.json({
           success: true,

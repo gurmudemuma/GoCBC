@@ -12,11 +12,14 @@
 //   - EXPORTER: only rows they own (exporter_id matches one of the
 //     identities on their token — exporterId, username or subject — the
 //     same identity ExporterPortal uses: payload.exporterId || username).
-//     Payments / LCs / forex have no exporter_id column, so they are
-//     scoped through their linked shipment (payments also through their
-//     LC's shipment). An LC / payment / forex row with no linked shipment
-//     is therefore invisible to exporters; that is the honest limit of
-//     the mirror schema, not a silent leak.
+//     LCs, payments and forex carry their own exporter_id column
+//     (populated on every live row: 101/101 LCs, 7/7 payments, 91/91
+//     forex), so they are scoped on it first; the contract link, then
+//     the shipment / LC links, cover legacy rows with a NULL
+//     exporter_id. Scoping through the shipment alone used to hide
+//     every LC / payment / forex row from exporters (0/101 LCs, 0/91
+//     forex and 6/7 payments have a shipment_id — LCs and forex are
+//     created before any shipment exists).
 //   - APPLICANT / EXPORTER without an applicationId: applications are
 //     restricted to the application id on the token (or none).
 //   - Every other role (ADMIN, ECTA, ECX, NBE, BANKS, CUSTOMS, SHIPPING):
@@ -206,9 +209,10 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     const rankOrder = (idCol: string) =>
       `ORDER BY CASE WHEN ${idCol} = $1 THEN 0 WHEN ${idCol} ILIKE $3 THEN 1 ELSE 2 END, created_at DESC NULLS LAST LIMIT ${PER_GROUP_LIMIT}`;
 
-    // Exporter ownership via the linked shipment (payments/LCs/forex have
-    // no exporter_id column of their own).
+    // Exporter ownership: the row's own exporter_id first, then the
+    // contract link, then the shipment link (legacy NULL exporter_id).
     const exporterShipments = `SELECT shipment_id FROM shipments WHERE exporter_id = ANY($4::text[])`;
+    const exporterContracts = `SELECT contract_id FROM contracts WHERE exporter_id = ANY($4::text[])`;
     const exporterScope = isExporter
       ? { clause: `exporter_id = ANY($4::text[])`, params: [identities] }
       : { clause: '', params: [] as unknown[] };
@@ -276,7 +280,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     // ---- Letters of credit ------------------------------------------
     {
       const where = `(lc_number ILIKE $2 OR shipment_id ILIKE $2 OR issuing_bank ILIKE $2 OR advising_bank ILIKE $2 OR beneficiary ILIKE $2 OR applicant ILIKE $2 OR status ILIKE $2)`;
-      const scope = isExporter ? ` AND shipment_id IN (${exporterShipments})` : '';
+      const scope = isExporter ? ` AND (exporter_id = ANY($4::text[]) OR contract_id IN (${exporterContracts}) OR shipment_id IN (${exporterShipments}))` : '';
       const rows = await db.all(
         `SELECT lc_number, shipment_id, issuing_bank, beneficiary, applicant, amount, currency, status, created_at
          FROM letters_of_credit WHERE ${where}${scope} ${rankOrder('lc_number')}`,
@@ -333,10 +337,10 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     {
       const where = `(payment_id ILIKE $2 OR lc_number ILIKE $2 OR shipment_id ILIKE $2 OR status ILIKE $2)`;
       const scope = isExporter
-        ? ` AND (shipment_id IN (${exporterShipments}) OR lc_number IN (SELECT lc_number FROM letters_of_credit WHERE shipment_id IN (${exporterShipments})))`
+        ? ` AND (exporter_id = ANY($4::text[]) OR contract_id IN (${exporterContracts}) OR shipment_id IN (${exporterShipments}) OR lc_number IN (SELECT lc_number FROM letters_of_credit WHERE exporter_id = ANY($4::text[]) OR contract_id IN (${exporterContracts})))`
         : '';
-      // The scope above reuses $4 twice (two IN-subqueries); pg binds the
-      // same parameter position, so only one extra param is needed.
+      // The scope above reuses $4 in several IN-subqueries; pg binds
+      // the same parameter position, so only one extra param is needed.
       const rows = await db.all(
         `SELECT payment_id, lc_number, shipment_id, amount, currency, status, created_at
          FROM payments WHERE ${where}${scope} ${rankOrder('payment_id')}`,
@@ -393,7 +397,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     // ---- Forex allocations -------------------------------------------
     {
       const where = `(allocation_id ILIKE $2 OR shipment_id ILIKE $2 OR lc_number ILIKE $2 OR status ILIKE $2)`;
-      const scope = isExporter ? ` AND shipment_id IN (${exporterShipments})` : '';
+      const scope = isExporter ? ` AND (exporter_id = ANY($4::text[]) OR contract_id IN (${exporterContracts}) OR lc_id IN (SELECT lc_number FROM letters_of_credit WHERE exporter_id = ANY($4::text[]) OR contract_id IN (${exporterContracts})) OR shipment_id IN (${exporterShipments}))` : '';
       const rows = await db.all(
         `SELECT allocation_id, shipment_id, lc_number, amount_usd, status, created_at
          FROM forex_allocations WHERE ${where}${scope} ${rankOrder('allocation_id')}`,
