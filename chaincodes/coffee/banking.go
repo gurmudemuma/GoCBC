@@ -47,14 +47,22 @@ type LetterOfCredit struct {
 	IssuedByMSP             string    `json:"issuedByMsp"`      // MSP ID of issuer
 	LastUpdatedBy           string    `json:"lastUpdatedBy"`    // X.509 certificate of last updater
 	LastUpdatedByMSP        string    `json:"lastUpdatedByMsp"` // MSP ID of last updater
-	RejectionReason         string    `json:"rejectionReason,omitempty"`
-	RejectedBy              string    `json:"rejectedBy,omitempty"`
-	RejectedByMSP           string    `json:"rejectedByMsp,omitempty"`
-	RejectionDate           string    `json:"rejectionDate,omitempty"`
-	DocumentRejectionReason string    `json:"documentRejectionReason,omitempty"`
-	DocumentRejectedBy      string    `json:"documentRejectedBy,omitempty"`
-	DocumentRejectedByMSP   string    `json:"documentRejectedByMsp,omitempty"`
-	DocumentRejectionDate   string    `json:"documentRejectionDate,omitempty"`
+	// Rejection fields are only populated when an LC (or its documents) is
+	// rejected. They MUST be marked metadata:",optional": the
+	// fabric-contract-api-go response schema treats every struct field as
+	// required unless tagged optional, while encoding/json omits empty
+	// `,omitempty` fields — so a never-rejected LC (including every legacy
+	// pre-v2.3 LC) failed ReadLC/QueryAllLCs with "… is required".
+	// Optional in the schema + omitted when empty keeps the wire shape
+	// unchanged and lets both fresh and legacy docs read back.
+	RejectionReason         string    `json:"rejectionReason,omitempty" metadata:",optional"`
+	RejectedBy              string    `json:"rejectedBy,omitempty" metadata:",optional"`
+	RejectedByMSP           string    `json:"rejectedByMsp,omitempty" metadata:",optional"`
+	RejectionDate           string    `json:"rejectionDate,omitempty" metadata:",optional"`
+	DocumentRejectionReason string    `json:"documentRejectionReason,omitempty" metadata:",optional"`
+	DocumentRejectedBy      string    `json:"documentRejectedBy,omitempty" metadata:",optional"`
+	DocumentRejectedByMSP   string    `json:"documentRejectedByMsp,omitempty" metadata:",optional"`
+	DocumentRejectionDate   string    `json:"documentRejectionDate,omitempty" metadata:",optional"`
 	CreatedAt               time.Time `json:"createdAt"`
 	UpdatedAt               time.Time `json:"updatedAt"`
 }
@@ -72,19 +80,19 @@ type LCAmendment struct {
 // LC Discrepancy structure
 type LCDiscrepancy struct {
 	DiscrepancyID     string    `json:"discrepancyId"`
-	DiscrepancyType   string    `json:"discrepancyType,omitempty"`
-	Severity          string    `json:"severity,omitempty"`
+	DiscrepancyType   string    `json:"discrepancyType,omitempty" metadata:",optional"`
+	Severity          string    `json:"severity,omitempty" metadata:",optional"`
 	Document          string    `json:"document"` // Which document has issue
 	Issue             string    `json:"issue"`    // Description of problem
-	AffectedClauses   string    `json:"affectedClauses,omitempty"`
-	RecommendedAction string    `json:"recommendedAction,omitempty"`
+	AffectedClauses   string    `json:"affectedClauses,omitempty" metadata:",optional"`
+	RecommendedAction string    `json:"recommendedAction,omitempty" metadata:",optional"`
 	ReportedDate      time.Time `json:"reportedDate"`
-	ReportedBy        string    `json:"reportedBy,omitempty"`
-	ReportedByMSP     string    `json:"reportedByMsp,omitempty"`
+	ReportedBy        string    `json:"reportedBy,omitempty" metadata:",optional"`
+	ReportedByMSP     string    `json:"reportedByMsp,omitempty" metadata:",optional"`
 	ResolvedDate      string    `json:"resolvedDate"` // ISO date when resolved
 	Resolution        string    `json:"resolution"`   // How it was resolved
-	ResolvedBy        string    `json:"resolvedBy,omitempty"`
-	ResolvedByMSP     string    `json:"resolvedByMsp,omitempty"`
+	ResolvedBy        string    `json:"resolvedBy,omitempty" metadata:",optional"`
+	ResolvedByMSP     string    `json:"resolvedByMsp,omitempty" metadata:",optional"`
 	Status            string    `json:"status"` // OPEN, RESOLVED, WAIVED, REJECTED
 }
 
@@ -2073,6 +2081,17 @@ func (c *CoffeeContract) QueryLCsWithDiscrepancies(ctx contractapi.TransactionCo
 		err = json.Unmarshal(queryResponse.Value, &lc)
 		if err != nil {
 			return nil, err
+		}
+
+		// Ensure arrays are never nil (backward compatibility)
+		if lc.Amendments == nil {
+			lc.Amendments = []LCAmendment{}
+		}
+		if lc.Discrepancies == nil {
+			lc.Discrepancies = []LCDiscrepancy{}
+		}
+		if lc.Documents == nil {
+			lc.Documents = []string{}
 		}
 
 		lcs = append(lcs, &lc)

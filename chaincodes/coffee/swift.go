@@ -1125,6 +1125,13 @@ func (c *CoffeeContract) ReadSWIFTMessage(ctx contractapi.TransactionContextInte
 	if msg.DiscrepancyList == nil {
 		msg.DiscrepancyList = []string{}
 	}
+	// AttachedDocuments is never initialised by CreateSWIFTMessage, so a
+	// freshly created message stores it as null; the response schema
+	// requires an array, so ReadSWIFTMessage 500'd on every message
+	// without attached documents.
+	if msg.AttachedDocuments == nil {
+		msg.AttachedDocuments = []SWIFTDocument{}
+	}
 
 	return &msg, nil
 }
@@ -1214,6 +1221,9 @@ func (c *CoffeeContract) QueryAllSWIFTMessages(ctx contractapi.TransactionContex
 		if msg.DiscrepancyList == nil {
 			msg.DiscrepancyList = []string{}
 		}
+		if msg.AttachedDocuments == nil {
+			msg.AttachedDocuments = []SWIFTDocument{}
+		}
 
 		messages = append(messages, &msg)
 	}
@@ -1252,6 +1262,9 @@ func (c *CoffeeContract) querySWIFTMessages(ctx contractapi.TransactionContextIn
 		}
 		if msg.DiscrepancyList == nil {
 			msg.DiscrepancyList = []string{}
+		}
+		if msg.AttachedDocuments == nil {
+			msg.AttachedDocuments = []SWIFTDocument{}
 		}
 
 		messages = append(messages, &msg)

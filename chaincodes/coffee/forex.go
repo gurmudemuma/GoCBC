@@ -18,10 +18,17 @@ type ForexAllocation struct {
 	ContractID      string  `json:"contractId"`
 	ExporterID      string  `json:"exporterId"`
 	LCID            string  `json:"lcId"`
-	RequestedBy     string  `json:"requestedBy,omitempty"`
-	RequestedByMSP  string  `json:"requestedByMsp,omitempty"`
-	AllocatedBy     string  `json:"allocatedBy,omitempty"`
-	AllocatedByMSP  string  `json:"allocatedByMsp,omitempty"`
+	// AllocatedBy/AllocatedByMSP (and RequestedBy/RequestedByMSP) are empty
+	// until allocation happens. They MUST be marked metadata:",optional":
+	// fabric-contract-api-go treats every struct field as required unless
+	// tagged optional, while encoding/json omits empty `,omitempty` fields
+	// — so a pre-allocation forex doc failed ReadForex with
+	// "allocatedBy is required". Optional in the schema + omitted when
+	// empty keeps the wire shape unchanged.
+	RequestedBy     string  `json:"requestedBy,omitempty" metadata:",optional"`
+	RequestedByMSP  string  `json:"requestedByMsp,omitempty" metadata:",optional"`
+	AllocatedBy     string  `json:"allocatedBy,omitempty" metadata:",optional"`
+	AllocatedByMSP  string  `json:"allocatedByMsp,omitempty" metadata:",optional"`
 	RequestedAmount float64 `json:"requestedAmount"`
 	AllocatedAmount float64 `json:"allocatedAmount"`
 	Currency        string  `json:"currency"`
@@ -850,6 +857,13 @@ func (c *CoffeeContract) ReadForex(ctx contractapi.TransactionContextInterface,
 	err = json.Unmarshal(forexJSON, &forex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal forex: %v", err)
+	}
+
+	// Ensure screenedAgainst is never null (backward compatibility fix;
+	// QueryAllForex/queryForex already do this — ReadForex did not, so a
+	// stored doc without the field failed response-schema validation).
+	if forex.ScreenedAgainst == nil {
+		forex.ScreenedAgainst = []string{}
 	}
 
 	return &forex, nil

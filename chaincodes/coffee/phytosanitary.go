@@ -441,6 +441,13 @@ func (c *CoffeeContract) ReadPhytosanitaryCertificate(ctx contractapi.Transactio
 		return nil, fmt.Errorf("failed to unmarshal certificate: %v", err)
 	}
 
+	// RequestPhytosanitaryCertificate never sets PestsFreeFrom, so a
+	// requested/inspected certificate stores it as null; the response
+	// schema requires an array, so the read 500'd on every fresh cert.
+	if certificate.PestsFreeFrom == nil {
+		certificate.PestsFreeFrom = []string{}
+	}
+
 	return &certificate, nil
 }
 
@@ -542,6 +549,9 @@ func (c *CoffeeContract) QueryAllPhytosanitaryCertificates(ctx contractapi.Trans
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal certificate: %v", err)
 		}
+		if certificate.PestsFreeFrom == nil {
+			certificate.PestsFreeFrom = []string{}
+		}
 		certificates = append(certificates, &certificate)
 	}
 
@@ -569,6 +579,9 @@ func (c *CoffeeContract) queryPhytosanitaryCertificates(ctx contractapi.Transact
 		err = json.Unmarshal(queryResponse.Value, &certificate)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal certificate: %v", err)
+		}
+		if certificate.PestsFreeFrom == nil {
+			certificate.PestsFreeFrom = []string{}
 		}
 		certificates = append(certificates, &certificate)
 	}
