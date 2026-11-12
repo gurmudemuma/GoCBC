@@ -721,10 +721,13 @@ router.post('/declaration/submit',
         });
       }
 
-      // Chaincode sync is best-effort (cf. quality.ts syncQualityDecisionBestEffort):
-      // the Postgres SUBMITTED row is the record of the declaration. A failed
-      // chain call must never produce a fabricated blockchain_tx_id, and must
-      // never be logged as recorded on-chain.
+      // Chaincode sync is ledger-first, not best-effort: the Postgres
+      // SUBMITTED row must only exist for a declaration the ledger
+      // accepted. A failed chain call returns 503 and inserts nothing —
+      // the old behaviour kept a PG SUBMITTED row and returned
+      // success:true for a declaration that does not exist on-chain
+      // (W2 run 3, step 5b), which then blocked any re-submit via the
+      // DECLARATION_EXISTS guard.
       let blockchainResult: any = null;
       let blockchainError: string | null = null;
       try {
@@ -755,11 +758,19 @@ router.post('/declaration/submit',
       // Only a ledger-confirmed txId may be stored or returned. A txId the
       // client generated for a proposal that was never endorsed is not one.
       const blockchain_tx_id = blockchainSynced ? (blockchainResult?.txId || null) : null;
-      if (blockchainSynced) {
-        logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
-      } else {
-        logger.warn(`[CUSTOMS] Declaration ${declarationID} NOT recorded on blockchain (PG SUBMITTED row kept): ${blockchainError}`);
+      if (!blockchainSynced) {
+        logger.warn(`[CUSTOMS] Declaration ${declarationID} NOT recorded on blockchain, no PG row written: ${blockchainError}`);
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'CUSTOMS_SUBMIT_FAILED',
+            message: `Customs declaration ${declarationID} could not be recorded on the ledger: ${blockchainError}. No status change was recorded.`
+          },
+          data: { declarationID, shipmentID, blockchainSynced: false, blockchainError },
+          timestamp: new Date().toISOString()
+        });
       }
+      logger.info(`✅ Customs declaration recorded on blockchain: ${declarationID}, TX: ${blockchain_tx_id}`);
 
       // Now persist to database with blockchain TX ID
       await postgresDb.run(
@@ -1650,10 +1661,11 @@ router.post('/declaration/:declarationId/review',
         });
       }
 
-      // Chaincode sync is best-effort (see submit above): the Postgres
-      // UNDER_INSPECTION progression is recorded either way, but a failed
-      // chain call never yields a fabricated txId or a "recorded on
-      // blockchain" log line, and never overwrites a stored txId with null.
+      // Ledger-first: the UNDER_INSPECTION progression is only recorded
+      // when the chaincode accepted the review. The old best-effort
+      // behaviour mirrored PG to UNDER_INSPECTION and returned
+      // success:true with status UNDER_INSPECTION for a declaration that
+      // does not exist on-chain (W2 run 3, step 5e).
       let blockchainResult: any = null;
       let blockchainError: string | null = null;
       try {
@@ -1675,28 +1687,27 @@ router.post('/declaration/:declarationId/review',
       }
       const blockchainSynced = !blockchainError && blockchainResult?.success === true;
       const blockchain_tx_id = blockchainSynced ? (blockchainResult?.txId || null) : null;
-      if (blockchainSynced) {
-        logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
-      } else {
-        logger.warn(`[CUSTOMS] Declaration ${declarationId} review NOT recorded on blockchain (PG UNDER_INSPECTION kept): ${blockchainError}`);
+      if (!blockchainSynced) {
+        logger.warn(`[CUSTOMS] Declaration ${declarationId} review NOT recorded on blockchain, no PG change: ${blockchainError}`);
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'CUSTOMS_REVIEW_FAILED',
+            message: `Customs review of declaration ${declarationId} could not be recorded on the ledger: ${blockchainError}. No status change was recorded.`
+          },
+          data: { declarationId, blockchainSynced: false, blockchainError },
+          timestamp: new Date().toISOString()
+        });
       }
+      logger.info(`✅ Customs review recorded on blockchain: ${declarationId}, TX: ${blockchain_tx_id}`);
 
       // Now update declaration with assigned officer and status
-      if (blockchainSynced) {
-        await postgresDb.run(
-          `UPDATE customs_declarations
-           SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW()
-           WHERE declaration_number = $4`,
-          [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
-        );
-      } else {
-        await postgresDb.run(
-          `UPDATE customs_declarations
-           SET customs_officer = $1, status = $2, updated_at = NOW()
-           WHERE declaration_number = $3`,
-          [officerName, 'UNDER_INSPECTION', declarationId]
-        );
-      }
+      await postgresDb.run(
+        `UPDATE customs_declarations
+         SET customs_officer = $1, status = $2, blockchain_tx_id = $3, updated_at = NOW()
+         WHERE declaration_number = $4`,
+        [officerName, 'UNDER_INSPECTION', blockchain_tx_id, declarationId]
+      );
 
       logger.info(`[CUSTOMS] Declaration ${declarationId} updated: officer=${officerName}, status=UNDER_INSPECTION`);
 

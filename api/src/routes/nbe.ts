@@ -117,10 +117,10 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
       });
     }
 
-    // Best-effort chain confirmation: ConfirmForex (REQUESTED → CONFIRMED,
-    // NBE only). A chain failure must not fail the approval — the Postgres
-    // record is what the portal reads — but it is reported honestly.
-    // ConfirmForex enforces the caller MSP (NBE only), so connect as
+    // Ledger-first chain confirmation: ConfirmForex (REQUESTED → CONFIRMED,
+    // NBE only). A chain failure fails the approval — the Postgres record
+    // must never claim a ledger state that does not exist (see the guard
+    // below). ConfirmForex enforces the caller MSP (NBE only), so connect as
     // NBEMSP first: the gateway is otherwise still on the org of the
     // previous call (BanksMSP after a forex request) and the chaincode
     // rejects with "only NBE can confirm forex (caller: BanksMSP)".
@@ -144,6 +144,27 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
       logger.warn(`[NBE] ${blockchainWarning}`);
     }
     
+    // Ledger-first: if the chaincode explicitly refused the confirmation
+    // (e.g. the forex is REJECTED — ConfirmForex only accepts REQUESTED),
+    // fail honestly and mirror nothing. The old best-effort behaviour
+    // wrote PG CONFIRMED and returned success:true with status CONFIRMED
+    // while the ledger stayed REJECTED (W2 run 3, step 3j) — a phantom
+    // the NBE portal then shows as confirmed. A Fabric outage is the
+    // only case where the old fallback could still apply, and it is not
+    // distinguishable here from an explicit chaincode rejection, so a
+    // failed confirmation always fails the request now.
+    if (!blockchainSynced) {
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: 'FOREX_CONFIRM_FAILED',
+          message: `Forex ${forexId} could not be confirmed on the ledger: ${blockchainWarning || 'chaincode confirmation failed'}. No status change was recorded.`
+        },
+        data: { forexId, blockchainSynced: false, blockchainWarning },
+        timestamp: new Date().toISOString()
+      });
+    }
+
     // Update forex allocation status to confirmed (the chaincode state)
     await db.run(`
       UPDATE forex_allocations

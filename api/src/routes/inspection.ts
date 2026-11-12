@@ -298,6 +298,21 @@ router.post('/:id/schedule', authMiddleware,
       inspectionDate
     } = req.body;
 
+    // All three are passed straight to the chaincode call; an undefined
+    // arg makes fabric-common throw "Cannot read properties of undefined
+    // (reading 'toString')" and surfaces as a 500 with no usable detail.
+    // Fail honestly with 400 instead.
+    if (!inspectorName || !inspectorLicense || !inspectionDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'inspectorName, inspectorLicense and inspectionDate are all required to schedule an inspection'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
     logger.info(`[INSPECTION] 📅 Scheduling inspection: ${id}`);
 
     const result = await fabricService.submitTransaction('ScheduleInspection',
@@ -470,6 +485,21 @@ router.post('/:id/reject', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), as
   try {
     const { id } = req.params;
     const { rejectionReason } = req.body;
+
+    // rejectionReason is passed straight to the chaincode call; an
+    // undefined arg makes fabric-common throw "Cannot read properties of
+    // undefined (reading 'toString')" and surfaces as a 500. Fail
+    // honestly with 400 instead.
+    if (!rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'rejectionReason is required to reject an inspection'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
     logger.info(`[INSPECTION] ❌ Rejecting inspection: ${id}`);
 
