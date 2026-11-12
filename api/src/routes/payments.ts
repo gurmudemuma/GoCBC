@@ -264,6 +264,61 @@ router.post('/initiate',
       const finalBeneficiaryAccount = beneficiaryAccount || `${finalExporterID}-001`;
       const finalPaymentMethod = paymentMethod || 'LC';
 
+      // LEG3 M-8a: do not trust the client-computed amount. Recompute it
+      // server-side as shipment quantity x contract pricePerKg — the exact
+      // formula the Exporter portal uses — and reject a provable mismatch.
+      // Best-effort reads: if the shipment or contract cannot be read, the
+      // check is skipped (logged) rather than blocking initiation; a
+      // mismatch that CAN be proven is a 400.
+      const shipmentIDForAmount = (req.body as any).shipmentID;
+      if (shipmentIDForAmount) {
+        try {
+          const [shipRes, contractRes] = await Promise.all([
+            fabricService.queryChaincode('ReadShipment', [shipmentIDForAmount]),
+            fabricService.queryChaincode('ReadSalesContract', [finalContractID]),
+          ]);
+          const qty = Number(shipRes?.data?.Quantity ?? shipRes?.data?.quantity);
+          const price = Number(contractRes?.data?.PricePerKg ?? contractRes?.data?.pricePerKg);
+          if (Number.isFinite(qty) && Number.isFinite(price) && qty > 0 && price > 0) {
+            const expectedAmount = Math.round(qty * price * 100) / 100;
+            const suppliedAmount = Number(finalAmount);
+            if (Number.isFinite(suppliedAmount) && Math.abs(suppliedAmount - expectedAmount) > 0.01) {
+              return res.status(400).json({
+                success: false,
+                error: {
+                  code: 'AMOUNT_MISMATCH',
+                  message: `Payment amount ${suppliedAmount} does not match the shipment value ${expectedAmount} (${qty} kg x $${price}/kg)`,
+                  expectedAmount,
+                  suppliedAmount,
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (amountCheckErr) {
+          logger.warn(`[PAYMENT] Could not verify initiate amount for ${paymentID}:`, amountCheckErr);
+        }
+      }
+
+      // LEG3 M-8b: re-initiate is idempotent. paymentID is PAY-<shipmentId>,
+      // so a re-click on the same shipment used to fail on-chain with a
+      // duplicate-ID error. If the payment already exists, return it
+      // (200, alreadyExists) instead of submitting a duplicate.
+      try {
+        const existingPayment = await fabricService.queryChaincode('ReadPayment', [paymentID]);
+        if (existingPayment.success && existingPayment.data) {
+          return res.status(200).json({
+            success: true,
+            alreadyExists: true,
+            message: 'Payment already initiated for this shipment',
+            data: existingPayment.data,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (existingErr) {
+        logger.warn(`[PAYMENT] Could not check for existing payment ${paymentID}, proceeding:`, existingErr);
+      }
+
       const result = await fabricService.invokeChaincode('InitiatePayment', [
         paymentID,
         finalContractID,

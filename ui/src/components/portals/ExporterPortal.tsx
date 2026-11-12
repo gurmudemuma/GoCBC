@@ -1999,6 +1999,14 @@ const ExporterPortal: React.FC = () => {
       return;
     }
 
+    // LEG3 M-8: the Submit button is already disabled without these, but
+    // re-check here so a programmatic submit can never send a blank BIC
+    // or account to the API (which requires both non-empty → 400).
+    if (!paymentForm.beneficiaryBankBIC || !paymentForm.beneficiaryAccount) {
+      showError('Missing Bank Details', 'Beneficiary bank BIC and beneficiary account are required before initiating payment.');
+      return;
+    }
+
     setIsInitiatingPayment(true);
     try {
       const token = localStorage.getItem('authToken');
@@ -2049,6 +2057,19 @@ const ExporterPortal: React.FC = () => {
       const result = await response.json();
       
       if (result.success) {
+        // LEG3 M-8: a re-click on the same shipment no longer fails
+        // on-chain — the API returns the existing payment with
+        // alreadyExists instead of a duplicate-ID error.
+        if ((result as any).alreadyExists) {
+          showSuccess(
+            'Payment Already Initiated',
+            `Payment ${paymentId} was already initiated for ${selectedShipmentForPayment.shipmentId} — no duplicate was created.`
+          );
+          setPaymentSettlementDialogOpen(false);
+          setSelectedShipmentForPayment(null);
+          loadExporterData();
+          return;
+        }
         const amountUSD = selectedContract ? (selectedShipmentForPayment.quantity * selectedContract.pricePerKg) : 0;
         const exchangeRate = Number(selectedForex.exchangeRate);
         const retentionRate = Number(selectedForex.retentionRate);
