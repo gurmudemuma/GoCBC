@@ -6,6 +6,8 @@ import { authMiddleware } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { body, param, query as queryParam, validationResult } from 'express-validator';
 import notificationService from '../services/notificationService';
+import { toInAppNotificationApiRow } from '../services/notificationService';
+import { normalizeNotificationRole } from '../utils/notificationRoles';
 import { DatabaseService } from '../services/databaseService';
 import smsService from '../services/smsService';
 import webhookService from '../services/webhookService';
@@ -90,6 +92,202 @@ router.put('/preferences',
       }
     } catch (error: any) {
       logger.error('Error updating notification preferences:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * Visibility predicate for the persisted in-app feed (migration 072).
+ * A caller sees a row when it is addressed to them directly (user_id =
+ * their numeric users.id), to their exporter (exporter_id = their JWT
+ * exporterId/username), or to their canonical base role (role =
+ * normalised users.role). ADMIN sees everything. Returns a SQL fragment
+ * whose $n placeholders start at `firstParam` (1-based) plus the values
+ * in placeholder order, so callers can combine it with other filters.
+ */
+const notificationVisibility = (user: any, firstParam = 1): { clause: string; values: any[] } => {
+  const baseRole = normalizeNotificationRole(user?.role);
+  if (baseRole === 'ADMIN') {
+    return { clause: 'TRUE', values: [] };
+  }
+  const numericUserId = Number(user?.userId ?? user?.sub);
+  const viewerId = Number.isFinite(numericUserId) ? numericUserId : -1;
+  const p = firstParam;
+  return {
+    clause: `(user_id = $${p} OR exporter_id = $${p + 1} OR role = $${p + 2})`,
+    values: [viewerId, user?.exporterId || user?.username || '', baseRole],
+  };
+};
+
+/**
+ * GET /api/v1/notifications
+ * Role-scoped in-app feed (persisted rows only — never another role's).
+ * Query: ?page=1&limit=20&type=<event>&entityType=<entity>&unreadOnly=true
+ * Response: { success, data: [{ id, title, message, type, entityType,
+ *   entityId, actionUrl, severity, role, exporterId, userId, read,
+ *   createdAt }], pagination: { page, limit, total, totalPages },
+ *   unreadCount, timestamp }
+ * unreadCount is the caller's total unread across all visible rows
+ * (independent of the type/entityType/unreadOnly filters).
+ */
+router.get('/',
+  authMiddleware,
+  [
+    queryParam('page').optional().isInt({ min: 1 }),
+    queryParam('limit').optional().isInt({ min: 1, max: 100 }),
+    queryParam('type').optional().isString().trim().notEmpty(),
+    queryParam('entityType').optional().isString().trim().notEmpty(),
+    queryParam('unreadOnly').optional().isBoolean(),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
+      const offset = (page - 1) * limit;
+
+      const vis = notificationVisibility(user, 1);
+      const conditions: string[] = [];
+      const values: any[] = [...vis.values];
+      if (vis.clause !== 'TRUE') conditions.push(vis.clause);
+      if (typeof req.query.type === 'string') {
+        values.push(req.query.type);
+        conditions.push(`type = $${values.length}`);
+      }
+      if (typeof req.query.entityType === 'string') {
+        values.push(req.query.entityType);
+        conditions.push(`entity_type = $${values.length}`);
+      }
+      if (req.query.unreadOnly === 'true' || req.query.unreadOnly === true) {
+        conditions.push('read = FALSE');
+      }
+      const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const totalRow = await db.get(
+        `SELECT COUNT(*)::int AS total FROM notifications ${whereSql}`,
+        values
+      );
+      const total = totalRow?.total ?? 0;
+
+      values.push(limit);
+      const limitParam = values.length;
+      values.push(offset);
+      const offsetParam = values.length;
+      const rows = await db.all(
+        `SELECT id, user_id, title, message, type, read, entity_type,
+                entity_id, action_url, severity, role, exporter_id, created_at
+         FROM notifications ${whereSql}
+         ORDER BY created_at DESC, id DESC
+         LIMIT $${limitParam} OFFSET $${offsetParam}`,
+        values
+      );
+
+      const unreadVis = notificationVisibility(user, 1);
+      const unreadWhere = unreadVis.clause === 'TRUE'
+        ? 'WHERE read = FALSE'
+        : `WHERE ${unreadVis.clause} AND read = FALSE`;
+      const unreadRow = await db.get(
+        `SELECT COUNT(*)::int AS total FROM notifications ${unreadWhere}`,
+        unreadVis.values
+      );
+
+      res.json({
+        success: true,
+        data: rows.map(toInAppNotificationApiRow),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+        unreadCount: unreadRow?.total ?? 0,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error fetching notifications feed:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'FETCH_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/notifications/:id/read
+ * Mark one notification read. Only the owner / role audience may mark
+ * it: a row outside the caller's visibility returns 404 (existence is
+ * not leaked across roles).
+ */
+router.patch('/:id/read',
+  authMiddleware,
+  [param('id').isInt()],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const notificationId = parseInt(req.params.id, 10);
+      const vis = notificationVisibility(user, 2);
+      const updated = await db.get(
+        `UPDATE notifications SET read = TRUE
+         WHERE id = $1 AND ${vis.clause}
+         RETURNING id, user_id, title, message, type, read, entity_type,
+           entity_id, action_url, severity, role, exporter_id, created_at`,
+        [notificationId, ...vis.values]
+      );
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Notification was not found' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      res.json({
+        success: true,
+        data: toInAppNotificationApiRow(updated),
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Error marking notification read:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: error.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/notifications/read-all
+ * Mark every notification visible to the caller read.
+ * Response: { success, data: { updated }, timestamp }
+ */
+router.post('/read-all',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const vis = notificationVisibility(user, 1);
+      const result = await db.run(
+        `UPDATE notifications SET read = TRUE
+         WHERE ${vis.clause} AND read = FALSE`,
+        vis.values
+      );
+      res.json({
+        success: true,
+        data: { updated: result.rowCount ?? 0 },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      logger.error('Error marking notifications read:', error);
       res.status(500).json({
         success: false,
         error: { code: 'UPDATE_ERROR', message: error.message },

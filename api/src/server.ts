@@ -99,7 +99,7 @@ class CECBSServer {
   private wsServer!: WebSocketServer;
   private fabricService: FabricService;
   private databaseService: DatabaseService;
-  // private wsService!: WebSocketService; // Not used yet
+  private wsService!: WebSocketService; // Retained: notificationService broadcasts via WebSocketService.getInstance()
 
   constructor() {
     this.app = express();
@@ -429,8 +429,8 @@ class CECBSServer {
 
   private setupWebSocket(): void {
     this.wsServer = new WebSocketServer({ server: this.server });
-    new WebSocketService(this.wsServer);
-    
+    this.wsService = new WebSocketService(this.wsServer);
+
     logger.info('WebSocket server initialized');
   }
 
