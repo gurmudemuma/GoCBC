@@ -1880,27 +1880,7 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="h6" gutterBottom>
             Exporter Applications
           </Typography>
-          {/* Application status filter (W4 #2) — same contained/outlined
-              button pattern as the inspection filter in Quality Control.
-              Rejected applications used to vanish once decided because the
-              table only ever showed the pending page. */}
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-            {([
-              { value: 'ALL', label: 'All' },
-              { value: 'pending', label: 'Pending' },
-              { value: 'approved', label: 'Approved' },
-              { value: 'rejected', label: 'Rejected' },
-            ] as const).map(({ value, label }) => (
-              <Button
-                key={value}
-                size="small"
-                variant={applicationFilterTab === value ? 'contained' : 'outlined'}
-                onClick={() => { setApplicationFilterTab(value); setCurrentPage(0); }}
-              >
-                {label} ({value === 'ALL' ? allApplications.length : allApplications.filter((a) => a.status === value).length})
-              </Button>
-            ))}
-          </Box>
+          
           {filteredApplications.length === 0 ? (
             <Alert severity="info">{applicationFilterTab === 'ALL' ? 'No applications at this time.' : `No ${applicationFilterTab} applications at this time.`}</Alert>
           ) : (
@@ -2566,21 +2546,6 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Science /> Quality Inspection Records
           </Typography>
-
-          {/* Inspection status filter (F8) — filters the table below by the
-              displayed inspection status. */}
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-            {(['ALL', 'PENDING', 'REQUESTED', 'INSPECTED', 'APPROVED', 'REJECTED', 'PERMIT_ISSUED'] as const).map((filter) => (
-              <Button
-                key={filter}
-                size="small"
-                variant={inspectionFilterTab === filter ? 'contained' : 'outlined'}
-                onClick={() => setInspectionFilterTab(filter)}
-              >
-                {filter === 'ALL' ? 'All' : filter.split('_').map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')}
-              </Button>
-            ))}
-          </Box>
 
           {/* Unified Table for All Inspection Data */}
           {(() => {
