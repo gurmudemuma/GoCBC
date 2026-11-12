@@ -499,7 +499,16 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userRole }) => 
     channels.push(`notifications:user:${identity.userId}`);
     if (identity.exporterId) channels.push(`notifications:exporter:${identity.exporterId}`);
 
-    const ws = new WebSocket(`${WS_BASE}/?token=${encodeURIComponent(token)}`);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${WS_BASE}/?token=${encodeURIComponent(token)}`);
+    } catch (err) {
+      // Socket construction itself failed (e.g. WS blocked): stay in
+      // polling-fallback mode rather than crashing the effect.
+      console.warn('WebSocket unavailable, using polling fallback:', err);
+      setSocketConnected(false);
+      return;
+    }
     wsRef.current = ws;
 
     ws.onopen = () => {
