@@ -49,6 +49,18 @@ log_fail() {
     echo -e "${RED}✗ FAIL:${NC} $1" | tee -a "$LOG_FILE"
 }
 
+# Honest skip: the check could not run (no live fixture / no such endpoint).
+# Counts separately from pass/fail so a summary never overstates a pass.
+# (Added 2026-11-12, W3: two banking amendment tests have no API endpoint
+# to call — see banking-extended-workflow-test.sh.)
+log_skip() {
+    if [ -z "${SKIPPED_TESTS:-}" ]; then
+        SKIPPED_TESTS=0
+    fi
+    SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+    echo -e "${YELLOW}⊘ SKIP:${NC} $1" | tee -a "$LOG_FILE"
+}
+
 log_info() {
     echo -e "${YELLOW}ℹ INFO:${NC} $1" | tee -a "$LOG_FILE"
 }
@@ -390,6 +402,9 @@ print_test_summary() {
     echo "Total Tests: $TOTAL_TESTS" | tee -a "$LOG_FILE"
     echo -e "Passed: ${GREEN}$PASSED_TESTS ✓${NC}" | tee -a "$LOG_FILE"
     echo -e "Failed: ${RED}$FAILED_TESTS ✗${NC}" | tee -a "$LOG_FILE"
+    if [ -n "${SKIPPED_TESTS:-}" ] && [ "$SKIPPED_TESTS" -gt 0 ]; then
+        echo -e "Skipped: ${YELLOW}$SKIPPED_TESTS ⊘${NC}" | tee -a "$LOG_FILE"
+    fi
     
     if [ $TOTAL_TESTS -gt 0 ]; then
         local success_rate=$(echo "scale=2; $PASSED_TESTS * 100 / $TOTAL_TESTS" | bc)
@@ -461,7 +476,7 @@ trap trap_cleanup EXIT
 # EXPORT ALL FUNCTIONS
 ################################################################################
 
-export -f log_section log_test log_pass log_fail log_info log_debug
+export -f log_section log_test log_pass log_fail log_skip log_info log_debug
 export -f login_user refresh_token
 export -f api_call api_get api_post api_put api_patch api_delete
 export -f assert_success assert_failure assert_status_code
