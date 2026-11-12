@@ -1156,6 +1156,21 @@ call POST "/customs/declaration/submit" "$CUSTOMS_TOKEN" "$DECLARATION_DATA"
 CREATED_DEC_ID=$(echo "$RESP_BODY" | jq -r '.data.declarationID // .data.declaration_id // empty')
 if [ -n "$CREATED_DEC_ID" ]; then
     log_pass "Customs declaration submitted: $DECLARATION_ID"
+elif [ "$(echo "$RESP_BODY" | jq -r '.error.code // empty')" = "DECLARATION_EXISTS" ]; then
+    # The permit-issuance auto-declaration already created the declaration
+    # for this shipment (literal order inspect -> permit -> customs); the
+    # explicit submit is correctly refused by the DECLARATION_EXISTS guard.
+    # Resolve the auto-created id and run review/inspect/complete/clear
+    # against it instead of the unsubmitted id.
+    EXISTING_DEC_ID=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT_ID" '.data[]? | select(.shipmentId==$SHIP) | .declarationId' | head -1)
+    if [ -n "$EXISTING_DEC_ID" ]; then
+        DECLARATION_ID="$EXISTING_DEC_ID"
+        CREATED_DEC_ID="$EXISTING_DEC_ID"
+        log_pass "Customs declaration already auto-created at permit issuance: $DECLARATION_ID"
+    else
+        log_fail "Failed to submit customs declaration (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
 else
     log_fail "Failed to submit customs declaration (HTTP $RESP_CODE)"
     log_info "Response: $RESP_BODY"

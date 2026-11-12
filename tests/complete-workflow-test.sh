@@ -644,6 +644,22 @@ DECLARATION_RESPONSE=$(curl -s -X POST ${API_BASE}/customs/declaration/submit \
 
 if echo "$DECLARATION_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
     log_pass "Customs declaration submitted: $NEW_DECLARATION_ID"
+elif [ "$(echo "$DECLARATION_RESPONSE" | jq -r '.error.code // empty')" = "DECLARATION_EXISTS" ]; then
+    # The permit-issuance auto-declaration (shipmentService trigger) already
+    # created the declaration for this shipment in the literal order
+    # (inspect -> permit -> customs); the explicit submit is correctly
+    # refused by the DECLARATION_EXISTS guard. Resolve the auto-created
+    # declaration and continue with it.
+    EXISTING_DECL_ID=$(curl -s -H "Authorization: Bearer $TOKEN_CUSTOMS" \
+      "${API_BASE}/customs/declarations" | jq -r --arg SHIP "$NEW_SHIPMENT_ID" \
+      '.data[]? | select(.shipmentId==$SHIP) | .declarationId' | head -1)
+    if [ -n "$EXISTING_DECL_ID" ]; then
+        NEW_DECLARATION_ID="$EXISTING_DECL_ID"
+        log_pass "Customs declaration already auto-created at permit issuance: $NEW_DECLARATION_ID"
+    else
+        log_fail "Customs declaration failed"
+        log_info "Response: $DECLARATION_RESPONSE"
+    fi
 else
     log_fail "Customs declaration failed"
     log_info "Response: $DECLARATION_RESPONSE"
