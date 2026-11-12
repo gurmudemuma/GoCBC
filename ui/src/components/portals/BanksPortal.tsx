@@ -5461,7 +5461,9 @@ const BanksPortal: React.FC = () => {
           POST /banking/lc/request is EXPORTER/ECTA-only and chaincode
           RequestLC is ECTAMSP-only; there is no bank-side create-and-issue
           API route. The bank flow is Approve (REQUESTED) then Issue
-          (APPROVED) via POST /banking/lc/:id/issue. */}
+          (APPROVED) via POST /banking/lc/:id/issue. LEG 1 (F6c): the
+          fields are disabled — the dialog used to show editable inputs
+          with only a Close button, implying an unsaved edit. */}
             <PortalDialog brand="BANKS" open={dialogOpen && dialogType === 'lc'} onClose={handleCloseDialog} maxWidth="md" title="Letter of Credit Terms" icon={<Description />} actions={<>
           <GhostButton brand="BANKS" onClick={handleCloseDialog}>Close</GhostButton>
         </>}>
@@ -5495,6 +5497,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <PortalField
                     fullWidth
+                    disabled
                     label="Issuing Bank (Buyer's Bank) *"
                     value={lcForm.issuingBank}
                     onChange={(e) => setLcForm({...lcForm, issuingBank: e.target.value})}
@@ -5507,6 +5510,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <PortalField
                     fullWidth
+                    disabled
                     label="Advising Bank (Exporter's Bank) *"
                     value={lcForm.advisingBank}
                     onChange={(e) => setLcForm({...lcForm, advisingBank: e.target.value})}
@@ -5519,6 +5523,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <PortalField
                     fullWidth
+                    disabled
                     label="Beneficiary (Exporter) *"
                     value={lcForm.beneficiary}
                     onChange={(e) => setLcForm({...lcForm, beneficiary: e.target.value})}
@@ -5531,6 +5536,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12}>
                   <PortalField
                     fullWidth
+                    disabled
                     label="LC Terms"
                     value={lcForm.terms}
                     onChange={(e) => setLcForm({...lcForm, terms: e.target.value})}
@@ -5543,6 +5549,7 @@ const BanksPortal: React.FC = () => {
                 <Grid item xs={12} sm={6}>
                   <PortalField
                     fullWidth
+                    disabled
                     label="LC Validity (Days)"
                     type="number"
                     value={lcForm.expiryDays}

@@ -187,7 +187,10 @@ interface ExporterApplication {
   region?: string;
   bank_name?: string;
   bank_account_number?: string;
-  bank_branch_name?: string;
+  // LEG 1 (F7): the DB column is bank_branch. The old name
+  // bank_branch_name read a property that never exists on the row, so
+  // the branch prefill and the detail view always showed '' / 'N/A'.
+  bank_branch?: string;
   bank_branch_code?: string;
   comments?: string;
   status: 'pending' | 'approved' | 'rejected';
@@ -1631,26 +1634,32 @@ The exporter can reapply once all requirements are met.`,
   };
 
   // Auto-generate exporter ID, license number, and expiry date
-  const generateApprovalData = () => {
-    const currentYear = new Date().getFullYear();
-    const randomNum = Math.floor(Math.random() * 9000000) + 1000000; // 7-digit random number
-    const licenseNum = Math.floor(Math.random() * 900) + 100; // 3-digit random number
-    
-    // Generate expiry date (1 year from now)
-    const expiryDate = new Date();
-    expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-    const formattedExpiry = expiryDate.toISOString().split('T')[0]; // YYYY-MM-DD format
-    
-    setApprovalData({
-      exporterId: `EXP${randomNum}`,
-      ectaLicenseNumber: `ECTA-LIC-${currentYear}-${String(licenseNum).padStart(3, '0')}`,
-      licenseExpiryDate: formattedExpiry,
-      // Pre-populate banking info from the exporter's application
-      bankName: selectedApplication?.bank_name || '',
-      bankAccountNumber: selectedApplication?.bank_account_number || '',
-      bankBranch: selectedApplication?.bank_branch_name || '',
-      bankBranchCode: selectedApplication?.bank_branch_code || '',
-    });
+  // LEG 1 (F7): the IDs come from the SERVER (GET
+  // /exporters/exporter-applications/approval-ids), minted from
+  // sequences so they are unique. The old code invented EXP + 7 random
+  // digits and ECTA-LIC-<year>-<3 digits> (900 possibilities a year)
+  // in the browser with no uniqueness check. On failure the dialog
+  // does NOT open with invented IDs — the officer sees the error.
+  const generateApprovalData = async (app?: ExporterApplication) => {
+    const application = app ?? selectedApplication;
+    try {
+      const response = await api.get('/exporters/exporter-applications/approval-ids');
+      if (!response.data?.success) throw new Error(response.data?.error?.message || 'Failed to generate approval IDs');
+      const ids = response.data.data;
+      setApprovalData({
+        exporterId: ids.exporterId,
+        ectaLicenseNumber: ids.ectaLicenseNumber,
+        licenseExpiryDate: ids.licenseExpiryDate,
+        // Pre-populate banking info from the exporter's application
+        bankName: application?.bank_name || '',
+        bankAccountNumber: application?.bank_account_number || '',
+        bankBranch: application?.bank_branch || '',
+        bankBranchCode: application?.bank_branch_code || '',
+      });
+      setApproveDialogOpen(true);
+    } catch (error: any) {
+      showError('Approval IDs Unavailable', error?.response?.data?.error?.message || error?.message || 'Could not generate the exporter ID and licence number. Please try again.');
+    }
   };
 
   const getExporterStats = () => {
@@ -1963,8 +1972,7 @@ The exporter can reapply once all requirements are met.`,
                             color="success"
                             onClick={() => {
                               setSelectedApplication(application);
-                              generateApprovalData();
-                              setApproveDialogOpen(true);
+                              generateApprovalData(application);
                             }}
                           >
                             <CheckCircle />
@@ -3290,7 +3298,7 @@ The exporter can reapply once all requirements are met.`,
                     <Grid item xs={6}><Typography variant="caption" color="text.secondary">Email</Typography><Typography variant="body2">{selectedApplication.email}</Typography></Grid>
                     <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{selectedApplication.phone}</Typography></Grid>
                     <Grid item xs={6}><Typography variant="caption" color="text.secondary">Bank Name</Typography><Typography variant="body2">{selectedApplication.bank_name || 'N/A'}</Typography></Grid>
-                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Branch</Typography><Typography variant="body2">{selectedApplication.bank_branch_name || 'N/A'}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="caption" color="text.secondary">Branch</Typography><Typography variant="body2">{selectedApplication.bank_branch || 'N/A'}</Typography></Grid>
                     <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Number</Typography><Typography variant="body2">{selectedApplication.bank_account_number || 'N/A'}</Typography></Grid>
                   </Grid>
                 </Box>
@@ -3384,7 +3392,7 @@ The exporter can reapply once all requirements are met.`,
           <GhostButton brand="ECTA" onClick={() => setApproveConfirmOpen(false)}>
             Cancel
           </GhostButton>
-          <PrimaryButton brand="ECTA" onClick={() => { setApproveConfirmOpen(false); generateApprovalData(); setApproveDialogOpen(true); }}>
+          <PrimaryButton brand="ECTA" onClick={() => { setApproveConfirmOpen(false); generateApprovalData(); }}>
             Yes, Approve
           </PrimaryButton>
         
