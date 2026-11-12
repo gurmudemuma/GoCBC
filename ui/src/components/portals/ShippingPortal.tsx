@@ -105,10 +105,10 @@ interface ShippingRecord {
   estimatedArrival: string;
   actualDeparture?: string;
   actualArrival?: string;
-  // All 18 chaincode shipment states (coffee v2.3, main.go validShipmentStatuses).
+  // All 19 chaincode shipment states (coffee v2.3, main.go validShipmentStatuses).
   // Rows whose status is outside this set are still kept (cast through) and shown
   // on the Pre-Shipping tab with their real status — never silently dropped.
-  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
+  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'INSPECTION_COMPLETE' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
   trackingNumber: string;
   billOfLading?: string; // Sea freight B/L number
   containerType?: 'DRY' | 'REEFER' | 'OPEN_TOP'; // Sea freight only
@@ -196,11 +196,11 @@ const ShippingPortal: React.FC = () => {
     { index: 7, label: 'Destination Arrived', icon: <LocationOn />, status: 'DESTINATION_ARRIVED', statuses: ['DESTINATION_ARRIVED', 'ARRIVED'], description: 'Arrived at buyer\'s port' },
     { index: 8, label: 'Delivered', icon: <CheckCircle />, status: 'DELIVERED', description: 'Completed deliveries' },
     // Pre-shipping states (chaincode CREATED / PERMIT_ISSUED / CUSTOMS_DECLARED /
-    // INSPECTION_PENDING / CUSTOMS_REJECTED / CANCELLED) plus any status no other
+    // INSPECTION_PENDING / INSPECTION_COMPLETE / CUSTOMS_REJECTED / CANCELLED) plus any status no other
     // tab covers: shown here with their real status and no shipping action, so no
     // row is ever silently dropped. No action is offered — these shipments have
     // not cleared customs yet (or are rejected/cancelled).
-    { index: 9, label: 'Pre-Shipping', icon: <Schedule />, status: 'CREATED', statuses: ['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED'], description: 'Not yet cleared for shipping — permit / customs / inspection states' },
+    { index: 9, label: 'Pre-Shipping', icon: <Schedule />, status: 'CREATED', statuses: ['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'INSPECTION_COMPLETE', 'CUSTOMS_REJECTED', 'CANCELLED'], description: 'Not yet cleared for shipping — permit / customs / inspection states' },
     { index: 10, label: 'Users', icon: <Person />, status: '', description: 'User management', roles: ['ADMIN', 'SHIPPING', 'Shipping Portal Administrator'] },
   ];
   const visibleMainTabs = mainTabs.filter(tab =>
@@ -213,6 +213,7 @@ const ShippingPortal: React.FC = () => {
     'PERMIT_ISSUED': 5,
     'CUSTOMS_DECLARED': 5,
     'INSPECTION_PENDING': 5,
+    'INSPECTION_COMPLETE': 5,
     'CUSTOMS_REJECTED': 0,
     'CANCELLED': 0,
     'CUSTOMS_CLEARED': 10,
@@ -233,6 +234,7 @@ const ShippingPortal: React.FC = () => {
     'PERMIT_ISSUED': '#ff9800',
     'CUSTOMS_DECLARED': '#ff9800',
     'INSPECTION_PENDING': '#ff9800',
+    'INSPECTION_COMPLETE': '#ff9800',
     'CUSTOMS_REJECTED': '#d32f2f',
     'CANCELLED': '#616161',
     'CUSTOMS_CLEARED': '#ff9800',
@@ -420,6 +422,7 @@ const ShippingPortal: React.FC = () => {
       case 'PERMIT_ISSUED': return 'Export permit issued — awaiting customs declaration; no shipping action is available yet.';
       case 'CUSTOMS_DECLARED': return 'Customs declaration submitted — awaiting clearance; no shipping action is available yet.';
       case 'INSPECTION_PENDING': return 'Quality inspection pending — awaiting inspection; no shipping action is available yet.';
+      case 'INSPECTION_COMPLETE': return 'Quality inspection approved — ready for export permit; no shipping action is available yet.';
       case 'CUSTOMS_REJECTED': return 'Customs declaration rejected — terminal for this shipment in the customs flow; no shipping action is available.';
       case 'CANCELLED': return 'Shipment cancelled — terminal; no shipping action is available.';
       default: return null;
@@ -2352,7 +2355,7 @@ const ShippingPortal: React.FC = () => {
       valueGetter: (params) => {
         const row = params.row;
         // Early stages before B/L issuance (including pre-shipping states)
-        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED'].includes(row.status)) {
+        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'INSPECTION_COMPLETE', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED'].includes(row.status)) {
           return '(Pending)';
         }
         return row.transportMode === 'SEA'
@@ -2367,7 +2370,7 @@ const ShippingPortal: React.FC = () => {
       valueGetter: (params) => {
         const row = params.row;
         // Early stages before vessel/flight assignment (including pre-shipping)
-        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED', 'CONTAINER_STUFFED'].includes(row.status)) {
+        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'INSPECTION_COMPLETE', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED', 'CONTAINER_STUFFED'].includes(row.status)) {
           return '(To be assigned)';
         }
         return row.transportMode === 'SEA' 

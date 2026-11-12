@@ -24,6 +24,7 @@ import {
   TableRow,
   Paper,
   Chip,
+  CircularProgress,
   IconButton,
   Tooltip,
   Alert,
@@ -224,6 +225,14 @@ const ECTAPortal: React.FC = () => {
   // because quality_inspections rows can carry it (quality.ts perform
   // guard accepts PENDING or REQUESTED).
   const [inspectionFilterTab, setInspectionFilterTab] = useState<'ALL' | 'PENDING' | 'REQUESTED' | 'INSPECTED' | 'APPROVED' | 'REJECTED' | 'PERMIT_ISSUED'>('ALL');
+
+  // Applications status filter (W4 #2) — the tab 0 table used to render the
+  // pending page only, so a rejected application vanished from the UI once
+  // decided (it still exists in allApplications, merged from the
+  // pending/approved/rejected queries in loadData). Same contained/outlined
+  // button pattern as inspectionFilterTab in the Quality Control tab.
+  // Default 'pending' preserves the previous view.
+  const [applicationFilterTab, setApplicationFilterTab] = useState<'ALL' | 'pending' | 'approved' | 'rejected'>('pending');
   
   const [exporters, setExporters] = useState<Exporter[]>([]);
   const [allExporters, setAllExporters] = useState<Exporter[]>([]);
@@ -295,6 +304,15 @@ const ECTAPortal: React.FC = () => {
     bankBranchCode: '',
   });
   const [rejectionReason, setRejectionReason] = useState('');
+
+  // In-flight flags for the chaincode-backed rejections (W4 #6): the
+  // round-trip takes ~10–35 s, so the submit buttons show a spinner and
+  // disable while the request runs. Dialog closing is unchanged — the
+  // handlers still close the dialogs on success with a confirmation.
+  const [rejectingApplication, setRejectingApplication] = useState(false);
+  const [rejectingContract, setRejectingContract] = useState(false);
+  // In-flight flag for the contract resubmission (F-1), same round-trip.
+  const [resubmittingContract, setResubmittingContract] = useState(false);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [notificationContent, setNotificationContent] = useState({ title: '', message: '', type: 'success' as 'success' | 'error' });
   const [searchTerm, setSearchTerm] = useState('');
@@ -1185,7 +1203,8 @@ Contact system administrator if the issue persists.`,
 
   const handleRejectApplication = async () => {
     if (!selectedApplication || !rejectionReason) return;
-    
+
+    setRejectingApplication(true);
     try {
       const response = await api.post(
         `/exporters/exporter-applications/${selectedApplication.application_id}/reject`,
@@ -1238,6 +1257,8 @@ The exporter can reapply once all requirements are met.`,
         type: 'error'
       });
       setNotificationDialogOpen(true);
+    } finally {
+      setRejectingApplication(false);
     }
   };
 
@@ -1313,7 +1334,8 @@ The exporter can reapply once all requirements are met.`,
     }
     
     console.log('[REJECT] Rejecting contract:', contractId, 'Reason:', detailedFeedback);
-    
+
+    setRejectingContract(true);
     try {
       const response = await api.rejectContract(
         contractId,
@@ -1339,6 +1361,48 @@ The exporter can reapply once all requirements are met.`,
     } catch (error: any) {
       console.error('Failed to reject contract:', error);
       showError('Rejection Failed', error.response?.data?.error?.message || 'Failed to reject contract');
+    } finally {
+      setRejectingContract(false);
+    }
+  };
+
+  // Contract Resubmission Handler (F-1): sends a REJECTED contract back for
+  // review via POST /api/v1/contracts/:contractId/resubmit. The route is
+  // owned by the API; this control only calls it, shows the outcome and
+  // reloads. No body is sent — the route takes the contract from the URL.
+  const handleResubmitContract = async () => {
+    if (!selectedContract) return;
+
+    const contractId = selectedContract.contractID || selectedContract.contractId || selectedContract.contract_id;
+
+    if (!contractId) {
+      console.error('Contract ID missing:', selectedContract);
+      showError('Resubmission Failed', 'Contract ID is missing. Please try again.');
+      return;
+    }
+
+    console.log('[RESUBMIT] Resubmitting contract:', contractId);
+
+    setResubmittingContract(true);
+    try {
+      const response = await api.post(`/contracts/${contractId}/resubmit`);
+
+      if (response.data?.success) {
+        showSuccess(
+          'Contract Resubmitted',
+          `Contract ${contractId} has been resubmitted for review.`
+        );
+        setContractDetailsDialogOpen(false);
+        setSelectedContract(null);
+        loadData();
+      } else {
+        showError('Resubmission Failed', response.data?.error?.message || 'Failed to resubmit contract');
+      }
+    } catch (error: any) {
+      console.error('Failed to resubmit contract:', error);
+      showError('Resubmission Failed', error.response?.data?.error?.message || error.message || 'Failed to resubmit contract');
+    } finally {
+      setResubmittingContract(false);
     }
   };
 
@@ -1484,10 +1548,14 @@ The exporter can reapply once all requirements are met.`,
       });
       
       if (response.data.success) {
+        // The API returns the issued permit number as data.permitNumber;
+        // fall back to the pre-existing data.exportPermitNo and finally to
+        // the number generated for this request.
+        const issuedPermitNo = response.data?.data?.permitNumber || response.data?.data?.exportPermitNo || exportPermitNo;
         showSuccess(
           'Export Permit Issued',
-          `Export Permit ${exportPermitNo} issued for ${shipmentId}`,
-          'Customs declaration workflow has been automatically initiated'
+          `Export Permit ${issuedPermitNo} issued for ${shipmentId}`,
+          'The customs declaration is a separate next step — no customs declaration was created automatically.'
         );
         loadData();
       } else {
@@ -1623,6 +1691,14 @@ The exporter can reapply once all requirements are met.`,
 
   const stats = getExporterStats();
 
+  // Tab 0 table rows for the selected application status filter (W4 #2).
+  // allApplications is the merged pending+approved+rejected set (see
+  // mergeApplications/loadData); the pending-only `applications` page is
+  // what the table used to render, which hid decided applications.
+  const filteredApplications = applicationFilterTab === 'ALL'
+    ? allApplications
+    : allApplications.filter((a) => a.status === applicationFilterTab);
+
   return (
     <PortalShell brand="ECTA" title="ECTA Portal" subtitle={'Ethiopian Coffee & Tea Authority'}>
       {/* Dynamic KPI Cards - Change based on active tab */}
@@ -1637,6 +1713,8 @@ The exporter can reapply once all requirements are met.`,
                 label="Pending Review"
                 value={allApplications.filter(a => a.status === 'pending').length}
                 color="#ff9800"
+                onClick={() => { setApplicationFilterTab('pending'); setCurrentPage(0); }}
+                selected={applicationFilterTab === 'pending'}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
@@ -1646,6 +1724,8 @@ The exporter can reapply once all requirements are met.`,
                 label="Approved"
                 value={allApplications.filter(a => a.status === 'approved').length}
                 color="#4caf50"
+                onClick={() => { setApplicationFilterTab('approved'); setCurrentPage(0); }}
+                selected={applicationFilterTab === 'approved'}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
@@ -1655,6 +1735,8 @@ The exporter can reapply once all requirements are met.`,
                 label="Rejected"
                 value={allApplications.filter(a => a.status === 'rejected').length}
                 color="#f44336"
+                onClick={() => { setApplicationFilterTab('rejected'); setCurrentPage(0); }}
+                selected={applicationFilterTab === 'rejected'}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
@@ -1664,6 +1746,8 @@ The exporter can reapply once all requirements are met.`,
                 label="Total Applications"
                 value={allApplications.length}
                 color="#2196f3"
+                onClick={() => { setApplicationFilterTab('ALL'); setCurrentPage(0); }}
+                selected={applicationFilterTab === 'ALL'}
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
@@ -1941,10 +2025,31 @@ The exporter can reapply once all requirements are met.`,
           )}
           
           <Typography variant="h6" gutterBottom>
-            Pending Exporter Applications
+            Exporter Applications
           </Typography>
-          {applications.length === 0 ? (
-            <Alert severity="info">No pending applications at this time.</Alert>
+          {/* Application status filter (W4 #2) — same contained/outlined
+              button pattern as the inspection filter in Quality Control.
+              Rejected applications used to vanish once decided because the
+              table only ever showed the pending page. */}
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+            {([
+              { value: 'ALL', label: 'All' },
+              { value: 'pending', label: 'Pending' },
+              { value: 'approved', label: 'Approved' },
+              { value: 'rejected', label: 'Rejected' },
+            ] as const).map(({ value, label }) => (
+              <Button
+                key={value}
+                size="small"
+                variant={applicationFilterTab === value ? 'contained' : 'outlined'}
+                onClick={() => { setApplicationFilterTab(value); setCurrentPage(0); }}
+              >
+                {label} ({value === 'ALL' ? allApplications.length : allApplications.filter((a) => a.status === value).length})
+              </Button>
+            ))}
+          </Box>
+          {filteredApplications.length === 0 ? (
+            <Alert severity="info">{applicationFilterTab === 'ALL' ? 'No applications at this time.' : `No ${applicationFilterTab} applications at this time.`}</Alert>
           ) : (
             <TableContainer component={Paper}>
               <Table>
@@ -1960,7 +2065,7 @@ The exporter can reapply once all requirements are met.`,
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {getPaginatedData(applications).map((application) => (
+                  {getPaginatedData(filteredApplications).map((application) => (
                     <TableRow key={application.application_id}>
                       <TableCell>{application.application_id}</TableCell>
                       <TableCell>{application.company_name}</TableCell>
@@ -2027,7 +2132,7 @@ The exporter can reapply once all requirements are met.`,
           )}
 
           {/* Pagination Controls */}
-          {applications.length > 0 && (
+          {filteredApplications.length > 0 && (
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Typography variant="body2" color="black">Rows per page:</Typography>
@@ -2047,7 +2152,7 @@ The exporter can reapply once all requirements are met.`,
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Typography variant="body2" color="black">
-                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, applications.length)} of {applications.length}
+                  Page {currentPage + 1} shows items {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, filteredApplications.length)} of {filteredApplications.length}
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
@@ -2061,7 +2166,7 @@ The exporter can reapply once all requirements are met.`,
                   <Button
                     size="small"
                     variant="outlined"
-                    disabled={currentPage >= Math.ceil(applications.length / rowsPerPage) - 1}
+                    disabled={currentPage >= Math.ceil(filteredApplications.length / rowsPerPage) - 1}
                     onClick={() => handleChangePage(currentPage + 1)}
                   >
                     Next
@@ -3445,8 +3550,8 @@ The exporter can reapply once all requirements are met.`,
           <GhostButton brand="ECTA" onClick={() => setRejectConfirmOpen(false)}>
             Go Back
           </GhostButton>
-          <DangerButton brand="ECTA" startIcon={<WarningAmber />} onClick={() => { setRejectConfirmOpen(false); handleRejectApplication(); }}>
-            Yes, Reject Permanently
+          <DangerButton brand="ECTA" startIcon={rejectingApplication ? <CircularProgress size={18} color="inherit" /> : <WarningAmber />} disabled={rejectingApplication} onClick={() => { setRejectConfirmOpen(false); handleRejectApplication(); }}>
+            {rejectingApplication ? 'Rejecting…' : 'Yes, Reject Permanently'}
           </DangerButton>
         
       </>}>
@@ -3617,20 +3722,31 @@ The exporter can reapply once all requirements are met.`,
           <AnimatedButton onClick={() => {
             setRejectDialogOpen(false);
             setRejectionReason('');
-          }} variant="outlined">
+          }} variant="outlined" disabled={rejectingApplication}>
             Cancel
           </AnimatedButton>
-          <AnimatedButton 
+          <AnimatedButton
             variant="contained"
             brandColor="#f44336"
             onClick={() => setRejectConfirmOpen(true)}
             disabled={!rejectionReason}
+            loading={rejectingApplication}
           >
             Reject Application
           </AnimatedButton>
         
       </>}>
 
+          {/* Progress feedback (W4 #6): this dialog stays open while the
+              rejection writes to the blockchain (~10–35 s) — the confirm
+              dialog closes on click and the success notification only
+              arrives when the round-trip completes. Closing behaviour is
+              unchanged: the handler still closes this dialog on success. */}
+          {rejectingApplication && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Rejecting application… this writes to the blockchain and can take 10–35 seconds. Please wait — this dialog closes when the rejection is confirmed.
+            </Alert>
+          )}
           <Typography variant="body2" color="textSecondary" paragraph>
             Please provide a reason for rejecting this application.
           </Typography>
@@ -3961,7 +4077,14 @@ The exporter can reapply once all requirements are met.`,
               </PrimaryButton>
             </>
           )}
-        
+          {/* Resubmit (F-1): only a REJECTED contract can be resubmitted.
+              Calls POST /api/v1/contracts/:contractId/resubmit. */}
+          {(selectedContract?.contractStatus === 'REJECTED' || selectedContract?.status === 'REJECTED') && (
+            <PrimaryButton brand="ECTA" startIcon={resubmittingContract ? <CircularProgress size={18} color="inherit" /> : undefined} disabled={resubmittingContract} onClick={handleResubmitContract}>
+              {resubmittingContract ? 'Resubmitting…' : 'Resubmit Contract'}
+            </PrimaryButton>
+          )}
+
       </>}>
 
           {selectedContract && (
@@ -4004,6 +4127,25 @@ The exporter can reapply once all requirements are met.`,
                   </Grid>
                 </Grid>
               </Paper>
+
+              {/* Rejection reason (W4 #1) — shown on a REJECTED contract so
+                  the feedback ECTA gave is visible in Details, not only in
+                  the rejection dialog. Field names come from
+                  api/src/routes/contracts.ts getContracts (rejectionReason /
+                  rejectionDate / rejectedBy, with chaincode/PG variants). */}
+              {(selectedContract.contractStatus === 'REJECTED' || selectedContract.status === 'REJECTED') && (
+                <Paper variant="outlined" sx={{ p: 2, mb: 2, borderColor: '#ef9a9a', bgcolor: '#fff5f5' }}>
+                  <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 1, color: '#c62828' }}>
+                    Rejection Reason
+                  </Typography>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                    {selectedContract.rejectionReason || selectedContract.RejectionReason || selectedContract.rejection_reason || 'No rejection reason was recorded for this contract.'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                    {`Rejected${(selectedContract.rejectedBy || selectedContract.RejectedBy || selectedContract.rejected_by) ? ` by ${selectedContract.rejectedBy || selectedContract.RejectedBy || selectedContract.rejected_by}` : ''}${(selectedContract.rejectionDate || selectedContract.RejectionDate || selectedContract.rejection_date) ? ` on ${new Date(selectedContract.rejectionDate || selectedContract.RejectionDate || selectedContract.rejection_date).toLocaleDateString()}` : ''}`}
+                  </Typography>
+                </Paper>
+              )}
 
               {/* Parties Information */}
               <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -4318,11 +4460,11 @@ The exporter can reapply once all requirements are met.`,
       {/* Contract Rejection Dialog */}
       <PortalDialog brand="ECTA" title="Reject Contract" open={contractRejectDialogOpen} onClose={() => { setContractRejectDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); }} maxWidth="sm" actions={<>
 
-          <GhostButton brand="ECTA" onClick={() => { setContractRejectDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); }}>
+          <GhostButton brand="ECTA" disabled={rejectingContract} onClick={() => { setContractRejectDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); }}>
             Cancel
           </GhostButton>
-          <DangerButton brand="ECTA" onClick={handleRejectContract} disabled={!contractRejectionField || contractRejectionReason.trim().length < 20}>
-            Reject Contract
+          <DangerButton brand="ECTA" onClick={handleRejectContract} disabled={rejectingContract || !contractRejectionField || contractRejectionReason.trim().length < 20} startIcon={rejectingContract ? <CircularProgress size={18} color="inherit" /> : undefined}>
+            {rejectingContract ? 'Rejecting…' : 'Reject Contract'}
           </DangerButton>
         
       </>}>
@@ -4334,6 +4476,15 @@ The exporter can reapply once all requirements are met.`,
                 <br />
                 The exporter sees this feedback on the rejected contract. Name the field and state the exact change required.
               </Alert>
+              {/* Progress feedback (W4 #6): this dialog stays open while the
+                  rejection writes to the blockchain (~10–35 s). Closing
+                  behaviour is unchanged: the handler still closes this
+                  dialog on success with a confirmation. */}
+              {rejectingContract && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Rejecting contract… this writes to the blockchain and can take 10–35 seconds. Please wait — this dialog closes when the rejection is confirmed.
+                </Alert>
+              )}
               
               <Typography variant="body2" sx={{ mb: 1 }}>
                 <strong>Contract ID:</strong> {selectedContract.contractID || selectedContract.contractId}

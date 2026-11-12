@@ -1052,9 +1052,16 @@ const ECXPortal: React.FC = () => {
           {selectedLot && (
             <>
               {/* BLOCKCHAIN PROOF BADGE */}
+              {/* NOTE: entity type must be ECXLOT, the entity type the
+                  chaincode writes in its audit logs (ecx.go
+                  CreateAuditLog(..., "ECXLOT", lotID, ...)) and the state
+                  key prefix (ECXLOT_<lotId>). "COFFEE_LOT" matches nothing
+                  on-chain, so the signature lookup below returned zero
+                  transactions and showed "No Blockchain Signatures Found"
+                  even for lots whose grade/reject tx is committed. */}
               <BlockchainBadge
                 entityId={selectedLot.lotId || selectedLot.ecxLotNumber}
-                entityType="COFFEE_LOT"
+                entityType="ECXLOT"
                 chaincode="coffee"
                 channel="coffeechannel"
                 compact
@@ -1063,7 +1070,7 @@ const ECXPortal: React.FC = () => {
               {/* Blockchain Verification - Component handles all messaging */}
               <Box sx={{ mt: 3 }}>
                 <BlockchainSignatureVerification
-                  entityType="COFFEE_LOT"
+                  entityType="ECXLOT"
                   entityId={selectedLot.lotId || selectedLot.ecxLotNumber}
                 />
               </Box>

@@ -907,19 +907,16 @@ const BanksPortal: React.FC = () => {
         consignments: consignmentRows.length,
       });
 
-      // ✅ Filter delivered shipments by LC payment status
-      if (shipments && shipments.length > 0 && lcs && lcs.length > 0) {
-        const shipmentsWithPaymentReleased = shipments.filter((shipment: any) => {
-          // Find the LC for this shipment
-          const contractId = shipment.contractId || shipment.contractID;
-          const lc = lcs.find((l: any) => l.contractId === contractId);
-          
-          // Only include if LC payment has been released or settled
-          return lc && (lc.status === 'PAYMENT_RELEASED' || lc.status === 'SETTLED');
-        });
-        setDeliveredShipments(shipmentsWithPaymentReleased);
-        devLog(`[BANKS] ⚡ Delivered shipments with payment released: ${shipmentsWithPaymentReleased.length}`);
-      }
+      // NOTE: deliveredShipments is intentionally NOT filtered by LC
+      // payment status here. The shipments fetch above already returns
+      // only DELIVERED shipments, and the LC Settlements tab (tab 5)
+      // must list every delivered shipment so its per-card "Issue
+      // Export Permit" button is reachable — filtering to
+      // PAYMENT_RELEASED/SETTLED LCs emptied the list (and the permit
+      // button with it) for every shipment whose LC payment had not
+      // been released yet. Settlement tracking still happens per card
+      // (LC lookup + PostDeliveryWorkflowPanel), and the Payment
+      // Release tab keeps its own lcsForPaymentRelease list.
 
       // Process forex allocations with buyer names from LCs
       if (forex && forex.length > 0) {
@@ -1535,6 +1532,49 @@ const BanksPortal: React.FC = () => {
     } catch (error: any) {
       console.error('Error approving LC:', error);
       showError('Network Error', 'Failed to approve LC', error.message);
+    }
+  };
+
+  // Reject LC — POST /banking/lc/:lcId/reject (BANKS). Chaincode
+  // RejectLC: REQUESTED → REJECTED, reason 10–500 chars; the rejection
+  // is recorded on the consortium ledger and the LC cannot be approved
+  // afterwards. Same endpoint/body as the DocumentValidationDialog
+  // onReject path; the reason prompt (with the 10-char minimum) follows
+  // handleRejectForex.
+  const handleRejectLC = async (lcId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+    const reason = window.prompt(
+      `Reject LC ${lcId}?\nEnter a rejection reason (10–500 characters):`,
+      ''
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 10) {
+      showError('Rejection Reason Too Short', 'The chaincode requires a rejection reason of 10–500 characters.');
+      return;
+    }
+    try {
+      const response = await apiFetch(`/banking/lc/${encodeURIComponent(lcId)}/reject`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ rejectionReason: reason.trim() }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('LC Rejected', `LC ${lcId} was rejected and recorded on the consortium ledger.`);
+        handleCloseDialog();
+        loadBankingData();
+      } else {
+        showError('LC Rejection Failed', result.error?.message || 'Failed to reject LC');
+      }
+    } catch (error: any) {
+      showError('Network Error', 'Failed to reject LC', error?.message || 'Please try again');
     }
   };
 
@@ -2225,6 +2265,51 @@ const BanksPortal: React.FC = () => {
     }
   };
 
+  // Re-fetch ONLY the SWIFT list (same endpoint/shape as the SWIFT
+  // promise in loadBankingData) without touching other state. Returns
+  // the rows, or [] on failure — never throws.
+  const fetchSwiftMessages = async (): Promise<any[]> => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return [];
+    try {
+      const response = await apiFetch('/api/v1/swift/messages', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const result = await response.json();
+      if (result.success) return result.data || [];
+      return [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Re-fetch the SWIFT list until the acted-on message shows the
+  // expected post-action status, then apply the fresh list. The list
+  // read (GET /api/v1/swift/messages) is served from the CouchDB state
+  // DB, which can lag the ledger commit by a few seconds — a single
+  // immediate reload can therefore return the PRE-action status and
+  // leave the row looking unchanged until a manual reload. Only a list
+  // that already shows the new status is applied, so a stale read can
+  // never flash the row back to its old state.
+  const refreshSwiftMessagesUntil = async (
+    messageId: string,
+    expectedStatus: string,
+    attempts = 6
+  ): Promise<boolean> => {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const rows = await fetchSwiftMessages();
+      const row = rows.find((m: any) => (m.messageId || m.messageID || m.MessageID) === messageId);
+      if (row && row.status === expectedStatus) {
+        setSwiftMessages(rows);
+        return true;
+      }
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+    return false;
+  };
+
   // SWIFT lifecycle on an EXISTING message — chaincode swift.go:
   // DRAFT → APPROVED → SENT → RECEIVED → PROCESSING → SETTLED, and any
   // non-terminal state → REJECTED. NBE_APPROVED → APPROVED is the same
@@ -2250,6 +2335,11 @@ const BanksPortal: React.FC = () => {
       approve: 'approved', send: 'sent', receive: 'received',
       process: 'moved to processing', settle: 'settled', reject: 'rejected',
     };
+    // Status the message must show after this action (chaincode swift.go).
+    const expectedStatus: Record<string, string> = {
+      approve: 'APPROVED', send: 'SENT', receive: 'RECEIVED',
+      process: 'PROCESSING', settle: 'SETTLED', reject: 'REJECTED',
+    };
     try {
       const response = await apiFetch(`/swift/messages/${encodeURIComponent(messageId)}/${action}`, {
         method: 'POST',
@@ -2258,8 +2348,33 @@ const BanksPortal: React.FC = () => {
       });
       const result = await response.json();
       if (result.success) {
+        const nextStatus = expectedStatus[action];
+        // Optimistic row update: the API confirmed the ledger write, so
+        // the row (and the open details dialog, if any) shows the new
+        // status immediately instead of the pre-action one.
+        setSwiftMessages((prev: any[]) => prev.map((m: any) =>
+          (m.messageId || m.messageID || m.MessageID) === messageId
+            ? { ...m, status: nextStatus }
+            : m
+        ));
+        setSelectedSwiftMessage((prev: any) =>
+          prev && (prev.messageId || prev.messageID || prev.MessageID) === messageId
+            ? { ...prev, status: nextStatus }
+            : prev
+        );
         showSuccess('SWIFT Message Updated', `Message ${messageId} ${pastTense[action]}.`);
-        loadBankingData();
+        // Full refresh like every other action in this file, then
+        // re-assert the confirmed status (the list read can lag the
+        // commit), then keep polling the list until it agrees with the
+        // ledger. If it never converges, the optimistic row above stays
+        // — it matches the API-confirmed ledger state.
+        await loadBankingData();
+        setSwiftMessages((prev: any[]) => prev.map((m: any) =>
+          (m.messageId || m.messageID || m.MessageID) === messageId
+            ? { ...m, status: nextStatus }
+            : m
+        ));
+        await refreshSwiftMessagesUntil(messageId, nextStatus);
       } else {
         showError('SWIFT Action Failed', result.error?.message || `Failed to ${action} SWIFT message`);
       }
@@ -4807,6 +4922,14 @@ const BanksPortal: React.FC = () => {
             <CircularProgress size={20} sx={{ ml: 2, verticalAlign: 'middle' }} />
           )}</>} icon={<Description />} actions={<>
           <GhostButton brand="BANKS" onClick={handleCloseDialog}>Close</GhostButton>
+          {selectedLC && selectedLC.status === 'REQUESTED' && (
+            <DangerButton brand="BANKS"
+              startIcon={<Cancel />}
+              onClick={() => handleRejectLC(selectedLC.lcId)}
+            >
+              Reject LC
+            </DangerButton>
+          )}
           {selectedLC && selectedLC.status === 'ISSUED' && (
             <>
               <Button
@@ -6233,6 +6356,17 @@ const BanksPortal: React.FC = () => {
                                 onClick={() => handleApproveLC(lc.lcId, lc.exporterId)}
                               >
                                 <CheckCircle />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {lc.status === 'REQUESTED' && (
+                            <Tooltip title="Reject LC">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => handleRejectLC(lc.lcId)}
+                              >
+                                <Cancel />
                               </IconButton>
                             </Tooltip>
                           )}

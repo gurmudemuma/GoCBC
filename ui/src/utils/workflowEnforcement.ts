@@ -20,6 +20,7 @@ export const SHIPMENT_STATUS = {
   CUSTOMS_CLEARED: 'CUSTOMS_CLEARED',
   CUSTOMS_REJECTED: 'CUSTOMS_REJECTED',
   INSPECTION_PENDING: 'INSPECTION_PENDING',
+  INSPECTION_COMPLETE: 'INSPECTION_COMPLETE',
   LAND_TRANSPORT: 'LAND_TRANSPORT',
   PORT_ARRIVED: 'PORT_ARRIVED',
   CONTAINER_STUFFED: 'CONTAINER_STUFFED',
@@ -477,6 +478,8 @@ export const getWorkflowStageMessage = (
       return '📄 Customs Declared - Declaration submitted, awaiting review';
     case SHIPMENT_STATUS.INSPECTION_PENDING:
       return '🔍 Inspection Pending - Quality inspection requested for this shipment';
+    case SHIPMENT_STATUS.INSPECTION_COMPLETE:
+      return '✓ Inspection Complete - Quality inspection approved; ready for export permit';
     case SHIPMENT_STATUS.PERMIT_ISSUED:
       return '✓ Permit Issued - Awaiting customs declaration';
     case SHIPMENT_STATUS.CANCELLED:

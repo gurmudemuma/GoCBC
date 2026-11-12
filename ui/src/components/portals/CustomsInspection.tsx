@@ -125,7 +125,18 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
         // Filter to only show APPROVED inspections with export permits that DON'T have declarations yet
         const permitReady = inspectionsList.filter((insp: any) => {
           const status = (insp.status || insp.Status || '').toString().toUpperCase();
-          const permitNo = (insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '').toString();
+          // The list endpoint maps exportPermitNo from export_permit_no,
+          // a column no API route ever writes — the issue-permit route
+          // (quality.ts) only appends "EXPORT PERMIT ISSUED: <num> by …"
+          // to remarks and flips status to PERMIT_ISSUED. Recover the
+          // number from remarks when the column is empty so a
+          // permit-issued inspection is not filtered out as permit-less.
+          let permitNo = (insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '').toString();
+          if (!permitNo) {
+            const remarks = (insp.remarks || insp.Remarks || '').toString();
+            const permitMatch = remarks.match(/EXPORT PERMIT ISSUED:\s*(\S+)/i);
+            if (permitMatch) permitNo = permitMatch[1];
+          }
           // The list endpoint returns both `certificateNo` and
           // `certificationNumber` (same PG column); the by-shipment
           // endpoint returns only `certificationNumber`. Accept both.
@@ -133,9 +144,13 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
           const shipmentId = (insp.shipmentId || insp.ShipmentID || '').toString();
           
           // Check approval by status OR by having both certificate and permit
-          const statusApproved = status === 'APPROVED' || status === 'QUALITY_APPROVED';
+          // PERMIT_ISSUED is the status the issue-permit route sets after
+          // an APPROVED inspection with a certificate receives its permit,
+          // so it implies both approval and a permit (the number itself is
+          // recovered from remarks above when the column is empty).
+          const statusApproved = status === 'APPROVED' || status === 'QUALITY_APPROVED' || status === 'PERMIT_ISSUED';
           const hasCertificate = certificateNo && certificateNo.trim() !== '' && certificateNo.toUpperCase() !== 'N/A';
-          const hasPermit = permitNo && permitNo.trim() !== '' && permitNo.toUpperCase() !== 'NOT ISSUED' && permitNo.toUpperCase() !== 'N/A';
+          const hasPermit = (permitNo && permitNo.trim() !== '' && permitNo.toUpperCase() !== 'NOT ISSUED' && permitNo.toUpperCase() !== 'N/A') || status === 'PERMIT_ISSUED';
           
           // If both certificate and permit exist, inspection is approved (regardless of status field)
           const isApprovedByDocuments = hasCertificate && hasPermit;
@@ -195,7 +210,11 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
   };
 
   const getExportPermitNo = (inspection: QualityInspection) => {
-    return inspection.exportPermitNo || 'Not Issued';
+    if (inspection.exportPermitNo) return inspection.exportPermitNo;
+    // See the permit-ready filter: the issue-permit route records the
+    // number in remarks, not in export_permit_no.
+    const permitMatch = (inspection.remarks || '').match(/EXPORT PERMIT ISSUED:\s*(\S+)/i);
+    return permitMatch ? permitMatch[1] : 'Not Issued';
   };
 
   const getInspectorName = (inspection: QualityInspection) => {

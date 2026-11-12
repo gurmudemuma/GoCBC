@@ -396,6 +396,14 @@ const CustomsPortal: React.FC = () => {
           const inspStatus = inspection.status || '';
           const certificateNo = inspection.certificationNumber || inspection.certificateNo || inspection.CertificationNumber || '';
           let exportPermitNo = inspection.exportPermitNo || inspection.ExportPermitNo || '';
+          // The issue-permit route records the permit number in remarks
+          // ("EXPORT PERMIT ISSUED: <num> by …"), not in the
+          // export_permit_no column, so recover it from there when the
+          // column read is empty.
+          if (!exportPermitNo && inspection.remarks) {
+            const permitMatch = String(inspection.remarks).match(/EXPORT PERMIT ISSUED:\s*(\S+)/i);
+            if (permitMatch) exportPermitNo = permitMatch[1];
+          }
           if (!exportPermitNo) {
             try {
               const listResponse = await apiFetch(`/quality/inspections?limit=1000`, {
@@ -405,7 +413,13 @@ const CustomsPortal: React.FC = () => {
               const list = Array.isArray(listResult.data) ? listResult.data : (listResult.data?.inspections || []);
               const match = list.find((insp: any) =>
                 normalizeShipmentId(insp.shipmentId || insp.ShipmentID || insp.shipmentID || '') === normalizeShipmentId(shipmentId));
-              if (match) exportPermitNo = match.exportPermitNo || match.ExportPermitNo || '';
+              if (match) {
+                exportPermitNo = match.exportPermitNo || match.ExportPermitNo || '';
+                if (!exportPermitNo && match.remarks) {
+                  const permitMatch = String(match.remarks).match(/EXPORT PERMIT ISSUED:\s*(\S+)/i);
+                  if (permitMatch) exportPermitNo = permitMatch[1];
+                }
+              }
             } catch (lookupErr) {
               console.warn('[CUSTOMS] Could not look up export permit from inspection list:', lookupErr);
             }
@@ -417,9 +431,21 @@ const CustomsPortal: React.FC = () => {
           console.log('  - Export Permit:', exportPermitNo || '(empty)');
           
           // Check if inspection is approved
-          const statusApproved = inspStatus.toUpperCase().includes('APPROVED');
+          // PERMIT_ISSUED is the status the PG issue-permit route sets
+          // (quality.ts) after an APPROVED inspection with a certificate
+          // receives its permit, so it implies approval + permit.
+          const statusApproved = inspStatus.toUpperCase().includes('APPROVED') ||
+            inspStatus.toUpperCase() === 'PERMIT_ISSUED';
           const hasCertificate = certificateNo.trim().length > 0 && !['N/A', 'NA', 'NONE', 'NULL'].includes(certificateNo.toUpperCase());
-          const hasPermit = exportPermitNo.trim().length > 0 && !['NOT ISSUED', 'N/A', 'NA', 'NONE', 'NULL'].includes(exportPermitNo.toUpperCase());
+          // The permit that DOES exist for a properly permitted shipment is
+          // the ledger one: IssueCBEExportPermit cascades the shipment to
+          // PERMIT_ISSUED on-chain, and GET /shipments/:id reads that
+          // status via ReadShipment (shipments.ts) — so a PERMIT_ISSUED
+          // ledger shipment satisfies the permit check even though the
+          // inspection endpoints never return a permit number.
+          const hasLedgerPermit = (shipmentData.status || '').toUpperCase() === 'PERMIT_ISSUED';
+          const hasPermit = hasLedgerPermit ||
+            (exportPermitNo.trim().length > 0 && !['NOT ISSUED', 'N/A', 'NA', 'NONE', 'NULL'].includes(exportPermitNo.toUpperCase()));
           
           // CRITICAL: If both certificate AND permit exist, inspection IS approved
           const isApprovedByDocuments = hasCertificate && hasPermit;
@@ -587,11 +613,22 @@ ${solution}`);
             
             if (existingDecl) {
               const declId = existingDecl.DeclarationID || existingDecl.declarationId || existingDecl.declarationID || existingDecl.declaration_id || '';
-              const declStatus = existingDecl.DeclarationStatus || existingDecl.status || existingDecl.Status || '';
-              console.log('[CUSTOMS] ⚠️ Declaration already exists:', declId, 'Status:', declStatus);
-              alert(`⚠️ Declaration Already Exists\n\nDeclaration ID: ${declId}\nStatus: ${declStatus}\n\nThis shipment already has a customs declaration.\n\nYou can view or modify the existing declaration instead of creating a new one.`);
-              setIsLoadingShipmentData(false);
-              return;
+              const declStatus = (existingDecl.DeclarationStatus || existingDecl.status || existingDecl.Status || '').toString().toUpperCase();
+              // A REJECTED declaration is terminal and must not block
+              // re-submission: the detail view says "Corrections required
+              // before resubmission", and the API DECLARATION_EXISTS guard
+              // is being relaxed in parallel to allow re-submit for
+              // REJECTED rows. Fall through so the form auto-fills and the
+              // corrected declaration can be submitted (same CD-<shipmentId>
+              // id is reused).
+              if (declStatus === 'REJECTED') {
+                console.log('[CUSTOMS] ⚠️ Previous declaration was REJECTED:', declId, '— allowing re-submission with corrections.');
+              } else {
+                console.log('[CUSTOMS] ⚠️ Declaration already exists:', declId, 'Status:', declStatus);
+                alert(`⚠️ Declaration Already Exists\n\nDeclaration ID: ${declId}\nStatus: ${declStatus}\n\nThis shipment already has a customs declaration.\n\nYou can view or modify the existing declaration instead of creating a new one.`);
+                setIsLoadingShipmentData(false);
+                return;
+              }
             }
           }
           console.log('[CUSTOMS] ✅ No existing declaration found');
@@ -2338,6 +2375,24 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
             <GhostButton brand="CUSTOMS" onClick={() => setSelectedDeclaration(null)}>
               Close
             </GhostButton>
+            {/* REJECTED is the only status that can be re-submitted: open
+                the new-declaration dialog pre-filled for this shipment
+                (skipValidation path, so the old declaration does not
+                block the corrected re-submission). */}
+            {selectedDeclaration?.status === 'REJECTED' && (
+              <SecondaryButton
+                brand="CUSTOMS"
+                size="small"
+                onClick={() => {
+                  const shipmentId = selectedDeclaration.shipmentId;
+                  setSelectedDeclaration(null);
+                  void handleCreateDeclarationFromPermit(shipmentId, '');
+                }}
+                sx={{ textTransform: 'none' }}
+              >
+                Resubmit Declaration
+              </SecondaryButton>
+            )}
           </>
         }
       >

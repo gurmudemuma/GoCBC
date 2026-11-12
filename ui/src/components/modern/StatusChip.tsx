@@ -72,6 +72,7 @@ export type StatusType =
   | 'CUSTOMS_DECLARED'
   | 'CUSTOMS_REJECTED'
   | 'INSPECTION_PENDING'
+  | 'INSPECTION_COMPLETE'
   | 'LAND_TRANSPORT'
   | 'PORT_ARRIVED'
   | 'CONTAINER_STUFFED'
@@ -168,6 +169,7 @@ const StyledChip = styled(Chip, {
     success: restrictedColors.success,
     QUALITY_APPROVED: restrictedColors.success,
     PERMIT_ISSUED: restrictedColors.success,
+    INSPECTION_COMPLETE: restrictedColors.success,
     COMPLETED: restrictedColors.success,
     CONFIRMED: restrictedColors.success,
     FOREX_ALLOCATED: restrictedColors.success,
@@ -283,6 +285,7 @@ const StyledChip = styled(Chip, {
     INSPECTING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     UNDER_INSPECTION: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     INSPECTION_PENDING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    INSPECTION_COMPLETE: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     CUSTOMS_DECLARED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     QUALITY_APPROVED: { bg: alpha('#8bc34a', 0.15), text: '#558b2f', border: '#8bc34a' },
     PERMIT_ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
@@ -392,7 +395,7 @@ const getStatusIcon = (status: StatusType): React.ReactElement => {
   }
   
   // Intermediate success states
-  if (['QUALITY_APPROVED', 'PERMIT_ISSUED'].includes(upperStatus)) {
+  if (['QUALITY_APPROVED', 'PERMIT_ISSUED', 'INSPECTION_COMPLETE'].includes(upperStatus)) {
     return <CheckCircleIcon />;
   }
   

@@ -194,7 +194,7 @@ const hasActionableRejectionFeedback = (reason?: string) => {
 
 // Helper: Get user-friendly shipment status label.
 // Chaincode `coffee` v2.3 closed set (main.go validShipmentStatuses) —
-// exactly these 18 values, no others. Anything else renders raw so an
+// exactly these 19 values, no others. Anything else renders raw so an
 // unexpected value is visible, never silently relabelled.
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   CREATED: 'Created',
@@ -204,6 +204,7 @@ const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   CUSTOMS_CLEARED: 'Customs Cleared',
   CUSTOMS_REJECTED: 'Customs Rejected',
   INSPECTION_PENDING: 'Inspection Pending',
+  INSPECTION_COMPLETE: 'Inspection Complete',
   LAND_TRANSPORT: 'Land Transport',
   PORT_ARRIVED: 'Arrived at Port',
   CONTAINER_STUFFED: 'Container Stuffed',
@@ -300,15 +301,16 @@ interface ShipmentStatus {
   quantity: number;
   grade?: string;
   // Shipment status — chaincode `coffee` v2.3 closed set
-  // (main.go validShipmentStatuses): exactly these 18 values. The old
+  // (main.go validShipmentStatuses): exactly these 19 values. The old
   // union listed DRAFT / REGISTERED / QUALITY_PENDING / QUALITY_APPROVED /
   // QUALITY_REJECTED / BOOKED / COMPLETED / CONFIRMED, none of which any
   // shipment machine ever assigns (quality is an *inspection* state;
-  // quality.go only ever sets a shipment to INSPECTION_PENDING).
-  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
+  // quality.go sets a shipment to INSPECTION_PENDING on request and to
+  // INSPECTION_COMPLETE on approval).
+  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'INSPECTION_COMPLETE' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
   // Logistics tracking status: same chaincode namespace as `status`
   // (there is no separate logistics field on-chain).
-  logisticsStatus?: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
+  logisticsStatus?: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'INSPECTION_COMPLETE' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
   transportMode?: TransportMode;
   billOfLading?: string;
   vesselName?: string;
@@ -1952,7 +1954,7 @@ const ExporterPortal: React.FC = () => {
           `Estimated Departure: ${new Date(shippingForm.estimatedDeparture).toLocaleDateString()}\n\n` +
           'What happens next:\n' +
           '• Container and bill of lading are issued by the shipping line\n' +
-          '• This is a post-delivery booking: the shipment status is now FREIGHT_BOOKED, which has no on-chain exit to land transport\n' +
+          '• This is a post-delivery booking: the shipment stays DELIVERED (booking no longer moves it to FREIGHT_BOOKED)\n' +
           '• Proceed to Payment Settlement'
         );
         setBookShippingDialogOpen(false);
@@ -2325,9 +2327,8 @@ const ExporterPortal: React.FC = () => {
       ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status));
 
   // Freight booking (0.12): offer ONLY after delivery. Booking mirrors
-  // FREIGHT_BOOKED onto the shipment, which breaks the CREATED-only
-  // permit cascade and the CUSTOMS_CLEARED gate of StartLandTransport,
-  // so it must never be offered mid-chain.
+  // FREIGHT_BOOKED only from CREATED and never regresses a DELIVERED
+  // shipment, so it must never be offered mid-chain.
   const canBookFreight = (shipment: { shipmentId: string; status: string; _isPending?: boolean } | null | undefined) => {
     if (!shipment) return false;
     return !shipment._isPending && shipment.status === 'DELIVERED';
