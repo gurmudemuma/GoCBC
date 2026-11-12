@@ -39,9 +39,7 @@ export class CustomsService {
     value: number;
     currency: string;
     destination: string;
-    invoiceNumber?: string;
-    packingListNumber?: string;
-    certificateOfOrigin?: string;
+    contractId?: string;
     userId: string;
     userOrg: string;
   }) {
@@ -58,7 +56,14 @@ export class CustomsService {
       // quality-pass auto-declaration (shipmentService.
       // triggerCustomsDeclaration, called from quality.ts) could never
       // land on-chain and always fell into its silent best-effort catch.
-      // The dropped values stay PG-only (see the INSERT below).
+      // The dropped values are NOT persisted anywhere: customs_declarations
+      // has no invoice_number / packing_list_number / certificate_of_origin
+      // columns (schema: migration 000 + 031) and nothing in the API or UI
+      // reads them — the old INSERT below referenced them and threw
+      // 42703 on every call whose chain write succeeded, so the
+      // auto-declaration could never complete end-to-end in EITHER order.
+      // The INSERT now mirrors the working manual route (routes/customs.ts)
+      // and uses only columns that exist.
       const blockchainResult = await this.fabricService.submitTransaction(
         'SubmitCustomsDeclaration',
         declarationData.declarationID,
@@ -74,26 +79,30 @@ export class CustomsService {
         'false'
       );
 
-      // Update database
+      // Update database — only after on-chain success, and only with
+      // columns that exist (see the comment above: invoice_number /
+      // packing_list_number / certificate_of_origin do not exist).
+      // Mirrors the manual route (routes/customs.ts), including
+      // ON CONFLICT DO NOTHING for a concurrent double-fire.
       await this.dbService.run(
         `INSERT INTO customs_declarations (
-          declaration_id, shipment_id, exporter_id,
-          hs_code, quantity, customs_value_usd, currency, destination,
-          invoice_number, packing_list_number, certificate_of_origin,
+          declaration_id, declaration_number, shipment_id, contract_id, exporter_id,
+          hs_code, quantity, declared_value, customs_value_usd, currency, destination,
           status, submitted_date, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+        ON CONFLICT (declaration_id) DO NOTHING`,
         [
           declarationData.declarationID,
+          declarationData.declarationID,
           declarationData.shipmentID,
+          declarationData.contractId || null,
           declarationData.exporterID,
           declarationData.hsCode,
           declarationData.quantity,
           declarationData.value,
+          declarationData.value,
           declarationData.currency,
           declarationData.destination,
-          declarationData.invoiceNumber,
-          declarationData.packingListNumber,
-          declarationData.certificateOfOrigin,
           'SUBMITTED',
           new Date().toISOString(),
           typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId

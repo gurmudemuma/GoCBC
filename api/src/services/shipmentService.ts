@@ -209,7 +209,7 @@ export class ShipmentService {
         value: contract?.total_value || shipment.quantity * 5, // Fallback calculation
         currency: 'USD',
         destination: shipment.destination || contract?.buyer_country || 'Unknown',
-        invoiceNumber: contract?.contract_id,
+        contractId: contract?.contract_id || shipment.contract_id,
         userId,
         userOrg: 'ECTAMSP'
       });
