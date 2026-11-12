@@ -2,7 +2,7 @@
  * Banks Portal Integration Validation Script
  * Validates that Tab 8 (LC Settlements) is properly integrated
  * 
- * Run: node tests/validate-banks-portal-integration.js
+ * Run: node test/validate-banks-portal-integration.js
  */
 
 const fs = require('fs');
@@ -234,8 +234,8 @@ if (results.failed.length === 0) {
   console.log('\nNext steps:');
   console.log('1. Run: npm run type-check (in ui folder)');
   console.log('2. Run: npm run build (in ui folder)');
-  console.log('3. Run automated tests: npx playwright test tests/banks-portal-automated.test.js');
-  console.log('4. Manual testing using: tests/banks-portal-manual-test-script.md');
+  console.log('3. Run automated tests: npx playwright test test/banks-portal-automated.test.js');
+  console.log('4. Manual testing using: test/banks-portal-manual-test-script.md');
   process.exit(0);
 } else {
   console.log('❌ VALIDATION FAILED');

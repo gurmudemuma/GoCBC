@@ -192,8 +192,8 @@ Status: ✅ API SERVER RUNNING
 ## 🧪 Testing Status
 
 ### Test Files Created
-✅ `tests/test-new-endpoints.js` - Automated test for all 21 endpoints
-✅ `tests/test-complete-workflow.js` - Complete workflow test (existing)
+✅ `test/test-new-endpoints.js` - Automated test for all 21 endpoints
+✅ `test/test-complete-workflow.js` - Complete workflow test (existing)
 
 ### Test Coverage
 ```
@@ -207,7 +207,7 @@ Status: ✅ API SERVER RUNNING
 ### How to Run Tests
 ```bash
 # Test new endpoints only
-cd tests
+cd test
 node test-new-endpoints.js
 
 # Test complete workflow (35+ steps)
@@ -248,7 +248,7 @@ Check: Each endpoint has proper request/response schemas
 
 ### 3. Run Automated Tests
 ```bash
-cd tests
+cd test
 node test-new-endpoints.js
 ```
 

@@ -158,9 +158,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "5. Checking Test Suite..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-if [ -f "tests/test-user-management.js" ]; then
+if [ -f "test/test-user-management.js" ]; then
     check_pass "Test suite exists"
-    TEST_LINES=$(wc -l < tests/test-user-management.js)
+    TEST_LINES=$(wc -l < test/test-user-management.js)
     check_info "  Test suite has $TEST_LINES lines"
 else
     check_fail "Test suite NOT FOUND"
@@ -264,7 +264,7 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "  1. Start the system: bash start-all.sh"
-    echo "  2. Run tests: node tests/test-user-management.js"
+    echo "  2. Run tests: node test/test-user-management.js"
     echo ""
 elif [ $ERRORS -eq 0 ]; then
     echo -e "${YELLOW}⚠ PASSED WITH WARNINGS${NC}"

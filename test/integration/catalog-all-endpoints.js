@@ -171,7 +171,7 @@ function catalogEndpoints() {
   }
   
   // Save to JSON for further processing
-  const outputFile = path.join(PROJECT_ROOT, 'tests/integration/backend-endpoints-catalog.json');
+  const outputFile = path.join(PROJECT_ROOT, 'test/integration/backend-endpoints-catalog.json');
   fs.writeFileSync(outputFile, JSON.stringify(routes, null, 2));
   
   console.log('');

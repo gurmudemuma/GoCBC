@@ -2,7 +2,7 @@
  * Quick Integration Test for Banks Portal Tab 8
  * Tests basic integration without browser automation
  * 
- * Run: node tests/quick-integration-test.js
+ * Run: node test/quick-integration-test.js
  */
 
 const fs = require('fs');

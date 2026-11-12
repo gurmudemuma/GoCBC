@@ -1185,7 +1185,7 @@ router.post('/lc/:lcID/allocate-forex',
       // and requestForex mirrors it into forex_allocations with lc_id set.
       // Resolution order:
       //   1. explicit forexID / forexId / forexAllocationId in the body
-      //      (tests/scripts/test-forex-only.sh already sends forexAllocationId)
+      //      (test/scripts/test-forex-only.sh already sends forexAllocationId)
       //   2. latest REQUESTED/CONFIRMED/APPROVED row for this LC in Postgres
       //   3. on-chain QueryForexByContract for the LC's contract
       // If none resolves, fail honestly with 404 — no allocation recorded.

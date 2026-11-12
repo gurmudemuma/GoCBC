@@ -16,7 +16,7 @@ A **complete validation and testing framework** to ensure **zero discrepancies**
 
 ### 1. **Automated Testing Suite** 🧪
 
-**File:** `tests/test-signature-system-integration.js`
+**File:** `test/test-signature-system-integration.js`
 
 **What it does:**
 - Tests all signature system components end-to-end
@@ -28,7 +28,7 @@ A **complete validation and testing framework** to ensure **zero discrepancies**
 
 **How to use:**
 ```bash
-node tests/test-signature-system-integration.js
+node test/test-signature-system-integration.js
 ```
 
 **Expected output:**
@@ -187,7 +187,7 @@ chmod +x deploy-signatures.sh
 Next steps:
 1. Start API server:  cd api && npm run dev
 2. Start UI server:   cd ui && npm run dev
-3. Run tests:         node tests/test-signature-system-integration.js
+3. Run tests:         node test/test-signature-system-integration.js
 4. Open browser:      http://localhost:3000
 
 System ready for testing!
@@ -441,7 +441,7 @@ All validation and deployment documentation:
 2. **PORTAL-INTEGRATION-GUIDE.md** - Portal-specific integration examples
 3. **DEPLOYMENT-CHECKLIST.md** - Step-by-step deployment guide ⭐
 4. **SYSTEM-VALIDATION-COMPLETE.md** - This file
-5. **tests/test-signature-system-integration.js** - Automated test suite
+5. **test/test-signature-system-integration.js** - Automated test suite
 6. **validate-system.ps1** / **validate-system.sh** - System validation scripts
 7. **deploy-signatures.ps1** / **deploy-signatures.sh** - Quick deployment scripts
 8. **system-status.ps1** - Real-time status dashboard

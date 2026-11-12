@@ -79,4 +79,4 @@ Blockchain related scripts are in the main `scripts/` directory:
 
 ## Testing Scripts
 
-All testing scripts are in the `tests/` directory at the project root.
+All testing scripts are in the `test/` directory at the project root.

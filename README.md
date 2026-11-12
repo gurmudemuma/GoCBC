@@ -26,10 +26,10 @@ GoCBC is a comprehensive blockchain-based coffee export management system for Et
 ./stop-all.sh
 
 # Run E2E tests
-./tests/e2e/COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
+./test/e2e/COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
 
 # Check system health
-./tests/e2e/COMPONENT-HEALTH-CHECK-V2.sh
+./test/e2e/COMPONENT-HEALTH-CHECK-V2.sh
 ```
 
 ## Documentation
@@ -39,7 +39,7 @@ GoCBC is a comprehensive blockchain-based coffee export management system for Et
 | **Architecture** | [Docs/CODEBASE-ARCHITECTURE-ANALYSIS.md](Docs/CODEBASE-ARCHITECTURE-ANALYSIS.md) |
 | **Testing** | [Docs/POST-CLEANUP-VERIFICATION.md](Docs/POST-CLEANUP-VERIFICATION.md) |
 | **Complete Reports** | [Docs/](Docs/) |
-| **Test Scripts** | [tests/e2e/](tests/e2e/) |
+| **Test Scripts** | [test/e2e/](test/e2e/) |
 | **Deployment Guides** | [scripts/](scripts/) |
 
 ## System Architecture
@@ -66,7 +66,7 @@ GoCBC/
 ├── chaincodes/             # Smart contracts (Go)
 ├── config/                 # Configuration files
 ├── Docs/                   # 📚 Documentation & reports
-├── tests/                  # 🧪 Test files & scripts
+├── test/                  # 🧪 Test files & scripts
 ├── logs/                   # 📋 Log files
 ├── scripts/                # 🔧 Operational scripts
 ├── archive/                # 📦 Archived/deprecated files
@@ -86,14 +86,14 @@ GoCBC/
 ### Run Tests
 ```bash
 # Full E2E test
-cd tests/e2e
+cd test/e2e
 ./COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
 
 # Component health check
 ./COMPONENT-HEALTH-CHECK-V2.sh
 
 # Integration tests
-cd tests/integration
+cd test/integration
 ./test-all-portals-comprehensive.sh
 ```
 
@@ -111,7 +111,7 @@ See [scripts/](scripts/) for deployment scripts.
 ./start-all.sh
 
 # Verify deployment
-./tests/e2e/COMPONENT-HEALTH-CHECK-V2.sh
+./test/e2e/COMPONENT-HEALTH-CHECK-V2.sh
 ```
 
 ## Architecture Score

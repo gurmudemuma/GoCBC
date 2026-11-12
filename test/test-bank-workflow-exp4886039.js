@@ -2,7 +2,7 @@
  * Banks Portal Workflow Test - EXP4886039
  * Complete end-to-end test for specific exporter
  * 
- * Run: node tests/test-bank-workflow-exp4886039.js
+ * Run: node test/test-bank-workflow-exp4886039.js
  */
 
 const http = require('http');

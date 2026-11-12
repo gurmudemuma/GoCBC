@@ -9,7 +9,7 @@
  * 4. (External) Ship and deliver goods
  * 5. Tab 8: Post-delivery settlement
  * 
- * Run: node tests/test-banks-portal-complete-workflow.js
+ * Run: node test/test-banks-portal-complete-workflow.js
  */
 
 const http = require('http');

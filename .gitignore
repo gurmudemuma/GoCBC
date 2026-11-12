@@ -93,8 +93,16 @@ logs/**/*.log
 *.log
 
 # Test outputs
-tests/**/*.log
+test/**/*.log
 test-output*.txt
+test-results/
+
+# Local dev-run harness outputs + UI test screenshots (untracked runtime dirs)
+.devrun/
+.ui-test-shots/
+
+# Compiled chaincode binary (rebuilt by deploy; never commit)
+chaincodes/coffee/coffee
 
 # Backups
 *-backup-*/

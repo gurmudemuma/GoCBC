@@ -7,7 +7,7 @@
  * - Test user: bank_admin
  * - Playwright installed: npm install -D @playwright/test
  * 
- * Run: npx playwright test tests/banks-portal-automated.test.js
+ * Run: npx playwright test test/banks-portal-automated.test.js
  */
 
 const { test, expect } = require('@playwright/test');

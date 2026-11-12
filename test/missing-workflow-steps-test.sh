@@ -25,7 +25,7 @@
 #  12. Bill of Lading, both endpoints
 #      (POST /shipments/:id/bill-of-lading, POST /shipping/bookings/:id/bill-of-lading/issue)
 #
-# Conventions (same as tests/complete-end-to-end-workflow-test.sh):
+# Conventions (same as test/complete-end-to-end-workflow-test.sh):
 #   API_URL env (default http://localhost:3001/api/v1), timestamped log under
 #   ./test-results, TOTAL/PASSED/FAILED/BLOCKED counters, per-test HTTP-status
 #   + response-field assertions.

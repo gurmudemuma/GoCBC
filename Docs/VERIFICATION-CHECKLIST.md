@@ -13,7 +13,7 @@
 - [x] `api/src/routes/courier.ts` ✅
 
 ### 2. Test Files
-- [x] `tests/test-new-endpoints.js` ✅
+- [x] `test/test-new-endpoints.js` ✅
 
 ### 3. Documentation Files
 - [x] `WORKFLOW-COMPLETION-SUMMARY.md` ✅
@@ -181,7 +181,7 @@ Visit: `http://localhost:3001/api-docs`
 
 ### 4. Run New Endpoints Test
 ```bash
-cd tests
+cd test
 node test-new-endpoints.js
 ```
 **Expected**: All 20+ tests pass
@@ -314,7 +314,7 @@ curl -X POST http://localhost:3001/api/v1/courier/SHIP-TEST-001/send \
 
 ### Next Actions:
 1. Restart API server to load new routes
-2. Run `node tests/test-new-endpoints.js`
+2. Run `node test/test-new-endpoints.js`
 3. Verify all 21 endpoints in Swagger docs
 4. Deploy to production
 

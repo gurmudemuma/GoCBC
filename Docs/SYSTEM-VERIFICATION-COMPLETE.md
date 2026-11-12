@@ -344,7 +344,7 @@ docker-compose -f docker-compose-fabric.yml logs -f
 ### For Testing
 ```bash
 # Run E2E workflow tests
-cd tests
+cd test
 node test-complete-workflow.js
 
 # Generate test data

@@ -329,7 +329,7 @@ export class NBEAPI extends GoCBCApiClient {
   // REMOVED (removed-unverifiable): registerContract() called
   // POST /nbe/contracts/register, which has no equivalent — contracts are
   // created via POST /contracts and NBE never registers them. No caller
-  // in tests/ used this method.
+  // in test/ used this method.
 
   async approveContract(contractId: string, approvalData: any): Promise<any> {
     // Was POST /nbe/contracts/:id/approve (does not exist). Real route:
@@ -381,7 +381,7 @@ export class CustomsAPI extends GoCBCApiClient {
   }
 
   async scheduleInspection(declarationId: string, inspectionData: any): Promise<any> {
-    // LEFTOVER — semantic mismatch, kept so tests/workflows/05-all-portals.test.ts
+    // LEFTOVER — semantic mismatch, kept so test/workflows/05-all-portals.test.ts
     // still compiles (it calls this method expecting SUBMITTED → INSPECTING).
     // The server has NO schedule-inspection endpoint. The closest real
     // action is POST /customs/declaration/:id/inspect (customs.ts:1820),
@@ -426,7 +426,7 @@ export class ShippingAPI extends GoCBCApiClient {
     // Was POST /shipping/bill-of-lading (does not exist). Real route:
     // POST /shipping/bookings/:bookingId/bill-of-lading/issue (shipping.ts:812)
     // — body { blNumber, blType, shipper, consignee, ... }. Signature
-    // changed: first argument is now the booking id (no callers in tests/).
+    // changed: first argument is now the booking id (no callers in test/).
     return this.post(`/shipping/bookings/${bookingId}/bill-of-lading/issue`, bolData);
   }
 

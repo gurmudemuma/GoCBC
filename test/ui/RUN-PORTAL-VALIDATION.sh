@@ -40,7 +40,7 @@ fi
 echo "Starting portal tab validation..."
 echo ""
 
-cd /home/guda/GoCBC/tests/ui
+cd /home/guda/GoCBC/test/ui
 bash PORTAL-TAB-DATA-VALIDATION.sh
 
 exit $?

@@ -44,7 +44,7 @@ curl http://localhost:3000
 
 ```bash
 cd c:\goCBC
-npx playwright test tests/banks-portal-automated.test.js --reporter=list
+npx playwright test test/banks-portal-automated.test.js --reporter=list
 ```
 
 **Pros:** Fast, comprehensive, repeatable  
@@ -140,7 +140,7 @@ curl http://localhost:3001/health
 
 ### 5. Automated Test Suite (15 min)
 ```bash
-npx playwright test tests/banks-portal-automated.test.js
+npx playwright test test/banks-portal-automated.test.js
 ```
 
 Review results and screenshots for any failures.
@@ -315,7 +315,7 @@ docker exec cli peer chaincode query \
 **Solutions:**
 1. Create delivered shipment:
    ```bash
-   node tests/test-complete-workflow.js
+   node test/test-complete-workflow.js
    ```
 2. Or manually mark shipment as DELIVERED in Shipping Portal
 3. Verify database:
@@ -418,11 +418,11 @@ _________________________________________________________
 3. **Check documentation:**
    - `BANKS-PORTAL-TESTING-COMPLETE.md`
    - `POST-DELIVERY-WORKFLOW-INTEGRATION-COMPLETE.md`
-   - `tests/banks-portal-manual-test-script.md`
+   - `test/banks-portal-manual-test-script.md`
 
 4. **Review integration:**
    ```bash
-   node tests/validate-banks-portal-integration.js
+   node test/validate-banks-portal-integration.js
    ```
 
 ### If System Won't Start
@@ -527,7 +527,7 @@ Before marking as **COMPLETE**:
 **Execute now:**
 ```bash
 # Option 1: Automated
-npx playwright test tests/banks-portal-automated.test.js
+npx playwright test test/banks-portal-automated.test.js
 
 # Option 2: Interactive
 tests\run-banks-portal-tests.bat

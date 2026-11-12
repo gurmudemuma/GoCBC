@@ -125,7 +125,7 @@ Each arrow represents validated status transitions with proper business logic.
 
 ```bash
 cd /home/guda/GoCBC/api
-node tests/status-transition-expert-test.js
+node test/status-transition-expert-test.js
 ```
 
 **Result:** ✅ Exit Code 0 (Success)

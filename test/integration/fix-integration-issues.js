@@ -13,7 +13,7 @@ const path = require('path');
 
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const UI_DIR = path.join(PROJECT_ROOT, 'ui/src');
-const catalogFile = path.join(PROJECT_ROOT, 'tests/integration/backend-endpoints-catalog.json');
+const catalogFile = path.join(PROJECT_ROOT, 'test/integration/backend-endpoints-catalog.json');
 
 console.log('╔════════════════════════════════════════════════════════════════╗');
 console.log('║ FRONTEND-BACKEND INTEGRATION FIXER                             ║');
@@ -255,7 +255,7 @@ function analyzeIntegration() {
     matchedIntegrations: matched.slice(0, 20)
   };
   
-  const reportFile = path.join(PROJECT_ROOT, 'tests/integration/integration-fix-report.json');
+  const reportFile = path.join(PROJECT_ROOT, 'test/integration/integration-fix-report.json');
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
   
   console.log(`📊 Detailed report saved to: ${path.relative(PROJECT_ROOT, reportFile)}`);

@@ -186,7 +186,7 @@ cd /home/guda/GoCBC/api && npm run build
 
 ### Parameter Signature Validation
 ```bash
-npx tsc tests/unit/service-parameters-test.ts --noEmit --skipLibCheck
+npx tsc test/unit/service-parameters-test.ts --noEmit --skipLibCheck
 ✅ Exit Code: 0
 ✅ All parameter signatures correct
 ✅ Type safety verified
@@ -205,7 +205,7 @@ cd /home/guda/GoCBC/api
 npm run dev
 
 # Run the integration test (in another terminal)
-node tests/integration/workflow-integration-test.js
+node test/integration/workflow-integration-test.js
 ```
 
 **What the test does:**
@@ -390,7 +390,7 @@ cd /home/guda/GoCBC/api
 npm run dev
 
 # 2. In another terminal, run integration test
-node tests/integration/workflow-integration-test.js
+node test/integration/workflow-integration-test.js
 ```
 
 ### If Issues Found

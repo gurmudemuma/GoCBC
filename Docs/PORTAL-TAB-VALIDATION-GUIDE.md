@@ -138,7 +138,7 @@ This test validates that all **61 main tabs** plus **18 subtabs** across **7 por
 
 ### Option 1: Quick Run (Auto-start system if needed)
 ```bash
-cd /home/guda/GoCBC/tests/ui
+cd /home/guda/GoCBC/test/ui
 ./RUN-PORTAL-VALIDATION.sh
 ```
 
@@ -155,7 +155,7 @@ cd /home/guda/GoCBC
 
 # Wait for services to be ready (about 60 seconds)
 # Then run the validation
-cd tests/ui
+cd test/ui
 ./PORTAL-TAB-DATA-VALIDATION.sh
 ```
 
@@ -245,7 +245,7 @@ docker exec -it postgres psql -U postgres -d gocbc_db -c "SELECT email, role FRO
 **Solution:**
 This is expected if no data exists yet. Run the E2E test first to populate data:
 ```bash
-cd /home/guda/GoCBC/tests/e2e
+cd /home/guda/GoCBC/test/e2e
 ./COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
 ```
 

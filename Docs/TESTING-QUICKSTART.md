@@ -198,7 +198,7 @@ http://localhost:3000
 |------|---------|-------------|
 | `RUN-PORTAL-TESTS.sh` | Interactive test runner | **Use this first** |
 | `test-all-portals.sh` | Bash endpoint tests | Direct bash execution |
-| `tests/run-all-workflows.ts` | TypeScript suite | Comprehensive testing |
+| `test/run-all-workflows.ts` | TypeScript suite | Comprehensive testing |
 | `simple-test.sh` | Quick smoke test | API health check |
 
 ---
@@ -311,7 +311,7 @@ bash start-all.sh
 - **Complete Status:** `COMPREHENSIVE-PORTAL-TEST-STATUS.md`
 - **All Tabs List:** `COMPLETE-PORTAL-TABS-LIST.md`
 - **Manual Testing:** `WORKFLOW-TEST-PLAN.md`
-- **Automated Tests:** `tests/README.md`
+- **Automated Tests:** `test/README.md`
 
 ---
 

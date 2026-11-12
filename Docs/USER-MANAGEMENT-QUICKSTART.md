@@ -27,7 +27,7 @@ The API will start on **http://localhost:3001**
 cd /c/goCBC
 
 # Run comprehensive user management tests
-node tests/test-user-management.js
+node test/test-user-management.js
 ```
 
 The test suite will:
@@ -309,7 +309,7 @@ cat api/.env | grep DATABASE
 export DEBUG=true
 
 # Run tests with verbose output
-node tests/test-user-management.js 2>&1 | tee test-output.log
+node test/test-user-management.js 2>&1 | tee test-output.log
 
 # Check API logs
 tail -f api/logs/combined.log
@@ -343,7 +343,7 @@ This provides interactive Swagger documentation for all endpoints.
 
 ### 1. Test the System (Now)
 ```bash
-node tests/test-user-management.js
+node test/test-user-management.js
 ```
 
 ### 2. Update Frontend UI
@@ -388,6 +388,6 @@ Your user management system is working correctly if:
 
 ---
 
-**Ready to test?** Run: `node tests/test-user-management.js`
+**Ready to test?** Run: `node test/test-user-management.js`
 
 **Questions?** Check the full documentation: `USER-MANAGEMENT-SYSTEM.md`

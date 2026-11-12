@@ -35,7 +35,7 @@
 #
 # Usage: API_BASE=http://localhost:3001/api/v1 ./verify-all-portal-tabs.sh
 # Requires the API running with the seeded portal admins
-# (tests/setup-portal-admins.sh: *_admin / password123, admin / admin123).
+# (test/setup-portal-admins.sh: *_admin / password123, admin / admin123).
 # Exit code = number of failed checks (0 = all checked tabs verified).
 ################################################################################
 
@@ -61,7 +61,7 @@ echo "" | tee -a "$TEST_OUTPUT"
 
 TMP_RESP=$(mktemp)
 
-# Login helper (same shape as tests/complete-end-to-end-workflow-test.sh)
+# Login helper (same shape as test/complete-end-to-end-workflow-test.sh)
 login_user() {
     local username=$1 password=$2
     TOKEN=$(curl -s -X POST "$API_BASE/auth/login" \
@@ -79,7 +79,7 @@ login_user() {
 # check_tab PORTAL TAB ENDPOINT TOKEN [NOTE]
 # Passes only on HTTP 200 + success != false + no error.code in the body.
 # A 5xx naming a peer / the ledger is BLOCKED (Fabric down in dev mode),
-# not a product failure — same rule as tests/missing-workflow-steps-test.sh.
+# not a product failure — same rule as test/missing-workflow-steps-test.sh.
 # ACTIVE_POLICY_NOT_FOUND is BLOCKED too: the endpoint is live, this dev
 # DB simply has no active retention policy seeded.
 check_tab() {

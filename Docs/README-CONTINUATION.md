@@ -120,7 +120,7 @@ README-CONTINUATION.md              # This file (NEW)
 
 ### Testing
 ```
-tests/test-user-management.js       # Comprehensive test suite (NEW)
+test/test-user-management.js       # Comprehensive test suite (NEW)
 ```
 
 ### Configuration
@@ -142,7 +142,7 @@ Wait ~112 seconds for everything to start.
 ### Step 2: Run the Test Suite
 ```bash
 cd /c/goCBC
-node tests/test-user-management.js
+node test/test-user-management.js
 ```
 
 ### Step 3: Verify Results
@@ -236,7 +236,7 @@ KEY_PASSPHRASE=cecbs-secure-passphrase-change-in-production
 - **`STARTUP-OPTIONS.md`** - Startup script documentation
 
 ### For Testing
-- **`tests/test-user-management.js`** - Automated test suite
+- **`test/test-user-management.js`** - Automated test suite
 - **Test output** - Color-coded results with detailed logging
 
 ---
@@ -246,7 +246,7 @@ KEY_PASSPHRASE=cecbs-secure-passphrase-change-in-production
 ### Immediate (Now)
 1. **Run the test suite**:
    ```bash
-   node tests/test-user-management.js
+   node test/test-user-management.js
    ```
 2. **Verify all tests pass** (should see 12 green checkmarks)
 3. **Review the logs** to understand what's happening
@@ -409,7 +409,7 @@ bash start-all.sh
 
 ### Run Tests
 ```bash
-node tests/test-user-management.js
+node test/test-user-management.js
 ```
 
 ### Check Health
@@ -452,7 +452,7 @@ The **Cryptographic User Management System** is **COMPLETE** and **PRODUCTION RE
 - ✅ Complete documentation
 - ✅ Test suite ready
 
-**Next Action**: Run `node tests/test-user-management.js` to verify!
+**Next Action**: Run `node test/test-user-management.js` to verify!
 
 ---
 
@@ -461,4 +461,4 @@ The **Cryptographic User Management System** is **COMPLETE** and **PRODUCTION RE
 **Security Level**: 🔒 Cryptographic-Grade  
 **Production Ready**: ✅ YES  
 
-**Ready to test? Just run**: `node tests/test-user-management.js` 🚀
+**Ready to test? Just run**: `node test/test-user-management.js` 🚀

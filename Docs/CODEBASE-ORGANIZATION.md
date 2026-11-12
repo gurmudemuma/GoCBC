@@ -22,7 +22,7 @@ goCBC/
 │   ├── user-guides/        → Portal user guides (6 organizations)
 │   ├── swift/              → SWIFT integration documentation
 │   └── archived/           → Old status files, fix reports, etc.
-├── tests/                  → All test files (test-*.js, verify-*.js)
+├── test/                  → All test files (test-*.js, verify-*.js)
 ├── scripts/
 │   └── utility/            → Utility scripts, old .bat/.ps1 files
 ├── api/                    → API server code (unchanged)
@@ -117,7 +117,7 @@ bash organize-codebase.sh
 - Historical implementation docs
 - ~40+ old markdown files
 
-### **Test Files** → `tests/`
+### **Test Files** → `test/`
 - test-*.js
 - verify-*.js
 - test-*.sh
@@ -194,7 +194,7 @@ These important files remain in the project root:
 → Check `docs/technical/`
 
 ### **I need to run tests**
-→ Check `tests/`
+→ Check `test/`
 
 ### **I need old fix reports**
 → Check `docs/archived/`
@@ -214,7 +214,7 @@ These important files remain in the project root:
 git status
 
 # Add new structure
-git add docs/ tests/ scripts/
+git add docs/ test/ scripts/
 
 # Commit
 git commit -m "Organize codebase: move docs and tests to folders"
@@ -240,7 +240,7 @@ cat docs/business/WHY-BLOCKCHAIN-FOR-COFFEE-EXPORT.md
 The script creates README.md files in each folder:
 
 - `docs/README.md` - Documentation index
-- `tests/README.md` - Test files overview
+- `test/README.md` - Test files overview
 - `scripts/README.md` - Utility scripts overview
 
 Each README provides:
@@ -283,7 +283,7 @@ goCBC/
 ├── docker-compose-fabric.yml
 ├── package.json
 ├── docs/               ← All documentation
-├── tests/              ← All test files
+├── test/              ← All test files
 ├── scripts/            ← Utility scripts
 ├── api/
 ├── ui/
@@ -318,7 +318,7 @@ bash organize-codebase.sh
 ```bash
 # Check new structure
 ls -la docs/
-ls -la tests/
+ls -la test/
 ls -la scripts/
 
 # Read the new README files
@@ -330,7 +330,7 @@ Check any scripts or documentation that reference moved files.
 
 ### **5. Commit to Git**
 ```bash
-git add docs/ tests/ scripts/
+git add docs/ test/ scripts/
 git commit -m "Organize codebase into clean folder structure"
 ```
 
@@ -345,7 +345,7 @@ After running the script, verify:
 
 - [ ] Root directory is clean (~15-20 files)
 - [ ] All docs in `docs/` subfolder
-- [ ] All tests in `tests/` folder
+- [ ] All tests in `test/` folder
 - [ ] All utility scripts in `scripts/utility/`
 - [ ] Main scripts still in root
 - [ ] README.md files created in each folder
@@ -366,7 +366,7 @@ mv docs/deployment/*.md .
 # ... etc
 
 # Remove empty folders
-rm -rf docs/ tests/ scripts/
+rm -rf docs/ test/ scripts/
 ```
 
 Or restore from git:

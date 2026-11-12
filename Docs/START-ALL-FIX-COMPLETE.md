@@ -145,7 +145,7 @@ cd /home/guda/GoCBC
 1. **Start UI:** The UI needs to be started manually with `cd ui && npm start`
 2. **Access System:** Open browser to `http://localhost:3000`
 3. **Monitor Logs:** Use `docker-compose -f docker-compose-fabric.yml logs -f` to watch blockchain logs
-4. **Weekly Validation:** Run `bash tests/ui/PORTAL-TAB-DATA-VALIDATION.sh` weekly
+4. **Weekly Validation:** Run `bash test/ui/PORTAL-TAB-DATA-VALIDATION.sh` weekly
 
 ## Summary
 

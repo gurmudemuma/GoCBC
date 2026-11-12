@@ -8,7 +8,7 @@ cd /home/guda/GoCBC/api && npm run dev
 
 # 2. Open new terminal and run test
 cd /home/guda/GoCBC/api
-node tests/step-by-step-workflow-test.js
+node test/step-by-step-workflow-test.js
 
 # 3. Watch the magic happen! ✨
 ```
@@ -295,7 +295,7 @@ Total: 7 main records + audit logs + blockchain transactions
 
 **Ready to test? Just run:**
 ```bash
-cd /home/guda/GoCBC/api && node tests/step-by-step-workflow-test.js
+cd /home/guda/GoCBC/api && node test/step-by-step-workflow-test.js
 ```
 
 **Good luck! 🚀**

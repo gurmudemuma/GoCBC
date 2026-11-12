@@ -183,7 +183,7 @@ All documentation has been updated:
 3. **[Docs/SQLITE-TO-POSTGRESQL-MIGRATION.md](./Docs/SQLITE-TO-POSTGRESQL-MIGRATION.md)** - Complete guide
 4. **[Docs/DATA-ARCHITECTURE-EXPLAINED.md](./Docs/DATA-ARCHITECTURE-EXPLAINED.md)** - Architecture details
 5. **[Docs/SHIPPING-PORTAL-COMPLETE-GUIDE.md](./Docs/SHIPPING-PORTAL-COMPLETE-GUIDE.md)** - Workflow guide
-6. **[scripts/README.md](./scripts/README.md)** - Script documentation
+6. **[scripts/README.md](scripts-README.md)** - Script documentation
 
 ## Support
 

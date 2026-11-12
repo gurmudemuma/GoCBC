@@ -61,7 +61,7 @@ Helper script that:
 
 3. Optionally, run E2E test first to populate data:
    ```bash
-   cd /home/guda/GoCBC/tests/e2e
+   cd /home/guda/GoCBC/test/e2e
    ./COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
    ```
 
@@ -89,7 +89,7 @@ docker exec -it postgres psql -U postgres -d gocbc_db \
 ### No Data Warnings
 Run E2E test to populate data:
 ```bash
-cd /home/guda/GoCBC/tests/e2e
+cd /home/guda/GoCBC/test/e2e
 ./COMPLETE-E2E-TEST-ALL-WORKFLOWS.sh
 ```
 

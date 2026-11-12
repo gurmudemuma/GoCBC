@@ -39,7 +39,7 @@
 curl http://localhost:3001/health
 
 # Test portals
-bash tests/ui/PORTAL-TAB-DATA-VALIDATION.sh
+bash test/ui/PORTAL-TAB-DATA-VALIDATION.sh
 ```
 
 ---
@@ -147,11 +147,11 @@ Run these commands to verify:
 
 ```bash
 # Portal tabs
-bash tests/ui/PORTAL-TAB-DATA-VALIDATION.sh
+bash test/ui/PORTAL-TAB-DATA-VALIDATION.sh
 # Expected: 73/73 passed
 
 # Integration  
-node tests/integration/final-integration-check.js
+node test/integration/final-integration-check.js
 # Expected: 176/176 integrated
 
 # Chaincode version

@@ -385,7 +385,7 @@ SELECT action, username, target_username, created_at FROM user_activity_log ORDE
 
 1. **Test via API first** (works now):
    ```bash
-   node tests/test-user-management.js
+   node test/test-user-management.js
    ```
 
 2. **Then integrate UI** (copy `BlockchainIdentityPanel.tsx` to UI project)

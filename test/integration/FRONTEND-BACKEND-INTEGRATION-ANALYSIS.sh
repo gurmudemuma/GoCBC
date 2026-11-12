@@ -27,8 +27,8 @@ echo "╚═══════════════════════�
 echo ""
 
 # Create output directory
-mkdir -p "$PROJECT_ROOT/tests/integration/results"
-REPORT_FILE="$PROJECT_ROOT/tests/integration/results/integration-analysis-$(date +%Y%m%d-%H%M%S).txt"
+mkdir -p "$PROJECT_ROOT/test/integration/results"
+REPORT_FILE="$PROJECT_ROOT/test/integration/results/integration-analysis-$(date +%Y%m%d-%H%M%S).txt"
 
 echo "Report will be saved to: $REPORT_FILE"
 echo ""

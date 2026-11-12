@@ -133,7 +133,7 @@ Props provided:
 ## Testing Resources
 
 ### 1. Automated Test Suite
-**File:** `tests/banks-portal-automated.test.js`  
+**File:** `test/banks-portal-automated.test.js`  
 **Tool:** Playwright  
 **Coverage:** 36+ test cases across all 9 tabs
 
@@ -147,23 +147,23 @@ npx playwright install chromium
 #### Run Tests
 ```bash
 # All tests
-npx playwright test tests/banks-portal-automated.test.js
+npx playwright test test/banks-portal-automated.test.js
 
 # Tab 8 only (smoke test)
-npx playwright test tests/banks-portal-automated.test.js --grep "Tab 8"
+npx playwright test test/banks-portal-automated.test.js --grep "Tab 8"
 
 # Integration tests only
-npx playwright test tests/banks-portal-automated.test.js --grep "Integration"
+npx playwright test test/banks-portal-automated.test.js --grep "Integration"
 
 # With UI
-npx playwright test tests/banks-portal-automated.test.js --headed
+npx playwright test test/banks-portal-automated.test.js --headed
 
 # Debug mode
-npx playwright test tests/banks-portal-automated.test.js --debug
+npx playwright test test/banks-portal-automated.test.js --debug
 ```
 
 ### 2. Manual Test Script
-**File:** `tests/banks-portal-manual-test-script.md`  
+**File:** `test/banks-portal-manual-test-script.md`  
 **Format:** Step-by-step checklist  
 **Duration:** 60-90 minutes for complete testing
 
@@ -182,7 +182,7 @@ npx playwright test tests/banks-portal-automated.test.js --debug
   - Error handling
 
 ### 3. Quick Test Runner
-**File:** `tests/run-banks-portal-tests.bat`  
+**File:** `test/run-banks-portal-tests.bat`  
 **Usage:** Double-click to launch interactive test menu
 
 Options:
@@ -193,11 +193,11 @@ Options:
 5. Exit
 
 ### 4. Integration Validator
-**File:** `tests/validate-banks-portal-integration.js`  
+**File:** `test/validate-banks-portal-integration.js`  
 **Purpose:** Quick validation of Tab 8 integration
 
 ```bash
-node tests/validate-banks-portal-integration.js
+node test/validate-banks-portal-integration.js
 ```
 
 Checks:
@@ -236,7 +236,7 @@ For comprehensive Tab 8 testing, you need:
 #### Create Test Data
 ```bash
 # Use existing workflow test
-node tests/test-complete-workflow.js
+node test/test-complete-workflow.js
 
 # Or manually through UI:
 # 1. Create contract
@@ -254,7 +254,7 @@ node tests/test-complete-workflow.js
 ### Phase 1: Quick Validation (5 minutes)
 1. ✅ Run integration validator
    ```bash
-   node tests/validate-banks-portal-integration.js
+   node test/validate-banks-portal-integration.js
    ```
 2. ✅ Verify TypeScript compilation
    ```bash
@@ -292,7 +292,7 @@ node tests/test-complete-workflow.js
 ### Phase 5: Automated Testing (15 minutes)
 1. ✅ Run Playwright test suite
    ```bash
-   npx playwright test tests/banks-portal-automated.test.js
+   npx playwright test test/banks-portal-automated.test.js
    ```
 2. ✅ Review test results
 3. ✅ Check screenshots for failures
@@ -479,12 +479,12 @@ Tab 8 (LC Settlements) is considered **production-ready** when:
 ## Test Results Summary
 
 ### Automated Tests
-**File:** `tests/banks-portal-automated.test.js`  
+**File:** `test/banks-portal-automated.test.js`  
 **Status:** ⏳ Pending execution
 
 Run command:
 ```bash
-npx playwright test tests/banks-portal-automated.test.js --reporter=html
+npx playwright test test/banks-portal-automated.test.js --reporter=html
 ```
 
 Expected Results:
@@ -493,19 +493,19 @@ Expected Results:
 - Critical Tests: Must pass 100%
 
 ### Manual Tests
-**File:** `tests/banks-portal-manual-test-script.md`  
+**File:** `test/banks-portal-manual-test-script.md`  
 **Status:** ⏳ Pending execution
 
 ### Integration Tests
 **Status:** ⏳ Pending execution
 
 ### Validation Tests
-**File:** `tests/validate-banks-portal-integration.js`  
+**File:** `test/validate-banks-portal-integration.js`  
 **Status:** ⏳ Ready to run
 
 Run command:
 ```bash
-node tests/validate-banks-portal-integration.js
+node test/validate-banks-portal-integration.js
 ```
 
 ---
@@ -554,7 +554,7 @@ Before marking as **COMPLETE**:
 
 1. **Verify Integration**
    ```bash
-   node tests/validate-banks-portal-integration.js
+   node test/validate-banks-portal-integration.js
    ```
 
 2. **Run TypeScript Check**
@@ -576,11 +576,11 @@ Before marking as **COMPLETE**:
 
 2. **Run Automated Tests**
    ```bash
-   npx playwright test tests/banks-portal-automated.test.js
+   npx playwright test test/banks-portal-automated.test.js
    ```
 
 3. **Manual Testing**
-   - Open: `tests/banks-portal-manual-test-script.md`
+   - Open: `test/banks-portal-manual-test-script.md`
    - Follow step-by-step instructions
    - Record results in the document
 
@@ -596,7 +596,7 @@ Before marking as **COMPLETE**:
 
 2. **Full Test Suite**
    ```bash
-   tests/run-banks-portal-tests.bat
+   test/run-banks-portal-tests.bat
    # Select option 1: Run automated tests
    ```
 

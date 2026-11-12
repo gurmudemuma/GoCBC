@@ -10,8 +10,8 @@
 ```bash
 curl http://localhost:3001/health                                    # API health
 docker ps | grep peer                                                # Blockchain
-bash tests/ui/PORTAL-TAB-DATA-VALIDATION.sh                         # Portal tabs
-node tests/integration/final-integration-check.js                    # Integration
+bash test/ui/PORTAL-TAB-DATA-VALIDATION.sh                         # Portal tabs
+node test/integration/final-integration-check.js                    # Integration
 ```
 
 ## 🔧 Common Tasks
