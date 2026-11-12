@@ -277,16 +277,20 @@ export class LCService {
       );
 
       // 🔥 WORKFLOW TRIGGER: Auto-request forex allocation
+      // The forex ID returned here MUST be the ID of the forex request that
+      // was actually created (see triggerForexAutoRequest) — callers (the
+      // /banking/lc/issue route, the E2E scripts) approve/allocate that ID.
+      // A freshly generated ID here would point at a forex that does not exist.
       logger.info(`🔥 [LCService] LC issued - triggering forex auto-request for ${lcData.lcID}`);
-      await this.triggerForexAutoRequest(lcData.lcID, lc || { contract_id: lcData.contractID, exporter_id: lcData.exporterID, amount: lcData.amount, currency: lcData.currency });
+      const forexId = await this.triggerForexAutoRequest(lcData.lcID, lc || { contract_id: lcData.contractID, exporter_id: lcData.exporterID, amount: lcData.amount, currency: lcData.currency });
 
       logger.info(`✅ [LCService] LC issued: ${lcData.lcID}`);
-      return { 
-        success: true, 
-        lcID: lcData.lcID, 
+      return {
+        success: true,
+        lcID: lcData.lcID,
         blockchainTxId: result.txId,
-        forexAutoCreated: true,
-        forexID: `FOREX-${Date.now()}`
+        forexAutoCreated: forexId !== null,
+        forexID: forexId ?? undefined
       };
     } catch (error: any) {
       logger.error(`❌ [LCService] Issue failed: ${error.message}`);
@@ -296,15 +300,19 @@ export class LCService {
 
   /**
    * 🔥 WORKFLOW FIX: Auto-request forex when LC is issued
+   * Returns the ID of the forex request actually created, or null if the
+   * auto-request failed. Callers must use this return value — never
+   * generate a fresh `FOREX-${Date.now()}` to report, because that ID
+   * would differ from the one created here and point at nothing.
    */
-  private async triggerForexAutoRequest(lcID: string, lc: any) {
+  private async triggerForexAutoRequest(lcID: string, lc: any): Promise<string | null> {
     try {
       const { ForexService } = await import('./forexService');
       const forexService = ForexService.getInstance();
 
       const forexId = `FOREX-${Date.now()}`;
-      
-      await forexService.requestForex({
+
+      const created = await forexService.requestForex({
         forexId,
         contractId: lc.contract_id,
         lcId: lcID,
@@ -315,10 +323,15 @@ export class LCService {
         userOrg: 'BanksMSP',
       });
 
-      logger.info(`✅ [LCService] Auto-requested forex: ${forexId} for LC: ${lcID}`);
+      // Trust the ID the creation call itself reports, not a re-generated one.
+      const createdForexId = created?.forexId || forexId;
+      logger.info(`✅ [LCService] Auto-requested forex: ${createdForexId} for LC: ${lcID}`);
+      return createdForexId;
     } catch (error: any) {
       logger.error(`❌ [LCService] Forex auto-request failed: ${error.message}`);
-      // Don't fail the LC issuance if forex request fails
+      // Don't fail the LC issuance if forex request fails — but report the
+      // failure honestly (null) instead of a fabricated forex ID.
+      return null;
     }
   }
 
