@@ -109,12 +109,22 @@ func isBankMSP(mspID string) bool {
 
 // RequestLC - Exporter requests Letter of Credit from bank
 // AUTO-MAPS: Contract details, issuing bank (buyer's bank), advising bank (exporter's bank)
+// Trailing args are explicit overrides: when the caller supplies an
+// issuing/advising bank (the 17-field LC form does), the ledger records
+// exactly that bank; when empty, the contract's banks are used, as before.
+// (F6a probe: the explicit banks never reached the chaincode, so PG/API
+// said 'Deutsche Bank AG' while the ledger recorded the contract's
+// buyerBank 'Chase Bank New York'.)
 func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	lcID, contractID, exporterID, bankName, amountStr, currency, expiryDate string,
 	// LEG 1 (F6a): trailing beneficiary + terms. The API always passes
 	// all 9 args; the 17-field LC form's beneficiary/terms were silently
 	// dropped before (ledger stored '' for both).
-	beneficiary, terms string) error {
+	beneficiary, terms string,
+	// SEQ 9 (F6a fix): explicit issuing/advising banks. Appended after
+	// beneficiary/terms so existing 7- and 9-arg callers keep working
+	// once updated; empty means "derive from the contract".
+	issuingBankArg, advisingBankArg string) error {
 
 	fmt.Printf("=== RequestLC called: lcID=%s, contractID=%s ===\n", lcID, contractID)
 	requesterMSP, err := ctx.GetClientIdentity().GetMSPID()
@@ -202,14 +212,29 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 		fmt.Printf("RequestLC: Auto-mapped amount and currency from contract: %f %s\n", mappedAmount, mappedCurrency)
 	}
 
-	// AUTO-MAP: Issuing bank (buyer's bank) and Advising bank (exporter's bank) from contract
-	issuingBank := contract.BuyerBank     // Buyer's bank opens the LC
-	advisingBank := contract.ExporterBank // Exporter's bank receives/advises the LC
+	// AUTO-MAP: Issuing bank (buyer's bank) and Advising bank (exporter's bank) from contract.
+	// SEQ 9 (F6a fix): an explicitly supplied bank wins over the
+	// contract-derived one — the LC request form's issuing/advising
+	// banks are the banks the LC is actually opened/advised with, and
+	// the PG mirror + API response already report them. Empty means
+	// "derive from the contract", preserving the old behaviour for
+	// callers that do not supply banks (e.g. the contract-approval
+	// handoff, which passes the contract banks explicitly anyway).
+	issuingBank := strings.TrimSpace(issuingBankArg)
+	if issuingBank == "" {
+		issuingBank = contract.BuyerBank // Buyer's bank opens the LC
+	}
+	advisingBank := strings.TrimSpace(advisingBankArg)
+	if advisingBank == "" {
+		advisingBank = contract.ExporterBank // Exporter's bank receives/advises the LC
+	}
 
 	// Fallback if banks not set in contract
 	if issuingBank == "" {
 		issuingBank = "Foreign Bank - " + contract.BuyerCountry
 		fmt.Printf("RequestLC: Using fallback issuing bank: %s\n", issuingBank)
+	} else if issuingBankArg != "" {
+		fmt.Printf("RequestLC: Using explicit issuing bank: %s\n", issuingBank)
 	} else {
 		fmt.Printf("RequestLC: Auto-mapped issuing bank from contract: %s\n", issuingBank)
 	}
@@ -220,6 +245,8 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 			advisingBank = "Commercial Bank of Ethiopia"
 		}
 		fmt.Printf("RequestLC: Using fallback advising bank: %s\n", advisingBank)
+	} else if advisingBankArg != "" {
+		fmt.Printf("RequestLC: Using explicit advising bank: %s\n", advisingBank)
 	} else {
 		fmt.Printf("RequestLC: Auto-mapped advising bank from contract: %s\n", advisingBank)
 	}

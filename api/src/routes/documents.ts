@@ -204,10 +204,15 @@ router.post('/',
       // the table by migration 032), so hash-registered documents were
       // invisible to every entity query (unlike /documents/upload, which
       // stores them). Store the resolved entity type/id.
+      // M-9 probe fix: the INSERT referenced ipfs_cid, which does not
+      // exist — the table has ipfs_hash (000_initial_schema.sql:120),
+      // and file_hash already holds the SHA-256 file hash. The IPFS CID
+      // belongs in ipfs_hash; no separate ipfs_cid column is needed
+      // (nothing reads ipfs_cid anywhere in api/ or ui/).
       await postgresDb.run(
         `INSERT INTO documents (
           document_id, entity_type, entity_id, shipment_id, contract_id, exporter_id, document_type,
-          file_name, file_hash, ipfs_cid, uploaded_by, blockchain_tx_id
+          file_name, file_hash, ipfs_hash, uploaded_by, blockchain_tx_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [documentID, documentEntityType, documentEntityId, shipmentID || null, contractID || null, exporterID,
          documentType, fileName, fileHash, ipfsCID || null, user.username, blockchainResult.txId]

@@ -1467,16 +1467,29 @@ router.post('/inspections/:inspectionID/issue-permit',
       const blockchain_tx_id = chainResult.txId || null;
 
       // Postgres mirror, only after the ledger write committed.
-      await postgresDb.run(
-        `UPDATE quality_inspections SET
-          status = 'PERMIT_ISSUED',
-          remarks = COALESCE(remarks, '') || '\n\nEXPORT PERMIT ISSUED: ' || $2 || ' by ' || $3,
-          blockchain_tx_id = $4,
-          export_permit_no = $5,
-          updated_at = NOW()
-        WHERE inspection_id = $1`,
-        [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office', blockchain_tx_id, permitNumber]
-      );
+      // #6: this UPDATE used to be unguarded, and the export_permit_no
+      // column did not exist (added by migration 077) — so a successful
+      // ledger issuance still returned HTTP 500 and left PG stale. The
+      // mirror must never turn a committed issuance into a bare 500:
+      // on failure, keep going (shipment mirror + customs trigger below
+      // are independent) and report the ledger result AND the mirror
+      // error separately in the response.
+      let inspectionMirrorError: string | null = null;
+      try {
+        await postgresDb.run(
+          `UPDATE quality_inspections SET
+            status = 'PERMIT_ISSUED',
+            remarks = COALESCE(remarks, '') || '\n\nEXPORT PERMIT ISSUED: ' || $2 || ' by ' || $3,
+            blockchain_tx_id = $4,
+            export_permit_no = $5,
+            updated_at = NOW()
+          WHERE inspection_id = $1`,
+          [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office', blockchain_tx_id, permitNumber]
+        );
+      } catch (mirrorErr: any) {
+        inspectionMirrorError = mirrorErr?.message || String(mirrorErr);
+        logger.error(`[PERMIT] Inspection PG mirror failed for ${inspectionID} (ledger permit ${permitId} already issued, tx ${blockchain_tx_id}):`, mirrorErr);
+      }
 
       // Best-effort: mirror into export_permits (the table the portals
       // read) — same INSERT as permits.ts mirrorPermitPG. A mirror
@@ -1535,10 +1548,17 @@ router.post('/inspections/:inspectionID/issue-permit',
           permitId,
           certificateNo: inspection.certification_number,
           status: 'PERMIT_ISSUED',
-          blockchain_tx_id
+          blockchain_tx_id,
+          // #6: the ledger issuance is the truth; a failed PG mirror is
+          // reported here, never hidden behind a 500.
+          postgresMirror: inspectionMirrorError
+            ? { inspection: false, error: inspectionMirrorError }
+            : { inspection: true },
         },
         txId: blockchain_tx_id,
-        message: 'Export permit issued successfully. Shipment ready for customs clearance.',
+        message: inspectionMirrorError
+          ? 'Export permit issued on the ledger, but the Postgres inspection mirror failed — the ledger state is authoritative, re-check the inspection row before retrying.'
+          : 'Export permit issued successfully. Shipment ready for customs clearance.',
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {

@@ -58,6 +58,10 @@ export class LCService {
       }
 
       // 2. Request LC on blockchain
+      // SEQ 9 (F6a fix): RequestLC now takes 11 args — beneficiary,
+      // terms, issuingBank, advisingBank. This service has no explicit
+      // banks to pass, so empty strings keep the contract-derived
+      // fallback on-chain.
       const result = await this.fabricService.invokeChaincode('RequestLC', [
         lcData.lcID,
         lcData.contractID,
@@ -66,6 +70,10 @@ export class LCService {
         lcData.amount.toString(), // amount as string
         lcData.currency,          // currency after amount
         lcData.expiryDate,
+        '',
+        '',
+        '',
+        '',
       ]);
 
       if (!result.success) {

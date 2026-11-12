@@ -14,9 +14,27 @@ export interface ExchangeRate {
   setBy: string;
   setByMsp: string;
   effectiveDate: string;
-  isActive: boolean;
+  // Chaincode ExchangeRate (forex.go) has NO isActive field — only
+  // `status` ('ACTIVE' | 'INACTIVE' | 'SUPERSEDED'), and
+  // QueryExchangeRate already selects status='ACTIVE'. isActive is
+  // kept only as a legacy alias for non-ledger sources; the live
+  // check below is status-based (#20 probe: getCurrentRate could
+  // never succeed because it required isActive === true).
+  status?: string;
+  isActive?: boolean;
   source: string; // 'NBE_OFFICIAL' | 'MANUAL' | 'SYSTEM'
   createdAt: string;
+}
+
+/** True when a ledger exchange-rate record is the ACTIVE one. */
+function isActiveRate(rate: any): boolean {
+  const status = rate?.status ?? rate?.Status;
+  if (typeof status === 'string' && status.length > 0) {
+    return status.toUpperCase() === 'ACTIVE';
+  }
+  // Legacy fallback for records that carry the old boolean shape.
+  const isActive = rate?.isActive ?? rate?.IsActive;
+  return isActive === true || String(isActive).toLowerCase() === 'true';
 }
 
 export class ExchangeRateService {
@@ -56,9 +74,12 @@ export class ExchangeRateService {
       }
 
       const rate = result.data as any;
-      const isActive = rate.isActive ?? rate.IsActive;
       const midRate = Number(rate.midRate ?? rate.MidRate);
-      if (isActive !== true && String(isActive).toLowerCase() !== 'true') {
+      // #20: the chaincode ExchangeRate struct has no isActive field,
+      // only status ('ACTIVE'/'SUPERSEDED'); QueryExchangeRate already
+      // returns the ACTIVE rate, but verify it rather than trusting a
+      // boolean that is never present.
+      if (!isActiveRate(rate)) {
         throw new Error(`No active NBE exchange rate is recorded for ${currency}`);
       }
       if (!Number.isFinite(midRate) || midRate <= 0) {
@@ -81,10 +102,7 @@ export class ExchangeRateService {
       const result = await this.fabricService.queryChaincode('QueryAllExchangeRates', []);
       
       if (result.success && Array.isArray(result.data)) {
-        return result.data.filter((rate: any) => {
-          const isActive = rate.isActive ?? rate.IsActive;
-          return isActive === true || String(isActive).toLowerCase() === 'true';
-        });
+        return result.data.filter((rate: any) => isActiveRate(rate));
       }
 
       throw new Error(result.error || 'Unable to query exchange rates from the Fabric ledger');
@@ -130,6 +148,7 @@ export class ExchangeRateService {
             setBy,
             setByMsp: 'NBEMSP',
             effectiveDate: new Date().toISOString(),
+            status: 'ACTIVE',
             isActive: true,
             source,
             createdAt: new Date().toISOString()

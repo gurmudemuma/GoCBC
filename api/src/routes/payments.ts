@@ -708,6 +708,22 @@ router.post('/:paymentID/verify',
         });
       } else {
         logger.error(`❌ [PAYMENT] Failed to verify documents: ${result.error}`);
+        // M-9 probe fix: the chaincode reports a missing payment as
+        // "VerifyPaymentDocuments: payment <id> does not exist"
+        // (payment.go) — that is a 404, not a 400 chain failure.
+        // The /does not exist/ match is the chaincode's own wording for
+        // a missing ledger record, distinct from every other verify
+        // failure (wrong status, validation), which stay 400.
+        if (/does not exist/i.test(result.error || '')) {
+          return res.status(404).json({
+            success: false,
+            error: {
+              code: 'PAYMENT_NOT_FOUND',
+              message: result.error || `Payment ${paymentID} does not exist`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
         res.status(400).json({
           success: false,
           error: {

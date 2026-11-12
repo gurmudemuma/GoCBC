@@ -1334,7 +1334,12 @@ export class FabricService {
     // LEG 1 (F6a): beneficiary + terms were dropped by the LC request
     // route; they are now passed through to chaincode RequestLC (9 args).
     beneficiary?: string,
-    terms?: string
+    terms?: string,
+    // SEQ 9 (F6a fix): explicit issuing/advising banks, passed through
+    // to chaincode RequestLC as args 10-11. Empty falls back to the
+    // contract's buyerBank/exporterBank on-chain.
+    issuingBank?: string,
+    advisingBank?: string
   ): Promise<ChaincodeResponse> {
     // RequestLC validates the exporter from ledger state inside the same
     // transaction, avoiding a separate preflight query and TOCTOU gap.
@@ -1351,6 +1356,8 @@ export class FabricService {
       expiryDate,
       beneficiary || '',
       terms || '',
+      issuingBank || '',
+      advisingBank || '',
     ], mspId);
   }
 

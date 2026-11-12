@@ -1176,7 +1176,7 @@ else
     log_info "Response: $RESP_BODY"
 fi
 
-for STEP in "review:Review customs declaration:/customs/declaration/$DECLARATION_ID/review:customs.ts:1624" "inspect:Inspect customs declaration:/customs/declaration/$DECLARATION_ID/inspect:customs.ts:1820" "complete-inspection:Complete customs inspection:/customs/declaration/$DECLARATION_ID/complete-inspection:customs.ts:1837" "clear:Clear customs declaration:/customs/declaration/$DECLARATION_ID/clear:customs.ts:2022"; do
+for STEP in "review:Review customs declaration:/customs/declaration/$DECLARATION_ID/review:customs.ts:1624" "inspect:Inspect customs declaration:/customs/declaration/$DECLARATION_ID/inspect:customs.ts:1820" "complete-inspection:Complete customs inspection:/customs/declaration/$DECLARATION_ID/complete-inspection:customs.ts:1837"; do
     NAME="${STEP%%:*}"; REST="${STEP#*:}"; LABEL="${REST%%:*}"; ENDPOINT="${REST#*:}"; ENDPOINT="${ENDPOINT%%:*}"
     log_test "$LABEL (POST $ENDPOINT)"
     if [ -z "$CREATED_DEC_ID" ]; then
@@ -1186,6 +1186,35 @@ for STEP in "review:Review customs declaration:/customs/declaration/$DECLARATION
         check_success "$LABEL"
     fi
 done
+
+# Calculate duty BEFORE clear: clear requires a stored duty (customs.ts
+# clear returns 400 DUTY_REQUIRED otherwise), so the old script failed
+# at clear and the 14 steps after it cascade-blocked. The body sends
+# the declaration's own value/HS code and NO exchangeRate, so the
+# calculation must use the live ledger NBE rate (fix #3: getCurrentRate
+# now reads status='ACTIVE' instead of a nonexistent isActive field).
+# Assert 200 + a duty amount in the response.
+log_test "Calculate customs duty (POST /customs/declaration/:id/calculate-duty, customs.ts:1490)"
+if [ -z "$CREATED_DEC_ID" ]; then
+    log_blocked "Calculate customs duty — no declaration (submit failed)"
+else
+    DECL_VALUE=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT_ID" '.data[]? | select(.shipmentId==$SHIP) | .customsValueUSD' | head -1)
+    DECL_HS=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT_ID" '.data[]? | select(.shipmentId==$SHIP) | .hsCode' | head -1)
+    DUTY_DATA="{
+    \"customsValueUSD\": ${DECL_VALUE:-0},
+    \"hsCode\": \"${DECL_HS:-090111}\"
+}"
+    call POST "/customs/declaration/$DECLARATION_ID/calculate-duty" "$CUSTOMS_TOKEN" "$DUTY_DATA"
+    check_success "Calculate customs duty" ".data.amounts.totalDuty"
+fi
+
+log_test "Clear customs declaration (POST /customs/declaration/$DECLARATION_ID/clear, customs.ts:2289)"
+if [ -z "$CREATED_DEC_ID" ]; then
+    log_blocked "Clear customs declaration — no declaration (submit failed)"
+else
+    call POST "/customs/declaration/$DECLARATION_ID/clear" "$CUSTOMS_TOKEN" ""
+    check_success "Clear customs declaration"
+fi
 
 # Shipping lifecycle, in chaincode order (shipments.ts). Each step mirrors the
 # shipment status in Postgres on success; on Fabric failure the route returns

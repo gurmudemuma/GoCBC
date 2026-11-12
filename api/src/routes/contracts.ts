@@ -1522,6 +1522,10 @@ router.post('/:contractID/approve',
               // when beneficiary is empty) and mirror the advising bank
               // in PG — the old insert stored issuing_bank only, so
               // advising_bank/beneficiary read empty for handoff LCs.
+              // SEQ 9 (F6a fix): also pass the contract-derived banks
+              // explicitly, so the ledger records them instead of
+              // re-deriving them (identical values either way, but the
+              // explicit path is now the one the form route uses too).
               const requestResult = await fabricService.requestLC(
                 generatedLcId,
                 contractID,
@@ -1532,7 +1536,9 @@ router.post('/:contractID/approve',
                 expiryDate,
                 'ECTAMSP',
                 '',
-                ''
+                '',
+                issuingBank,
+                advisingBank
               );
               if (!requestResult.success) {
                 throw new Error(requestResult.error || 'The ledger rejected the generated LC request.');

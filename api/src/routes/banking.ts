@@ -245,7 +245,13 @@ router.post('/lc/request',
         expiryDate,
         undefined,
         finalBeneficiary,
-        finalTerms
+        finalTerms,
+        // SEQ 9 (F6a fix): pass the resolved banks through so the ledger
+        // records the same issuing/advising banks as the PG mirror and
+        // the API response below (previously the chaincode always
+        // derived them from the contract, diverging from both).
+        finalIssuingBank,
+        finalAdvisingBank
       );
 
       if (result.success) {
@@ -2397,6 +2403,19 @@ router.post('/payment/:paymentID/verify-documents',
           timestamp: new Date().toISOString(),
         });
       } else {
+        // Same not-found mapping as POST /payments/:id/verify (M-9):
+        // "payment <id> does not exist" from VerifyPaymentDocuments
+        // is a 404, not a 400 chain failure.
+        if (/does not exist/i.test(result.error || '')) {
+          return res.status(404).json({
+            success: false,
+            error: {
+              code: 'PAYMENT_NOT_FOUND',
+              message: result.error || `Payment ${paymentID} does not exist`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
         res.status(400).json({
           success: false,
           error: {
