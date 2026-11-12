@@ -4,12 +4,14 @@ import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { CustomsService } from '../services/customsService';
+import { ShipmentService } from '../services/shipmentService';
 import { logger } from '../utils/logger';
 
 const router = Router();
 const postgresDb = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
 const customsService = CustomsService.getInstance();
+const shipmentService = ShipmentService.getInstance();
 
 const validateRequest = (req: Request, res: Response, next: any) => {
   const errors = validationResult(req);
@@ -914,6 +916,13 @@ router.post('/test-shipment-update/:shipmentId',
         shipmentId,
         'CUSTOMS_CLEARED'
       ]);
+
+      // O-1: mirror the chain status move in Postgres. Test endpoint or
+      // not, the ledger status changed — the PG row must follow it.
+      // Best-effort: the mirror never fails this request.
+      if (result.success) {
+        await shipmentService.mirrorShipmentStatus(shipmentId, 'CUSTOMS_CLEARED');
+      }
       
       logger.info(`[CUSTOMS TEST] Update result:`, result);
       
@@ -2036,6 +2045,23 @@ router.post('/declaration/:declarationId/reject',
         });
       }
 
+      // O-1: RejectCustomsDeclaration moves the linked shipment to
+      // CUSTOMS_REJECTED on-chain (customs.go:864/939); mirror it in
+      // Postgres so the shipment leaves CUSTOMS_DECLARED in the portals
+      // too. Best-effort and independent of the declaration mirror below:
+      // a failure here never changes this response.
+      try {
+        const declRow: any = await postgresDb.get(
+          `SELECT shipment_id FROM customs_declarations WHERE declaration_number = $1`,
+          [declarationId]
+        );
+        if (declRow?.shipment_id) {
+          await shipmentService.mirrorShipmentStatus(declRow.shipment_id, 'CUSTOMS_REJECTED');
+        }
+      } catch (mirrorLookupError) {
+        logger.warn(`[CUSTOMS] Could not mirror CUSTOMS_REJECTED for declaration ${declarationId}:`, mirrorLookupError);
+      }
+
       try {
         await postgresDb.run(
           `UPDATE customs_declarations
@@ -2191,12 +2217,23 @@ router.post('/declaration/:declarationId/clear',
         logger.warn(`[CUSTOMS] Declaration ${declarationId} cleared in PG only (chain not synced): ${result.blockchainError}`);
       }
 
-      // The linked shipment moves to CUSTOMS_CLEARED on-chain via the
-      // ClearCustomsDeclaration cascade itself (customs.go) — there is
-      // no separate shipment update to do here. (The old comment
-      // claimed UpdateShipmentStatus did not exist in the chaincode;
-      // it does — main.go — but the cascade already covers it, and the
-      // shipment update must not be attempted twice.)
+      // O-1: the linked shipment moves to CUSTOMS_CLEARED on-chain via
+      // the ClearCustomsDeclaration cascade itself (customs.go:679/788) —
+      // there is no separate chain shipment update to do here — but the
+      // Postgres shipment row still needs mirroring, which nothing did.
+      // Only when the ledger clear actually synced: clearDeclaration
+      // throws on a chain failure, so reaching here means it synced, but
+      // the guard stays explicit. Best-effort: the mirror never fails
+      // this response.
+      if (result.blockchainSynced && declaration.shipment_id) {
+        await shipmentService.mirrorShipmentStatus(declaration.shipment_id, 'CUSTOMS_CLEARED');
+      }
+
+      // (The old comment here claimed UpdateShipmentStatus did not exist
+      // in the chaincode; it does — main.go — but the cascade already
+      // covers the chain move, and the shipment update must not be
+      // attempted twice on-chain. The PG mirror above is the missing
+      // half, not a second chain write.)
       if (!declaration.shipment_id) {
         logger.warn(`[CUSTOMS] ⚠️ No shipment_id found for declaration ${declarationId} — no shipment cascade to run`);
       }

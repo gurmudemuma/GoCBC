@@ -1,12 +1,14 @@
 import express from 'express';
 import { FabricService } from '../services/fabricService';
 import { DatabaseService } from '../services/databaseService';
+import { ShipmentService } from '../services/shipmentService';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
 const dbService = DatabaseService.getInstance();
+const shipmentService = ShipmentService.getInstance();
 
 // Mirror an issued permit into Postgres. Both issue handlers only wrote
 // the chain, so the export_permits table (which the portals read) was
@@ -22,6 +24,22 @@ async function mirrorPermitPG(permitId: string, contractId: string, approvedBy: 
     );
   } catch (err) {
     logger.warn(`[PERMITS] Could not mirror permit ${permitId} to Postgres:`, err);
+  }
+}
+
+// Mirror the IssueCBEExportPermit cascade (permit.go:248) in Postgres:
+// every shipment under the contract in CREATED or INSPECTION_COMPLETE
+// moves to PERMIT_ISSUED on-chain. The eligibility guard matches the
+// chaincode exactly, so a shipment that already moved on is never
+// regressed. When no contract id was supplied the cascade had nothing to
+// move under, so fall back to the single known shipment, guarded the same
+// way. Best-effort: the shared helper never throws, so a mirror failure
+// can never fail a committed issuance.
+async function mirrorPermitCascadePG(contractId: string, shipmentId?: string): Promise<void> {
+  if (contractId) {
+    await shipmentService.mirrorShipmentStatusForContract(contractId, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
+  } else if (shipmentId) {
+    await shipmentService.mirrorShipmentStatus(shipmentId, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
   }
 }
 
@@ -90,6 +108,7 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
 
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
+      await mirrorPermitCascadePG(contractId, shipmentID);
       logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
       res.status(201).json({ 
         success: true, 
@@ -186,6 +205,7 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
 
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
+      await mirrorPermitCascadePG(contractId, shipmentID);
       logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
       res.status(201).json({ 
         success: true, 
@@ -256,6 +276,7 @@ router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async 
 
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
+      await mirrorPermitCascadePG(contractId);
       res.json({ 
         success: true, 
         message: 'Export permit issued successfully',

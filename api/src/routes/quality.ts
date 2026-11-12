@@ -66,7 +66,7 @@ async function decideQualityInspection(
   | { ok: false; status: number; error: { code: string; message: string } }
 > {
   const inspection = await postgresDb.get(
-    'SELECT id, status FROM quality_inspections WHERE inspection_id = $1',
+    'SELECT id, status, shipment_id FROM quality_inspections WHERE inspection_id = $1',
     [inspectionID]
   );
 
@@ -118,6 +118,16 @@ async function decideQualityInspection(
        WHERE inspection_id = $1`,
       [inspectionID, certificateNumber, opts.grade || null, opts.remarks || null, chainSync.blockchain_tx_id]
     );
+
+    // O-1: ApproveQualityInspection moves the linked shipment
+    // INSPECTION_PENDING -> INSPECTION_COMPLETE on-chain (quality.go:444);
+    // mirror it in Postgres so the shipment leaves INSPECTION_PENDING.
+    // Best-effort: the mirror never fails the decision. (Reject moves no
+    // shipment status — the shipment stays INSPECTION_PENDING — so the
+    // REJECTED branch below mirrors nothing.)
+    if ((inspection as any).shipment_id) {
+      await shipmentService.mirrorShipmentStatus((inspection as any).shipment_id, 'INSPECTION_COMPLETE');
+    }
   } else {
     await postgresDb.run(
       `UPDATE quality_inspections SET
@@ -497,6 +507,17 @@ router.post('/inspections',
       }
       blockchain_tx_id = chainResult.txId || null;
       logger.info(`✅ [INSPECTION] Inspection ${inspectionID} created on-chain (tx ${blockchain_tx_id})`);
+
+      // O-1: RequestInspection moves the shipment to INSPECTION_PENDING
+      // on-chain (quality.go:172); mirror it in Postgres so the portals
+      // stop showing CREATED. Best-effort: the mirror never fails the
+      // request. (The "already exists" recovery branch above returns
+      // before this point, so it is deliberately not mirrored here —
+      // that inspection predates this request and its shipment may
+      // already have moved past INSPECTION_PENDING.)
+      if (shipmentID) {
+        await shipmentService.mirrorShipmentStatus(shipmentID, 'INSPECTION_PENDING');
+      }
 
       // Postgres mirror AFTER the successful ledger write. coffeeType /
       // quantity are mirror-only fields — the chaincode QualityInspection
@@ -1402,6 +1423,18 @@ router.post('/inspections/:inspectionID/issue-permit',
         );
       } catch (mirrorErr) {
         logger.warn(`[PERMIT] Could not mirror permit ${permitId} to Postgres:`, mirrorErr);
+      }
+
+      // O-1: mirror the IssueCBEExportPermit cascade (permit.go:248):
+      // every shipment under this contract in CREATED or
+      // INSPECTION_COMPLETE moves to PERMIT_ISSUED on-chain. The
+      // eligibility guard matches the chaincode exactly, so a shipment
+      // that already moved on is never regressed. Best-effort: the
+      // mirror never fails the issuance.
+      if (contractId) {
+        await shipmentService.mirrorShipmentStatusForContract(contractId, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
+      } else if (inspection.shipment_id) {
+        await shipmentService.mirrorShipmentStatus(inspection.shipment_id, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
       }
 
       logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}, TX: ${blockchain_tx_id}`);

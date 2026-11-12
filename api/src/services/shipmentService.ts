@@ -193,6 +193,14 @@ export class ShipmentService {
         userOrg: 'ECTAMSP'
       });
 
+      // O-1: SubmitCustomsDeclaration moves the shipment to
+      // CUSTOMS_DECLARED on-chain (customs.go:360); mirror it in
+      // Postgres so the shipment leaves INSPECTION_COMPLETE in the
+      // portals too. submitDeclaration throws on a chain failure, so
+      // reaching here means the ledger move committed. Best-effort:
+      // the mirror never fails this trigger.
+      await this.mirrorShipmentStatus(shipmentID, 'CUSTOMS_DECLARED');
+
       logger.info(`✅ [ShipmentService] Customs declaration auto-created: ${declarationID} for shipment: ${shipmentID}`);
 
       return { success: true, declarationID };
@@ -256,6 +264,78 @@ export class ShipmentService {
     } catch (error: any) {
       logger.error(`❌ [ShipmentService] Status update failed: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Best-effort Postgres mirror of a ledger shipment status (O-1).
+   *
+   * This is NOT updateShipmentStatus above: that method validates the
+   * transition against the API statusManager table, throws when the
+   * shipment row is missing, and writes an audit row — all wrong for a
+   * mirror of a status the ledger has ALREADY committed (e.g. the
+   * quality-approve auto-trigger moves a shipment INSPECTION_COMPLETE
+   * -> CUSTOMS_DECLARED, a transition the statusManager table does not
+   * list). This method does one plain UPDATE and never throws: a mirror
+   * failure must never turn a committed chain write into an error —
+   * try/catch, warn-and-continue, same as mirrorShipmentStatusPG in
+   * routes/shipments.ts (which now delegates here) and the other mirrors
+   * in this codebase. A missing row simply updates 0 rows.
+   *
+   * @param onlyFrom when given, mirror only if the Postgres row currently
+   *   holds one of these states — used for the IssueCBEExportPermit
+   *   cascade, which moves only CREATED / INSPECTION_COMPLETE shipments
+   *   to PERMIT_ISSUED (permit.go) and must never regress a shipment
+   *   that already moved on.
+   */
+  async mirrorShipmentStatus(
+    shipmentID: string,
+    status: string,
+    onlyFrom?: string[]
+  ): Promise<void> {
+    try {
+      if (onlyFrom && onlyFrom.length > 0) {
+        await this.dbService.run(
+          `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $2 AND status = ANY($3)`,
+          [status, shipmentID, onlyFrom]
+        );
+      } else {
+        await this.dbService.run(
+          `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $2`,
+          [status, shipmentID]
+        );
+      }
+    } catch (err) {
+      logger.warn(`[ShipmentService] Could not mirror shipment ${shipmentID} status ${status} to Postgres:`, err);
+    }
+  }
+
+  /**
+   * Best-effort Postgres mirror of the IssueCBEExportPermit cascade
+   * (permit.go): the permit carries no ShipmentID — it links shipments
+   * through ContractID — so the chaincode moves EVERY shipment under the
+   * contract that is waiting for a permit. Mirror the same set in
+   * Postgres. Same never-throws contract as mirrorShipmentStatus.
+   */
+  async mirrorShipmentStatusForContract(
+    contractID: string,
+    status: string,
+    onlyFrom?: string[]
+  ): Promise<void> {
+    try {
+      if (onlyFrom && onlyFrom.length > 0) {
+        await this.dbService.run(
+          `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE contract_id = $2 AND status = ANY($3)`,
+          [status, contractID, onlyFrom]
+        );
+      } else {
+        await this.dbService.run(
+          `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE contract_id = $2`,
+          [status, contractID]
+        );
+      }
+    } catch (err) {
+      logger.warn(`[ShipmentService] Could not mirror contract ${contractID} shipments to ${status} in Postgres:`, err);
     }
   }
 

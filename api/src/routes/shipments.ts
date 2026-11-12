@@ -40,15 +40,10 @@ const postgresDb = DatabaseService.getInstance();
 // write status on the chaincode but never updated the Postgres row, so
 // every portal query against the DB showed a stale status. Best-effort:
 // a Postgres failure must never fail a committed chaincode transaction.
+// Delegates to the shared ShipmentService.mirrorShipmentStatus (O-1) so
+// every route file mirrors through the same helper.
 async function mirrorShipmentStatusPG(shipmentID: string, status: string): Promise<void> {
-  try {
-    await postgresDb.run(
-      `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = $2`,
-      [status, shipmentID]
-    );
-  } catch (err) {
-    logger.warn(`[SHIPMENTS] Could not mirror status ${status} for ${shipmentID} to Postgres:`, err);
-  }
+  await shipmentService.mirrorShipmentStatus(shipmentID, status);
 }
 
 
@@ -1643,6 +1638,11 @@ router.put('/:shipmentID/shipping-status',
       ]);
 
       if (result.success) {
+        // O-1: UpdateShipmentLocation sets shipment.Status = status
+        // on-chain (main.go:2511); mirror the same target status in
+        // Postgres. The chain call already validated it against
+        // validShipmentStatuses, so the value is legal here.
+        await mirrorShipmentStatusPG(shipmentID, status);
         logger.info(`✅ [SHIPPING] Shipping status updated: ${shipmentID} -> ${status}`);
         res.json({
           success: true,
@@ -2858,6 +2858,11 @@ router.post('/:shipmentId/vessel/load',
       ]);
 
       if (result.success) {
+        // O-1: RecordVesselLoading delegates to LoadOnVessel, which sets
+        // VESSEL_LOADED on-chain (main.go:3514); mirror it in Postgres.
+        // (The canonical POST /:shipmentID/vessel/load handler already
+        // mirrors; this :shipmentId alias did not.)
+        await mirrorShipmentStatusPG(shipmentId, 'VESSEL_LOADED');
         logger.info(`✅ Vessel loading recorded: ${shipmentId}`);
         res.json({
           success: true,
@@ -2904,6 +2909,11 @@ router.post('/:shipmentId/vessel/depart',
       ]);
 
       if (result.success) {
+        // O-1: RecordVesselDeparture delegates to DepartFromPort, which
+        // sets DEPARTED on-chain (main.go:3590); mirror it in Postgres.
+        // (The canonical POST /:shipmentID/vessel/depart handler already
+        // mirrors; this :shipmentId alias did not.)
+        await mirrorShipmentStatusPG(shipmentId, 'DEPARTED');
         logger.info(`✅ Vessel departure recorded: ${shipmentId}`);
         res.json({
           success: true,
@@ -2996,6 +3006,11 @@ router.post('/:shipmentId/destination/arrive',
       ]);
 
       if (result.success) {
+        // O-1: RecordDestinationArrival delegates to ArriveAtDestination,
+        // which sets DESTINATION_ARRIVED on-chain (main.go:3745); mirror
+        // it in Postgres. (The canonical POST /:shipmentID/destination/
+        // arrive handler already mirrors; this :shipmentId alias did not.)
+        await mirrorShipmentStatusPG(shipmentId, 'DESTINATION_ARRIVED');
         logger.info(`✅ Destination arrival recorded: ${shipmentId}`);
         res.json({
           success: true,

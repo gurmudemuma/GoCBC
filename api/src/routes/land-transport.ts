@@ -3,6 +3,7 @@
 
 import express from 'express';
 import { FabricService } from '../services/fabricService';
+import { ShipmentService } from '../services/shipmentService';
 import { logger } from '../utils/logger';
 import { validateRequest } from '../middleware/validation';
 import { authMiddleware, requireRole } from '../middleware/auth';
@@ -10,6 +11,7 @@ import { body, param } from 'express-validator';
 
 const router = express.Router();
 const fabricService = FabricService.getInstance();
+const shipmentService = ShipmentService.getInstance();
 
 /**
  * @swagger
@@ -81,6 +83,12 @@ router.post('/:shipmentID/start',
       ]);
 
       if (result.success) {
+        // O-1: StartLandTransport sets LAND_TRANSPORT on-chain
+        // (main.go:3247); mirror it in Postgres. (The shipments.ts
+        // POST /:shipmentID/land-transport/start handler already mirrors;
+        // this land-transport route did not.) Best-effort: the mirror
+        // never fails the request.
+        await shipmentService.mirrorShipmentStatus(shipmentID, 'LAND_TRANSPORT');
         logger.info(`✅ Land transport started: ${shipmentID} (Truck: ${truckPlateNumber})`);
         res.json({
           success: true,
