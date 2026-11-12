@@ -33,6 +33,7 @@ import {
   Info as InfoIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { API_BASE_URL } from '@/config/api.config';
 
 interface BlockchainSignature {
   signature_id: string;
@@ -112,7 +113,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
       
       // STEP 1: Fetch document signatures from PostgreSQL
       const docsResponse = await axios.get(
-        `http://localhost:3001/api/v1/documents/entity/${entityType}/${entityId}`,
+        `${API_BASE_URL}/documents/entity/${entityType}/${entityId}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -126,7 +127,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
       for (const doc of docs) {
         try {
           const response = await axios.get(
-            `http://localhost:3001/api/v1/documents/${doc.document_id}/verify-signatures`,
+            `${API_BASE_URL}/documents/${doc.document_id}/verify-signatures`,
             {
               headers: { Authorization: `Bearer ${token}` },
             }
@@ -149,7 +150,7 @@ const BlockchainSignatureVerification: React.FC<Props> = ({ entityType, entityId
       const entitySignatures: BlockchainSignature[] = [];
       try {
         const entitySigResponse = await axios.get(
-          `http://localhost:3001/api/v1/blockchain-signatures/entity/${entityType}/${entityId}`,
+          `${API_BASE_URL}/blockchain-signatures/entity/${entityType}/${entityId}`,
           {
             headers: { Authorization: `Bearer ${token}` },
           }

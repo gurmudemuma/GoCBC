@@ -4,7 +4,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { Box, Grid, Card, CardContent, Typography, Button, TextField, MenuItem, Chip, IconButton, Tooltip, Alert, Paper, InputAdornment } from '@mui/material';
-import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
+import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
+import { PortalDataGrid, getPortalBrand } from '@/components/shared/portal';
 import { Visibility, CheckCircle, Cancel, LocalShipping, Warning, Assessment, FilterList, Refresh, VerifiedUser, LocationOn } from '@mui/icons-material';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import { DashboardKPI } from '@/components/modern';
@@ -14,10 +15,14 @@ import BorderCrossingInitiationDialog from './BorderCrossingInitiationDialog';
 import PhysicalInspectionDialog from './PhysicalInspectionDialog';
 import ClearanceDecisionDialog from './ClearanceDecisionDialog';
 
-const CUSTOMS_COLORS = { navy: '#1565c0', lightBlue: '#42a5f5', success: '#4caf50', warning: '#f57c00', error: '#d32f2f' };
+const CUSTOMS_COLORS = { navy: getPortalBrand('CUSTOMS').primary, success: '#4caf50', warning: '#f57c00', error: '#d32f2f' };
 
 interface BorderCrossing {
-  borderCrossingId: string;
+  // Chaincode field is `crossingId` (bordercrossing.go:18, json:"crossingId");
+  // GET /bordercrossing returns raw chaincode rows, so there is no
+  // `borderCrossingId` key. The old name made every row id `undefined`
+  // and every write hit POST /bordercrossing/undefined/... .
+  crossingId: string;
   shipmentId: string;
   exporterId: string;
   vehicleNumber: string;
@@ -56,8 +61,10 @@ const BorderCrossingTab: React.FC = () => {
         setFiltered(data);
         setStats({
           total: data.length,
-          active: data.filter((c: BorderCrossing) => c.status !== 'CLEARED' && c.status !== 'DETAINED').length,
-          cleared: data.filter((c: BorderCrossing) => c.status === 'CLEARED').length,
+          // "Active" = not yet terminal. CLEARED / CROSSED / ARRIVED are
+          // terminal (no outgoing transition, rules §14); DETAINED has no exit.
+          active: data.filter((c: BorderCrossing) => ['PENDING', 'INSPECTED', 'INSPECTION_FAILED', 'CLEARED_EXIT', 'IN_TRANSIT'].includes(c.status)).length,
+          cleared: data.filter((c: BorderCrossing) => c.status === 'CLEARED' || c.status === 'CLEARED_EXIT').length,
           avgTime: 4.5
         });
         showSuccess('Success', `Loaded ${data.length} border crossing records`);
@@ -75,7 +82,7 @@ const BorderCrossingTab: React.FC = () => {
   // chaincode guards, so a wrong-state call is rejected server-side.
   const handleAdvance = async (crossing: BorderCrossing, endpoint: string, body: Record<string, string>) => {
     try {
-      const response = await apiFetch(`/bordercrossing/${crossing.borderCrossingId}/${endpoint}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const response = await apiFetch(`/bordercrossing/${crossing.crossingId}/${endpoint}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(body) });
       const result = await response.json();
       if (result.success) {
         showSuccess('Success', result.message || 'Crossing updated');
@@ -94,7 +101,7 @@ const BorderCrossingTab: React.FC = () => {
     if (statusFilter !== 'ALL') f = f.filter(c => c.status === statusFilter);
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
-      f = f.filter(c => c.borderCrossingId.toLowerCase().includes(s) || c.vehicleNumber.toLowerCase().includes(s) || c.shipmentId.toLowerCase().includes(s));
+      f = f.filter(c => (c.crossingId || '').toLowerCase().includes(s) || c.vehicleNumber.toLowerCase().includes(s) || c.shipmentId.toLowerCase().includes(s));
     }
     setFiltered(f);
   }, [statusFilter, searchTerm, crossings]);
@@ -116,7 +123,7 @@ const BorderCrossingTab: React.FC = () => {
   };
 
   const columns: GridColDef[] = [
-    { field: 'borderCrossingId', headerName: 'Crossing ID', width: 150, renderCell: (p: GridRenderCellParams) => (
+    { field: 'crossingId', headerName: 'Crossing ID', width: 150, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography variant="body2" fontWeight={600}>{p.value}</Typography>
         {p.row.txId && <BlockchainStatusIcon status="RECORDED" txId={p.row.txId} size="small" />}
@@ -135,7 +142,15 @@ const BorderCrossingTab: React.FC = () => {
     { field: 'actions', headerName: 'Actions', width: 150, sortable: false, renderCell: (p: GridRenderCellParams) => (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         {p.row.status === 'PENDING' && (
-          <Tooltip title="Physical Inspection"><IconButton size="small" onClick={() => { setSelected(p.row); setInspectionDialogOpen(true); }} sx={{ color: CUSTOMS_COLORS.navy }}><Assessment fontSize="small" /></IconButton></Tooltip>
+          <>
+            <Tooltip title="Physical Inspection"><IconButton size="small" onClick={() => { setSelected(p.row); setInspectionDialogOpen(true); }} sx={{ color: CUSTOMS_COLORS.navy }}><Assessment fontSize="small" /></IconButton></Tooltip>
+            {/* PENDING → CLEARED_EXIT (chaincode ClearForExit, CustomsMSP only).
+                Previously unreachable: no UI ever called POST /bordercrossing/:id/clear-exit,
+                so the tab's own CLEARED_EXIT → departure path could never start.
+                The route takes customsOfficer/clearanceRef; the tab collects
+                neither, so both are sent blank rather than invented. */}
+            <Tooltip title="Clear for Exit"><IconButton size="small" onClick={() => handleAdvance(p.row, 'clear-exit', { customsOfficer: '', clearanceRef: '' })} sx={{ color: CUSTOMS_COLORS.success }}><CheckCircle fontSize="small" /></IconButton></Tooltip>
+          </>
         )}
         {(p.row.status === 'INSPECTED' || p.row.status === 'INSPECTION_FAILED') && (
           <Tooltip title="Clear/Detain"><IconButton size="small" onClick={() => { setSelected(p.row); setClearanceDialogOpen(true); }} sx={{ color: CUSTOMS_COLORS.success }}><CheckCircle fontSize="small" /></IconButton></Tooltip>
@@ -159,7 +174,7 @@ const BorderCrossingTab: React.FC = () => {
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Total Crossings" value={stats.total} icon={<Assessment />} brandColor={CUSTOMS_COLORS.navy} /></Grid>
         <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Active Crossings" value={stats.active} icon={<LocalShipping />} brandColor="#ff9800" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Cleared Today" value={stats.cleared} icon={<CheckCircle />} brandColor={CUSTOMS_COLORS.success} /></Grid>
+        <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Cleared" value={stats.cleared} icon={<CheckCircle />} brandColor={CUSTOMS_COLORS.success} /></Grid>
         <Grid item xs={12} sm={6} md={3}><DashboardKPI title="Avg Processing" value={`${stats.avgTime.toFixed(1)}h`} icon={<Warning />} brandColor="#f57c00" /></Grid>
       </Grid>
 
@@ -194,14 +209,14 @@ const BorderCrossingTab: React.FC = () => {
       </Card>
 
       <Paper sx={{ height: 600, width: '100%' }}>
-        <DataGrid 
-          rows={filtered} 
-          columns={columns} 
-          getRowId={(r) => r.borderCrossingId} 
-          loading={loading} 
-          pageSizeOptions={[5, 10, 25]} 
-          disableRowSelectionOnClick 
-          sx={{ '& .MuiDataGrid-columnHeaders': { backgroundColor: CUSTOMS_COLORS.lightBlue, color: 'white', fontWeight: 600 } }} 
+        <PortalDataGrid
+          brand="CUSTOMS"
+          rows={filtered}
+          columns={columns}
+          getRowId={(r) => r.crossingId}
+          loading={loading}
+          pageSizeOptions={[5, 10, 25]}
+          disableRowSelectionOnClick
         />
       </Paper>
 

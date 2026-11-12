@@ -130,6 +130,11 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
   ]);
   const [selectedMessage, setSelectedMessage] = useState<SWIFTMessage | null>(null);
   const [approvalModalVisible, setApprovalModalVisible] = useState(false);
+  // What the modal may do for the selected message. The nbe-approve endpoint
+  // only accepts DRAFT (chaincode DRAFT -> NBE_APPROVED), and the approve
+  // endpoint only accepts NBE_APPROVED (chaincode NBE_APPROVED -> APPROVED):
+  // 'view' offers neither action.
+  const [modalMode, setModalMode] = useState<'nbe-approve' | 'approve' | 'view'>('view');
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -244,11 +249,11 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
   const handleApproveTransaction = async (messageId: string) => {
     try {
       const values = await form.validateFields();
-      
+
       await axios.post(
         `${API_BASE_URL}/swift/messages/${messageId}/nbe-approve`,
         {
-          approvedBy: localStorage.getItem('userId'),
+          approvedBy: localStorage.getItem('userId') || (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').username; } catch { return undefined; } })() || 'NBE',
           amlCheck: values.amlCheck,
           sanctionScreening: values.sanctionScreening,
           comments: values.comments,
@@ -263,6 +268,35 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
 
       setApprovalModalVisible(false);
       form.resetFields();
+      loadMonitoringData();
+    } catch (error: any) {
+      notification.error({
+        message: 'Approval Failed',
+        description: error.response?.data?.error?.message || error.message
+      });
+    }
+  };
+
+  // NBE_APPROVED -> APPROVED (chaincode ApproveSWIFTMessage). NOTE: the API
+  // route POST /swift/messages/:id/approve currently requireRole()s
+  // BANKS/BANK_ADMIN only (swift.ts), so an NBE-role user gets a 403 until
+  // that role list is widened — an API change, not a UI one. The failure is
+  // surfaced honestly here instead of hidden.
+  const handleApproveMessage = async (messageId: string) => {
+    try {
+      await axios.post(
+        `${API_BASE_URL}/swift/messages/${messageId}/approve`,
+        {},
+        { headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` } }
+      );
+
+      notification.success({
+        message: 'Message Approved',
+        description: 'The SWIFT message was approved and can now be sent.'
+      });
+
+      setApprovalModalVisible(false);
+      setSelectedMessage(null);
       loadMonitoringData();
     } catch (error: any) {
       notification.error({
@@ -358,13 +392,22 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
             icon={<EyeOutlined />}
             onClick={() => {
               setSelectedMessage(record);
-              // The NBE-approve endpoint only accepts DRAFT (chaincode DRAFT -> NBE_APPROVED).
-              if (record.amount > 1000000 && record.status === 'DRAFT') {
+              // The NBE-approve endpoint only accepts DRAFT (chaincode DRAFT
+              // -> NBE_APPROVED); the approve endpoint only accepts
+              // NBE_APPROVED (-> APPROVED). Anything else is view-only.
+              if (record.status === 'NBE_APPROVED') {
+                setModalMode('approve');
+                setApprovalModalVisible(true);
+              } else if (record.amount > 1000000 && record.status === 'DRAFT') {
+                setModalMode('nbe-approve');
+                setApprovalModalVisible(true);
+              } else {
+                setModalMode('view');
                 setApprovalModalVisible(true);
               }
             }}
           >
-            {record.amount > 1000000 && record.status === 'DRAFT'
+            {record.status === 'NBE_APPROVED' || (record.amount > 1000000 && record.status === 'DRAFT')
               ? 'Approve'
               : 'View'}
           </Button>
@@ -466,6 +509,16 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
                         const message = messages.find((item) => item.messageId === alert.messageId);
                         if (message) {
                           setSelectedMessage(message);
+                          // Review must never offer an approve the message's
+                          // state cannot run: DRAFT -> NBE-approve only,
+                          // NBE_APPROVED -> approve only, anything else view-only.
+                          setModalMode(
+                            message.status === 'DRAFT'
+                              ? 'nbe-approve'
+                              : message.status === 'NBE_APPROVED'
+                                ? 'approve'
+                                : 'view'
+                          );
                           setApprovalModalVisible(true);
                         }
                       }}
@@ -492,9 +545,15 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
 
       {/* Approval Modal */}
       <Modal
-        title="Approve High-Value Transaction"
+        title={modalMode === 'nbe-approve' ? 'Approve High-Value Transaction' : modalMode === 'approve' ? 'Approve SWIFT Message' : 'SWIFT Message Details'}
         open={approvalModalVisible}
-        onOk={() => selectedMessage && handleApproveTransaction(selectedMessage.messageId)}
+        onOk={() => {
+          if (!selectedMessage) return;
+          if (modalMode === 'nbe-approve') handleApproveTransaction(selectedMessage.messageId);
+          else if (modalMode === 'approve') handleApproveMessage(selectedMessage.messageId);
+          else setApprovalModalVisible(false);
+        }}
+        okText={modalMode === 'view' ? 'Close' : 'Approve'}
         onCancel={() => {
           setApprovalModalVisible(false);
           setSelectedMessage(null);
@@ -503,13 +562,33 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
       >
         {selectedMessage && (
           <>
-            <AntAlert
-              message="High-Value Transaction Review"
-              description={`This transaction exceeds $1,000,000 and requires NBE approval before processing.`}
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
+            {modalMode === 'nbe-approve' && (
+              <AntAlert
+                message="High-Value Transaction Review"
+                description={`This transaction exceeds $1,000,000 and requires NBE approval before processing.`}
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {modalMode === 'approve' && (
+              <AntAlert
+                message="NBE-Approved Message"
+                description="This message was already NBE-approved. Approving it moves it to APPROVED, after which the bank can send it."
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {modalMode === 'view' && (
+              <AntAlert
+                message="View Only"
+                description={`This message is ${selectedMessage.status} — no approval action applies to that state (NBE approval runs on DRAFT only; final approval runs on NBE_APPROVED only).`}
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
 
             <Descriptions bordered column={1} style={{ marginBottom: 16 }}>
               <Descriptions.Item label="Message Type">
@@ -531,37 +610,40 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
               </Descriptions.Item>
             </Descriptions>
 
-            <Form form={form} layout="vertical">
-              <Form.Item
-                name="amlCheck"
-                label="AML Check"
-                rules={[{ required: true }]}
-              >
-                <Select>
-                  <Option value="PASSED">Passed</Option>
-                  <Option value="FLAGGED">Flagged</Option>
-                  <Option value="REQUIRES_REVIEW">Requires Review</Option>
-                </Select>
-              </Form.Item>
+            {modalMode === 'nbe-approve' && (
+              <Form form={form} layout="vertical">
+                <Form.Item
+                  name="amlCheck"
+                  label="AML Check"
+                  rules={[{ required: true }]}
+                  extra="A FAIL result blocks approval (route + chaincode require PASS/FAIL)."
+                >
+                  <Select>
+                    <Option value="PASS">Pass</Option>
+                    <Option value="FAIL">Fail</Option>
+                  </Select>
+                </Form.Item>
 
-              <Form.Item
-                name="sanctionScreening"
-                label="Sanction Screening"
-                rules={[{ required: true }]}
-              >
-                <Select>
-                  <Option value="CLEAR">Clear</Option>
-                  <Option value="FLAGGED">Flagged</Option>
-                </Select>
-              </Form.Item>
+                <Form.Item
+                  name="sanctionScreening"
+                  label="Sanction Screening"
+                  rules={[{ required: true }]}
+                  extra="A FAIL result blocks approval (route + chaincode require PASS/FAIL)."
+                >
+                  <Select>
+                    <Option value="PASS">Pass</Option>
+                    <Option value="FAIL">Fail</Option>
+                  </Select>
+                </Form.Item>
 
-              <Form.Item
-                name="comments"
-                label="Comments"
-              >
-                <Input.TextArea rows={3} placeholder="Any additional comments..." />
-              </Form.Item>
-            </Form>
+                <Form.Item
+                  name="comments"
+                  label="Comments"
+                >
+                  <Input.TextArea rows={3} placeholder="Any additional comments..." />
+                </Form.Item>
+              </Form>
+            )}
           </>
         )}
       </Modal>

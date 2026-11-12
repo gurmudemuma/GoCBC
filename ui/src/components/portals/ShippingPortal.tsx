@@ -4,22 +4,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { viewDocument, downloadDocument } from '@/utils/documentHelpers';
 import {
+  alpha,
   Box,
   Grid,
   Card,
   CardContent,
   Typography,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Chip,
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   Table,
   TableBody,
   TableCell,
@@ -29,13 +24,14 @@ import {
   Paper,
   LinearProgress,
   Divider,
-  TextField,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
   Snackbar,
   CircularProgress,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material';
 import {
   Add,
@@ -51,7 +47,6 @@ import {
   Warning,
   Schedule,
   TrendingUp,
-  QrCode,
   Inventory,
   Anchor,
   Assessment,
@@ -59,10 +54,10 @@ import {
   Info,
   Refresh,
 } from '@mui/icons-material';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
-import { apiFetch, getAuthHeaders } from '@/config/api.config';
+import { apiFetch, getAuthHeaders, API_BASE_URL } from '@/config/api.config';
 import AuditTrailViewer from './AuditTrailViewer';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import UserManagement from '@/components/admin/UserManagement';
@@ -73,13 +68,24 @@ import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 // Modern Components - 2026 Design
 import {
-  ModernCard,
   AnimatedButton,
   DashboardKPI,
   StatusChip,
   StatusType,
   ThemeToggle,
 } from '@/components/modern';
+import {
+  PortalShell,
+  PortalTabBar,
+  PortalTabPanel,
+  PortalKpiCard,
+  PortalCard,
+  PortalDialog,
+  PortalField,
+  PortalDataGrid,
+  GhostButton,
+  getPortalBrand,
+} from '@/components/shared/portal';
 
 
 interface ShippingRecord {
@@ -99,7 +105,10 @@ interface ShippingRecord {
   estimatedArrival: string;
   actualDeparture?: string;
   actualArrival?: string;
-  status: 'CUSTOMS_CLEARED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'ARRIVED' | 'DELIVERED' | 'LOADED' | 'CREATED';
+  // All 18 chaincode shipment states (coffee v2.3, main.go validShipmentStatuses).
+  // Rows whose status is outside this set are still kept (cast through) and shown
+  // on the Pre-Shipping tab with their real status — never silently dropped.
+  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
   trackingNumber: string;
   billOfLading?: string; // Sea freight B/L number
   containerType?: 'DRY' | 'REEFER' | 'OPEN_TOP'; // Sea freight only
@@ -161,18 +170,6 @@ interface ActionInputs {
   deliveryNotes: string;
 }
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
-
 const ShippingPortal: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   
@@ -187,7 +184,7 @@ const ShippingPortal: React.FC = () => {
   // Get current user role from local storage
   const userRole = JSON.parse(localStorage.getItem('user') || '{}')?.role || '';
 
-  // Main tab structure - one dedicated tab per shipping lifecycle status (matches KPI branches 0-8 + Users at 9)
+  // Main tab structure - one dedicated tab per shipping lifecycle status (matches KPI branches 0-9 + Users at 10)
   const mainTabs = [
     { index: 0, label: 'Clearance', icon: <CheckCircle />, status: 'CUSTOMS_CLEARED', statuses: ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED'], description: 'Customs cleared shipments ready for transport' },
     { index: 1, label: 'Land Transport', icon: <LocalShipping />, status: 'LAND_TRANSPORT', description: 'Addis Ababa → Djibouti (800km)' },
@@ -198,14 +195,26 @@ const ShippingPortal: React.FC = () => {
     { index: 6, label: 'In Transit', icon: <DirectionsBoat />, status: 'IN_TRANSIT', description: 'Ocean/air freight journey' },
     { index: 7, label: 'Destination Arrived', icon: <LocationOn />, status: 'DESTINATION_ARRIVED', statuses: ['DESTINATION_ARRIVED', 'ARRIVED'], description: 'Arrived at buyer\'s port' },
     { index: 8, label: 'Delivered', icon: <CheckCircle />, status: 'DELIVERED', description: 'Completed deliveries' },
-    { index: 9, label: 'Users', icon: <Person />, status: '', description: 'User management', roles: ['ADMIN', 'SHIPPING', 'Shipping Portal Administrator'] },
+    // Pre-shipping states (chaincode CREATED / PERMIT_ISSUED / CUSTOMS_DECLARED /
+    // INSPECTION_PENDING / CUSTOMS_REJECTED / CANCELLED) plus any status no other
+    // tab covers: shown here with their real status and no shipping action, so no
+    // row is ever silently dropped. No action is offered — these shipments have
+    // not cleared customs yet (or are rejected/cancelled).
+    { index: 9, label: 'Pre-Shipping', icon: <Schedule />, status: 'CREATED', statuses: ['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED'], description: 'Not yet cleared for shipping — permit / customs / inspection states' },
+    { index: 10, label: 'Users', icon: <Person />, status: '', description: 'User management', roles: ['ADMIN', 'SHIPPING', 'Shipping Portal Administrator'] },
   ];
   const visibleMainTabs = mainTabs.filter(tab =>
-    tab.index !== 9 || (tab.roles || []).includes(userRole)
+    tab.index !== 10 || (tab.roles || []).includes(userRole)
   );
 
   // Lifecycle progress and stage colors used by the per-status tab tables
   const lifecycleProgressMap: { [key: string]: number } = {
+    'CREATED': 0,
+    'PERMIT_ISSUED': 5,
+    'CUSTOMS_DECLARED': 5,
+    'INSPECTION_PENDING': 5,
+    'CUSTOMS_REJECTED': 0,
+    'CANCELLED': 0,
     'CUSTOMS_CLEARED': 10,
     'FREIGHT_BOOKED': 10,
     'LAND_TRANSPORT': 25,
@@ -220,6 +229,12 @@ const ShippingPortal: React.FC = () => {
     'DELIVERED': 100,
   };
   const lifecycleStageColors: { [key: string]: string } = {
+    'CREATED': '#9e9e9e',
+    'PERMIT_ISSUED': '#ff9800',
+    'CUSTOMS_DECLARED': '#ff9800',
+    'INSPECTION_PENDING': '#ff9800',
+    'CUSTOMS_REJECTED': '#d32f2f',
+    'CANCELLED': '#616161',
     'CUSTOMS_CLEARED': '#ff9800',
     'FREIGHT_BOOKED': '#ff9800',
     'LAND_TRANSPORT': '#2196f3',
@@ -249,6 +264,9 @@ const ShippingPortal: React.FC = () => {
   });
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
+  // Ticked by the user to attest the required documents have been verified when
+  // the automatic match cannot confirm all of them (see approval dialog).
+  const [docsConfirmed, setDocsConfirmed] = useState(false);
 
   // Per-action user inputs collected in the professional Workflow Approval Dialog
   // (replaces legacy prompt()/confirm() flows). Reset each time the dialog opens.
@@ -376,34 +394,89 @@ const ShippingPortal: React.FC = () => {
     { line: 'Others', share: 7, performance: 85.1 },
   ];
 
+  // Rows for a tab. The Pre-Shipping tab (9) also catches any status no other
+  // tab covers, so a row with an unexpected status is shown there with its real
+  // status instead of disappearing from the portal.
+  const tabCoveredStatuses = useMemo(() => new Set(
+    mainTabs.filter((t) => t.status).flatMap((t) => t.statuses || [t.status])
+  ), [mainTabs]);
+  const rowsForTab = (tab: (typeof mainTabs)[number]): ShippingRecord[] =>
+    allShippingRecords.filter((r) =>
+      (tab.statuses || [tab.status]).includes(r.status) ||
+      (tab.index === 9 && !tabCoveredStatuses.has(r.status))
+    );
+
+  // Dead-end statuses: the chaincode has no onward transition from these, so the
+  // portal must show the fact instead of an action button that can never work.
+  const DEAD_END_NOTES: Record<string, string> = {
+    FREIGHT_BOOKED: 'Freight booked — this shipment cannot advance to land transport. Start Land Transport requires exactly CUSTOMS_CLEARED and the chaincode has no exit from FREIGHT_BOOKED, so booking freight before customs clearance strands the shipment. Freight booking is therefore only offered after delivery.',
+    LOADED: 'Bill of lading / airway bill recorded — this shipment cannot depart. DepartFromPort requires exactly VESSEL_LOADED and RecordShippingDetails sets LOADED unconditionally, so LOADED has no onward step. BoL/AWB recording is post-delivery paperwork only.',
+    ARRIVED: 'ARRIVED is written by the freight-booking mirror, not the main lifecycle. Complete Delivery requires exactly DESTINATION_ARRIVED, so this shipment has no onward action in this portal.',
+  };
+
+  const preShippingNoteFor = (status: string): string | null => {
+    switch (status) {
+      case 'CREATED': return 'Shipment created — it has not cleared customs yet, so no shipping action is available here.';
+      case 'PERMIT_ISSUED': return 'Export permit issued — awaiting customs declaration; no shipping action is available yet.';
+      case 'CUSTOMS_DECLARED': return 'Customs declaration submitted — awaiting clearance; no shipping action is available yet.';
+      case 'INSPECTION_PENDING': return 'Quality inspection pending — awaiting inspection; no shipping action is available yet.';
+      case 'CUSTOMS_REJECTED': return 'Customs declaration rejected — terminal for this shipment in the customs flow; no shipping action is available.';
+      case 'CANCELLED': return 'Shipment cancelled — terminal; no shipping action is available.';
+      default: return null;
+    }
+  };
+
   useEffect(() => {
     // Check if coming from Customs Portal with clearance context
     const customsContext = sessionStorage.getItem('shipping_from_customs');
     if (customsContext) {
       try {
         const data = JSON.parse(customsContext);
-        console.log('[SHIPPING] Received context from Customs Portal:', data);
-        
-        // Show notification
-        setSnackbar({
-          open: true,
-          message:
-            `📦 Customs clearance received for shipment ${data.shipmentId} — ` +
-            `Bill of Lading form opened with auto-filled data.`,
-          severity: 'info'
-        });
-        
+
         // Pre-fill B/L form with shipment ID
         setBolForm({ ...bolForm, shipmentId: data.shipmentId });
-        
-        // Auto-open B/L dialog and trigger auto-mapping
-        setBillOfLadingDialogOpen(true);
-        
-        // Auto-map data after a brief delay to ensure dialog is open
-        setTimeout(() => {
-          autoMapBOLData(data.shipmentId);
-        }, 500);
-        
+
+        // BoL/AWB recording is post-delivery paperwork only: RecordShippingDetails
+        // sets LOADED unconditionally, which strands any shipment that has not
+        // delivered yet (DepartFromPort requires VESSEL_LOADED). Only auto-open
+        // the dialog once the shipment is DELIVERED.
+        void (async () => {
+          try {
+            const statusResponse = await apiFetch(`/shipments/${data.shipmentId}`, {
+              headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+            });
+            const statusResult = await statusResponse.json();
+            const currentStatus = String(statusResult?.data?.status || statusResult?.data?.Status || '').toUpperCase();
+            if (currentStatus === 'DELIVERED') {
+              setSnackbar({
+                open: true,
+                message:
+                  `📦 Customs clearance received for shipment ${data.shipmentId} — ` +
+                  `Bill of Lading form opened with auto-filled data.`,
+                severity: 'info'
+              });
+              setBillOfLadingDialogOpen(true);
+              setTimeout(() => { autoMapBOLData(data.shipmentId); }, 500);
+            } else {
+              setSnackbar({
+                open: true,
+                message:
+                  `📦 Customs clearance received for shipment ${data.shipmentId} (status ${currentStatus || 'unknown'}). ` +
+                  `Bill of lading / airway bill recording is post-delivery paperwork only and will be available once the shipment is DELIVERED.`,
+                severity: 'info'
+              });
+            }
+          } catch {
+            setSnackbar({
+              open: true,
+              message:
+                `📦 Customs clearance received for shipment ${data.shipmentId}. ` +
+                `Bill of lading / airway bill recording is post-delivery paperwork only and will be available once the shipment is DELIVERED.`,
+              severity: 'info'
+            });
+          }
+        })();
+
         // Clear the context after using it
         sessionStorage.removeItem('shipping_from_customs');
       } catch (error) {
@@ -411,7 +484,7 @@ const ShippingPortal: React.FC = () => {
         sessionStorage.removeItem('shipping_from_customs');
       }
     }
-    
+
     loadData();
   }, []);
 
@@ -474,33 +547,21 @@ const ShippingPortal: React.FC = () => {
         })));
         
         // Filter for shipments in shipping workflow
-        // Include shipments with shipping statuses OR cleared in customs database
+        // Include every shipment with a status (all 18 chaincode states) OR
+        // cleared in customs database. Unmapped/unknown statuses are NOT
+        // dropped — they are kept and shown on the Pre-Shipping tab.
         const readyShipments = uniqueShipments.filter((s: any) => {
           const shipmentId = s.ShipmentID || s.shipmentId;
           const status = (s.Status || s.status || s.shipmentStatus || '').toUpperCase().trim();
-          
+
           // Check if cleared in database (even if blockchain status isn't updated)
           const isClearedInDatabase = clearedShipmentIds.has(shipmentId);
-          
-          // Include if: cleared in database OR has a shipping workflow status
-          const hasShippingStatus = status === 'CUSTOMS_CLEARED' ||
-                 status === 'FREIGHT_BOOKED' ||
-                 status === 'LAND_TRANSPORT' ||
-                 status === 'PORT_ARRIVED' ||
-                 status === 'CONTAINER_STUFFED' ||
-                 status === 'VESSEL_LOADED' ||
-                 status === 'DEPARTED' ||
-                 status === 'IN_TRANSIT' ||
-                 status === 'DESTINATION_ARRIVED' ||
-                 status === 'ARRIVED' ||
-                 status === 'DELIVERED' ||
-                 status === 'LOADED';
-          
-          if (isClearedInDatabase && !hasShippingStatus) {
+
+          if (isClearedInDatabase && status !== 'CUSTOMS_CLEARED') {
             console.log(`[SHIPPING] ✅ Including ${shipmentId} - cleared in database (blockchain status: ${status})`);
           }
-          
-          return isClearedInDatabase || hasShippingStatus;
+
+          return isClearedInDatabase || !!status;
         });
         
         console.log(`[SHIPPING] Ready for shipping: ${readyShipments.length}`);
@@ -563,17 +624,35 @@ const ShippingPortal: React.FC = () => {
             // DESTINATION_ARRIVED. Shown on the Destination Arrived tab.
             shippingStatus = 'ARRIVED';
           } else if (status === 'CREATED') {
-            // Deliberately excluded: a CREATED shipment has not cleared customs
-            // yet, so it is not part of the shipping workflow.
-            return null;
+            // A CREATED shipment has not cleared customs yet, so it is shown
+            // on the Pre-Shipping tab (not dropped) — unless the customs
+            // database already cleared it, in which case it is in shipping.
+            if (isClearedInDatabase) {
+              console.log(`[SHIPPING] ⚠️ Using database clearance for ${shipmentId} (blockchain status: ${status})`);
+              shippingStatus = 'CUSTOMS_CLEARED';
+            } else {
+              shippingStatus = 'CREATED';
+            }
+          } else if (status === 'PERMIT_ISSUED') {
+            shippingStatus = 'PERMIT_ISSUED';
+          } else if (status === 'CUSTOMS_DECLARED') {
+            shippingStatus = 'CUSTOMS_DECLARED';
+          } else if (status === 'INSPECTION_PENDING') {
+            shippingStatus = 'INSPECTION_PENDING';
+          } else if (status === 'CUSTOMS_REJECTED') {
+            shippingStatus = 'CUSTOMS_REJECTED';
+          } else if (status === 'CANCELLED') {
+            shippingStatus = 'CANCELLED';
           } else if (isClearedInDatabase) {
             // If cleared in database but blockchain status not updated, treat as CUSTOMS_CLEARED
             console.log(`[SHIPPING] ⚠️ Using database clearance for ${shipmentId} (blockchain status: ${status})`);
             shippingStatus = 'CUSTOMS_CLEARED';
           } else {
-            // ERROR: Unknown status - do NOT show in shipping portal
-            console.error(`[SHIPPING] ❌ UNMAPPED STATUS "${status}" for shipment ${shipmentId} - SKIPPING THIS RECORD`);
-            return null; // Skip this shipment entirely
+            // Unknown status outside the 18 chaincode states: keep the row and
+            // show its real status on the Pre-Shipping tab with no action —
+            // never silently drop a record the portal cannot classify.
+            console.warn(`[SHIPPING] ⚠️ UNMAPPED STATUS "${status}" for shipment ${shipmentId} — showing with its real status, no action available`);
+            shippingStatus = status as ShippingRecord['status'];
           }
           
           console.log(`[SHIPPING] → Mapped to: ${shippingStatus}`);
@@ -621,6 +700,12 @@ const ShippingPortal: React.FC = () => {
         console.log(`[SHIPPING] Mapped ${mappedRecords.length} shipping records from blockchain`);
         console.log('[SHIPPING] Sample record:', mappedRecords[0]);
         console.log('[SHIPPING] Status distribution:', {
+          CREATED: mappedRecords.filter(r => r.status === 'CREATED').length,
+          PERMIT_ISSUED: mappedRecords.filter(r => r.status === 'PERMIT_ISSUED').length,
+          CUSTOMS_DECLARED: mappedRecords.filter(r => r.status === 'CUSTOMS_DECLARED').length,
+          INSPECTION_PENDING: mappedRecords.filter(r => r.status === 'INSPECTION_PENDING').length,
+          CUSTOMS_REJECTED: mappedRecords.filter(r => r.status === 'CUSTOMS_REJECTED').length,
+          CANCELLED: mappedRecords.filter(r => r.status === 'CANCELLED').length,
           CUSTOMS_CLEARED: mappedRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length,
           FREIGHT_BOOKED: mappedRecords.filter(r => r.status === 'FREIGHT_BOOKED').length,
           LAND_TRANSPORT: mappedRecords.filter(r => r.status === 'LAND_TRANSPORT').length,
@@ -641,6 +726,12 @@ const ShippingPortal: React.FC = () => {
         // Log final statistics after state update
         console.log('[SHIPPING] ✅ Final loaded state:', {
           total: mappedRecords.length,
+          CREATED: mappedRecords.filter(r => r.status === 'CREATED').length,
+          PERMIT_ISSUED: mappedRecords.filter(r => r.status === 'PERMIT_ISSUED').length,
+          CUSTOMS_DECLARED: mappedRecords.filter(r => r.status === 'CUSTOMS_DECLARED').length,
+          INSPECTION_PENDING: mappedRecords.filter(r => r.status === 'INSPECTION_PENDING').length,
+          CUSTOMS_REJECTED: mappedRecords.filter(r => r.status === 'CUSTOMS_REJECTED').length,
+          CANCELLED: mappedRecords.filter(r => r.status === 'CANCELLED').length,
           CUSTOMS_CLEARED: mappedRecords.filter(r => r.status === 'CUSTOMS_CLEARED').length,
           FREIGHT_BOOKED: mappedRecords.filter(r => r.status === 'FREIGHT_BOOKED').length,
           LAND_TRANSPORT: mappedRecords.filter(r => r.status === 'LAND_TRANSPORT').length,
@@ -688,12 +779,14 @@ const ShippingPortal: React.FC = () => {
       const applicationId = shipmentId.replace('SHIPAPP-', '').replace('SHIP', '');
       console.log('[VERIFICATION] Application ID:', applicationId);
       
-      // Fetch exporter information from PostgreSQL
+      // Fetch exporter information from PostgreSQL.
+      // exporterId is an EXP-… id, so use the by-exporter endpoint:
+      // GET /users/:userId looks up the numeric user PK and 404s/403s here.
       let exporterInfo = null;
       if (shipment.exporterId || shipment.exporterID) {
         try {
           const exporterId = shipment.exporterId || shipment.exporterID;
-          const exporterResponse = await apiFetch(`/users/${exporterId}`, {
+          const exporterResponse = await apiFetch(`/users/by-exporter/${exporterId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           const exporterData = await exporterResponse.json();
@@ -964,53 +1057,62 @@ const ShippingPortal: React.FC = () => {
             console.warn('[VERIFICATION] Could not fetch LC:', err);
           }
           
-          // Step 8: Customs Declaration
+          // Step 8: Customs Declaration.
+          // The backend ignores the shipmentId query param on
+          // GET /customs/declarations (it only reads ?status), so filter
+          // client-side by shipmentId — otherwise the dialog shows an
+          // arbitrary (most recent) declaration for a different shipment.
           try {
             const declResponse = await apiFetch(`/customs/declarations?shipmentId=${shipmentId}`, {
               headers: { 'Authorization': `Bearer ${token}` }
             });
             const declData = await declResponse.json();
-            if (declData.success && declData.data && declData.data.length > 0) {
-              const decl = declData.data[0];
-              
-              // Validate we have minimum required data
-              // Use created_at as fallback for clearance_date
-              const validDate = decl.clearance_date || decl.created_at;
-              if (validDate && decl.declaration_number) {
+            const allDecls = (declData.success && Array.isArray(declData.data)) ? declData.data : [];
+            const decl = allDecls.find((d: any) =>
+              String(d.shipmentId || d.shipment_id || d.shipmentID || '') === String(shipmentId)
+            );
+            if (decl) {
+              // The endpoint maps rows to camelCase (declarationNumber,
+              // clearanceDate, ...); accept snake_case too for safety.
+              const declNumber = decl.declarationNumber || decl.declaration_number;
+              const validDate = decl.clearanceDate || decl.clearance_date || decl.createdAt || decl.created_at;
+              if (validDate && declNumber) {
                 // Use contract quantity as fallback if declaration quantity is 0 or null
                 const declaredQuantity = decl.quantity || contractInfo?.quantity || contractInfo?.Quantity || 0;
-                
+
                 workflowSteps.push({
                   step: 'Customs Declaration Filed',
                   status: 'completed',
                   completedAt: validDate,
-                  officer: decl.customs_officer || exporterInfo?.company_name || 'Exporter',
+                  officer: decl.customsOfficer || decl.customs_officer || exporterInfo?.company_name || 'Exporter',
                   documents: [],
                   details: {
-                    declarationNumber: decl.declaration_number,
-                    declarationType: decl.declaration_type || 'STANDARD',
-                    hsCode: decl.hs_code || 'N/A',
-                    declaredValue: decl.customs_value_usd ? `$${parseFloat(decl.customs_value_usd).toLocaleString()}` : 'N/A',
+                    declarationNumber: declNumber,
+                    declarationType: decl.declarationType || decl.declaration_type || 'STANDARD',
+                    hsCode: decl.hsCode || decl.hs_code || 'N/A',
+                    declaredValue: (decl.customsValueUSD ?? decl.customs_value_usd) ? `$${parseFloat(decl.customsValueUSD ?? decl.customs_value_usd).toLocaleString()}` : 'N/A',
                     quantity: `${declaredQuantity.toLocaleString()} kg`,
                     currency: decl.currency || 'USD'
                   }
                 });
-                
+
                 // Step 9: Customs Inspection (if required)
-                if (decl.inspection_required && decl.clearance_date) {
-                  const verifiedQty = decl.verified_quantity || declaredQuantity;
+                const inspectionRequired = decl.inspectionRequired ?? decl.inspection_required;
+                const clearanceDate = decl.clearanceDate || decl.clearance_date;
+                if (inspectionRequired && clearanceDate) {
+                  const verifiedQty = decl.verifiedQuantity || decl.verified_quantity || declaredQuantity;
                   workflowSteps.push({
                     step: 'Customs Physical Inspection',
                     status: 'completed',
-                    completedAt: decl.clearance_date,
-                    officer: decl.inspector_name || decl.customs_officer || 'Customs Inspector',
+                    completedAt: clearanceDate,
+                    officer: decl.inspectorName || decl.inspector_name || decl.customsOfficer || decl.customs_officer || 'Customs Inspector',
                     documents: [],
                     details: {
-                      inspectionType: decl.inspection_type || 'STANDARD',
+                      inspectionType: decl.inspectionType || decl.inspection_type || 'STANDARD',
                       inspectionResult: 'Passed',
-                      findings: decl.additional_notes || 'No discrepancies found',
+                      findings: decl.additionalNotes || decl.additional_notes || 'No discrepancies found',
                       verifiedQuantity: `${verifiedQty.toLocaleString()} kg`,
-                      eudrCompliant: decl.eudr_compliant ? 'Yes' : 'No'
+                      eudrCompliant: (decl.eudrCompliant ?? decl.eudr_compliant) ? 'Yes' : 'No'
                     }
                   });
                 }
@@ -1281,14 +1383,44 @@ const ShippingPortal: React.FC = () => {
     
     return docMap[actionType] || [];
   };
-  
+
+  // Does an uploaded document cover a required document? Match on the
+  // normalised type/name slug first, then on shared significant words, so
+  // e.g. type CUSTOMS_CLEARANCE matches "Customs Clearance Certificate"
+  // and DRIVER_LICENSE matches "Driver License".
+  const isRequiredDocumentPresent = (
+    required: string,
+    uploaded: WorkflowVerificationData['uploadedDocuments']
+  ): boolean => {
+    const slug = required.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const words = required.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3);
+    return uploaded.some((doc) => {
+      const type = String(doc.type || '').toUpperCase();
+      const name = String(doc.fileName || doc.name || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+      if (type && (type.includes(slug) || slug.includes(type))) return true;
+      if (name && (name.includes(slug) || slug.includes(name))) return true;
+      const hay = `${type} ${name}`.toLowerCase();
+      const hits = words.filter((w) => hay.includes(w)).length;
+      return words.length >= 2 && hits >= 2;
+    });
+  };
+
+  // Required documents for the open approval dialog that no uploaded document
+  // covers. Empty when the dialog is closed or every required doc is present.
+  const approvalMissingDocs = useMemo(() => {
+    const vd = approvalDialog.verificationData;
+    if (!approvalDialog.open || !vd) return [];
+    return vd.requiredDocuments.filter((doc) => !isRequiredDocumentPresent(doc, vd.uploadedDocuments));
+  }, [approvalDialog]);
+
   // Open approval dialog with verification
   const openApprovalDialog = async (actionType: string, actionLabel: string, shipmentId: string) => {
     const verificationData = await fetchVerificationData(shipmentId, actionType);
-    
+
     if (verificationData) {
       setActionInputs(emptyActionInputs);
       setRejectionReason('');
+      setDocsConfirmed(false);
       setApprovalDialog({
         open: true,
         actionType,
@@ -1337,6 +1469,7 @@ const ShippingPortal: React.FC = () => {
     // Reset inputs after the action has been dispatched
     setActionInputs(emptyActionInputs);
     setRejectionReason('');
+    setDocsConfirmed(false);
   };
   
   // Handle rejection
@@ -1378,6 +1511,7 @@ const ShippingPortal: React.FC = () => {
       });
       setApprovalDialog({ ...approvalDialog, open: false });
       setRejectionReason('');
+      setDocsConfirmed(false);
       loadData(); // Refresh data
       
     } catch (error) {
@@ -1563,6 +1697,101 @@ const ShippingPortal: React.FC = () => {
     }
   };
 
+  // Open the BoL/AWB dialog only for a DELIVERED shipment. Recording a B/L
+  // or AWB sets LOADED unconditionally (chaincode RecordShippingDetails, no
+  // status guard), so opening it mid-chain would strand the shipment:
+  // DepartFromPort requires exactly VESSEL_LOADED.
+  const openBolDialog = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    try {
+      const statusResponse = await apiFetch(`/shipments/${shipmentId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const statusResult = await statusResponse.json();
+      const currentStatus = String(statusResult?.data?.status || statusResult?.data?.Status || '').toUpperCase();
+      if (currentStatus !== 'DELIVERED') {
+        setSnackbar({
+          open: true,
+          message: `❌ Bill of lading / airway bill recording is post-delivery paperwork only — shipment ${shipmentId} is ${currentStatus || 'not delivered'} and recording it now would set it to LOADED, which has no onward step.`,
+          severity: 'warning'
+        });
+        return;
+      }
+    } catch {
+      setSnackbar({
+        open: true,
+        message: '❌ Could not verify the shipment status — bill of lading recording was not opened.',
+        severity: 'error'
+      });
+      return;
+    }
+    setBillOfLadingDialogOpen(true);
+    setBolForm((prev) => ({ ...prev, shipmentId }));
+    setTimeout(() => { autoMapBOLData(shipmentId); }, 300);
+  };
+
+  // Download every document attached to a shipment with an authenticated
+  // fetch. GET /shipments/:id/documents returns JSON behind authMiddleware —
+  // window.open() on it sends no token (401) and is not a file download.
+  const handleDownloadDocuments = async (shipmentId: string) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    try {
+      const listResponse = await apiFetch(`/shipments/${shipmentId}/documents`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const listResult = await listResponse.json();
+      if (!listResponse.ok || !listResult.success) {
+        throw new Error(listResult.error?.message || 'Failed to list shipment documents');
+      }
+      const docs: any[] = Array.isArray(listResult.data?.documents) ? listResult.data.documents : [];
+      if (docs.length === 0) {
+        setSnackbar({ open: true, message: `No documents attached to shipment ${shipmentId}.`, severity: 'info' });
+        return;
+      }
+      let downloaded = 0;
+      const failures: string[] = [];
+      for (const doc of docs) {
+        const docId = doc.id || doc.document_id || doc.documentId;
+        const fileName = doc.file_name || doc.fileName || doc.document_name || doc.name || `document-${docId}`;
+        if (!docId) { failures.push(String(fileName)); continue; }
+        try {
+          const fileResponse = await apiFetch(`/documents/${docId}/download`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (!fileResponse.ok) throw new Error(`HTTP ${fileResponse.status}`);
+          const blob = await fileResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.URL.revokeObjectURL(url);
+          downloaded += 1;
+        } catch {
+          failures.push(String(fileName));
+        }
+      }
+      setSnackbar({
+        open: true,
+        message: downloaded > 0
+          ? `✅ Downloaded ${downloaded} of ${docs.length} document(s) for shipment ${shipmentId}${failures.length ? ` — failed: ${failures.join(', ')}` : ''}.`
+          : `❌ Could not download documents for shipment ${shipmentId}.`,
+        severity: downloaded > 0 ? 'success' : 'error'
+      });
+    } catch (error) {
+      console.error('[SHIPPING] Failed to download documents:', error);
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? `❌ ${error.message}` : '❌ Failed to download documents.',
+        severity: 'error'
+      });
+    }
+  };
+
   const handleSubmitBOL = async () => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
@@ -1592,6 +1821,33 @@ const ShippingPortal: React.FC = () => {
       setSnackbar({
         open: true,
         message: `❌ Validation Failed - Please complete: ${validationErrors.join(', ').replace(/•/g, '')}`,
+        severity: 'error'
+      });
+      return;
+    }
+
+    // Post-delivery paperwork only: re-check the live status here too, since
+    // the dialog's Shipment ID field is editable and the dialog can be opened
+    // with any id. Recording on a non-DELIVERED shipment would set LOADED
+    // unconditionally and strand it (DepartFromPort needs VESSEL_LOADED).
+    try {
+      const statusResponse = await apiFetch(`/shipments/${bolForm.shipmentId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const statusResult = await statusResponse.json();
+      const currentStatus = String(statusResult?.data?.status || statusResult?.data?.Status || '').toUpperCase();
+      if (currentStatus !== 'DELIVERED') {
+        setSnackbar({
+          open: true,
+          message: `❌ Bill of lading / airway bill recording is post-delivery paperwork only — shipment ${bolForm.shipmentId} is ${currentStatus || 'not delivered'}.`,
+          severity: 'warning'
+        });
+        return;
+      }
+    } catch {
+      setSnackbar({
+        open: true,
+        message: '❌ Could not verify the shipment status — bill of lading recording was not submitted.',
         severity: 'error'
       });
       return;
@@ -2095,12 +2351,12 @@ const ShippingPortal: React.FC = () => {
       width: 150,
       valueGetter: (params) => {
         const row = params.row;
-        // Early stages before B/L issuance
-        if (row.status === 'CUSTOMS_CLEARED' || row.status === 'LAND_TRANSPORT' || row.status === 'PORT_ARRIVED') {
+        // Early stages before B/L issuance (including pre-shipping states)
+        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED'].includes(row.status)) {
           return '(Pending)';
         }
-        return row.transportMode === 'SEA' 
-          ? row.billOfLading || row.containerNumber || '(Pending)'
+        return row.transportMode === 'SEA'
+          ? row.billOfLading || '(Pending)'
           : row.airwayBill || row.flightNumber || '(Pending)';
       },
     },
@@ -2110,8 +2366,8 @@ const ShippingPortal: React.FC = () => {
       width: 150,
       valueGetter: (params) => {
         const row = params.row;
-        // Early stages before vessel/flight assignment
-        if (row.status === 'CUSTOMS_CLEARED' || row.status === 'LAND_TRANSPORT' || row.status === 'PORT_ARRIVED' || row.status === 'CONTAINER_STUFFED') {
+        // Early stages before vessel/flight assignment (including pre-shipping)
+        if (['CREATED', 'PERMIT_ISSUED', 'CUSTOMS_DECLARED', 'INSPECTION_PENDING', 'CUSTOMS_REJECTED', 'CANCELLED', 'CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LAND_TRANSPORT', 'PORT_ARRIVED', 'CONTAINER_STUFFED'].includes(row.status)) {
           return '(To be assigned)';
         }
         return row.transportMode === 'SEA' 
@@ -2204,15 +2460,18 @@ const ShippingPortal: React.FC = () => {
             </IconButton>
           </Tooltip>
           
-          {/* CUSTOMS_CLEARED → Start Land Transport */}
+          {/* CUSTOMS_CLEARED → Start Land Transport (via the approval dialog:
+              the handler requires transport company + truck plate, which are
+              only collected in the dialog — calling it from the grid always
+              failed client-side validation) */}
           {params.row.status === 'CUSTOMS_CLEARED' && (
             <Tooltip title="Start Land Transport">
-              <IconButton 
+              <IconButton
                 size="small"
                 color="success"
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleStartLandTransport(params.row.shipmentId);
+                  openApprovalDialog('START_LAND_TRANSPORT', 'Start Land Transport', params.row.shipmentId);
                 }}
               >
                 <LocalShipping />
@@ -2236,15 +2495,17 @@ const ShippingPortal: React.FC = () => {
             </Tooltip>
           )}
           
-          {/* PORT_ARRIVED → Stuff Container */}
+          {/* PORT_ARRIVED → Stuff Container (via the approval dialog: the
+              handler requires a container number, only collected in the
+              dialog — calling it from the grid always failed client-side) */}
           {params.row.status === 'PORT_ARRIVED' && (
             <Tooltip title="Stuff Container">
-              <IconButton 
+              <IconButton
                 size="small"
                 color="primary"
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleContainerStuffing(params.row.shipmentId);
+                  openApprovalDialog('CONTAINER_STUFFING', 'Record Container Stuffing', params.row.shipmentId);
                 }}
               >
                 <Inventory />
@@ -2319,7 +2580,7 @@ const ShippingPortal: React.FC = () => {
           {/* DESTINATION_ARRIVED → Complete Delivery */}
           {params.row.status === 'DESTINATION_ARRIVED' && (
             <Tooltip title="Complete Delivery">
-              <IconButton 
+              <IconButton
                 size="small"
                 color="success"
                 onClick={(e) => {
@@ -2329,6 +2590,18 @@ const ShippingPortal: React.FC = () => {
               >
                 <CheckCircle />
               </IconButton>
+            </Tooltip>
+          )}
+
+          {/* Dead-end statuses: no onward step exists on-chain, so show why
+              instead of an action button that can never work. */}
+          {DEAD_END_NOTES[params.row.status] && (
+            <Tooltip title={DEAD_END_NOTES[params.row.status]}>
+              <span>
+                <IconButton size="small" color="warning" disabled>
+                  <Info />
+                </IconButton>
+              </span>
             </Tooltip>
           )}
         </Box>
@@ -2347,17 +2620,29 @@ const ShippingPortal: React.FC = () => {
 
   const stats = getShippingStats();
 
-  // Brand colors for Shipping Portal
-  const brandPrimary = '#006064'; // Deep Teal
-  const brandSecondary = '#0097a7'; // Cyan
+  // Brand colors for Shipping Portal — from the shared portal brand token
+  const brandPrimary = getPortalBrand('SHIPPING').primary; // Deep Teal
+  const brandSecondary = getPortalBrand('SHIPPING').secondary; // Cyan
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f7fcfd 0%, #edf7fa 46%, #fffef4 100%)',
-        p: { xs: 2, md: 3 },
-      }}
+    <PortalShell
+      brand="SHIPPING"
+      title="Shipping Portal"
+      subtitle="Ethiopian Shipping Lines"
+      actions={
+        <Tooltip title="Refresh Data">
+          <IconButton
+            onClick={() => loadData()}
+            disabled={loading}
+            sx={{
+              color: brandPrimary,
+              '&:hover': { bgcolor: `${brandPrimary}10` },
+            }}
+          >
+            {loading ? <CircularProgress size={24} /> : <Refresh />}
+          </IconButton>
+        </Tooltip>
+      }
     >
       {/* Professional KPI Cards - Reflect 9-Tab Workflow */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
@@ -2603,8 +2888,38 @@ const ShippingPortal: React.FC = () => {
               color: '#4caf50',
               subtitle: 'Delivery Completion'
             },
+          ] : tabValue === 9 ? [
+            // Tab 9: Pre-Shipping (not yet cleared for shipping)
+            {
+              icon: <Schedule />,
+              label: 'Pre-Shipping',
+              value: rowsForTab(mainTabs[9]).length,
+              color: '#9e9e9e',
+              subtitle: 'Awaiting clearance'
+            },
+            {
+              icon: <CheckCircle />,
+              label: 'Permit Issued',
+              value: allShippingRecords.filter(r => r.status === 'PERMIT_ISSUED').length,
+              color: '#ff9800',
+              subtitle: 'Awaiting customs'
+            },
+            {
+              icon: <Assignment />,
+              label: 'Customs Declared',
+              value: allShippingRecords.filter(r => ['CUSTOMS_DECLARED', 'INSPECTION_PENDING'].includes(r.status)).length,
+              color: '#ff9800',
+              subtitle: 'Declared / inspecting'
+            },
+            {
+              icon: <Cancel />,
+              label: 'Rejected / Cancelled',
+              value: allShippingRecords.filter(r => ['CUSTOMS_REJECTED', 'CANCELLED'].includes(r.status)).length,
+              color: '#d32f2f',
+              subtitle: 'Terminal states'
+            },
           ] : [
-            // Tab 8: Delivered
+            // Tab 8: Delivered (also the fallback for the Users tab)
             { 
               icon: <CheckCircle />, 
               label: 'Delivered', 
@@ -2641,177 +2956,79 @@ const ShippingPortal: React.FC = () => {
 
           return kpis.map((kpi, index) => (
             <Grid item xs={12} sm={6} lg={3} key={index}>
-              <Card 
-                elevation={0}
-                sx={{ 
-                  bgcolor: '#fff', 
-                  border: `3px solid ${kpi.color}15`,
-                  borderLeft: `6px solid ${kpi.color}`,
-                  borderRadius: 2,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  cursor: 'pointer',
-                  height: '100%',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  '&:hover': {
-                    boxShadow: `0 12px 28px ${kpi.color}25`,
-                    transform: 'translateY(-6px)',
-                    borderColor: `${kpi.color}30`,
-                  },
-                  '&::before': {
-                    content: '""',
-                    position: 'absolute',
-                    top: 0,
-                    right: 0,
-                    width: '120px',
-                    height: '120px',
-                    background: `radial-gradient(circle, ${kpi.color}08 0%, transparent 70%)`,
-                    borderRadius: '50%',
-                    transform: 'translate(40%, -40%)',
-                  }
-                }}
-              >
-                <CardContent sx={{ p: 3, position: 'relative', zIndex: 1 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                    <Box>
-                      <Typography variant="caption" sx={{ 
-                        color: '#666', 
-                        textTransform: 'uppercase', 
-                        fontWeight: 600, 
-                        display: 'block',
-                        letterSpacing: '1px',
-                        fontSize: '0.7rem',
-                        mb: 1
-                      }}>
-                        {kpi.label}
-                      </Typography>
-                      <Typography variant="h3" sx={{ 
-                        fontWeight: 800, 
-                        color: kpi.color,
-                        lineHeight: 1,
-                        fontSize: '2.5rem',
-                        mb: 0.5
-                      }}>
-                        {kpi.value}
-                      </Typography>
-                      <Typography variant="body2" sx={{ 
-                        color: '#999', 
-                        fontSize: '0.8rem',
-                        fontWeight: 500
-                      }}>
-                        {kpi.subtitle}
-                      </Typography>
-                    </Box>
-                    <Box sx={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      bgcolor: `${kpi.color}10`,
-                      flexShrink: 0,
-                    }}>
-                      {React.cloneElement(kpi.icon, { 
-                        sx: { 
-                          fontSize: 32, 
-                          color: kpi.color
-                        } 
-                      })}
-                    </Box>
-                  </Box>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="SHIPPING"
+                icon={kpi.icon}
+                label={kpi.label}
+                value={kpi.value}
+                color={kpi.color}
+                subtitle={kpi.subtitle}
+              />
             </Grid>
           ));
         })()}
       </Grid>
 
       {/* Tabs - Shipping Workflow Status */}
-      <ModernCard>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center' }}>
-          <Tabs 
-            value={tabValue} 
-            onChange={(e, newValue) => {
-              setTabValue(newValue);
-            }}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{
-              flex: 1,
-              '& .MuiTab-root': {
-                minHeight: 56,
-                textTransform: 'none',
-                fontSize: '1rem',
-                fontWeight: 600,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                px: 3,
-                '&.Mui-selected': {
-                  color: brandPrimary,
-                  fontWeight: 700,
-                },
-                '&:hover': {
-                  color: brandPrimary,
-                  opacity: 0.8,
-                  backgroundColor: 'rgba(21, 101, 192, 0.04)',
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 4,
-                backgroundColor: brandPrimary,
-                borderRadius: '4px 4px 0 0',
-              }
-            }}
-          >
-            {visibleMainTabs.map(tab => (
-              <Tab 
-                key={tab.index}
-                value={tab.index}
-                label={tab.label} 
-                icon={tab.icon} 
-                iconPosition="start"
-              />
-            ))}
-          </Tabs>
-          
-          <Tooltip title="Refresh Data">
-            <IconButton 
-              onClick={() => loadData()} 
-              disabled={loading}
-              sx={{ 
-                mr: 2,
-                color: brandPrimary,
-                '&:hover': { bgcolor: `${brandPrimary}10` }
-              }}
-            >
-              {loading ? <CircularProgress size={24} /> : <Refresh />}
-            </IconButton>
-          </Tooltip>
-        </Box>
+      <PortalCard brand="SHIPPING" noPadding>
+        <PortalTabBar
+          brand="SHIPPING"
+          value={tabValue}
+          onChange={(e, newValue) => {
+            setTabValue(newValue);
+          }}
+          scrollable
+          tabs={visibleMainTabs.map((tab) => ({
+            label: tab.label,
+            icon: tab.icon,
+            value: tab.index,
+          }))}
+        />
 
-        {/* Tabs 0-8: one persistent tab per lifecycle status; each shows only shipments at that exact status */}
+        {/* Tabs 0-9: one persistent tab per lifecycle status; each shows only shipments at that exact status */}
         {mainTabs.filter(tab => tab.status).map(tab => (
-          <TabPanel key={tab.index} value={tabValue} index={tab.index}>
+          <PortalTabPanel key={tab.index} value={tabValue} index={tab.index}>
             <Box sx={{ mb: 3 }}>
               <Typography variant="h5" gutterBottom sx={{ fontWeight: 700, color: brandPrimary }}>
                 {tab.label} — {tab.description}
               </Typography>
               <Typography variant="body2" color="textSecondary">
-                Shipments currently holding status <strong>{tab.status.replace(/_/g, ' ')}</strong> are listed below and persist here until they advance.
+                Shipments currently holding status <strong>{(tab.statuses || [tab.status]).join(', ').replace(/_/g, ' ')}</strong> are listed below and persist here until they advance.
               </Typography>
             </Box>
 
             <Alert severity="info" icon={tab.icon} sx={{ mb: 3 }}>
               <Typography variant="body2">
-                <strong>{allShippingRecords.filter(r => (tab.statuses || [tab.status]).includes(r.status)).length}</strong> shipment(s) currently at <strong>{tab.status.replace(/_/g, ' ')}</strong>.
+                <strong>{rowsForTab(tab).length}</strong> shipment(s) currently at <strong>{(tab.statuses || [tab.status]).join(', ').replace(/_/g, ' ')}</strong>.
               </Typography>
             </Alert>
 
+            {tab.index === 0 && rowsForTab(tab).some(r => r.status === 'FREIGHT_BOOKED') && (
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <Typography variant="body2">{DEAD_END_NOTES.FREIGHT_BOOKED}</Typography>
+              </Alert>
+            )}
+            {tab.index === 4 && rowsForTab(tab).some(r => r.status === 'LOADED') && (
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <Typography variant="body2">{DEAD_END_NOTES.LOADED}</Typography>
+              </Alert>
+            )}
+            {tab.index === 7 && rowsForTab(tab).some(r => r.status === 'ARRIVED') && (
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <Typography variant="body2">{DEAD_END_NOTES.ARRIVED}</Typography>
+              </Alert>
+            )}
+            {tab.index === 9 && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <Typography variant="body2">
+                  These shipments have not cleared customs yet (or were rejected/cancelled), so no shipping action is offered here. Rows with a status no other tab covers are also listed here with their real status.
+                </Typography>
+              </Alert>
+            )}
+
             <Box sx={{ height: 600, width: '100%' }}>
-              <DataGrid
-                rows={allShippingRecords.filter(r => (tab.statuses || [tab.status]).includes(r.status))}
+              <PortalDataGrid brand="SHIPPING"
+                rows={rowsForTab(tab)}
                 columns={[
                   ...shippingColumns.slice(0, -1),
                   {
@@ -2903,11 +3120,11 @@ const ShippingPortal: React.FC = () => {
                 </Grid>
               </Box>
             )}
-          </TabPanel>
+          </PortalTabPanel>
         ))}
 
-        {/* Tab 9: User Management */}
-        <TabPanel value={tabValue} index={9}>
+        {/* Tab 10: User Management */}
+        <PortalTabPanel value={tabValue} index={10}>
           <Box sx={{ mb: 3 }}>
             <Typography variant="h5" gutterBottom sx={{ fontWeight: 700, color: brandPrimary }}>
               User Management
@@ -2917,51 +3134,163 @@ const ShippingPortal: React.FC = () => {
             </Typography>
           </Box>
           <UserManagement />
-        </TabPanel>
+        </PortalTabPanel>
 
-      </ModernCard>
+      </PortalCard>
       {/* Comprehensive Shipping Record Detail Dialog */}
-      <Dialog 
-        open={!!selectedRecord && !trackingDialogOpen} 
-        onClose={() => setSelectedRecord(null)} 
-        maxWidth="lg" 
-        fullWidth
+      <PortalDialog
+        brand="SHIPPING"
+        open={!!selectedRecord && !trackingDialogOpen}
+        onClose={() => setSelectedRecord(null)}
+        maxWidth="lg"
+        title="Shipment Details"
+        subtitle={selectedRecord?.shipmentId}
+        titleAccessory={
+          selectedRecord ? (
+            <StatusChip status={selectedRecord.status as StatusType} />
+          ) : undefined
+        }
         PaperProps={{
           sx: {
             borderRadius: 2,
             maxHeight: '90vh'
           }
         }}
-      >
-        <DialogTitle sx={{ 
-          bgcolor: brandPrimary, 
-          color: 'white', 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          py: 2
-        }}>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              Shipment Details
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              {selectedRecord?.shipmentId}
-            </Typography>
-          </Box>
+        actions={<>
+          <AnimatedButton onClick={() => setSelectedRecord(null)} variant="outlined" color="inherit">
+            Close
+          </AnimatedButton>
+          
           {selectedRecord && (
-            <Chip 
-              label={selectedRecord.status.replace(/_/g, ' ')} 
-              sx={{ 
-                bgcolor: 'white', 
-                color: brandPrimary,
-                fontWeight: 700
-              }} 
-            />
+            <>
+              {/* Status-based Action Buttons */}
+              {selectedRecord.status === 'CUSTOMS_CLEARED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('START_LAND_TRANSPORT', 'Start Land Transport', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<LocalShipping />}
+                >
+                  Start Land Transport
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'LAND_TRANSPORT' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('RECORD_PORT_ARRIVAL', 'Record Port Arrival', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Anchor />}
+                >
+                  Record Port Arrival
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'PORT_ARRIVED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('CONTAINER_STUFFING', 'Record Container Stuffing', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="secondary"
+                  startIcon={<Inventory />}
+                >
+                  Record Container Stuffing
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'CONTAINER_STUFFED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('VESSEL_LOADING', 'Record Vessel Loading', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<DirectionsBoat />}
+                >
+                  Record Vessel Loading
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'VESSEL_LOADED' && (
+                <AnimatedButton
+                  onClick={() => openApprovalDialog('VESSEL_DEPARTURE', 'Record Vessel Departure', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<FlightTakeoff />}
+                >
+                  Record Vessel Departure
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'DEPARTED' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('IN_TRANSIT_UPDATE', 'Update to In-Transit', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<DirectionsBoat />}
+                >
+                  Update to In-Transit
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'IN_TRANSIT' && (
+                <AnimatedButton 
+                  onClick={() => openApprovalDialog('DESTINATION_ARRIVAL', 'Record Destination Arrival', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="success"
+                  startIcon={<LocationOn />}
+                >
+                  Record Destination Arrival
+                </AnimatedButton>
+              )}
+              
+              {selectedRecord.status === 'DESTINATION_ARRIVED' && (
+                <AnimatedButton
+                  onClick={() => openApprovalDialog('DELIVERY_COMPLETE', 'Complete Delivery', selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="success"
+                  startIcon={<CheckCircle />}
+                >
+                  Complete Delivery
+                </AnimatedButton>
+              )}
+
+              {/* Bill of lading / airway bill is post-delivery paperwork only:
+                  RecordShippingDetails sets LOADED unconditionally, which has
+                  no onward step — it must never be offered mid-chain. */}
+              {selectedRecord.status === 'DELIVERED' && (
+                <AnimatedButton
+                  onClick={() => openBolDialog(selectedRecord.shipmentId)}
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Assignment />}
+                >
+                  {selectedRecord.transportMode === 'AIR' ? 'Record Airway Bill' : 'Record Bill of Lading'}
+                </AnimatedButton>
+              )}
+              
+              {/* Always available actions */}
+              <AnimatedButton 
+                onClick={() => {
+                  setTrackingDialogOpen(true);
+                }}
+                variant="outlined"
+                startIcon={<LocationOn />}
+              >
+                Track Shipment
+              </AnimatedButton>
+              
+              <AnimatedButton
+                onClick={() => handleDownloadDocuments(selectedRecord.shipmentId)}
+                variant="outlined"
+                startIcon={<Download />}
+              >
+                Download Documents
+              </AnimatedButton>
+            </>
           )}
-        </DialogTitle>
+        </>}
+      >
         
-        <DialogContent sx={{ p: 3 }}>
+        
+        
           {selectedRecord && (
             <Box component="form">
               {/* BLOCKCHAIN PROOF BADGE */}
@@ -2972,6 +3301,20 @@ const ShippingPortal: React.FC = () => {
                 channel="coffeechannel"
                 compact
               />
+
+              {/* Dead-end / pre-shipping status notes: the chaincode has no onward
+                  step from these statuses, so say so instead of offering a
+                  button that can never work. */}
+              {selectedRecord && DEAD_END_NOTES[selectedRecord.status] && (
+                <Alert severity="warning" sx={{ mb: 3 }}>
+                  <Typography variant="body2">{DEAD_END_NOTES[selectedRecord.status]}</Typography>
+                </Alert>
+              )}
+              {selectedRecord && preShippingNoteFor(selectedRecord.status) && (
+                <Alert severity="info" sx={{ mb: 3 }}>
+                  <Typography variant="body2">{preShippingNoteFor(selectedRecord.status)}</Typography>
+                </Alert>
+              )}
 
               {/* Summary Stats Row */}
               <Box sx={{ mb: 3, p: 2, bgcolor: '#f8f9fa', borderRadius: 1, border: '1px solid #e0e0e0' }}>
@@ -3023,7 +3366,7 @@ const ShippingPortal: React.FC = () => {
                 </Typography>
                 <Grid container spacing={2}>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Shipping Line / Carrier"
                       value={selectedRecord.shippingLine || ''}
@@ -3033,7 +3376,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label={selectedRecord.transportMode === 'SEA' ? 'Vessel Name' : 'Flight Number'}
                       value={selectedRecord.vesselName || selectedRecord.flightNumber || 'Not assigned'}
@@ -3043,7 +3386,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label={selectedRecord.transportMode === 'SEA' ? 'Voyage Number' : 'Flight Number'}
                       value={selectedRecord.voyageNumber || selectedRecord.flightNumber || 'Not assigned'}
@@ -3053,7 +3396,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Tracking Number"
                       value={selectedRecord.trackingNumber}
@@ -3075,7 +3418,7 @@ const ShippingPortal: React.FC = () => {
                 </Typography>
                 <Grid container spacing={2}>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Container Number"
                       value={selectedRecord.containerNumber || 'Pending'}
@@ -3085,7 +3428,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Container Type"
                       value={selectedRecord.containerType || 'N/A'}
@@ -3095,7 +3438,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label={selectedRecord.transportMode === 'SEA' ? 'Bill of Lading' : 'Airway Bill'}
                       value={selectedRecord.billOfLading || selectedRecord.airwayBill || 'Pending'}
@@ -3105,7 +3448,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Exporter ID"
                       value={selectedRecord.exporterId}
@@ -3197,7 +3540,7 @@ const ShippingPortal: React.FC = () => {
 
                 <Grid container spacing={2}>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Port of Loading"
                       value={selectedRecord.portOfLoading}
@@ -3207,7 +3550,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Port of Discharge"
                       value={selectedRecord.portOfDischarge}
@@ -3217,7 +3560,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Estimated Departure"
                       value={formatDate(selectedRecord.estimatedDeparture)}
@@ -3227,7 +3570,7 @@ const ShippingPortal: React.FC = () => {
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField
+                    <PortalField
                       fullWidth
                       label="Estimated Arrival"
                       value={formatDate(selectedRecord.estimatedArrival)}
@@ -3238,7 +3581,7 @@ const ShippingPortal: React.FC = () => {
                   </Grid>
                   {selectedRecord.actualDeparture && (
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Actual Departure"
                         value={formatDate(selectedRecord.actualDeparture)}
@@ -3251,7 +3594,7 @@ const ShippingPortal: React.FC = () => {
                   )}
                   {selectedRecord.actualArrival && (
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Actual Arrival"
                         value={formatDate(selectedRecord.actualArrival)}
@@ -3278,152 +3621,37 @@ const ShippingPortal: React.FC = () => {
               )}
             </Box>
           )}
-        </DialogContent>
         
-        <DialogActions sx={{ px: 3, py: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0', gap: 1 }}>
-          <AnimatedButton onClick={() => setSelectedRecord(null)} variant="outlined" color="inherit">
-            Close
-          </AnimatedButton>
-          
-          {selectedRecord && (
-            <>
-              {/* Status-based Action Buttons */}
-              {selectedRecord.status === 'CUSTOMS_CLEARED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('START_LAND_TRANSPORT', 'Start Land Transport', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<LocalShipping />}
-                >
-                  Start Land Transport
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'LAND_TRANSPORT' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('RECORD_PORT_ARRIVAL', 'Record Port Arrival', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<Anchor />}
-                >
-                  Record Port Arrival
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'PORT_ARRIVED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('CONTAINER_STUFFING', 'Record Container Stuffing', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="secondary"
-                  startIcon={<Inventory />}
-                >
-                  Record Container Stuffing
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'CONTAINER_STUFFED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('VESSEL_LOADING', 'Record Vessel Loading', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<DirectionsBoat />}
-                >
-                  Record Vessel Loading
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'VESSEL_LOADED' && (
-                <>
-                  <AnimatedButton 
-                    onClick={() => {
-                      const shipmentId = selectedRecord.shipmentId;
-                      setBillOfLadingDialogOpen(true);
-                      setBolForm((prev) => ({ ...prev, shipmentId: shipmentId }));
-                      // Auto-fill data immediately when dialog opens
-                      setTimeout(() => {
-                        autoMapBOLData(shipmentId);
-                      }, 300);
-                    }}
-                    variant="contained"
-                    color="primary"
-                    startIcon={<Assignment />}
-                  >
-                    Issue Bill of Lading
-                  </AnimatedButton>
-                  <AnimatedButton 
-                    onClick={() => openApprovalDialog('VESSEL_DEPARTURE', 'Record Vessel Departure', selectedRecord.shipmentId)}
-                    variant="contained"
-                    color="primary"
-                    startIcon={<FlightTakeoff />}
-                  >
-                    Record Vessel Departure
-                  </AnimatedButton>
-                </>
-              )}
-              
-              {selectedRecord.status === 'DEPARTED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('IN_TRANSIT_UPDATE', 'Update to In-Transit', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="primary"
-                  startIcon={<DirectionsBoat />}
-                >
-                  Update to In-Transit
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'IN_TRANSIT' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('DESTINATION_ARRIVAL', 'Record Destination Arrival', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="success"
-                  startIcon={<LocationOn />}
-                >
-                  Record Destination Arrival
-                </AnimatedButton>
-              )}
-              
-              {selectedRecord.status === 'DESTINATION_ARRIVED' && (
-                <AnimatedButton 
-                  onClick={() => openApprovalDialog('DELIVERY_COMPLETE', 'Complete Delivery', selectedRecord.shipmentId)}
-                  variant="contained"
-                  color="success"
-                  startIcon={<CheckCircle />}
-                >
-                  Complete Delivery
-                </AnimatedButton>
-              )}
-              
-              {/* Always available actions */}
-              <AnimatedButton 
-                onClick={() => {
-                  setTrackingDialogOpen(true);
-                }}
-                variant="outlined"
-                startIcon={<LocationOn />}
-              >
-                Track Shipment
-              </AnimatedButton>
-              
-              <AnimatedButton 
-                onClick={() => {
-                  // Open documents download
-                  window.open(`/api/v1/shipments/${selectedRecord.shipmentId}/documents`, '_blank');
-                }}
-                variant="outlined"
-                startIcon={<Download />}
-              >
-                Download Documents
-              </AnimatedButton>
-            </>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+        
+      </PortalDialog>
 
       {/* Tracking Dialog */}
-      <Dialog open={trackingDialogOpen} onClose={() => setTrackingDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Container Tracking Details</DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="SHIPPING"
+        open={trackingDialogOpen}
+        onClose={() => setTrackingDialogOpen(false)}
+        maxWidth="md"
+        title="Container Tracking Details"
+        actions={<>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Assignment />}
+            onClick={() => {
+              setAuditEntityType('SHIPMENT');
+              setAuditEntityId(selectedRecord?.shipmentId || '');
+              setShowAuditTrail(true);
+            }}
+            sx={{ textTransform: 'none', mr: 'auto' }}
+          >
+            Audit Trail
+          </Button>
+          <GhostButton brand="SHIPPING" onClick={() => setTrackingDialogOpen(false)}>Close</GhostButton>
+        </>}
+      >
+        
+        
           {selectedRecord && (
             <Box>
               <Grid container spacing={2}>
@@ -3541,39 +3769,9 @@ const ShippingPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Assignment />}
-            onClick={() => {
-              setAuditEntityType('SHIPMENT');
-              setAuditEntityId(selectedRecord?.shipmentId || '');
-              setShowAuditTrail(true);
-            }}
-            sx={{ textTransform: 'none', mr: 'auto' }}
-          >
-            Audit Trail
-          </Button>
-          <Button onClick={() => setTrackingDialogOpen(false)}>Close</Button>
-          <Button 
-            variant="contained" 
-            startIcon={<QrCode />}
-            onClick={() => {
-              if (!selectedRecord) return;
-              
-              setSnackbar({
-                open: true,
-                message: `📱 QR Code generated for ${selectedRecord.shippingId} — Container ${selectedRecord.containerNumber || 'N/A'} | Tracking ${selectedRecord.trackingNumber || 'N/A'}`,
-                severity: 'success'
-              });
-            }}
-          >
-            Generate QR Code
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+        
+      </PortalDialog>
 
       {/* Audit Trail Viewer */}
       {showAuditTrail && auditEntityType && (
@@ -3586,435 +3784,20 @@ const ShippingPortal: React.FC = () => {
       )}
 
       {/* Professional Bill of Lading / Airway Bill Recording Dialog */}
-      <Dialog 
-        open={billOfLadingDialogOpen} 
-        onClose={() => setBillOfLadingDialogOpen(false)} 
-        maxWidth="lg" 
-        fullWidth
+      <PortalDialog
+        brand="SHIPPING"
+        open={billOfLadingDialogOpen}
+        onClose={() => setBillOfLadingDialogOpen(false)}
+        maxWidth="lg"
+        title={bolForm.transportMode === 'SEA' ? '📋 Record Bill of Lading' : '✈️ Record Airway Bill'}
+        subtitle={
+          bolForm.transportMode === 'SEA'
+            ? 'International Maritime Transport Document - Following COGSA & Hague-Visby Rules'
+            : 'International Air Transport Document - Following IATA & Montreal Convention'
+        }
         disableEnforceFocus
         disableAutoFocus
-      >
-        <DialogTitle>
-          <Box display="flex" justifyContent="space-between" alignItems="center">
-            <Box>
-              <Typography variant="h5" component="span" fontWeight={600}>
-                {bolForm.transportMode === 'SEA' ? '📋 Record Bill of Lading' : '✈️ Record Airway Bill'}
-              </Typography>
-              <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
-                {bolForm.transportMode === 'SEA' 
-                  ? 'International Maritime Transport Document - Following COGSA & Hague-Visby Rules'
-                  : 'International Air Transport Document - Following IATA & Montreal Convention'}
-              </Typography>
-            </Box>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2 }}>
-            <Alert severity="info" sx={{ mb: 3 }}>
-              <Typography variant="body2">
-                <strong>📦 Auto-Mapping Available:</strong> Enter a Shipment ID to automatically populate {bolForm.transportMode === 'SEA' ? 'container' : 'cargo'} details, 
-                route information, weight, and destination from customs clearance records.
-              </Typography>
-            </Alert>
-
-            <Grid container spacing={3}>
-              {/* Section 0: Transport Mode Selection */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  🚚 Transport Mode
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  select
-                  required
-                  label="Transport Mode"
-                  value={bolForm.transportMode}
-                  onChange={(e) => {
-                    const mode = e.target.value as 'SEA' | 'AIR';
-                    setBolForm((prev) => ({ 
-                      ...prev, 
-                      transportMode: mode,
-                      departurePort: mode === 'SEA' ? 'Djibouti Port' : 'Addis Ababa Bole International Airport',
-                      shippingLine: mode === 'SEA' ? 'Maersk Line' : 'Ethiopian Airlines Cargo',
-                    }));
-                  }}
-                >
-                  <MenuItem value="SEA">
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <DirectionsBoat /> Sea Freight (Container Ship)
-                    </Box>
-                  </MenuItem>
-                  <MenuItem value="AIR">
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <FlightTakeoff /> Air Freight (Cargo Plane)
-                    </Box>
-                  </MenuItem>
-                </TextField>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Alert severity={bolForm.transportMode === 'SEA' ? 'info' : 'warning'}>
-                  <Typography variant="body2">
-                    {bolForm.transportMode === 'SEA' 
-                      ? '🚢 Sea freight: 25-35 days transit, lower cost, bulk volumes'
-                      : '✈️ Air freight: 1-3 days transit, higher cost, premium coffee'}
-                  </Typography>
-                </Alert>
-              </Grid>
-
-              {/* Section 1: Shipment Identification */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  {bolForm.transportMode === 'SEA' ? <DirectionsBoat /> : <FlightTakeoff />} Shipment Identification
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Shipment ID"
-                  required
-                  value={bolForm.shipmentId}
-                  onChange={(e) => setBolForm({ ...bolForm, shipmentId: e.target.value })}
-                  onBlur={() => {
-                    if (bolForm.shipmentId) {
-                      autoMapBOLData(bolForm.shipmentId);
-                    }
-                  }}
-                  placeholder="SHIP1782819513441"
-                  helperText="Enter shipment ID and press Tab to auto-fill"
-                  sx={{ 
-                    '& .MuiOutlinedInput-root': { 
-                      backgroundColor: bolForm.shipmentId && !bolForm.billOfLadingNo ? '#e8f5e9' : 'inherit' 
-                    }
-                  }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label={bolForm.transportMode === 'SEA' ? 'Bill of Lading Number' : 'Airway Bill Number'}
-                  required
-                  value={bolForm.transportMode === 'SEA' ? bolForm.billOfLadingNo : bolForm.airwayBillNo}
-                  onChange={(e) => setBolForm({ 
-                    ...bolForm, 
-                    [bolForm.transportMode === 'SEA' ? 'billOfLadingNo' : 'airwayBillNo']: e.target.value 
-                  })}
-                  placeholder={bolForm.transportMode === 'SEA' ? 'BL1720000000000' : 'AWB-157-12345678'}
-                  helperText={bolForm.transportMode === 'SEA' ? 'Auto-generated B/L number' : 'Auto-generated AWB number (3-digit airline + 8-digit)'}
-                  InputProps={{ readOnly: true }}
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: '#e3f2fd' } }}
-                />
-              </Grid>
-
-              {/* Section 2: Carrier Details */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  {bolForm.transportMode === 'SEA' ? <DirectionsBoat /> : <FlightTakeoff />} {bolForm.transportMode === 'SEA' ? 'Vessel' : 'Flight'} Information
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  select
-                  required
-                  label="Shipping Line"
-                  value={bolForm.shippingLine}
-                  onChange={(e) => {
-                    setBolForm((prev) => ({ ...prev, shippingLine: e.target.value }));
-                  }}
-                >
-                  <MenuItem value="Maersk Line">Maersk Line</MenuItem>
-                  <MenuItem value="MSC">MSC (Mediterranean Shipping Company)</MenuItem>
-                  <MenuItem value="CMA CGM">CMA CGM</MenuItem>
-                  <MenuItem value="COSCO Shipping">COSCO Shipping</MenuItem>
-                  <MenuItem value="Hapag-Lloyd">Hapag-Lloyd</MenuItem>
-                  <MenuItem value="ONE">Ocean Network Express (ONE)</MenuItem>
-                </TextField>
-              </Grid>
-
-              {/* SEA FREIGHT FIELDS */}
-              {bolForm.transportMode === 'SEA' && (
-                <>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Vessel Name"
-                      required
-                      value={bolForm.vesselName}
-                      onChange={(e) => setBolForm({ ...bolForm, vesselName: e.target.value })}
-                      placeholder="Maersk Eindhoven"
-                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.vesselName ? '#e3f2fd' : 'inherit' } }}
-                    />
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Voyage Number"
-                      required
-                      value={bolForm.voyageNumber}
-                      onChange={(e) => setBolForm({ ...bolForm, voyageNumber: e.target.value })}
-                      placeholder="V2026W25"
-                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.voyageNumber ? '#e3f2fd' : 'inherit' } }}
-                    />
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Container Number"
-                      required
-                      value={bolForm.containerNumber}
-                      onChange={(e) => setBolForm({ ...bolForm, containerNumber: e.target.value })}
-                      placeholder="REEFER172000000"
-                      helperText="Auto-generated container number"
-                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.containerNumber ? '#e3f2fd' : 'inherit' } }}
-                    />
-                  </Grid>
-                </>
-              )}
-
-              {/* AIR FREIGHT FIELDS */}
-              {bolForm.transportMode === 'AIR' && (
-                <>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Flight Number"
-                      required
-                      value={bolForm.flightNumber}
-                      onChange={(e) => setBolForm({ ...bolForm, flightNumber: e.target.value })}
-                      placeholder="ET3701"
-                      helperText="e.g., ET3701 (Ethiopian Airlines), EK702 (Emirates)"
-                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.flightNumber ? '#e3f2fd' : 'inherit' } }}
-                    />
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Airline"
-                      required
-                      value={bolForm.airline}
-                      onChange={(e) => setBolForm({ ...bolForm, airline: e.target.value })}
-                      placeholder="Ethiopian Airlines Cargo"
-                      helperText="Full airline name for air transport document"
-                      InputProps={{ readOnly: true }}
-                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: '#e3f2fd' } }}
-                    />
-                  </Grid>
-                </>
-              )}
-
-              {/* Section 3: Route Information */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  <LocationOn /> Route & Schedule
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Port of Loading"
-                  required
-                  value={bolForm.departurePort}
-                  onChange={(e) => setBolForm({ ...bolForm, departurePort: e.target.value })}
-                  placeholder="Djibouti"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.departurePort ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Port of Discharge"
-                  required
-                  value={bolForm.destinationPort}
-                  onChange={(e) => setBolForm({ ...bolForm, destinationPort: e.target.value })}
-                  placeholder="Hamburg"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.destinationPort ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  type="date"
-                  label="Estimated Time of Departure (ETD)"
-                  required
-                  value={bolForm.estimatedDeparture}
-                  onChange={(e) => setBolForm({ ...bolForm, estimatedDeparture: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedDeparture ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  type="date"
-                  label="Estimated Time of Arrival (ETA)"
-                  required
-                  value={bolForm.estimatedArrival}
-                  onChange={(e) => setBolForm({ ...bolForm, estimatedArrival: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedArrival ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              {/* Section 4: Cargo Details */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  <Assignment /> Cargo Information
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  select
-                  required
-                  label="Container Type"
-                  value={bolForm.containerType}
-                  onChange={(e) => setBolForm((prev) => ({ ...prev, containerType: e.target.value }))}
-                >
-                  <MenuItem value="DRY">DRY - Standard 20/40ft Container</MenuItem>
-                  <MenuItem value="REEFER">REEFER - Refrigerated Container</MenuItem>
-                  <MenuItem value="OPEN_TOP">OPEN TOP - Open Top Container</MenuItem>
-                </TextField>
-              </Grid>
-
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Weight (kg)"
-                  required
-                  value={bolForm.weight}
-                  onChange={(e) => setBolForm({ ...bolForm, weight: e.target.value })}
-                  placeholder="1908"
-                  helperText="Total cargo weight"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.weight ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Volume (CBM)"
-                  value={bolForm.volume}
-                  onChange={(e) => setBolForm({ ...bolForm, volume: e.target.value })}
-                  placeholder="3.18"
-                  helperText="Cubic meters"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.volume ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              {/* Section 5: Parties Information */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  👥 Parties Information
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Consignee (Buyer)"
-                  value={bolForm.consignee}
-                  onChange={(e) => setBolForm({ ...bolForm, consignee: e.target.value })}
-                  placeholder="TOLAWAQ"
-                  helperText="Auto-filled from shipment"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.consignee ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Notify Party"
-                  value={bolForm.notify}
-                  onChange={(e) => setBolForm({ ...bolForm, notify: e.target.value })}
-                  placeholder="exporter@email.com"
-                  helperText="Email or contact details"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.notify ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              {/* Section 6: Additional Information */}
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-                  📝 Additional Details
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Tracking Number"
-                  value={bolForm.trackingNumber}
-                  onChange={(e) => setBolForm({ ...bolForm, trackingNumber: e.target.value })}
-                  placeholder="TRK1720000000000"
-                  helperText="Auto-generated tracking number"
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.trackingNumber ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  select
-                  label="Freight Terms"
-                  value={bolForm.freightTerms}
-                  onChange={(e) => setBolForm((prev) => ({ ...prev, freightTerms: e.target.value }))}
-                >
-                  <MenuItem value="PREPAID">PREPAID</MenuItem>
-                  <MenuItem value="COLLECT">COLLECT</MenuItem>
-                  <MenuItem value="FOB">FOB (Free on Board)</MenuItem>
-                  <MenuItem value="CIF">CIF (Cost, Insurance, Freight)</MenuItem>
-                  <MenuItem value="CFR">CFR (Cost and Freight)</MenuItem>
-                </TextField>
-              </Grid>
-
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  multiline
-                  rows={3}
-                  label="Special Instructions"
-                  value={bolForm.specialInstructions}
-                  onChange={(e) => setBolForm({ ...bolForm, specialInstructions: e.target.value })}
-                  placeholder="Enter special handling instructions, temperature requirements, or other remarks..."
-                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.specialInstructions ? '#e3f2fd' : 'inherit' } }}
-                />
-              </Grid>
-            </Grid>
-
-            {/* Validation Summary */}
-            <Alert severity="warning" sx={{ mt: 3 }}>
-              <Typography variant="body2">
-                <strong>⚠️ Required Fields:</strong> Shipment ID, B/L Number, Vessel Name, Departure Port, Destination Port, 
-                ETA, and Weight must be completed before submission.
-              </Typography>
-            </Alert>
-          </Box>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
+        actions={<>
           <AnimatedButton onClick={() => {
             setBillOfLadingDialogOpen(false);
             // Reset form
@@ -4047,7 +3830,7 @@ const ShippingPortal: React.FC = () => {
           </AnimatedButton>
           <AnimatedButton
             variant="outlined"
-            brandColor="#006064"
+            brandColor={brandPrimary}
             onClick={() => {
               if (bolForm.shipmentId) {
                 autoMapBOLData(bolForm.shipmentId);
@@ -4064,14 +3847,428 @@ const ShippingPortal: React.FC = () => {
           </AnimatedButton>
           <AnimatedButton
             variant="contained"
-            brandColor="#006064"
+            brandColor={brandPrimary}
             startIcon={<CheckCircle />}
             onClick={handleSubmitBOL}
           >
-            Record Bill of Lading
+            {bolForm.transportMode === 'SEA' ? 'Record Bill of Lading' : 'Record Airway Bill'}
           </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        </>}
+      >
+        
+        
+          <Box sx={{ pt: 2 }}>
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                <strong>📦 Auto-Mapping Available:</strong> Enter a Shipment ID to automatically populate {bolForm.transportMode === 'SEA' ? 'container' : 'cargo'} details,
+                route information, weight, and destination from customs clearance records.
+              </Typography>
+            </Alert>
+            <Alert severity="warning" sx={{ mb: 3 }}>
+              <Typography variant="body2">
+                <strong>Post-delivery paperwork only:</strong> recording a bill of lading / airway bill sets the shipment to LOADED, which has no onward step on-chain (DepartFromPort requires VESSEL_LOADED). This dialog only accepts DELIVERED shipments.
+              </Typography>
+            </Alert>
+
+            <Grid container spacing={3}>
+              {/* Section 0: Transport Mode Selection */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  🚚 Transport Mode
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  select
+                  required
+                  label="Transport Mode"
+                  value={bolForm.transportMode}
+                  onChange={(e) => {
+                    const mode = e.target.value as 'SEA' | 'AIR';
+                    setBolForm((prev) => ({ 
+                      ...prev, 
+                      transportMode: mode,
+                      departurePort: mode === 'SEA' ? 'Djibouti Port' : 'Addis Ababa Bole International Airport',
+                      shippingLine: mode === 'SEA' ? 'Maersk Line' : 'Ethiopian Airlines Cargo',
+                    }));
+                  }}
+                >
+                  <MenuItem value="SEA">
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <DirectionsBoat /> Sea Freight (Container Ship)
+                    </Box>
+                  </MenuItem>
+                  <MenuItem value="AIR">
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <FlightTakeoff /> Air Freight (Cargo Plane)
+                    </Box>
+                  </MenuItem>
+                </PortalField>
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <Alert severity={bolForm.transportMode === 'SEA' ? 'info' : 'warning'}>
+                  <Typography variant="body2">
+                    {bolForm.transportMode === 'SEA' 
+                      ? '🚢 Sea freight: 25-35 days transit, lower cost, bulk volumes'
+                      : '✈️ Air freight: 1-3 days transit, higher cost, premium coffee'}
+                  </Typography>
+                </Alert>
+              </Grid>
+
+              {/* Section 1: Shipment Identification */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  {bolForm.transportMode === 'SEA' ? <DirectionsBoat /> : <FlightTakeoff />} Shipment Identification
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Shipment ID"
+                  required
+                  value={bolForm.shipmentId}
+                  onChange={(e) => setBolForm({ ...bolForm, shipmentId: e.target.value })}
+                  onBlur={() => {
+                    if (bolForm.shipmentId) {
+                      autoMapBOLData(bolForm.shipmentId);
+                    }
+                  }}
+                  placeholder="SHIP1782819513441"
+                  helperText="Enter shipment ID and press Tab to auto-fill"
+                  sx={{ 
+                    '& .MuiOutlinedInput-root': { 
+                      backgroundColor: bolForm.shipmentId && !bolForm.billOfLadingNo ? '#e8f5e9' : 'inherit' 
+                    }
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label={bolForm.transportMode === 'SEA' ? 'Bill of Lading Number' : 'Airway Bill Number'}
+                  required
+                  value={bolForm.transportMode === 'SEA' ? bolForm.billOfLadingNo : bolForm.airwayBillNo}
+                  onChange={(e) => setBolForm({ 
+                    ...bolForm, 
+                    [bolForm.transportMode === 'SEA' ? 'billOfLadingNo' : 'airwayBillNo']: e.target.value 
+                  })}
+                  placeholder={bolForm.transportMode === 'SEA' ? 'BL1720000000000' : 'AWB-157-12345678'}
+                  helperText={bolForm.transportMode === 'SEA' ? 'Auto-generated B/L number' : 'Auto-generated AWB number (3-digit airline + 8-digit)'}
+                  InputProps={{ readOnly: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: '#e3f2fd' } }}
+                />
+              </Grid>
+
+              {/* Section 2: Carrier Details */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  {bolForm.transportMode === 'SEA' ? <DirectionsBoat /> : <FlightTakeoff />} {bolForm.transportMode === 'SEA' ? 'Vessel' : 'Flight'} Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  select
+                  required
+                  label="Shipping Line"
+                  value={bolForm.shippingLine}
+                  onChange={(e) => {
+                    setBolForm((prev) => ({ ...prev, shippingLine: e.target.value }));
+                  }}
+                >
+                  <MenuItem value="Maersk Line">Maersk Line</MenuItem>
+                  <MenuItem value="MSC">MSC (Mediterranean Shipping Company)</MenuItem>
+                  <MenuItem value="CMA CGM">CMA CGM</MenuItem>
+                  <MenuItem value="COSCO Shipping">COSCO Shipping</MenuItem>
+                  <MenuItem value="Hapag-Lloyd">Hapag-Lloyd</MenuItem>
+                  <MenuItem value="ONE">Ocean Network Express (ONE)</MenuItem>
+                </PortalField>
+              </Grid>
+
+              {/* SEA FREIGHT FIELDS */}
+              {bolForm.transportMode === 'SEA' && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <PortalField
+                      fullWidth
+                      label="Vessel Name"
+                      required
+                      value={bolForm.vesselName}
+                      onChange={(e) => setBolForm({ ...bolForm, vesselName: e.target.value })}
+                      placeholder="Maersk Eindhoven"
+                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.vesselName ? '#e3f2fd' : 'inherit' } }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <PortalField
+                      fullWidth
+                      label="Voyage Number"
+                      required
+                      value={bolForm.voyageNumber}
+                      onChange={(e) => setBolForm({ ...bolForm, voyageNumber: e.target.value })}
+                      placeholder="V2026W25"
+                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.voyageNumber ? '#e3f2fd' : 'inherit' } }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <PortalField
+                      fullWidth
+                      label="Container Number"
+                      required
+                      value={bolForm.containerNumber}
+                      onChange={(e) => setBolForm({ ...bolForm, containerNumber: e.target.value })}
+                      placeholder="REEFER172000000"
+                      helperText="Auto-generated container number"
+                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.containerNumber ? '#e3f2fd' : 'inherit' } }}
+                    />
+                  </Grid>
+                </>
+              )}
+
+              {/* AIR FREIGHT FIELDS */}
+              {bolForm.transportMode === 'AIR' && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <PortalField
+                      fullWidth
+                      label="Flight Number"
+                      required
+                      value={bolForm.flightNumber}
+                      onChange={(e) => setBolForm({ ...bolForm, flightNumber: e.target.value })}
+                      placeholder="ET3701"
+                      helperText="e.g., ET3701 (Ethiopian Airlines), EK702 (Emirates)"
+                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.flightNumber ? '#e3f2fd' : 'inherit' } }}
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <PortalField
+                      fullWidth
+                      label="Airline"
+                      required
+                      value={bolForm.airline}
+                      onChange={(e) => setBolForm({ ...bolForm, airline: e.target.value })}
+                      placeholder="Ethiopian Airlines Cargo"
+                      helperText="Full airline name for air transport document"
+                      InputProps={{ readOnly: true }}
+                      sx={{ '& .MuiOutlinedInput-root': { backgroundColor: '#e3f2fd' } }}
+                    />
+                  </Grid>
+                </>
+              )}
+
+              {/* Section 3: Route Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  <LocationOn /> Route & Schedule
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Port of Loading"
+                  required
+                  value={bolForm.departurePort}
+                  onChange={(e) => setBolForm({ ...bolForm, departurePort: e.target.value })}
+                  placeholder="Djibouti"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.departurePort ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Port of Discharge"
+                  required
+                  value={bolForm.destinationPort}
+                  onChange={(e) => setBolForm({ ...bolForm, destinationPort: e.target.value })}
+                  placeholder="Hamburg"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.destinationPort ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  type="date"
+                  label="Estimated Time of Departure (ETD)"
+                  required
+                  value={bolForm.estimatedDeparture}
+                  onChange={(e) => setBolForm({ ...bolForm, estimatedDeparture: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedDeparture ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  type="date"
+                  label="Estimated Time of Arrival (ETA)"
+                  required
+                  value={bolForm.estimatedArrival}
+                  onChange={(e) => setBolForm({ ...bolForm, estimatedArrival: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.estimatedArrival ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 4: Cargo Details */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  <Assignment /> Cargo Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <PortalField
+                  fullWidth
+                  select
+                  required
+                  label="Container Type"
+                  value={bolForm.containerType}
+                  onChange={(e) => setBolForm((prev) => ({ ...prev, containerType: e.target.value }))}
+                >
+                  <MenuItem value="DRY">DRY - Standard 20/40ft Container</MenuItem>
+                  <MenuItem value="REEFER">REEFER - Refrigerated Container</MenuItem>
+                  <MenuItem value="OPEN_TOP">OPEN TOP - Open Top Container</MenuItem>
+                </PortalField>
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <PortalField
+                  fullWidth
+                  type="number"
+                  label="Weight (kg)"
+                  required
+                  value={bolForm.weight}
+                  onChange={(e) => setBolForm({ ...bolForm, weight: e.target.value })}
+                  placeholder="1908"
+                  helperText="Total cargo weight"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.weight ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <PortalField
+                  fullWidth
+                  type="number"
+                  label="Volume (CBM)"
+                  value={bolForm.volume}
+                  onChange={(e) => setBolForm({ ...bolForm, volume: e.target.value })}
+                  placeholder="3.18"
+                  helperText="Cubic meters"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.volume ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 5: Parties Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  👥 Parties Information
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Consignee (Buyer)"
+                  value={bolForm.consignee}
+                  onChange={(e) => setBolForm({ ...bolForm, consignee: e.target.value })}
+                  placeholder="TOLAWAQ"
+                  helperText="Auto-filled from shipment"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.consignee ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Notify Party"
+                  value={bolForm.notify}
+                  onChange={(e) => setBolForm({ ...bolForm, notify: e.target.value })}
+                  placeholder="exporter@email.com"
+                  helperText="Email or contact details"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.notify ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              {/* Section 6: Additional Information */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+                  📝 Additional Details
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  label="Tracking Number"
+                  value={bolForm.trackingNumber}
+                  onChange={(e) => setBolForm({ ...bolForm, trackingNumber: e.target.value })}
+                  placeholder="TRK1720000000000"
+                  helperText="Auto-generated tracking number"
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.trackingNumber ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <PortalField
+                  fullWidth
+                  select
+                  label="Freight Terms"
+                  value={bolForm.freightTerms}
+                  onChange={(e) => setBolForm((prev) => ({ ...prev, freightTerms: e.target.value }))}
+                >
+                  <MenuItem value="PREPAID">PREPAID</MenuItem>
+                  <MenuItem value="COLLECT">COLLECT</MenuItem>
+                  <MenuItem value="FOB">FOB (Free on Board)</MenuItem>
+                  <MenuItem value="CIF">CIF (Cost, Insurance, Freight)</MenuItem>
+                  <MenuItem value="CFR">CFR (Cost and Freight)</MenuItem>
+                </PortalField>
+              </Grid>
+
+              <Grid item xs={12}>
+                <PortalField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  label="Special Instructions"
+                  value={bolForm.specialInstructions}
+                  onChange={(e) => setBolForm({ ...bolForm, specialInstructions: e.target.value })}
+                  placeholder="Enter special handling instructions, temperature requirements, or other remarks..."
+                  sx={{ '& .MuiOutlinedInput-root': { backgroundColor: bolForm.specialInstructions ? '#e3f2fd' : 'inherit' } }}
+                />
+              </Grid>
+            </Grid>
+
+            {/* Validation Summary */}
+            <Alert severity="warning" sx={{ mt: 3 }}>
+              <Typography variant="body2">
+                <strong>⚠️ Required Fields:</strong> Shipment ID, B/L Number, Vessel Name, Departure Port, Destination Port, 
+                ETA, and Weight must be completed before submission.
+              </Typography>
+            </Alert>
+          </Box>
+        
+        
+      </PortalDialog>
 
       {/* Audit Trail Viewer */}
       <AuditTrailViewer
@@ -4082,22 +4279,56 @@ const ShippingPortal: React.FC = () => {
       />
 
       {/* Workflow Approval/Verification Dialog */}
-      <Dialog 
-        open={approvalDialog.open} 
+      <PortalDialog
+        brand="SHIPPING"
+        open={approvalDialog.open}
         onClose={() => setApprovalDialog({ ...approvalDialog, open: false })}
         maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle sx={{ bgcolor: brandPrimary, color: 'white', py: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              🔍 Workflow Verification & Approval
-            </Typography>
-            <Chip label={approvalDialog.actionLabel} sx={{ bgcolor: 'white', color: brandPrimary, fontWeight: 700 }} />
-          </Box>
-        </DialogTitle>
+        title="🔍 Workflow Verification & Approval"
+        subtitle={approvalDialog.actionLabel}
+        titleAccessory={
+          <Chip
+            label={approvalDialog.actionLabel}
+            sx={{ bgcolor: alpha(brandPrimary, 0.12), color: brandPrimary, fontWeight: 700 }}
+          />
+        }
+        actions={<>
+          <AnimatedButton
+            onClick={() => {
+              setApprovalDialog({ ...approvalDialog, open: false });
+              setRejectionReason('');
+              setDocsConfirmed(false);
+            }}
+            variant="outlined"
+            color="inherit"
+          >
+            Cancel
+          </AnimatedButton>
 
-        <DialogContent>
+          <AnimatedButton
+            onClick={handleReject}
+            variant="contained"
+            color="error"
+            startIcon={<Cancel />}
+            disabled={verificationLoading || rejectionReason.trim().length < 3}
+          >
+            Reject
+          </AnimatedButton>
+
+          <AnimatedButton
+            onClick={handleApprove}
+            variant="contained"
+            color="success"
+            startIcon={<CheckCircle />}
+            disabled={verificationLoading || (approvalMissingDocs.length > 0 && !docsConfirmed)}
+          >
+            Approve & Proceed
+          </AnimatedButton>
+        </>}
+      >
+        
+
+        
           {verificationLoading ? (
             <Box sx={{ p: 4, textAlign: 'center' }}>
               <LinearProgress />
@@ -4111,9 +4342,45 @@ const ShippingPortal: React.FC = () => {
                   Current Status: {approvalDialog.verificationData.currentStatus}
                 </Typography>
                 <Typography variant="body2" sx={{ mt: 1 }}>
-                  Verify customs clearance and documents before approving land transport
+                  Verify customs clearance and documents before {approvalDialog.actionLabel.toLowerCase()}
                 </Typography>
               </Alert>
+
+              {/* Required Documents — rendered from getRequiredDocuments() and
+                  enforced below: Approve is blocked while any required
+                  document is unmatched and the user has not attested that
+                  they verified the documents. */}
+              <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: approvalMissingDocs.length ? '#fff3e0' : '#e8f5e9', border: `1px solid ${approvalMissingDocs.length ? '#ff9800' : '#4caf50'}` }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: brandPrimary }}>
+                  📋 Required Documents for {approvalDialog.actionLabel}
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                {approvalDialog.verificationData.requiredDocuments.length === 0 ? (
+                  <Typography variant="body2" color="textSecondary">No specific documents are required for this step.</Typography>
+                ) : (
+                  <Grid container spacing={1}>
+                    {approvalDialog.verificationData.requiredDocuments.map((doc) => {
+                      const present = isRequiredDocumentPresent(doc, approvalDialog.verificationData!.uploadedDocuments);
+                      return (
+                        <Grid item xs={12} md={6} key={doc}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {present ? <CheckCircle sx={{ color: '#4caf50' }} fontSize="small" /> : <Warning sx={{ color: '#ed6c02' }} fontSize="small" />}
+                            <Typography variant="body2" sx={{ flex: 1 }}>{doc}</Typography>
+                            <Chip label={present ? 'Present' : 'Missing'} size="small" color={present ? 'success' : 'warning'} />
+                          </Box>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
+                )}
+                {approvalMissingDocs.length > 0 && (
+                  <Alert severity="warning" sx={{ mt: 2 }}>
+                    <Typography variant="body2">
+                      {approvalMissingDocs.length} required document(s) could not be matched against the uploaded documents ({approvalMissingDocs.join(', ')}). Approve is blocked until you confirm below that you have verified the required documents.
+                    </Typography>
+                  </Alert>
+                )}
+              </Paper>
 
               {/* Shipment Information */}
               <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: '#fafafa', border: '1px solid #e0e0e0' }}>
@@ -4293,7 +4560,7 @@ const ShippingPortal: React.FC = () => {
                   <Divider sx={{ mb: 2 }} />
                   <Grid container spacing={2}>
                     <Grid item xs={12}>
-                      <TextField
+                      <PortalField
                         label="Transport Company *"
                         fullWidth
                         value={actionInputs.transportCompany}
@@ -4302,7 +4569,7 @@ const ShippingPortal: React.FC = () => {
                       />
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         label="Truck Plate Number *"
                         fullWidth
                         value={actionInputs.truckPlateNumber}
@@ -4311,7 +4578,7 @@ const ShippingPortal: React.FC = () => {
                       />
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         label="Driver Name (optional)"
                         fullWidth
                         value={actionInputs.driverName}
@@ -4329,7 +4596,7 @@ const ShippingPortal: React.FC = () => {
                     🚢 Port Arrival Details
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
-                  <TextField
+                  <PortalField
                     label="Arrival Notes (optional)"
                     fullWidth
                     multiline
@@ -4349,7 +4616,7 @@ const ShippingPortal: React.FC = () => {
                   <Divider sx={{ mb: 2 }} />
                   <Grid container spacing={2}>
                     <Grid item xs={12}>
-                      <TextField
+                      <PortalField
                         label="Container Number *"
                         fullWidth
                         value={actionInputs.containerNumber}
@@ -4372,7 +4639,7 @@ const ShippingPortal: React.FC = () => {
                       </FormControl>
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         label="Seal Number (auto if blank)"
                         fullWidth
                         value={actionInputs.sealNumber}
@@ -4392,7 +4659,7 @@ const ShippingPortal: React.FC = () => {
                   <Divider sx={{ mb: 2 }} />
                   <Grid container spacing={2}>
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         label="Vessel Name (optional)"
                         fullWidth
                         value={actionInputs.vesselName}
@@ -4401,7 +4668,7 @@ const ShippingPortal: React.FC = () => {
                       />
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      <TextField
+                      <PortalField
                         label="Voyage Number (optional)"
                         fullWidth
                         value={actionInputs.voyageNumber}
@@ -4419,7 +4686,7 @@ const ShippingPortal: React.FC = () => {
                     🚢 In-Transit Update
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
-                  <TextField
+                  <PortalField
                     label="Tracking Number (auto if blank)"
                     fullWidth
                     value={actionInputs.trackingNumber}
@@ -4435,7 +4702,7 @@ const ShippingPortal: React.FC = () => {
                     🏁 Destination Arrival
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
-                  <TextField
+                  <PortalField
                     label="Arrival Notes (optional)"
                     fullWidth
                     multiline
@@ -4453,7 +4720,7 @@ const ShippingPortal: React.FC = () => {
                     ✅ Delivery Completion
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
-                  <TextField
+                  <PortalField
                     label="Delivery Notes (optional)"
                     fullWidth
                     multiline
@@ -4511,7 +4778,6 @@ const ShippingPortal: React.FC = () => {
                                 {doc.type?.replace(/_/g, ' ') || 'Supporting document'}
                               </Typography>
                               <Box display="flex" gap={1} mt={1} flexWrap="wrap">
-                                <Chip label="Verified" size="small" color="success" sx={{ fontSize: '0.75rem' }} />
                                 {doc.source && (
                                   <Chip 
                                     label={doc.source} 
@@ -4547,43 +4813,42 @@ const ShippingPortal: React.FC = () => {
                   </Alert>
                 )}
               </Paper>
+              {/* Rejection Reason — required by POST /shipments/:id/reject-action
+                  (reason 3–1000 chars). Previously this dialog had no input
+                  bound to rejectionReason, so Reject could never succeed. */}
+              <Paper elevation={0} sx={{ p: 2, mt: 2, bgcolor: '#fce4ec', border: '1px solid #e57373' }}>
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom sx={{ color: '#c62828' }}>
+                  Rejection Reason
+                </Typography>
+                <PortalField
+                  label="Reason for rejecting this step (required to reject — 3–1000 characters)"
+                  fullWidth
+                  multiline
+                  rows={2}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Customs clearance certificate missing — cannot start land transport"
+                  helperText="Reject records the reason on the ledger (POST /shipments/:id/reject-action); the shipment stays at its current status."
+                />
+                {approvalMissingDocs.length > 0 && (
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={docsConfirmed}
+                        onChange={(e) => setDocsConfirmed(e.target.checked)}
+                      />
+                    }
+                    label="I have verified the required documents listed above (required to approve while documents are unmatched)"
+                    sx={{ mt: 1 }}
+                  />
+                )}
+              </Paper>
             </Box>
           )}
-        </DialogContent>
+        
 
-        <DialogActions sx={{ px: 3, py: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0', gap: 2 }}>
-          <AnimatedButton 
-            onClick={() => {
-              setApprovalDialog({ ...approvalDialog, open: false });
-              setRejectionReason('');
-            }}
-            variant="outlined"
-            color="inherit"
-          >
-            Cancel
-          </AnimatedButton>
-          
-          <AnimatedButton 
-            onClick={handleReject}
-            variant="contained"
-            color="error"
-            startIcon={<Cancel />}
-            disabled={verificationLoading}
-          >
-            Reject
-          </AnimatedButton>
-          
-          <AnimatedButton 
-            onClick={handleApprove}
-            variant="contained"
-            color="success"
-            startIcon={<CheckCircle />}
-            disabled={verificationLoading}
-          >
-            Approve & Proceed
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Professional Snackbar for Success/Error Messages */}
       <Snackbar
@@ -4645,7 +4910,7 @@ const ShippingPortal: React.FC = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
-    </Box>
+    </PortalShell>
   );
 };
 

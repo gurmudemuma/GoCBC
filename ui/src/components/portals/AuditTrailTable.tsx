@@ -214,6 +214,14 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
     });
   };
 
+  // old_value / new_value arrive from the API as JSON objects
+  // (e.g. { status: 'REGISTERED' }), not strings — stringify objects
+  // before any .substring() call or React child render.
+  const formatAuditValue = (v: unknown): string => {
+    if (v == null) return 'N/A';
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  };
+
   const handleChangePage = (event: unknown, newPage: number) => {
     setPage(newPage);
   };
@@ -279,8 +287,8 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
         `"${log.entity_id}"`,
         `"${log.performed_by}"`,
         `"${log.performed_by_org}"`,
-        `"${log.old_value}"`,
-        `"${log.new_value}"`,
+        `"${formatAuditValue(log.old_value).replace(/"/g, '""')}"`,
+        `"${formatAuditValue(log.new_value).replace(/"/g, '""')}"`,
         `"${(log.reason || '').replace(/"/g, '""')}"`,
         `"${log.ip_address}"`
       ].join(','))
@@ -496,11 +504,11 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
                         <Chip label={log.performed_by_org} size="small" />
                       </TableCell>
                       <TableCell>
-                        <Tooltip title={`From: ${log.old_value} → To: ${log.new_value}`}>
+                        <Tooltip title={`From: ${formatAuditValue(log.old_value)} → To: ${formatAuditValue(log.new_value)}`}>
                           <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                            <Chip label={log.old_value?.substring(0, 10) || 'N/A'} size="small" variant="outlined" />
+                            <Chip label={formatAuditValue(log.old_value).substring(0, 10)} size="small" variant="outlined" />
                             →
-                            <Chip label={log.new_value?.substring(0, 10) || 'N/A'} size="small" color="primary" />
+                            <Chip label={formatAuditValue(log.new_value).substring(0, 10)} size="small" color="primary" />
                           </Box>
                         </Tooltip>
                       </TableCell>
@@ -624,9 +632,9 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
                                     STATE CHANGE
                                   </Typography>
                                   <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                                    <Chip label={log.old_value || 'N/A'} variant="outlined" />
+                                    <Chip label={formatAuditValue(log.old_value)} variant="outlined" />
                                     <Typography>→</Typography>
-                                    <Chip label={log.new_value || 'N/A'} color="primary" />
+                                    <Chip label={formatAuditValue(log.new_value)} color="primary" />
                                   </Box>
                                 </Box>
                                 
@@ -744,7 +752,7 @@ const AuditTrailTable: React.FC<AuditTrailTableProps> = ({
                                               Transaction ID
                                             </Typography>
                                             <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
-                                              {log.metadata.transactionId.substring(0, 16)}...
+                                              {String(log.metadata.transactionId).substring(0, 16)}...
                                             </Typography>
                                           </Box>
                                         )}

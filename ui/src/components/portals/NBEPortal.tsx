@@ -8,18 +8,11 @@ import {
   Card,
   CardContent,
   Typography,
-  Button,
   TextField,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Chip,
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   FormControl,
   InputLabel,
   Select,
@@ -50,10 +43,11 @@ import {
   Category,
   AccessTime,
 } from '@mui/icons-material';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
+import { GridColDef } from '@mui/x-data-grid';
+import api, { formatDate, formatCurrency } from '@/utils/api';
 import { couchDBService } from '@/services/couchdbService';
 import { TestBlockchainButton } from '@/components/TestBlockchainButton';
+import { PortalShell, PortalTabBar, PortalTabPanel, PortalKpiCard, PortalCard, PrimaryButton, SecondaryButton, GhostButton, PortalDialog, PortalField, PortalDataGrid, StatusChip, getPortalBrand } from '@/components/shared/portal';
 import { SalesContract } from '@/types';
 import { DocumentValidationDialog } from './DocumentValidationDialog';
 import { apiFetch } from '@/config/api.config';
@@ -117,7 +111,7 @@ interface ForexAllocation {
   retentionRate: number;
   retentionStatus?: string;
   transportMode?: TransportMode;
-  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED'; // APPROVED is the legacy value the pre-fix NBE approve route wrote (042b8b7); allocateForex treats it as CONFIRMED
+  status: 'REQUESTED' | 'CONFIRMED' | 'APPROVED' | 'ALLOCATED' | 'UTILIZED' | 'REJECTED'; // APPROVED is the legacy value the pre-fix NBE approve route wrote (042b8b7); allocateForex treats it as CONFIRMED; REJECTED is assigned by chaincode RejectForex (forex.go)
   requestDate: string;
   approvalDate?: string | null;
   allocationDate?: string | null;
@@ -139,42 +133,12 @@ interface ExchangeRate {
   status: 'ACTIVE' | 'INACTIVE' | 'SUPERSEDED';
 }
 
-interface BankingMetrics {
-  totalExports: number;
-  forexVolume: number;
-  complianceRate: number;
-  avgProcessingTime: number;
-}
-
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
-
-const StatusChip: React.FC<{ status: string }> = ({ status }) => (
-  <Chip
-    label={status}
-    size="small"
-    sx={{
-      backgroundColor: getStatusColor(status, 'NBE'),
-      color: 'white',
-    }}
-  />
-);
-
 const NBEPortal: React.FC = () => {
   const { user } = useAuth();
   
-  // NBE Brand Colors
-  const BRAND_COLOR = '#8B6F47';  // Bronze
-  const SECONDARY_COLOR = '#C4A574';  // Light Bronze
+  // NBE Brand Colors (from the shared portal brand tokens)
+  const BRAND_COLOR = getPortalBrand('NBE').primary;
+  const SECONDARY_COLOR = getPortalBrand('NBE').secondary;
   
   // CBE Colors (for banking/forex context)
   const CBE_PURPLE = '#9b30b7';
@@ -199,12 +163,6 @@ const NBEPortal: React.FC = () => {
   const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
   const [coffeeRetentionPolicy, setCoffeeRetentionPolicy] = useState<{ retentionRate: number; surrenderRate: number } | null>(null);
   const [swiftMessages, setSwiftMessages] = useState<any[]>([]);
-  const [bankingMetrics, setBankingMetrics] = useState<BankingMetrics>({
-    totalExports: 0,
-    forexVolume: 0,
-    complianceRate: 0,
-    avgProcessingTime: 0
-  });
   const [loading, setLoading] = useState(false);
   const [selectedContract, setSelectedContract] = useState<ContractWithTransport | null>(null);
 
@@ -253,6 +211,28 @@ const NBEPortal: React.FC = () => {
     retentionPercentage: '',
   });
 
+  // Exchange-rate dialog state — every input is controlled; "Set Rate" calls
+  // POST /forex/rates via handleSetExchangeRate (mid-rate is computed
+  // server-side as (buying + selling) / 2). Validation mirrors chaincode
+  // SetExchangeRate: buying > 0, selling > 0, selling >= buying.
+  const [rateForm, setRateForm] = useState({
+    currency: 'USD',
+    buyingRate: '',
+    sellingRate: '',
+    effectiveDate: new Date().toISOString().split('T')[0],
+    justification: '',
+  });
+  const [settingRate, setSettingRate] = useState(false);
+
+  // Retention-policy form state (Policy & Compliance tab). The rate is
+  // always read from the active ledger policy (coffeeRetentionPolicy);
+  // it is never hardcoded — when no policy exists the field prefills empty.
+  const [retentionPolicyForm, setRetentionPolicyForm] = useState({
+    retentionRate: '',
+    justification: '',
+  });
+  const [settingPolicy, setSettingPolicy] = useState(false);
+
   // Pagination State
   const [currentPage, setCurrentPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -262,7 +242,7 @@ const NBEPortal: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (tabValue === 7) {
+    if (tabValue === 8) {
       loadAuditStats();
     }
   }, [tabValue]);
@@ -303,12 +283,12 @@ const NBEPortal: React.FC = () => {
             contractId: forex.contractId || '',
             exporterId: forex.exporterId || '',
             lcId: forex.lcId || '',
-            requestedAmount: forex.requestedAmount || 0,
-            allocatedAmount: forex.allocatedAmount || 0,
+            requestedAmount: Number(forex.requestedAmount || 0),
+            allocatedAmount: Number(forex.allocatedAmount || 0),
             currency: forex.currency || 'USD',
-            exchangeRate: isAllocated ? (forex.exchangeRate || 0) : 0,
-            officialRate: forex.exchangeRate || 0,
-            retentionRate: isAllocated ? (forex.retentionRate || 0) : 0,
+            exchangeRate: isAllocated ? Number(forex.exchangeRate || 0) : 0,
+            officialRate: Number(forex.exchangeRate || 0),
+            retentionRate: isAllocated ? Number(forex.retentionRate || 0) : 0,
             retentionStatus: forex.retentionStatus || '',
             status: status,
             requestDate: forex.requestDate || forex.createdAt || new Date().toISOString(),
@@ -361,6 +341,9 @@ const NBEPortal: React.FC = () => {
         if (ratesRes.success && ratesRes.data && Array.isArray(ratesRes.data)) {
           setExchangeRates(ratesRes.data.map((r: any) => ({
             ...r,
+            buyingRate: Number(r.buyingRate || 0),
+            sellingRate: Number(r.sellingRate || 0),
+            midRate: Number(r.midRate || 0),
             status: (r.status === 'ACTIVE' || r.status === 'INACTIVE' || r.status === 'SUPERSEDED')
               ? r.status
               : 'INACTIVE'
@@ -390,10 +373,6 @@ const NBEPortal: React.FC = () => {
         setCoffeeRetentionPolicy(null);
       }
 
-      // Calculate banking metrics
-      try {
-        const metricsRes = await api.getBankingMetrics();
-
       // Load SWIFT messages from API
       try {
         const swiftRes = await api.get('/swift/messages');
@@ -405,18 +384,6 @@ const NBEPortal: React.FC = () => {
       } catch (error) {
         console.warn('Could not load SWIFT messages:', error);
         setSwiftMessages([]);
-      }
-        if (metricsRes.success && metricsRes.data) {
-          setBankingMetrics(metricsRes.data);
-          console.log('Loaded banking metrics from analytics API:', metricsRes.data);
-        } else {
-          const fallbackMetrics: BankingMetrics = { totalExports: 0, forexVolume: 0, complianceRate: 0, avgProcessingTime: 0 };
-          setBankingMetrics(fallbackMetrics);
-        }
-      } catch (error) {
-        console.warn('Could not load banking metrics from API, using fallback:', error);
-        const fallbackMetrics: BankingMetrics = { totalExports: 0, forexVolume: 0, complianceRate: 0, avgProcessingTime: 0 };
-        setBankingMetrics(fallbackMetrics);
       }
 
       // Load delivered shipments for forex repatriation tracking
@@ -633,14 +600,15 @@ const NBEPortal: React.FC = () => {
   const handleSetExchangeRate = async (currency: string, buyingRate: number, sellingRate: number) => {
     try {
       setLoading(true);
+      setSettingRate(true);
       const user = JSON.parse(localStorage.getItem('user') || '{}');
-      
+
       const response = await api.post('/forex/rates', {
         currency,
         buyingRate,
         sellingRate,
       });
-      
+
       if (response.data.success) {
         const midRate = (buyingRate + sellingRate) / 2;
         setApprovalNotification({
@@ -648,6 +616,7 @@ const NBEPortal: React.FC = () => {
           success: true,
           message: `Exchange rate set: 1 ${currency} = ${midRate.toFixed(2)} ETB (Buy: ${buyingRate}, Sell: ${sellingRate})`
         });
+        setRateForm(prev => ({ ...prev, buyingRate: '', sellingRate: '' }));
         await loadData();
       } else {
         setApprovalNotification({
@@ -665,7 +634,86 @@ const NBEPortal: React.FC = () => {
       });
     } finally {
       setLoading(false);
+      setSettingRate(false);
       setRateDialogOpen(false);
+    }
+  };
+
+  // Validate the exchange-rate dialog form (chaincode SetExchangeRate:
+  // buying > 0, selling > 0, selling >= buying; mid is computed server-side)
+  // and submit it. Effective date / justification are collected for the
+  // record but POST /forex/rates only accepts currency/buyingRate/sellingRate.
+  const handleSubmitExchangeRate = async () => {
+    const buying = Number(rateForm.buyingRate);
+    const selling = Number(rateForm.sellingRate);
+    if (!rateForm.currency) {
+      setApprovalNotification({ open: true, success: false, message: 'Select a currency' });
+      return;
+    }
+    if (!Number.isFinite(buying) || buying <= 0) {
+      setApprovalNotification({ open: true, success: false, message: 'Buying rate must be greater than 0' });
+      return;
+    }
+    if (!Number.isFinite(selling) || selling <= 0) {
+      setApprovalNotification({ open: true, success: false, message: 'Selling rate must be greater than 0' });
+      return;
+    }
+    if (selling < buying) {
+      setApprovalNotification({ open: true, success: false, message: 'Selling rate must be greater than or equal to the buying rate' });
+      return;
+    }
+    await handleSetExchangeRate(rateForm.currency, buying, selling);
+  };
+
+  // Set Retention Policy (NBE Authority) — POST /forex/retention-policy.
+  // The route requires policyID, commodityType and retentionRate (0–100);
+  // commodity is always COFFEE here. The new policy supersedes the active
+  // one on-chain; the portal always reads the rate back from the ledger
+  // (GET /forex/retention-policy/coffee) instead of trusting this input.
+  const handleSetRetentionPolicy = async () => {
+    const rate = Number(retentionPolicyForm.retentionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      setApprovalNotification({ open: true, success: false, message: 'Retention rate must be between 0 and 100' });
+      return;
+    }
+    try {
+      setSettingPolicy(true);
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const response = await apiFetch('/forex/retention-policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          policyID: `POL-${Date.now()}`,
+          commodityType: 'COFFEE',
+          retentionRate: rate,
+          setBy: user.username || 'NBE',
+          justification: retentionPolicyForm.justification || 'NBE retention policy directive',
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setApprovalNotification({
+          open: true,
+          success: true,
+          message: `COFFEE retention policy set to ${rate}% (policy ${result.data?.policyID || ''})`
+        });
+        setRetentionPolicyForm({ retentionRate: '', justification: '' });
+        await loadData();
+      } else {
+        setApprovalNotification({
+          open: true,
+          success: false,
+          message: result.error?.message || 'Failed to set retention policy'
+        });
+      }
+    } catch (error: any) {
+      setApprovalNotification({
+        open: true,
+        success: false,
+        message: error.message || 'Failed to set retention policy'
+      });
+    } finally {
+      setSettingPolicy(false);
     }
   };
 
@@ -774,19 +822,25 @@ const NBEPortal: React.FC = () => {
         return;
       }
       
+      // The /forex/allocate route destructures `officer` / `approvalRef`
+      // (forex.ts) — sending nbeOfficer/nbeApprovalRef silently drops the
+      // approval reference to ''. Call api.post directly with the exact keys
+      // the route reads (api.allocateForex posts the wrong keys; api.ts is
+      // owned by another worker).
       const allocationData = {
         forexId: selectedForex.forexId,
         lcId: lcId,
         amount: parseFloat(forexForm.allocatedAmount),
         exchangeRate: parseFloat(forexForm.exchangeRate),
         retentionRate: parseFloat(forexForm.retentionRate),
-        nbeOfficer: forexForm.nbeOfficer || user.username || 'NBE Officer',
-        nbeApprovalRef: forexForm.nbeApprovalRef,
+        officer: forexForm.nbeOfficer || user.username || 'NBE Officer',
+        approvalRef: forexForm.nbeApprovalRef,
         expiryDate: forexForm.expiryDate,
       };
 
-      const result = await api.allocateForex(allocationData);
-      
+      const response = await api.post('/forex/allocate', allocationData);
+      const result = response.data;
+
       if (result.success) {
         setApprovalNotification({
           open: true,
@@ -1004,7 +1058,8 @@ const NBEPortal: React.FC = () => {
         if (params.row.status === 'REQUESTED' || params.value === 0) {
           return <Typography variant="body2" color="text.secondary">Pending</Typography>;
         }
-        return params.value.toFixed(2);
+        const n = Number(params.value);
+        return Number.isFinite(n) ? n.toFixed(2) : <Typography variant="body2" color="text.secondary">Pending</Typography>;
       },
     },
     {
@@ -1139,7 +1194,9 @@ const NBEPortal: React.FC = () => {
                   setRetentionForm({
                     forexId: params.row.forexId,
                     fcyAccountNumber: '',
-                    retentionPercentage: coffeeRetentionPolicy ? String(coffeeRetentionPolicy.retentionRate) : '40',
+                    // Never hardcode a retention rate: prefill from the active
+                    // ledger policy only; empty when no policy exists.
+                    retentionPercentage: coffeeRetentionPolicy ? String(coffeeRetentionPolicy.retentionRate) : '',
                   });
                   setRetentionDialogOpen(true);
                 }}
@@ -1153,17 +1210,12 @@ const NBEPortal: React.FC = () => {
     },
   ];
   return (
-    <Box
-      sx={{
-        p: { xs: 2, md: 3 },
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f7fbff 0%, #eef5ff 48%, #fff9ec 100%)',
-      }}
+    <PortalShell
+      brand="NBE"
+      title="NBE Portal"
+      subtitle="National Bank of Ethiopia"
+      actions={<TestBlockchainButton />}
     >
-      {/* Test Blockchain Button */}
-      <Box sx={{ position: 'fixed', top: 80, right: 20, zIndex: 1000 }}>
-        <TestBlockchainButton />
-      </Box>
 
       {/* Compact KPI Cards - Clean design like ECX Portal */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -1215,27 +1267,31 @@ const NBEPortal: React.FC = () => {
               // Sub-tab 0: All Messages - Show message overview metrics
               { icon: <FlightTakeoff />, label: 'Total Messages', value: swiftMessages.length, color: BRAND_COLOR },
               { icon: <AttachMoney />, label: 'Total Value', value: `$${(swiftMessages.reduce((sum, m) => sum + (m.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#4caf50' },
-              { icon: <TrendingUp />, label: 'Forex Inflow', value: `$${(swiftMessages.filter(m => m.status === 'SENT').reduce((sum, m) => sum + (m.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
-              { icon: <Warning />, label: 'High Value Txns', value: swiftMessages.filter(m => m.amount > 100000).length, color: '#ff9800' },
+              { icon: <TrendingUp />, label: 'Forex Inflow', value: `$${(swiftMessages.filter(m => m.messageType === 'MT103' && m.status === 'SETTLED').reduce((sum, m) => sum + (m.amount || 0), 0) / 1000000).toFixed(1)}M`, color: '#2196f3' },
+              { icon: <Warning />, label: 'High Value Txns', value: swiftMessages.filter(m => m.amount > 1000000).length, color: '#ff9800' },
             ] : swiftSubTab === 1 ? [
               // Sub-tab 1: Analytics & Charts - Show analytical metrics
               { icon: <Assessment />, label: 'Avg Message Value', value: `$${swiftMessages.length > 0 ? ((swiftMessages.reduce((sum, m) => sum + (m.amount || 0), 0) / swiftMessages.length) / 1000).toFixed(1) : 0}K`, color: BRAND_COLOR },
-              { icon: <TrendingUp />, label: 'Success Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: '#4caf50' },
-              { icon: <CheckCircle />, label: 'Sent Messages', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#2196f3' },
+              { icon: <TrendingUp />, label: 'Success Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SETTLED').length / swiftMessages.length) * 100) : 0}%`, color: '#4caf50' },
+              { icon: <CheckCircle />, label: 'Settled Messages', value: swiftMessages.filter(m => m.status === 'SETTLED').length, color: '#2196f3' },
               { icon: <Category />, label: 'Message Types', value: new Set(swiftMessages.map(m => m.messageType)).size, color: '#ff9800' },
             ] : [
               // Sub-tab 2: Compliance Alerts - Show compliance metrics
-              { icon: <VerifiedUser />, label: 'Compliant', value: swiftMessages.filter(m => m.status === 'SENT').length, color: '#4caf50' },
-              { icon: <Warning />, label: 'High Value Alerts', value: swiftMessages.filter(m => m.amount > 100000).length, color: '#ff9800' },
+              { icon: <VerifiedUser />, label: 'Compliant', value: swiftMessages.filter(m => m.status === 'SETTLED').length, color: '#4caf50' },
+              { icon: <Warning />, label: 'High Value Alerts', value: swiftMessages.filter(m => m.amount > 1000000).length, color: '#ff9800' },
               { icon: <Assessment />, label: 'Under Review', value: swiftMessages.filter(m => m.status === 'DRAFT' || m.status === 'NBE_APPROVED').length, color: '#2196f3' },
-              { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SENT').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
+              { icon: <CheckCircle />, label: 'Compliance Rate', value: `${swiftMessages.length > 0 ? Math.round((swiftMessages.filter(m => m.status === 'SETTLED').length / swiftMessages.length) * 100) : 0}%`, color: BRAND_COLOR },
             ]
-          ) : tabValue === 4 ? [
+          ) : tabValue === 5 ? [
+            // Policy & Compliance — retention-policy KPIs (were attached to
+            // tab 4 Repatriation by an off-by-one). Retention status is only
+            // meaningful once forex is ALLOCATED/UTILIZED: REQUESTED/CONFIRMED
+            // rows normalise to PENDING and must not inflate Review Required.
             { icon: <Gavel />, label: 'Active Coffee Policy', value: coffeeRetentionPolicy ? 1 : 0, color: BRAND_COLOR },
-            { icon: <CheckCircle />, label: 'Retention Compliant', value: forexAllocations.filter(f => f.retentionStatus === 'COMPLIED').length, color: '#4caf50' },
-            { icon: <Warning />, label: 'Review Required', value: forexAllocations.filter(f => ['PENDING', 'NON_COMPLIANT'].includes(f.retentionStatus || '')).length, color: '#ff9800' },
-            { icon: <Assessment />, label: 'Audit Activities', value: auditStats.totalActivities, color: '#2196f3' },
-          ] : tabValue === 5 ? (
+            { icon: <TrendingUp />, label: 'Current Retention Rate', value: coffeeRetentionPolicy ? `${coffeeRetentionPolicy.retentionRate}%` : 'Unavailable', color: '#2196f3' },
+            { icon: <CheckCircle />, label: 'Retention Compliant', value: forexAllocations.filter(f => ['ALLOCATED', 'UTILIZED'].includes(f.status) && f.retentionStatus === 'COMPLIED').length, color: '#4caf50' },
+            { icon: <Warning />, label: 'Review Required', value: forexAllocations.filter(f => ['ALLOCATED', 'UTILIZED'].includes(f.status) && ['PENDING', 'NON_COMPLIANT'].includes(f.retentionStatus || '')).length, color: '#ff9800' },
+          ] : tabValue === 6 ? (
             // Analytics Tab - KPIs change based on sub-tab (Overview, Trends, Breakdown)
             analyticsSubTab === 0 ? [
               // Overview - Show summary of all entities
@@ -1256,7 +1312,7 @@ const NBEPortal: React.FC = () => {
               { icon: <Assessment />, label: 'By Transport', value: `${Math.round((allContracts.filter(c => (c as any).transportMode === 'AIR').length / (allContracts.length || 1)) * 100)}% Air`, color: '#ff9800' },
               { icon: <TrendingUp />, label: 'Top Destination', value: topDestination, color: '#1976d2' },
             ]
-          ) : tabValue === 7 ? [
+          ) : tabValue === 8 ? [
             { icon: <Timeline />, label: 'Total Activities', value: auditStats.totalActivities, color: '#1976d2' },
             { icon: <Assessment />, label: 'Today\'s Actions', value: auditStats.todaysActions, color: '#4caf50' },
             { icon: <VerifiedUser />, label: 'Blockchain Verified', value: auditStats.blockchainVerified, color: '#9c27b0' },
@@ -1270,42 +1326,14 @@ const NBEPortal: React.FC = () => {
 
           return kpis.map((kpi, index) => (
             <Grid item xs={12} sm={6} md={3} key={index}>
-              <Card sx={{ 
-                bgcolor: '#fff', 
-                border: `1px solid ${kpi.color}20`,
-                borderLeft: `4px solid ${kpi.color}`,
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-                transition: 'all 0.2s ease',
-                cursor: kpi.onClick ? 'pointer' : 'default',
-                '&:hover': {
-                  boxShadow: kpi.onClick ? '0 6px 12px rgba(0,0,0,0.15)' : '0 4px 8px rgba(0,0,0,0.1)',
-                  transform: kpi.onClick ? 'translateY(-4px)' : 'translateY(-2px)',
-                }
-              }}
-              onClick={kpi.onClick}
-              >
-                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                  <Box display="flex" alignItems="center" justifyContent="space-between">
-                    <Box>
-                      <Typography variant="caption" sx={{ 
-                        color: '#666', 
-                        textTransform: 'uppercase', 
-                        fontWeight: 600,
-                        fontSize: '0.7rem',
-                        letterSpacing: '0.5px',
-                        display: 'block',
-                        mb: 0.5
-                      }}>
-                        {kpi.label}
-                      </Typography>
-                      <Typography variant="h5" sx={{ fontWeight: 700, color: kpi.color }}>
-                        {kpi.value}
-                      </Typography>
-                    </Box>
-                    {React.cloneElement(kpi.icon, { sx: { fontSize: 32, color: kpi.color, opacity: 0.3 } })}
-                  </Box>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="NBE"
+                icon={kpi.icon}
+                label={kpi.label}
+                value={kpi.value}
+                color={kpi.color}
+                onClick={kpi.onClick}
+              />
             </Grid>
           ));
         })()}
@@ -1685,75 +1713,33 @@ const NBEPortal: React.FC = () => {
       </Grid>
 
       {/* Professional Tabs Container */}
-      <Card sx={{ 
-        bgcolor: 'white',
-        border: '1px solid #e0e0e0',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
-      }}>
-        <Box sx={{ borderBottom: 2, borderColor: 'divider', bgcolor: '#fafafa' }}>
-          <Tabs 
-            value={tabValue} 
-            onChange={(e, newValue) => setTabValue(newValue)}
-            sx={{
-              '& .MuiTab-root': {
-                minHeight: 48,
-                textTransform: 'none',
-                fontSize: '0.95rem',
-                fontWeight: 600,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: BRAND_COLOR,
-                  fontWeight: 700,
-                },
-                '&:hover': {
-                  color: BRAND_COLOR,
-                  opacity: 0.8,
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 3,
-                backgroundColor: BRAND_COLOR,
-                borderRadius: '3px 3px 0 0',
-              }
-            }}
-          >
-            {visibleTabs.map((tab) => (
-              <Tab 
-                key={tab.index}
-                value={tab.index}
-                label={
-                  tab.index === 0 ? `${tab.label} (${forexAllocations.length})` :
-                  tab.index === 1 ? `${tab.label} (${exchangeRates.length})` :
-                  tab.index === 7 ? `${tab.label} (${deliveredShipments.length})` :
-                  tab.label
-                } 
-                icon={tab.icon} 
-                iconPosition="start" 
-              />
-            ))}
-          </Tabs>
-        </Box>
+      <PortalCard brand="NBE" noPadding>
+        <PortalTabBar
+          brand="NBE"
+          value={tabValue}
+          onChange={(e, newValue) => setTabValue(newValue)}
+          tabs={visibleTabs.map((tab) => ({
+            value: tab.index,
+            label:
+              tab.index === 0 ? `${tab.label} (${forexAllocations.length})` :
+              tab.index === 1 ? `${tab.label} (${lettersOfCredit.length})` :
+              tab.label,
+            icon: tab.icon,
+          }))}
+        />
 
-        <TabPanel value={tabValue} index={0}>
+        <PortalTabPanel value={tabValue} index={0}>
           <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3} px={3} pt={3}>
             <Box display="flex" gap={2}>
-              <Button
-                variant="outlined"
-                startIcon={<Download />}
-                sx={{ 
-                  textTransform: 'none',
-                  borderColor: '#ccc',
-                  color: '#666'
-                }}
-              >
+              <SecondaryButton brand="NBE" startIcon={<Download />}>
                 Export Report
-              </Button>
+              </SecondaryButton>
             </Box>
           </Box>
 
           <Box sx={{ bgcolor: 'white', px: 3, pb: 3 }}>
-            <DataGrid
+            <PortalDataGrid
+              brand="NBE"
               rows={forexSubTab === 1 ? forexAllocations.filter(f => f.status === 'ALLOCATED') : forexSubTab === 2 ? forexAllocations.filter(f => f.status === 'REQUESTED') : forexAllocations}
               columns={forexColumns}
               getRowId={(row) => row.forexId}
@@ -1762,38 +1748,22 @@ const NBEPortal: React.FC = () => {
               initialState={{
                 pagination: { paginationModel: { pageSize: 25 } },
               }}
-              sx={{
-                border: `2px solid ${CBE_PURPLE}`,
-                '& .MuiDataGrid-columnHeaders': {
-                  bgcolor: CBE_BLACK,
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  color: CBE_GOLDEN,
-                  borderBottom: `2px solid ${CBE_PURPLE}`,
-                },
-                '& .MuiDataGrid-cell': {
-                  borderBottom: '1px solid #f5f5f5',
-                },
-                '& .MuiDataGrid-row:hover': {
-                  bgcolor: 'rgba(155, 48, 183, 0.05)',
-                },
-              }}
             />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
         {/* LC Monitoring Tab - NEW */}
-        <TabPanel value={tabValue} index={1}>
+        <PortalTabPanel value={tabValue} index={1}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
             <Typography variant="h5" fontWeight={600}>
               Letters of Credit Monitoring
             </Typography>
-            <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
+            <SecondaryButton brand="NBE" startIcon={<Download />}>
               Export Report
-            </Button>
+            </SecondaryButton>
           </Box>
 
-          <DataGrid
+          <PortalDataGrid brand="NBE"
             rows={lettersOfCredit.map(lc => ({ ...lc, id: lc.id }))}
             columns={[
               { 
@@ -1841,15 +1811,7 @@ const NBEPortal: React.FC = () => {
                 headerName: 'Status', 
                 width: 120,
                 renderCell: (params) => (
-                  <Chip 
-                    label={params.value} 
-                    size="small"
-                    sx={{
-                      bgcolor: getStatusColor(params.value),
-                      color: 'white',
-                      fontWeight: 600
-                    }}
-                  />
+                  <StatusChip status={params.value} />
                 )
               },
               { 
@@ -1873,35 +1835,18 @@ const NBEPortal: React.FC = () => {
               },
             }}
             pageSizeOptions={[10, 25, 50]}
-            sx={{
-              '& .MuiDataGrid-root': {
-                border: 'none',
-              },
-              '& .MuiDataGrid-cell': {
-                borderBottom: '1px solid #f0f0f0',
-              },
-              '& .MuiDataGrid-columnHeaders': {
-                backgroundColor: '#f5f5f5',
-                borderBottom: '2px solid #e0e0e0',
-              },
-            }}
           />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={2}>
+        <PortalTabPanel value={tabValue} index={2}>
           <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3}>
             <Box display="flex" gap={2}>
-              <Button variant="outlined" startIcon={<Download />} sx={{ textTransform: 'none' }}>
+              <SecondaryButton brand="NBE" startIcon={<Download />}>
                 Export Rates
-              </Button>
-              <Button
-                variant="contained"
-                startIcon={<Add />}
-                sx={{ textTransform: 'none', bgcolor: BRAND_COLOR }}
-                onClick={() => setRateDialogOpen(true)}
-              >
+              </SecondaryButton>
+              <PrimaryButton brand="NBE" startIcon={<Add />} onClick={() => setRateDialogOpen(true)}>
                 Update Rates
-              </Button>
+              </PrimaryButton>
             </Box>
           </Box>
 
@@ -1929,9 +1874,9 @@ const NBEPortal: React.FC = () => {
               </Grid>
             ))}
           </Grid>
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <PortalTabPanel value={tabValue} index={3}>
           {/* SWIFT Monitoring Tab - Uses NBE colors (Bronze) not CBE colors */}
           <SWIFTMonitoringWrapper 
             primaryColor={BRAND_COLOR}
@@ -1940,14 +1885,14 @@ const NBEPortal: React.FC = () => {
             activeSubTab={swiftSubTab}
             onSubTabChange={setSwiftSubTab}
           />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={4}>
+        <PortalTabPanel value={tabValue} index={4}>
           {/* Forex Repatriation Tab */}
           <RepatriationManagementTab />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <PortalTabPanel value={tabValue} index={5}>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Card>
@@ -1955,12 +1900,54 @@ const NBEPortal: React.FC = () => {
                   <Typography variant="h6" gutterBottom>Compliance Metrics</Typography>
                   <Box sx={{ mb: 2 }}>
                     <Typography variant="body2" color="textSecondary">
-                      Minimum Price Compliance: {bankingMetrics.complianceRate}%
+                      Minimum Price Compliance: {allContracts.length > 0 ? `${Math.round((allContracts.filter(c => (c as any).minimumPriceCompliant).length / allContracts.length) * 100)}%` : 'Unavailable'} ({allContracts.filter(c => (c as any).minimumPriceCompliant).length}/{allContracts.length} contracts at or above the $5.00/kg minimum)
                     </Typography>
                   </Box>
                   <Box sx={{ mb: 2 }}>
                     <Typography variant="body2" color="textSecondary">EUDR Documentation: Unavailable</Typography>
                   </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>Set Retention Policy — COFFEE</Typography>
+                  <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                    Active policy: {coffeeRetentionPolicy ? `${coffeeRetentionPolicy.retentionRate}% retained / ${coffeeRetentionPolicy.surrenderRate}% surrendered` : 'none — allocate and retention recording are blocked until a policy is set'}. Setting a new policy supersedes the active one on-chain.
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        fullWidth
+                        label="Retention Rate (%)"
+                        type="number"
+                        value={retentionPolicyForm.retentionRate}
+                        onChange={(e) => setRetentionPolicyForm(prev => ({ ...prev, retentionRate: e.target.value }))}
+                        placeholder={coffeeRetentionPolicy ? String(coffeeRetentionPolicy.retentionRate) : 'Enter a rate from 0 to 100'}
+                        helperText="0–100. Always read from the active ledger policy — never assumed."
+                        inputProps={{ min: 0, max: 100, step: '0.1' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        fullWidth
+                        label="Justification"
+                        value={retentionPolicyForm.justification}
+                        onChange={(e) => setRetentionPolicyForm(prev => ({ ...prev, justification: e.target.value }))}
+                        placeholder="NBE directive reference"
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <PrimaryButton
+                        brand="NBE"
+                        disabled={settingPolicy || retentionPolicyForm.retentionRate === ''}
+                        onClick={handleSetRetentionPolicy}
+                      >
+                        {settingPolicy ? 'Setting…' : 'Set Retention Policy'}
+                      </PrimaryButton>
+                    </Grid>
+                  </Grid>
                 </CardContent>
               </Card>
             </Grid>
@@ -1981,22 +1968,22 @@ const NBEPortal: React.FC = () => {
               </Card>
             </Grid>
           </Grid>
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <PortalTabPanel value={tabValue} index={6}>
           {/* Analytics Tab */}
           <AnalyticsDashboard 
             activeSubTab={analyticsSubTab}
             onSubTabChange={setAnalyticsSubTab}
           />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <PortalTabPanel value={tabValue} index={7}>
           {/* User Management Tab */}
           <UserManagement />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={8}>
+        <PortalTabPanel value={tabValue} index={8}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="NBE Portal - Complete Transaction History"
@@ -2005,8 +1992,8 @@ const NBEPortal: React.FC = () => {
             showStats={false}
             maxHeight={700}
           />
-        </TabPanel>
-      </Card>
+        </PortalTabPanel>
+      </PortalCard>
 
       {/* Approval result notification */}
       <Snackbar
@@ -2025,9 +2012,27 @@ const NBEPortal: React.FC = () => {
         </Alert>
       </Snackbar>
       {/* Contract Approval Dialog */}
-      <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Approve Contract for Forex Allocation</DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="NBE"
+        open={approvalDialogOpen}
+        onClose={() => setApprovalDialogOpen(false)}
+        maxWidth="sm"
+        title="Approve Contract for Forex Allocation"
+        actions={
+          <>
+            <SecondaryButton brand="NBE" onClick={() => setApprovalDialogOpen(false)}>
+            Cancel
+            </SecondaryButton>
+            <PrimaryButton
+            brand="NBE"
+            disabled={!selectedContract?.minimumPriceCompliant}
+            onClick={() => handleApproveContract(selectedContract!)}
+            >
+            Approve for Forex
+            </PrimaryButton>
+          </>
+        }
+      >
           {selectedContract && (
             <Box sx={{ pt: 2 }}>
               <Alert severity="info" sx={{ mb: 3 }}>
@@ -2039,7 +2044,7 @@ const NBEPortal: React.FC = () => {
               
               <Grid container spacing={2}>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Contract ID"
                     value={selectedContract.contractId}
@@ -2047,7 +2052,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Exporter ID"
                     value={selectedContract.exporterId}
@@ -2055,7 +2060,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Contract Value"
                     value={formatCurrency(selectedContract.totalValue)}
@@ -2063,7 +2068,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Min Price Compliant"
                     value={selectedContract.minimumPriceCompliant ? 'Yes' : 'No'}
@@ -2076,7 +2081,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Coffee Type & Quality"
                     value={`${selectedContract.coffeeType} - ${selectedContract.quantity} kg`}
@@ -2128,7 +2133,7 @@ const NBEPortal: React.FC = () => {
                 )}
                 
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Approval Comments"
                     multiline
@@ -2139,30 +2144,21 @@ const NBEPortal: React.FC = () => {
               </Grid>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setApprovalDialogOpen(false)} variant="outlined">
-            Cancel
-          </Button>
-          <Button 
-            variant="contained"
-            disabled={!selectedContract?.minimumPriceCompliant}
-            sx={{ 
-              bgcolor: BRAND_COLOR, 
-              '&:hover': { bgcolor: SECONDARY_COLOR },
-              '&:disabled': { bgcolor: '#ccc' }
-            }}
-            onClick={() => handleApproveContract(selectedContract!)}
-          >
-            Approve for Forex
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Contract Details Dialog */}
-      <Dialog open={detailsDialogOpen} onClose={() => setDetailsDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Contract Details</DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="NBE"
+        open={detailsDialogOpen}
+        onClose={() => setDetailsDialogOpen(false)}
+        maxWidth="md"
+        title="Contract Details"
+        actions={
+          <>
+            <GhostButton brand="NBE" onClick={() => setDetailsDialogOpen(false)}>Close</GhostButton>
+          </>
+        }
+      >
           {selectedContract && (
             <Box sx={{ pt: 2 }}>
               {/* BLOCKCHAIN PROOF BADGE */}
@@ -2353,18 +2349,30 @@ const NBEPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailsDialogOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Forex Allocation Dialog */}
-      <Dialog open={forexDialogOpen} onClose={() => setForexDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ bgcolor: CBE_BLACK, color: CBE_GOLDEN, fontWeight: 700 }}>
-          Allocate Foreign Exchange
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="NBE"
+        open={forexDialogOpen}
+        onClose={() => setForexDialogOpen(false)}
+        maxWidth="md"
+        title="Allocate Foreign Exchange"
+        actions={
+          <>
+            <SecondaryButton brand="NBE" onClick={() => setForexDialogOpen(false)}>
+            Cancel
+            </SecondaryButton>
+            <PrimaryButton
+            brand="NBE"
+            disabled={!forexForm.allocatedAmount || !forexForm.exchangeRate || !forexForm.retentionRate || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
+            onClick={handleAllocateForex}
+            >
+            Allocate Forex
+            </PrimaryButton>
+          </>
+        }
+      >
           {selectedForex && (
             <Box sx={{ pt: 2 }}>
               {(!forexForm.exchangeRate || !forexForm.retentionRate) && (
@@ -2372,7 +2380,7 @@ const NBEPortal: React.FC = () => {
                   An active NBE exchange rate and COFFEE retention policy are required before this allocation can be submitted.
                 </Alert>
               )}
-              <Alert severity="warning" sx={{ mb: 3, bgcolor: 'rgba(155, 48, 183, 0.1)', borderLeft: `4px solid ${CBE_PURPLE}` }}>
+              <Alert severity="warning" sx={{ mb: 3, borderLeft: `4px solid ${BRAND_COLOR}` }}>
                 <Typography variant="body2">
                   <strong>NBE Forex Allocation:</strong> This will allocate foreign exchange for the approved export contract.
                   Ensure all details are correct as this cannot be easily reversed.
@@ -2381,7 +2389,7 @@ const NBEPortal: React.FC = () => {
               
               <Grid container spacing={2}>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Forex Request ID"
                     value={selectedForex.forexId}
@@ -2389,7 +2397,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Requested Amount"
                     value={formatCurrency(selectedForex.requestedAmount, selectedForex.currency)}
@@ -2397,7 +2405,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Allocated Amount"
                     type="number"
@@ -2412,7 +2420,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Exchange Rate (ETB)"
                     type="number"
@@ -2423,7 +2431,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Retention Rate (%)"
                     type="number"
@@ -2434,7 +2442,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="NBE Officer"
                     value={forexForm.nbeOfficer}
@@ -2443,7 +2451,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="NBE Approval Reference"
                     value={forexForm.nbeApprovalRef}
@@ -2452,7 +2460,7 @@ const NBEPortal: React.FC = () => {
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Expiry Date"
                     type="date"
@@ -2541,35 +2549,32 @@ const NBEPortal: React.FC = () => {
               </Grid>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setForexDialogOpen(false)} variant="outlined" sx={{ borderColor: CBE_PURPLE, color: CBE_PURPLE }}>
-            Cancel
-          </Button>
-          <Button 
-            variant="contained"
-            disabled={!forexForm.allocatedAmount || !forexForm.exchangeRate || !forexForm.retentionRate || !forexForm.nbeOfficer || !forexForm.nbeApprovalRef}
-            sx={{ 
-              bgcolor: CBE_PURPLE, 
-              color: CBE_WHITE,
-              fontWeight: 600,
-              '&:hover': { bgcolor: '#7a2692' },
-              '&:disabled': { bgcolor: '#cccccc' }
-            }}
-            onClick={handleAllocateForex}
-          >
-            Allocate Forex
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
       {/* Record Retention Dialog — slice-6 fix: the retention step had no UI */}
-      <Dialog open={retentionDialogOpen} onClose={() => setRetentionDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Record Forex Retention {retentionForm.forexId ? `— ${retentionForm.forexId}` : ''}</DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2 }}>
+      <PortalDialog
+        brand="NBE"
+        open={retentionDialogOpen}
+        onClose={() => setRetentionDialogOpen(false)}
+        maxWidth="sm"
+        title={<>Record Forex Retention {retentionForm.forexId ? `— ${retentionForm.forexId}` : ''}</>}
+        actions={
+          <>
+            <SecondaryButton brand="NBE" onClick={() => setRetentionDialogOpen(false)}>
+            Cancel
+            </SecondaryButton>
+            <PrimaryButton
+            brand="NBE"
+            disabled={recordingRetention || !retentionForm.fcyAccountNumber || !retentionForm.retentionPercentage}
+            onClick={handleRecordRetention}
+            >
+            {recordingRetention ? 'Recording...' : 'Record Retention'}
+            </PrimaryButton>
+          </>
+        }
+      >          <Box sx={{ pt: 2 }}>
             <Grid container spacing={2}>
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   label="FCY Account Number *"
                   value={retentionForm.fcyAccountNumber}
                   onChange={(e) => setRetentionForm({ ...retentionForm, fcyAccountNumber: e.target.value })}
@@ -2579,7 +2584,7 @@ const NBEPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   label="Retention Percentage (%) *"
                   type="number"
                   value={retentionForm.retentionPercentage}
@@ -2592,26 +2597,29 @@ const NBEPortal: React.FC = () => {
               </Grid>
             </Grid>
           </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRetentionDialogOpen(false)} variant="outlined" sx={{ borderColor: CBE_PURPLE, color: CBE_PURPLE }}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            disabled={recordingRetention || !retentionForm.fcyAccountNumber || !retentionForm.retentionPercentage}
-            sx={{ bgcolor: CBE_PURPLE, color: CBE_WHITE, fontWeight: 600, '&:hover': { bgcolor: '#7a2692' }, '&:disabled': { bgcolor: '#cccccc' } }}
-            onClick={handleRecordRetention}
-          >
-            {recordingRetention ? 'Recording...' : 'Record Retention'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
       {/* Exchange Rate Update Dialog */}
-      <Dialog open={rateDialogOpen} onClose={() => setRateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Update Exchange Rate</DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2 }}>
+      <PortalDialog
+        brand="NBE"
+        open={rateDialogOpen}
+        onClose={() => setRateDialogOpen(false)}
+        maxWidth="sm"
+        title="Update Exchange Rate"
+        actions={
+          <>
+            <SecondaryButton brand="NBE" onClick={() => setRateDialogOpen(false)}>
+            Cancel
+            </SecondaryButton>
+            <PrimaryButton
+            brand="NBE"
+            disabled={settingRate}
+            onClick={handleSubmitExchangeRate}
+            >
+            {settingRate ? 'Setting…' : 'Set Rate'}
+            </PrimaryButton>
+          </>
+        }
+      >          <Box sx={{ pt: 2 }}>
             <Alert severity="warning" sx={{ mb: 2 }}>
               Setting a new exchange rate will supersede the current active rate for the selected currency.
             </Alert>
@@ -2619,7 +2627,11 @@ const NBEPortal: React.FC = () => {
               <Grid item xs={12}>
                 <FormControl fullWidth>
                   <InputLabel>Currency</InputLabel>
-                  <Select defaultValue="USD">
+                  <Select
+                    value={rateForm.currency}
+                    label="Currency"
+                    onChange={(e) => setRateForm(prev => ({ ...prev, currency: e.target.value }))}
+                  >
                     <MenuItem value="USD">USD - United States Dollar</MenuItem>
                     <MenuItem value="EUR">EUR - Euro</MenuItem>
                     <MenuItem value="GBP">GBP - British Pound</MenuItem>
@@ -2627,59 +2639,54 @@ const NBEPortal: React.FC = () => {
                 </FormControl>
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Buying Rate (ETB)"
                   type="number"
+                  value={rateForm.buyingRate}
+                  onChange={(e) => setRateForm(prev => ({ ...prev, buyingRate: e.target.value }))}
                   placeholder="115.00"
-                  helperText="NBE buying rate"
-                  inputProps={{ step: "0.01" }}
+                  helperText="NBE buying rate (must be > 0)"
+                  inputProps={{ step: "0.01", min: "0" }}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Selling Rate (ETB)"
                   type="number"
+                  value={rateForm.sellingRate}
+                  onChange={(e) => setRateForm(prev => ({ ...prev, sellingRate: e.target.value }))}
                   placeholder="116.00"
-                  helperText="NBE selling rate"
-                  inputProps={{ step: "0.01" }}
+                  helperText="NBE selling rate (must be >= buying rate)"
+                  inputProps={{ step: "0.01", min: "0" }}
                 />
               </Grid>
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Effective Date"
                   type="date"
-                  defaultValue={new Date().toISOString().split('T')[0]}
+                  value={rateForm.effectiveDate}
+                  onChange={(e) => setRateForm(prev => ({ ...prev, effectiveDate: e.target.value }))}
                   InputLabelProps={{ shrink: true }}
+                  helperText="Recorded with the rate; POST /forex/rates applies it from submission"
                 />
               </Grid>
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Justification"
                   multiline
                   rows={3}
+                  value={rateForm.justification}
+                  onChange={(e) => setRateForm(prev => ({ ...prev, justification: e.target.value }))}
                   placeholder="Economic justification for rate change"
                 />
               </Grid>
             </Grid>
           </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRateDialogOpen(false)} variant="outlined">
-            Cancel
-          </Button>
-          <Button 
-            variant="contained"
-            sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: SECONDARY_COLOR } }}
-            onClick={() => setRateDialogOpen(false)}
-          >
-            Set Rate
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Document Validation Dialog */}
       <DocumentValidationDialog
@@ -2699,7 +2706,7 @@ const NBEPortal: React.FC = () => {
         open={showAuditTrail}
         onClose={() => setShowAuditTrail(false)}
       />
-    </Box>
+    </PortalShell>
   );
 };
 

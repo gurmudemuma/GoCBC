@@ -19,6 +19,10 @@ import {
   CircularProgress,
   InputAdornment,
   Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import {
@@ -33,6 +37,7 @@ import {
   Refresh,
   Schedule,
   VerifiedUser,
+  Gavel,
 } from '@mui/icons-material';
 import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
 import { DashboardKPI } from '@/components/modern';
@@ -77,6 +82,9 @@ interface Repatriation {
   bankStatementHash?: string;
   txId?: string;
   timestamp?: string;
+  waiverRequested?: boolean;
+  penaltyAmount?: number;
+  penaltyCurrency?: string;
 }
 
 interface RepatriationStats {
@@ -113,6 +121,16 @@ const RepatriationManagementTab: React.FC = () => {
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [compliancePanelOpen, setCompliancePanelOpen] = useState(false);
   const [selectedRepatriation, setSelectedRepatriation] = useState<Repatriation | null>(null);
+
+  // Penalty dialog state — chaincode ApplyNonCompliancePenalty only accepts
+  // NON_COMPLIANT / OVERDUE records, with a positive amount, currency and reason.
+  const [penaltyDialogOpen, setPenaltyDialogOpen] = useState(false);
+  const [penaltyForm, setPenaltyForm] = useState({ repatriationId: '', penaltyAmount: '', penaltyCurrency: 'ETB', reason: '' });
+  // Waiver dialog state — chaincode ApproveWaiver only applies when a waiver
+  // was requested (WaiverRequested); `approved` must be exactly true/false.
+  const [waiverDialogOpen, setWaiverDialogOpen] = useState(false);
+  const [waiverForm, setWaiverForm] = useState({ repatriationId: '', approved: true, reason: '' });
+  const [actionBusy, setActionBusy] = useState(false);
   
   // Pagination
   const [page, setPage] = useState(0);
@@ -148,6 +166,9 @@ const RepatriationManagementTab: React.FC = () => {
             daysOverdue: daysRemaining < 0 ? Math.abs(daysRemaining) : 0,
             verifiedDate: item.verificationDate || item.VerificationDate,
             complianceDate: item.complianceDate || item.ComplianceDate,
+            waiverRequested: Boolean(item.waiverRequested ?? item.WaiverRequested ?? false),
+            penaltyAmount: item.penaltyAmount ?? item.PenaltyAmount,
+            penaltyCurrency: item.penaltyCurrency ?? item.PenaltyCurrency,
           };
         });
         setRepatriations(data);
@@ -252,6 +273,75 @@ const RepatriationManagementTab: React.FC = () => {
     } catch (error: any) {
       console.error('[REPATRIATION] Error verifying:', error);
       showError('Error', 'Failed to verify repatriation');
+    }
+  };
+
+  // Apply non-compliance penalty — POST /repatriation/:id/penalty (NBE).
+  const handleApplyPenalty = async () => {
+    const amount = Number(penaltyForm.penaltyAmount);
+    if (!penaltyForm.repatriationId || !Number.isFinite(amount) || amount <= 0) {
+      showError('Error', 'Enter a penalty amount greater than 0');
+      return;
+    }
+    if (!penaltyForm.penaltyCurrency.trim() || !penaltyForm.reason.trim()) {
+      showError('Error', 'Penalty currency and reason are required');
+      return;
+    }
+    try {
+      setActionBusy(true);
+      const response = await apiFetch(`/repatriation/${penaltyForm.repatriationId}/penalty`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          penaltyAmount: amount,
+          penaltyCurrency: penaltyForm.penaltyCurrency.trim(),
+          reason: penaltyForm.reason.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Success', 'Penalty applied successfully');
+        setPenaltyDialogOpen(false);
+        setPenaltyForm({ repatriationId: '', penaltyAmount: '', penaltyCurrency: 'ETB', reason: '' });
+        fetchRepatriations();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to apply penalty');
+      }
+    } catch (error: any) {
+      console.error('[REPATRIATION] Error applying penalty:', error);
+      showError('Error', 'Failed to apply penalty');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // Approve / reject a requested waiver — POST /repatriation/:id/waiver/approve (NBE).
+  const handleApproveWaiver = async () => {
+    if (!waiverForm.repatriationId) return;
+    try {
+      setActionBusy(true);
+      const response = await apiFetch(`/repatriation/${waiverForm.repatriationId}/waiver/approve`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          approved: waiverForm.approved,
+          reason: waiverForm.reason.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Success', `Waiver ${waiverForm.approved ? 'approved' : 'rejected'} successfully`);
+        setWaiverDialogOpen(false);
+        setWaiverForm({ repatriationId: '', approved: true, reason: '' });
+        fetchRepatriations();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to decide waiver');
+      }
+    } catch (error: any) {
+      console.error('[REPATRIATION] Error deciding waiver:', error);
+      showError('Error', 'Failed to decide waiver');
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -384,7 +474,7 @@ const RepatriationManagementTab: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 200,
+      width: 280,
       sortable: false,
       renderCell: (params: GridRenderCellParams) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -397,7 +487,7 @@ const RepatriationManagementTab: React.FC = () => {
               <Visibility fontSize="small" />
             </IconButton>
           </Tooltip>
-          
+
           {(params.row.status === 'READY_FOR_VERIFICATION' || params.row.status === 'OVERDUE') && (
             <Tooltip title="Verify">
               <IconButton
@@ -409,7 +499,41 @@ const RepatriationManagementTab: React.FC = () => {
               </IconButton>
             </Tooltip>
           )}
-          
+
+          {/* Penalty — chaincode ApplyNonCompliancePenalty accepts only
+              NON_COMPLIANT / OVERDUE records. */}
+          {(params.row.status === 'NON_COMPLIANT' || params.row.status === 'OVERDUE') && (
+            <Tooltip title="Apply Penalty">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  setPenaltyForm({ repatriationId: params.row.repatriationId, penaltyAmount: '', penaltyCurrency: 'ETB', reason: '' });
+                  setPenaltyDialogOpen(true);
+                }}
+                sx={{ color: NBE_COLORS.error }}
+              >
+                <Gavel fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+
+          {/* Waiver decision — chaincode ApproveWaiver only applies when a
+              waiver was requested (WaiverRequested). */}
+          {params.row.waiverRequested && params.row.status !== 'WAIVED' && params.row.status !== 'COMPLIED' && (
+            <Tooltip title="Approve / Reject Waiver">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  setWaiverForm({ repatriationId: params.row.repatriationId, approved: true, reason: '' });
+                  setWaiverDialogOpen(true);
+                }}
+                sx={{ color: NBE_COLORS.warning }}
+              >
+                <CheckCircle fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+
         </Box>
       ),
     },
@@ -505,6 +629,21 @@ const RepatriationManagementTab: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Compliance Panel opener — the panel was rendered but
+          compliancePanelOpen was never set to true anywhere, so sending
+          compliance notices to overdue exporters was unreachable. */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button
+          variant="contained"
+          startIcon={<Warning />}
+          onClick={() => setCompliancePanelOpen(true)}
+          disabled={repatriations.filter(r => r.status === 'OVERDUE' || r.status === 'NON_COMPLIANT').length === 0}
+          sx={{ backgroundColor: NBE_COLORS.bronze, '&:hover': { backgroundColor: NBE_COLORS.lightBronze } }}
+        >
+          Compliance Notices ({repatriations.filter(r => r.status === 'OVERDUE' || r.status === 'NON_COMPLIANT').length} overdue)
+        </Button>
+      </Box>
+
       {/* Data Grid */}
       <Paper sx={{ height: 600, width: '100%' }}>
         <DataGrid
@@ -545,11 +684,111 @@ const RepatriationManagementTab: React.FC = () => {
       <RepatriationCompliancePanel
         open={compliancePanelOpen}
         onClose={() => setCompliancePanelOpen(false)}
-        overdueRepatriations={repatriations.filter(r => 
+        overdueRepatriations={repatriations.filter(r =>
           (r.status === 'OVERDUE' || r.status === 'NON_COMPLIANT') && r.daysOverdue !== undefined
         ) as any}
         onRefresh={fetchRepatriations}
       />
+
+      {/* Apply Penalty Dialog */}
+      <Dialog open={penaltyDialogOpen} onClose={() => setPenaltyDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Apply Non-Compliance Penalty {penaltyForm.repatriationId ? `— ${penaltyForm.repatriationId}` : ''}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Penalty Amount *"
+                  type="number"
+                  value={penaltyForm.penaltyAmount}
+                  onChange={(e) => setPenaltyForm({ ...penaltyForm, penaltyAmount: e.target.value })}
+                  fullWidth
+                  required
+                  inputProps={{ min: 0, step: '0.01' }}
+                  helperText="Must be greater than 0"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Currency *"
+                  value={penaltyForm.penaltyCurrency}
+                  onChange={(e) => setPenaltyForm({ ...penaltyForm, penaltyCurrency: e.target.value })}
+                  fullWidth
+                  required
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Reason *"
+                  value={penaltyForm.reason}
+                  onChange={(e) => setPenaltyForm({ ...penaltyForm, reason: e.target.value })}
+                  fullWidth
+                  required
+                  multiline
+                  rows={2}
+                  placeholder="Why the penalty is applied"
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPenaltyDialogOpen(false)} variant="outlined">Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={actionBusy || !penaltyForm.penaltyAmount || !penaltyForm.penaltyCurrency.trim() || !penaltyForm.reason.trim()}
+            sx={{ backgroundColor: NBE_COLORS.error, '&:hover': { backgroundColor: '#b71c1c' } }}
+            onClick={handleApplyPenalty}
+          >
+            {actionBusy ? 'Applying…' : 'Apply Penalty'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Waiver Decision Dialog */}
+      <Dialog open={waiverDialogOpen} onClose={() => setWaiverDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Decide Waiver Request {waiverForm.repatriationId ? `— ${waiverForm.repatriationId}` : ''}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <TextField
+                  select
+                  fullWidth
+                  label="Decision"
+                  value={waiverForm.approved ? 'approve' : 'reject'}
+                  onChange={(e) => setWaiverForm({ ...waiverForm, approved: e.target.value === 'approve' })}
+                >
+                  <MenuItem value="approve">Approve waiver (status becomes WAIVED)</MenuItem>
+                  <MenuItem value="reject">Reject waiver</MenuItem>
+                </TextField>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Reason"
+                  value={waiverForm.reason}
+                  onChange={(e) => setWaiverForm({ ...waiverForm, reason: e.target.value })}
+                  fullWidth
+                  multiline
+                  rows={2}
+                  placeholder="Reason for the decision (optional)"
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWaiverDialogOpen(false)} variant="outlined">Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={actionBusy}
+            sx={{ backgroundColor: NBE_COLORS.bronze, '&:hover': { backgroundColor: NBE_COLORS.lightBronze } }}
+            onClick={handleApproveWaiver}
+          >
+            {actionBusy ? 'Submitting…' : waiverForm.approved ? 'Approve Waiver' : 'Reject Waiver'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

@@ -39,6 +39,7 @@ interface ClearedShipment {
   currency: string;
   quantity: number;
   customsOfficer: string;
+  dutyAmount: number;
 }
 
 export const CustomsClearedShipments: React.FC = () => {
@@ -76,13 +77,20 @@ export const CustomsClearedShipments: React.FC = () => {
             declarationId: d.declarationId || d.DeclarationID || '',
             shipmentId: d.shipmentId || d.ShipmentID || '',
             exporterId: d.exporterId || d.ExporterID || '',
-            clearanceNumber: d.clearanceNumber || d.ClearanceNumber || 'N/A',
-            clearanceDate: d.clearanceDate || d.ClearanceDate || '',
+            // NOTE: GET /customs/declarations does NOT select
+            // clearance_number / cleared_by, so clearanceNumber is 'N/A'
+            // until the API list selects those columns (the clear service
+            // does persist them on customs_declarations). Do not invent a
+            // number here. Officer/date DO come back: customsOfficer and
+            // clearanceDate are selected by the list endpoint.
+            clearanceNumber: d.clearanceNumber || d.ClearanceNumber || d.clearance_number || 'N/A',
+            clearanceDate: d.clearanceDate || d.ClearanceDate || d.clearance_date || '',
             destination: d.destination || d.Destination || 'Unknown',
             value: parseFloat(d.totalValue || d.TotalValue || d.value || '0'),
             currency: d.currency || d.Currency || 'USD',
             quantity: parseFloat(d.quantity || d.Quantity || '0'),
-            customsOfficer: d.clearedBy || d.ClearedBy || d.customsOfficer || 'Unknown',
+            customsOfficer: d.clearedBy || d.ClearedBy || d.customsOfficer || d.CustomsOfficer || 'Unknown',
+            dutyAmount: parseFloat(d.dutyAmount || d.duty_amount || '0'),
           }));
         
         setClearedShipments(cleared);
@@ -188,6 +196,7 @@ export const CustomsClearedShipments: React.FC = () => {
                   <TableCell>Destination</TableCell>
                   <TableCell align="right">Quantity (kg)</TableCell>
                   <TableCell align="right">Value</TableCell>
+                  <TableCell align="right">Duty (ETB)</TableCell>
                   <TableCell>Clearance Date</TableCell>
                   <TableCell>Officer</TableCell>
                   <TableCell>Actions</TableCell>
@@ -212,6 +221,7 @@ export const CustomsClearedShipments: React.FC = () => {
                     <TableCell>{shipment.destination}</TableCell>
                     <TableCell align="right">{shipment.quantity.toLocaleString()}</TableCell>
                     <TableCell align="right">{formatCurrency(shipment.value, shipment.currency)}</TableCell>
+                    <TableCell align="right">{shipment.dutyAmount ? `${shipment.dutyAmount.toLocaleString()} ETB` : '—'}</TableCell>
                     <TableCell>{formatDate(shipment.clearanceDate)}</TableCell>
                     <TableCell>{shipment.customsOfficer}</TableCell>
                     <TableCell>
@@ -356,6 +366,14 @@ export const CustomsClearedShipments: React.FC = () => {
                     fullWidth
                     label="Customs Value"
                     value={formatCurrency(selectedShipment.value, selectedShipment.currency)}
+                    InputProps={{ readOnly: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Duty Assessed (ETB)"
+                    value={selectedShipment.dutyAmount ? `${selectedShipment.dutyAmount.toLocaleString()} ETB` : 'Not calculated'}
                     InputProps={{ readOnly: true }}
                   />
                 </Grid>

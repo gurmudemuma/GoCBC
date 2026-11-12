@@ -27,8 +27,6 @@ import {
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   Divider,
   Snackbar,
   Button,
@@ -106,6 +104,20 @@ import {
   ThemeToggle,
 } from '@/components/modern';
 import UserManagement from '@/components/admin/UserManagement';
+import {
+  PortalShell,
+  PortalTabBar,
+  PortalTabPanel,
+  PortalKpiCard,
+  PortalCard,
+  PrimaryButton,
+  DangerButton,
+  GhostButton,
+  PortalDialog,
+  PortalDialogActions,
+  PortalField,
+  getPortalBrand,
+} from '@/components/shared/portal';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import { DocumentManagementPanel } from '@/components/documents';
@@ -126,23 +138,28 @@ const contractRejectionFields = [
   'Other contract detail',
 ];
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
+// Minimum capital (ETB) by exporter type — the SINGLE source for every
+// capital minimum shown in this portal. It mirrors the registration
+// schema, ui/src/pages/register-exporter.tsx:58 MIN_CAPITAL_BY_EXPORTER_TYPE
+// (private 15M / company 20M / individual 10M); the API itself enforces no
+// numeric minimum (exporters.ts only requires the field to be numeric), so
+// this map is the requirement. Do not hardcode another minimum anywhere in
+// this file — use getMinCapital().
+const MIN_CAPITAL_BY_EXPORTER_TYPE: Record<string, number> = {
+  private: 15_000_000,
+  company: 20_000_000,
+  individual: 10_000_000,
+};
+const getMinCapital = (exporterType?: string): number =>
+  MIN_CAPITAL_BY_EXPORTER_TYPE[String(exporterType || 'company').toLowerCase()] ?? 20_000_000;
 
 const exporterSchema = yup.object({
   exporterId: yup.string().matches(/^EXP\d{7}$/, 'Invalid exporter ID format').required(),
   companyName: yup.string().min(3).max(100).required(),
   ectaLicenseNumber: yup.string().matches(/^ECTA-LIC-\d{4}-\d{3}$/, 'Invalid license format').required(),
-  capitalRequirement: yup.number().min(10000000).required('Minimum capital: 10M ETB for individual exporters'),
+  // Floor of the per-type minima above (individual: 10M); the per-type
+  // minimum is enforced by getMinCapital() wherever the type is known.
+  capitalRequirement: yup.number().min(MIN_CAPITAL_BY_EXPORTER_TYPE.individual).required('Minimum capital: 10M ETB for individual exporters (15M private, 20M company)'),
   professionalTaster: yup.string().min(3).max(50).required(),
   tasterCertificate: yup.string().required(),
   licenseExpiryDate: yup.string().required(),
@@ -187,9 +204,9 @@ const ECTAPortal: React.FC = () => {
   // Get user context for role-based access
   const { user } = useAuth();
   
-  // ECTA Brand Colors
-  const BRAND_COLOR = '#078930';  // ECTA Green
-  const SECONDARY_COLOR = '#6d4c41';  // Coffee Brown
+  // ECTA Brand Colors (from the shared portal brand tokens)
+  const BRAND_COLOR = getPortalBrand('ECTA').primary;  // ECTA Green
+  const SECONDARY_COLOR = getPortalBrand('ECTA').secondary;  // Coffee Brown
   
   const { notification, showSuccess, showError, showWarning, showInfo, closeNotification } = useNotification();
   const [tabValue, setTabValue] = useState(0);
@@ -228,6 +245,40 @@ const ECTAPortal: React.FC = () => {
   const [selectedExporter, setSelectedExporter] = useState<Exporter | null>(null);
   const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
   const [selectedShipmentForInspection, setSelectedShipmentForInspection] = useState<any>(null);
+
+  // 0.9 — Quality "Inspect" form. The old handler POSTed hardcoded values
+  // (inspector ECTA-01, moisture 11.2, defect 3, cupping 8/10, overall 87,
+  // all lab tests PASSED) with no user input — a fabricated passing result.
+  // This form collects the real values and sends exactly what the inspector
+  // entered to POST /quality/inspections/:id/perform. Nothing is pre-filled
+  // with a passing outcome: numeric defaults are 0 / blank and validation
+  // forces the inspector to enter moisture, sample size and cupping scores.
+  const CUPPING_FIELDS = [
+    { key: 'fragrance', label: 'Fragrance / Aroma' },
+    { key: 'flavor', label: 'Flavor' },
+    { key: 'aftertaste', label: 'Aftertaste' },
+    { key: 'acidity', label: 'Acidity' },
+    { key: 'body', label: 'Body' },
+    { key: 'balance', label: 'Balance' },
+    { key: 'uniformity', label: 'Uniformity' },
+    { key: 'cleanCup', label: 'Clean Cup' },
+    { key: 'sweetness', label: 'Sweetness' },
+    { key: 'overall', label: 'Overall' },
+  ] as const;
+  type CuppingKey = (typeof CUPPING_FIELDS)[number]['key'];
+  const emptyInspectForm = {
+    inspectorName: '',
+    sampleSize: 0,
+    moistureContent: 0,
+    defectCount: 0,
+    remarks: '',
+    fragrance: 0, flavor: 0, aftertaste: 0, acidity: 0, body: 0,
+    balance: 0, uniformity: 0, cleanCup: 0, sweetness: 0, overall: 0,
+  };
+  const [inspectDialogOpen, setInspectDialogOpen] = useState(false);
+  const [inspectTarget, setInspectTarget] = useState<any>(null);
+  const [inspectForm, setInspectForm] = useState(emptyInspectForm);
+  const [inspectSubmitting, setInspectSubmitting] = useState(false);
   const [qualityDialogOpen, setQualityDialogOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<ExporterApplication | null>(null);
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
@@ -298,8 +349,10 @@ const ECTAPortal: React.FC = () => {
     }
   }, []);
 
+  // Audit Trail is tab 8 (not 6 — 6 is Pre-shipment Inspection); the KPI
+  // cards below are rendered under tabValue === 8 as well.
   useEffect(() => {
-    if (tabValue === 6) {
+    if (tabValue === 8) {
       loadAuditStats();
     }
   }, [tabValue]);
@@ -504,6 +557,20 @@ const ECTAPortal: React.FC = () => {
     return contracts;
   };
 
+  // Merge one status page of applications into allApplications, deduped by
+  // application_id. loadData fires the pending/approved/rejected queries in
+  // parallel, so a plain setAllApplications(rows) from whichever resolves
+  // last would drop the other statuses — which is why the Approved/Rejected
+  // KPI cards were always 0 (only the pending page was ever loaded).
+  const mergeApplications = (rows: ExporterApplication[]) => {
+    if (!Array.isArray(rows)) return;
+    setAllApplications((prev) => {
+      const seen = new Set(prev.map((a) => a.application_id));
+      const fresh = rows.filter((a) => a.application_id && !seen.has(a.application_id));
+      return fresh.length ? [...prev, ...fresh] : prev;
+    });
+  };
+
   const loadData = async () => {
     console.log('[ECTA] ⚡ Starting PARALLEL data loading (zero waits)...');
     console.time('[ECTA] Total load time');
@@ -522,17 +589,28 @@ const ECTAPortal: React.FC = () => {
         if (appsData && Array.isArray(appsData)) {
           console.log(`[ECTA] ✅ Pending applications loaded: ${appsData.length} items (${performance.now().toFixed(0)}ms)`);
           setApplications(appsData);
-          setAllApplications(appsData);
+          mergeApplications(appsData);
         } else {
           console.warn('[ECTA] ⚠️ Pending applications response has no valid data');
           setApplications([]);
-          setAllApplications([]);
         }
       })
       .catch(err => {
         console.error('[ECTA] ❌ Failed to load pending applications:', err.message);
         setApplications([]);
-        setAllApplications([]);
+      });
+
+    // 1b️⃣ Rejected Applications — needed for the Rejected KPI card and the
+    // Total count (allApplications must cover every status, not pending only)
+    api.get('/exporters/exporter-applications?status=rejected')
+      .then(rejectedApplicationsRes => {
+        const rejectedAppsData = rejectedApplicationsRes.data?.data?.applications || rejectedApplicationsRes.data?.data;
+        if (rejectedAppsData && Array.isArray(rejectedAppsData)) {
+          mergeApplications(rejectedAppsData);
+        }
+      })
+      .catch(err => {
+        console.error('[ECTA] ❌ Failed to load rejected applications:', err.message);
       });
     
     // 2️⃣ Approved Applications - Load independently
@@ -542,6 +620,7 @@ const ECTAPortal: React.FC = () => {
         if (approvedAppsData && Array.isArray(approvedAppsData)) {
           console.log(`[ECTA] ✅ Approved applications loaded: ${approvedAppsData.length} items (${performance.now().toFixed(0)}ms)`);
           setApprovedApplications(approvedAppsData);
+          mergeApplications(approvedAppsData);
         } else {
           setApprovedApplications([]);
         }
@@ -680,6 +759,32 @@ const ECTAPortal: React.FC = () => {
       }
     } catch (error) {
       console.error('[ECTA] Failed to load audit stats:', error);
+    }
+  };
+
+  // View a document URL (e.g. `/api/v1/documents/:id/download`) through the
+  // API with the JWT attached (apiFetch resolves against API_BASE_URL and
+  // sends the Authorization header). The old code did
+  // window.open('http://localhost:3001' + url) — no token (the download
+  // route requires auth) and a hardcoded host that breaks on any
+  // non-localhost deployment. (The existing handleViewDocument below covers
+  // bare document IDs via the viewDocument helper; this one covers full
+  // API paths, which that helper does not handle.)
+  const handleViewDocumentUrl = async (url?: string) => {
+    if (!url) return;
+    try {
+      const response = await apiFetch(url);
+      if (!response.ok) {
+        showError('View Failed', `Could not open document (HTTP ${response.status})`);
+        return;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, '_blank');
+      // Revoke after the new tab has had a chance to load it.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error: any) {
+      showError('View Failed', error?.message || 'Could not open document');
     }
   };
 
@@ -990,21 +1095,13 @@ Contact system administrator if the issue persists.`,
           status: (() => {
             const capital = parseFloat(application.capital_requirement);
             const exporterType = application.exporter_type || 'company';
-            const minCapital = {
-              'private': 15000000,    // 15M ETB
-              'company': 20000000,    // 20M ETB
-              'individual': 10000000  // 10M ETB
-            }[exporterType] || 20000000;
+            const minCapital = getMinCapital(exporterType);
             return capital >= minCapital ? 'PASSED' : 'FAILED';
           })(),
           details: (() => {
             const capital = parseFloat(application.capital_requirement);
             const exporterType = application.exporter_type || 'company';
-            const minCapital = {
-              'private': 15000000,
-              'company': 20000000,
-              'individual': 10000000
-            }[exporterType] || 20000000;
+            const minCapital = getMinCapital(exporterType);
             const minCapitalStr = (minCapital / 1000000).toFixed(0) + 'M';
             return capital >= minCapital 
               ? `Capital ${capital.toLocaleString()} ETB meets ${minCapitalStr} ETB requirement for ${exporterType} exporter` 
@@ -1053,21 +1150,13 @@ Contact system administrator if the issue persists.`,
           status: (() => {
             const capital = parseFloat(application.capital_requirement);
             const exporterType = application.exporter_type || 'company';
-            const minCapital = {
-              'private': 15000000,
-              'company': 20000000,
-              'individual': 10000000
-            }[exporterType] || 20000000;
+            const minCapital = getMinCapital(exporterType);
             return capital >= minCapital ? 'COMPLIANT' : 'NON_COMPLIANT';
           })(),
           details: (() => {
             const capital = parseFloat(application.capital_requirement);
             const exporterType = application.exporter_type || 'company';
-            const minCapital = {
-              'private': 15000000,
-              'company': 20000000,
-              'individual': 10000000
-            }[exporterType] || 20000000;
+            const minCapital = getMinCapital(exporterType);
             const minCapitalStr = (minCapital / 1000000).toFixed(0) + ' million';
             return capital >= minCapital 
               ? `Meets minimum capital requirement of ${minCapitalStr} ETB for ${exporterType} exporter (ECTA Directive 1106/2025)` 
@@ -1125,7 +1214,7 @@ What the Exporter Can Do Next:
 4. Submit a new application at: http://localhost:3000/register-exporter
 
 Requirements to Meet:
-• Minimum capital: 50,000,000 ETB
+• Minimum capital: ${(getMinCapital(selectedApplication?.exporter_type) / 1000000).toFixed(0)},000,000 ETB for ${selectedApplication?.exporter_type || 'company'} exporters (registration requirement)
 • Valid TIN (Tax Identification Number)
 • Current business license
 • Professional coffee taster with certification
@@ -1267,7 +1356,9 @@ The exporter can reapply once all requirements are met.`,
         coffeeType: shipment.grade || shipment.coffeeType || 'Arabica',
         quantity: shipment.quantity || 0,
         sampleSize: 100,
-        scheduledDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days from now
+        // Route reads `requestedDate` (quality.ts) — `scheduledDate` was
+        // silently dropped, so the requested date always fell back to today.
+        requestedDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
       });
       
       if (response.data.success) {
@@ -1285,48 +1376,73 @@ The exporter can reapply once all requirements are met.`,
     }
   };
 
-  // STAGE 2: Perform Inspection (REQUESTED → INSPECTED)
-  const handlePerformInspection = async (inspection: any) => {
+  // STAGE 2: Perform Inspection (PENDING/REQUESTED → INSPECTED) — opens the
+  // real Inspect form (0.9). The submit handler below sends the entered
+  // values; nothing here fabricates a result.
+  const handlePerformInspection = (inspection: any) => {
+    setInspectTarget(inspection);
+    setInspectForm(emptyInspectForm);
+    setInspectDialogOpen(true);
+  };
+
+  const handleSubmitInspectForm = async () => {
+    if (!inspectTarget) return;
+    const inspectionId = inspectTarget.inspection_id || inspectTarget.inspectionID || inspectTarget.InspectionID;
+    const moisture = Number(inspectForm.moistureContent);
+    const defects = Number(inspectForm.defectCount);
+    const sampleSize = Number(inspectForm.sampleSize);
+    if (!inspectForm.inspectorName.trim()) {
+      showError('Validation Failed', 'Inspector name is required');
+      return;
+    }
+    if (!(sampleSize > 0)) {
+      showError('Validation Failed', 'Sample size must be greater than 0');
+      return;
+    }
+    if (!(moisture >= 8 && moisture <= 13)) {
+      showError('Validation Failed', 'Moisture content must be between 8% and 13% (chaincode ValidateMoistureContent)');
+      return;
+    }
+    if (!(defects >= 0 && defects <= 100)) {
+      showError('Validation Failed', 'Defect count must be between 0 and 100');
+      return;
+    }
+    for (const { key, label } of CUPPING_FIELDS) {
+      const v = Number(inspectForm[key]);
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        showError('Validation Failed', `${label} score must be between 0 and 100`);
+        return;
+      }
+    }
     try {
-      const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
+      setInspectSubmitting(true);
+      const cupping: Record<string, number> = {};
+      for (const { key } of CUPPING_FIELDS) cupping[key] = Number(inspectForm[key]);
       const response = await api.post(`/quality/inspections/${inspectionId}/perform`, {
-        inspectorID: 'ECTA-01',
-        inspectorName: 'ECTA Quality Lab',
-        sampleSize: 100,
-        moistureContent: 11.2,
-        defectCount: 3,
-        beanSize: '17',
-        color: 'Green',
-        odor: 'Clean',
-        fragrance: 8,
-        flavor: 8,
-        aftertaste: 8,
-        acidity: 8,
-        body: 8,
-        balance: 8,
-        uniformity: 10,
-        cleanCup: 10,
-        sweetness: 10,
-        overall: 87,
-        classification: 'WASHED',
-        pesticideTest: 'PASSED',
-        heavyMetalTest: 'PASSED',
-        mycotoxinTest: 'PASSED',
-        remarks: 'Quality inspection completed - meets export standards',
+        inspectorName: inspectForm.inspectorName.trim(),
+        sampleSize,
+        moistureContent: moisture,
+        defectCount: defects,
+        ...cupping,
+        remarks: inspectForm.remarks,
       });
-      
+
       if (response.data.success) {
         showSuccess(
           'Inspection Completed',
           `Inspection ${inspectionId} has been performed`,
-          'Quality Lab results recorded. Awaiting ECTA approval for export permit'
+          'Quality results recorded as entered. Awaiting ECTA approval for export permit'
         );
+        setInspectDialogOpen(false);
+        setInspectTarget(null);
         loadData();
       } else {
         showError('Inspection Failed', response.data.error?.message || 'Failed to perform inspection');
       }
     } catch (error: any) {
       showError('Inspection Failed', error.response?.data?.error?.message || error.message);
+    } finally {
+      setInspectSubmitting(false);
     }
   };
 
@@ -1508,529 +1624,275 @@ The exporter can reapply once all requirements are met.`,
   const stats = getExporterStats();
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f7fcf8 0%, #eefbf2 45%, #fffdf3 100%)',
-        p: { xs: 2, md: 3 },
-      }}
-    >
+    <PortalShell brand="ECTA" title="ECTA Portal" subtitle={'Ethiopian Coffee & Tea Authority'}>
       {/* Dynamic KPI Cards - Change based on active tab */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {/* Tab 0: Pending Applications */}
         {tabValue === 0 && (
           <>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Pending Review
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                    {allApplications.filter(a => a.status === 'pending').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Warning />}
+                label="Pending Review"
+                value={allApplications.filter(a => a.status === 'pending').length}
+                color="#ff9800"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Approved
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                    {allApplications.filter(a => a.status === 'approved').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<CheckCircle />}
+                label="Approved"
+                value={allApplications.filter(a => a.status === 'approved').length}
+                color="#4caf50"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Cancel sx={{ fontSize: 28, color: '#f44336' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Rejected
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
-                    {allApplications.filter(a => a.status === 'rejected').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Cancel />}
+                label="Rejected"
+                value={allApplications.filter(a => a.status === 'rejected').length}
+                color="#f44336"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Assignment sx={{ fontSize: 28, color: '#2196f3' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Total Applications
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
-                    {allApplications.length}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </>
-        )}
-
-        {/* Tab 1: Approved Exporters */}
-        {tabValue === 1 && (
-          <>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: `${BRAND_COLOR}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Coffee sx={{ fontSize: 28, color: BRAND_COLOR }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Active Exporters
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: BRAND_COLOR, lineHeight: 1 }}>
-                    {approvedApplications.filter(a => a.status === 'approved').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Assignment />}
+                label="Total Applications"
+                value={allApplications.length}
+                color="#2196f3"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Warning sx={{ fontSize: 28, color: '#ff9800' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Expiring Soon
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                    {approvedApplications.filter(a => {
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Coffee />}
+                label="Active Exporters"
+                value={approvedApplications.filter(a => a.status === 'approved').length}
+                color={BRAND_COLOR}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Warning />}
+                label="Expiring Soon"
+                value={approvedApplications.filter(a => {
                       if (!a.license_expiry_date) return false;
                       const expiryDate = new Date(a.license_expiry_date);
                       const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
                       return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
-                    }).length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                }).length}
+                color="#ff9800"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <ErrorOutline sx={{ fontSize: 28, color: '#f44336' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Expired Licenses
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
-                    {approvedApplications.filter(a => {
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<ErrorOutline />}
+                label="Expired Licenses"
+                value={approvedApplications.filter(a => {
                       if (!a.license_expiry_date) return false;
                       const expiryDate = new Date(a.license_expiry_date);
                       return expiryDate.getTime() < Date.now();
-                    }).length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                }).length}
+                color="#f44336"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Science sx={{ fontSize: 28, color: '#9c27b0' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Lab Certified
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
-                    {approvedApplications.filter(a => a.laboratory_facility && a.laboratory_facility.toLowerCase() === 'yes').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Science />}
+                label="Lab Certified"
+                value={approvedApplications.filter(a => a.laboratory_facility && a.laboratory_facility.toLowerCase() === 'yes').length}
+                color="#9c27b0"
+              />
             </Grid>
-          </>
-        )}
-
-        {/* Tab 2: Sales Contracts */}
-        {tabValue === 2 && (
-          <>
             <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'REGISTERED' ? '#ff9800' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<HourglassEmpty />}
+                label="Pending Approval"
+                value={allContracts.filter(c => c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED').length}
+                color="#ff9800"
                 onClick={() => setContractStatusFilter('REGISTERED')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <HourglassEmpty sx={{ fontSize: 28, color: '#ff9800' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Pending Approval
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'REGISTERED'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'APPROVED' ? '#4caf50' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<CheckCircle />}
+                label="Approved"
+                value={allContracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length}
+                color="#4caf50"
                 onClick={() => setContractStatusFilter('APPROVED')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Approved
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'APPROVED'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'REJECTED' ? '#f44336' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Cancel />}
+                label="Rejected"
+                value={allContracts.filter(c => c.contractStatus === 'REJECTED' || c.status === 'REJECTED').length}
+                color="#f44336"
                 onClick={() => setContractStatusFilter('REJECTED')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#f4433615', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Cancel sx={{ fontSize: 28, color: '#f44336' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Rejected
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#f44336', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'REJECTED' || c.status === 'REJECTED').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'REJECTED'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card
-                sx={{
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'PENDING' ? '#ef6c00' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Pending />}
+                label="Pending"
+                value={allContracts.filter(c => c.contractStatus === 'PENDING' || c.status === 'PENDING').length}
+                color="#ef6c00"
                 onClick={() => setContractStatusFilter('PENDING')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ef6c0015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Pending sx={{ fontSize: 28, color: '#ef6c00' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Pending
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ef6c00', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'PENDING' || c.status === 'PENDING').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'PENDING'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card
-                sx={{
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'CANCELLED' ? '#616161' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Block />}
+                label="Cancelled"
+                value={allContracts.filter(c => c.contractStatus === 'CANCELLED' || c.status === 'CANCELLED').length}
+                color="#616161"
                 onClick={() => setContractStatusFilter('CANCELLED')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#61616115', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Block sx={{ fontSize: 28, color: '#616161' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Cancelled
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#616161', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'CANCELLED' || c.status === 'CANCELLED').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'CANCELLED'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card
-                sx={{
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === 'COMPLETED' ? '#00897b' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<CheckCircleOutline />}
+                label="Completed"
+                value={allContracts.filter(c => c.contractStatus === 'COMPLETED' || c.status === 'COMPLETED').length}
+                color="#00897b"
                 onClick={() => setContractStatusFilter('COMPLETED')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#00897b15', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <CheckCircleOutline sx={{ fontSize: 28, color: '#00897b' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Completed
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#00897b', lineHeight: 1 }}>
-                    {allContracts.filter(c => c.contractStatus === 'COMPLETED' || c.status === 'COMPLETED').length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === 'COMPLETED'}
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card 
-                sx={{ 
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  py: 3,
-                  transition: 'all 0.3s ease',
-                  border: `2px solid ${contractStatusFilter === '' ? '#2196f3' : 'transparent'}`,
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }
-                }}
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Description />}
+                label="All Contracts"
+                value={allContracts.length}
+                color="#2196f3"
                 onClick={() => setContractStatusFilter('')}
-              >
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Description sx={{ fontSize: 28, color: '#2196f3' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    All Contracts
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
-                    {allContracts.length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                selected={contractStatusFilter === ''}
+              />
             </Grid>
-          </>
-        )}
-
-        {/* Tab 3: Quality Inspections */}
-        {tabValue === 3 && (
-          <>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Pending sx={{ fontSize: 28, color: '#ff9800' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Pending Inspection
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                    {allShipments.filter(s => {
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Pending />}
+                label="Pending Inspection"
+                value={allShipments.filter(s => {
                       const status = (s.status || (s as any).Status || '').toUpperCase();
-                      return status === 'CREATED' && 
+                      return status === 'CREATED' &&
                              !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-                    }).length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                }).length}
+                color="#ff9800"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#2196f315', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Science sx={{ fontSize: 28, color: '#2196f3' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    In Progress
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196f3', lineHeight: 1 }}>
-                    {allInspectionRecords.filter(i => {
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Science />}
+                label="In Progress"
+                value={allInspectionRecords.filter(i => {
                       const status = (i.status || (i as any).Status || '').toUpperCase();
                       return status === 'INSPECTED';
-                    }).length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                }).length}
+                color="#2196f3"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <CheckCircle sx={{ fontSize: 28, color: '#4caf50' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Completed
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                    {allInspectionRecords.filter(i => {
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<CheckCircle />}
+                label="Completed"
+                value={allInspectionRecords.filter(i => {
+                      // COMPLETED is not a QualityInspection status
+                      // (quality.go: PENDING, INSPECTED, APPROVED, REJECTED).
+                      // A completed inspection is one that reached a terminal
+                      // decision: APPROVED or REJECTED. INSPECTED is still
+                      // in progress (see the "In Progress" card above).
                       const status = (i.status || (i as any).Status || '').toUpperCase();
-                      return status === 'COMPLETED';
-                    }).length}
-                  </Typography>
-                </CardContent>
-              </Card>
+                      return status === 'APPROVED' || status === 'REJECTED';
+                }).length}
+                color="#4caf50"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Assessment sx={{ fontSize: 28, color: '#9c27b0' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Total Inspections
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
-                    {allInspectionRecords.length}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </>
-        )}
-
-        {/* Tab 6: Audit Trail */}
-        {tabValue === 6 && (
-          <>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#1976d215', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <Assessment sx={{ fontSize: 28, color: '#1976d2' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Total Activities
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#1976d2', lineHeight: 1 }}>
-                    {auditStats.totalActivities}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Assessment />}
+                label="Total Inspections"
+                value={allInspectionRecords.length}
+                color="#9c27b0"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#4caf5015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <TrendingUp sx={{ fontSize: 28, color: '#4caf50' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Today's Actions
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#4caf50', lineHeight: 1 }}>
-                    {auditStats.todaysActions}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<Assessment />}
+                label="Total Activities"
+                value={auditStats.totalActivities}
+                color="#1976d2"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#9c27b015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <CheckCircle sx={{ fontSize: 28, color: '#9c27b0' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Blockchain Verified
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#9c27b0', lineHeight: 1 }}>
-                    {auditStats.blockchainVerified}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<TrendingUp />}
+                label="Today's Actions"
+                value={auditStats.todaysActions}
+                color="#4caf50"
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ textAlign: 'center', py: 3 }}>
-                <CardContent>
-                  <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: '#ff980015', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1.5, mx: 'auto' }}>
-                    <People sx={{ fontSize: 28, color: '#ff9800' }} />
-                  </Box>
-                  <Typography variant="caption" sx={{ color: '#666', textTransform: 'uppercase', fontWeight: 600, fontSize: '0.7rem', letterSpacing: 0.5, mb: 0.5, display: 'block' }}>
-                    Organizations
-                  </Typography>
-                  <Typography variant="h4" sx={{ fontWeight: 700, color: '#ff9800', lineHeight: 1 }}>
-                    {auditStats.organizationsInvolved}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<CheckCircle />}
+                label="Blockchain Verified"
+                value={auditStats.blockchainVerified}
+                color="#9c27b0"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <PortalKpiCard
+                brand="ECTA"
+                icon={<People />}
+                label="Organizations"
+                value={auditStats.organizationsInvolved}
+                color="#ff9800"
+              />
             </Grid>
           </>
         )}
       </Grid>
 
-      {/* Main Tabs - Enhanced with full-width, rounded corners */}
-      <Paper sx={{ 
-        mb: 3, 
-        borderRadius: 2, 
-        boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
-        border: '1px solid #e0e0e0',
-        overflow: 'hidden'
-      }}>
-        <Tabs 
-          value={tabValue} 
+      {/* Main Tabs */}
+      <PortalCard brand="ECTA" noPadding>
+        <PortalTabBar
+          brand="ECTA"
+          value={tabValue}
           onChange={(e, newValue) => {
             setTabValue(newValue);
             setSubTabValue(0);
           }}
-          variant="fullWidth"
-          sx={{ 
-            borderBottom: 2,
-            borderColor: 'divider',
-            '& .MuiTab-root': {
-              minHeight: 64,
-              textTransform: 'none',
-              fontSize: '0.95rem',
-              fontWeight: 600,
-              color: '#666',
-              transition: 'all 0.3s ease',
-              '&.Mui-selected': {
-                color: BRAND_COLOR,
-                fontWeight: 700,
-                bgcolor: 'rgba(7, 137, 48, 0.05)',
-              },
-              '&:hover': {
-                color: BRAND_COLOR,
-                bgcolor: 'rgba(7, 137, 48, 0.03)',
-              }
-            },
-            '& .MuiTabs-indicator': {
-              height: 4,
-              backgroundColor: BRAND_COLOR,
-              borderRadius: '4px 4px 0 0',
-            }
-          }}
-        >
-          {visibleTabs.map((tab) => (
-            <Tab 
-              key={tab.index}
-              value={tab.index}
-              icon={tab.icon}
-              iconPosition="start"
-              label={
+          fullWidth
+          tabs={visibleTabs.map((tab) => ({
+            value: tab.index,
+            icon: tab.icon,
+            label: 
                 tab.index === 0 ? `${tab.label} (${allApplications.filter(a => a.status === 'pending').length})` :
                 tab.index === 1 ? `${tab.label} (${approvedApplications.length})` :
                 tab.index === 2 ? `${tab.label} (${contracts.length})` :
@@ -2055,17 +1917,16 @@ The exporter can reapply once all requirements are met.`,
                 tab.index === 8 ? `${tab.label} (${deliveredShipments.length})` :
                 tab.index === 9 ? `${tab.label} (${deliveredShipments.length})` :
                 tab.label
-              }
-            />
-          ))}
-        </Tabs>
-      </Paper>
+              ,
+          }))}
+        />
+      </PortalCard>
 
 
 
       {/* Content Panels */}
       <Box>
-        <TabPanel value={tabValue} index={0}>
+        <PortalTabPanel value={tabValue} index={0}>
           {/* 🎯 ROLE-BASED DASHBOARD ALERT */}
           {(user?.role === 'ECTA_SUPERVISOR' || user?.username?.includes('supervisor')) && (
             <Alert severity="info" icon={<Assignment />} sx={{ mb: 3 }}>
@@ -2209,9 +2070,9 @@ The exporter can reapply once all requirements are met.`,
               </Box>
             </Box>
           )}
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={1}>
+        <PortalTabPanel value={tabValue} index={1}>
           <Typography variant="h6" gutterBottom>
             Approved Coffee Exporters
           </Typography>
@@ -2346,7 +2207,10 @@ The exporter can reapply once all requirements are met.`,
                                       { label: 'Capital', value: `${parseFloat(application.capital_requirement).toLocaleString()} ETB` },
                                       { label: 'Approved Date', value: application.approved_at ? formatDate(application.approved_at) : 'N/A' },
                                       { label: 'License Expires', value: application.license_expiry_date ? formatDate(application.license_expiry_date) : 'Not Set' },
-                                      { label: 'Status', value: 'ACTIVE' },
+                                      // Real status from the on-chain exporter
+                                      // record (getLicenseStatus), never a
+                                      // hardcoded 'ACTIVE'.
+                                      { label: 'Status', value: getLicenseStatus(application) },
                                     ],
                                     prerequisites: [],
                                     documents: applicationDocuments,
@@ -2528,25 +2392,12 @@ The exporter can reapply once all requirements are met.`,
               </Box>
             </Box>
           )}
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={2}>
+        <PortalTabPanel value={tabValue} index={2}>
           <Typography variant="h6" gutterBottom>
             Sales Contracts - Export Compliance Approval
           </Typography>
-          
-          {/* Debug info - remove after fixing */}
-          <Alert severity="info" sx={{ mb: 2 }}>
-            <strong>Debug:</strong> Total contracts: {contracts.length}, 
-            All contracts: {allContracts.length}, 
-            Filter: "{contractStatusFilter}",
-            Filtered count: {allContracts.filter(c => {
-              if (!contractStatusFilter) return true;
-              return c.contractStatus === contractStatusFilter || c.status === contractStatusFilter;
-            }).length},
-            Approved in allContracts: {allContracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length},
-            Approved in contracts: {contracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length}
-          </Alert>
           
           {allContracts.filter(c => {
             if (!contractStatusFilter) return true; // Show all when no filter
@@ -2590,9 +2441,9 @@ The exporter can reapply once all requirements are met.`,
                       <TableCell>{contract.quantity.toLocaleString()}</TableCell>
                       <TableCell>{contract.currency} {(contract.quantity * contract.pricePerKg).toLocaleString()}</TableCell>
                       <TableCell>
-                        <StatusChip 
-                          status={contract.contractStatus === 'REGISTERED' ? 'pending' : contract.contractStatus === 'APPROVED' ? 'approved' : 'rejected'}
-                          label={contract.contractStatus}
+                        <StatusChip
+                          status={(contract.contractStatus || contract.status || 'REGISTERED') as any}
+                          label={contract.contractStatus || contract.status}
                           brandColor={BRAND_COLOR}
                         />
                       </TableCell>
@@ -2617,21 +2468,19 @@ The exporter can reapply once all requirements are met.`,
                             >
                               Details
                             </Button>
-                            <Button
-                              variant="contained"
+                            <PrimaryButton
+                              brand="ECTA"
                               size="small"
-                              sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
                               onClick={() => {
                                 setSelectedContract(contract);
                                 setContractApprovalDialogOpen(true);
                               }}
                             >
                               Approve
-                            </Button>
-                            <Button
-                              variant="outlined"
+                            </PrimaryButton>
+                            <DangerButton
+                              brand="ECTA"
                               size="small"
-                              color="error"
                               onClick={() => {
                                 setSelectedContract(contract);
                                 setContractRejectionField('');
@@ -2640,7 +2489,7 @@ The exporter can reapply once all requirements are met.`,
                               }}
                             >
                               Reject
-                            </Button>
+                            </DangerButton>
                           </Box>
                         ) : contract.contractStatus === 'APPROVED' ? (
                           <Box display="flex" gap={1}>
@@ -2752,9 +2601,9 @@ The exporter can reapply once all requirements are met.`,
               </Box>
             </Box>
           )}
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <PortalTabPanel value={tabValue} index={3}>
           {/* Quality Control Tab - Clean Table View */}
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Science /> Quality Inspection Records
@@ -2962,29 +2811,27 @@ The exporter can reapply once all requirements are met.`,
                                 >
                                   Approve
                                 </Button>
-                                <Button
-                                  variant="outlined"
+                                <DangerButton
+                                  brand="ECTA"
                                   size="small"
                                   startIcon={<Cancel />}
-                                  color="error"
                                   onClick={() => {
                                     const reason = prompt('Enter rejection reason:');
                                     if (reason) handleRejectInspection(item, reason);
                                   }}
                                 >
                                   Reject
-                                </Button>
+                                </DangerButton>
                               </Box>
                             ) : status === 'APPROVED' ? (
-                              <Button
-                                variant="contained"
+                              <PrimaryButton
+                                brand="ECTA"
                                 size="small"
                                 startIcon={<Description />}
-                                sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
                                 onClick={() => handleIssueExportPermit(item)}
                               >
                                 Issue Permit
-                              </Button>
+                              </PrimaryButton>
                             ) : status === 'REJECTED' ? (
                               <Chip label="Rejected" size="small" color="error" />
                             ) : status === 'PERMIT_ISSUED' ? (
@@ -3047,9 +2894,9 @@ The exporter can reapply once all requirements are met.`,
             </>
             );
           })()}
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={4}>
+        <PortalTabPanel value={tabValue} index={4}>
           {/* License Renewals Tab */}
           <Typography variant="h6" gutterBottom>
             License Renewals
@@ -3196,14 +3043,14 @@ The exporter can reapply once all requirements are met.`,
               </Box>
             );
           })()}
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <PortalTabPanel value={tabValue} index={5}>
           {/* Analytics Tab */}
           <AnalyticsDashboard />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <PortalTabPanel value={tabValue} index={6}>
           {/* Pre-shipment Inspection Tab */}
           <Box>
             <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700, mb: 3 }}>
@@ -3211,14 +3058,14 @@ The exporter can reapply once all requirements are met.`,
             </Typography>
             <InspectionRequestsTab />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <PortalTabPanel value={tabValue} index={7}>
           {/* User Management Tab */}
           <UserManagement />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={8}>
+        <PortalTabPanel value={tabValue} index={8}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="ECTA Portal - Complete Transaction History"
@@ -3227,9 +3074,9 @@ The exporter can reapply once all requirements are met.`,
             showStats={false}
             maxHeight={700}
           />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={9}>
+        <PortalTabPanel value={tabValue} index={9}>
           {/* Post-Delivery Audits Tab */}
           <Box>
             <Typography variant="h5" gutterBottom sx={{ color: BRAND_COLOR, fontWeight: 700 }}>
@@ -3286,8 +3133,8 @@ The exporter can reapply once all requirements are met.`,
               </Grid>
             )}
           </Box>
-        </TabPanel>
-        <TabPanel value={tabValue} index={10}>
+        </PortalTabPanel>
+        <PortalTabPanel value={tabValue} index={10}>
           {/* Phytosanitary Certificates Tab — slice-6 fix: the component
               existed but was never mounted in any portal, so the phyto
               step (request → inspect → issue) had no UI path. */}
@@ -3300,21 +3147,20 @@ The exporter can reapply once all requirements are met.`,
             </Typography>
             <PhytosanitaryCertificates />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
       </Box>
 
       {/* Register Exporter Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Register New Coffee Exporter</DialogTitle>
+      <PortalDialog brand="ECTA" title="Register New Coffee Exporter" open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md">
         <form onSubmit={handleSubmit(handleCreateExporter)}>
-          <DialogContent>
+
             <Grid container spacing={3}>
               <Grid item xs={12} md={6}>
                 <Controller
                   name="exporterId"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="Exporter ID"
                       placeholder="EXP2026001"
@@ -3330,7 +3176,7 @@ The exporter can reapply once all requirements are met.`,
                   name="companyName"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="Company Name"
                       fullWidth
@@ -3345,7 +3191,7 @@ The exporter can reapply once all requirements are met.`,
                   name="ectaLicenseNumber"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="ECTA License Number"
                       placeholder="ECTA-LIC-2026-001"
@@ -3361,7 +3207,7 @@ The exporter can reapply once all requirements are met.`,
                   name="capitalRequirement"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="Capital Requirement (ETB)"
                       type="number"
@@ -3377,7 +3223,7 @@ The exporter can reapply once all requirements are met.`,
                   name="professionalTaster"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="Professional Taster"
                       fullWidth
@@ -3392,7 +3238,7 @@ The exporter can reapply once all requirements are met.`,
                   name="tasterCertificate"
                   control={control}
                   render={({ field }) => (
-                    <TextField
+                    <PortalField
                       {...field}
                       label="Taster Certificate"
                       fullWidth
@@ -3403,44 +3249,40 @@ The exporter can reapply once all requirements are met.`,
                 />
               </Grid>
             </Grid>
-          </DialogContent>
-          <DialogActions>
+          
+          <PortalDialogActions>
+
             <AnimatedButton onClick={() => setDialogOpen(false)} variant="outlined">
               Cancel
             </AnimatedButton>
             <AnimatedButton 
               type="submit" 
               variant="contained"
-              brandColor="#FFD700"
-              secondaryColor="#B8860B"
+              brandColor={BRAND_COLOR}
+              secondaryColor={SECONDARY_COLOR}
             >
               Register Exporter
             </AnimatedButton>
-          </DialogActions>
+          
+          </PortalDialogActions>
         </form>
-      </Dialog>
+      </PortalDialog>
 
       {/* Application Details Dialog */}
-      <Dialog 
-        open={!!selectedApplication && !approveDialogOpen && !rejectDialogOpen && !approveConfirmOpen && !rejectConfirmOpen} 
-        onClose={() => setSelectedApplication(null)} 
-        maxWidth="md" 
-        fullWidth
-      >
-        <DialogTitle sx={{ 
-          borderBottom: '1px solid #e0e0e0',
-          background: 'linear-gradient(135deg, #9b30b7 0%, #7a2596 100%)',
-          color: 'white',
-          py: 2
-        }}>
-          <Typography variant="h6" fontWeight={700}>Application Details</Typography>
-          {selectedApplication && (
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              {selectedApplication.application_id} — {selectedApplication.company_name}
-            </Typography>
-          )}
-        </DialogTitle>
-        <DialogContent sx={{ p: 3, bgcolor: '#f8f9fa' }}>
+      <PortalDialog brand="ECTA" title="Application Details" subtitle={selectedApplication ? `${selectedApplication.application_id} — ${selectedApplication.company_name}` : undefined} open={!!selectedApplication && !approveDialogOpen && !rejectDialogOpen && !approveConfirmOpen && !rejectConfirmOpen} onClose={() => setSelectedApplication(null)} maxWidth="md" contentSx={{ bgcolor: '#f8f9fa' }} actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => setSelectedApplication(null)}>
+            Close
+          </GhostButton>
+          <DangerButton brand="ECTA" onClick={() => setRejectDialogOpen(true)}>
+            Reject
+          </DangerButton>
+          <PrimaryButton brand="ECTA" onClick={() => setApproveConfirmOpen(true)}>
+            Approve
+          </PrimaryButton>
+        
+      </>}>
+
           {selectedApplication && (
             <Stack spacing={2.5}>
 
@@ -3559,7 +3401,7 @@ The exporter can reapply once all requirements are met.`,
                               </Box>
                               {match && match.status === 'AVAILABLE' && match.url ? (
                                 <Button size="small" variant="outlined" sx={{ color, borderColor: color, fontWeight: 700, minWidth: 70 }}
-                                  onClick={() => window.open('http://localhost:3001' + match.url, '_blank')}>
+                                  onClick={() => handleViewDocumentUrl(match.url)}>
                                   VIEW
                                 </Button>
                               ) : (
@@ -3576,44 +3418,39 @@ The exporter can reapply once all requirements are met.`,
 
             </Stack>
           )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, borderTop: '1px solid #e0e0e0', gap: 1 }}>
-          <Button variant="outlined" color="inherit" onClick={() => setSelectedApplication(null)} sx={{ borderColor: '#bdbdbd', color: '#616161' }}>
-            Close
-          </Button>
-          <Button variant="outlined" color="error" onClick={() => setRejectDialogOpen(true)}>
-            Reject
-          </Button>
-          <Button variant="contained" sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
-            onClick={() => setApproveConfirmOpen(true)}>
-            Approve
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Approve Confirmation Dialog */}
-      <Dialog open={approveConfirmOpen} onClose={() => setApproveConfirmOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ borderBottom: '1px solid #e0e0e0' }}>Confirm Approval</DialogTitle>
-        <DialogContent sx={{ pt: 3 }}>
+      <PortalDialog brand="ECTA" title="Confirm Approval" open={approveConfirmOpen} onClose={() => setApproveConfirmOpen(false)} maxWidth="sm" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => setApproveConfirmOpen(false)}>
+            Cancel
+          </GhostButton>
+          <PrimaryButton brand="ECTA" onClick={() => { setApproveConfirmOpen(false); generateApprovalData(); setApproveDialogOpen(true); }}>
+            Yes, Approve
+          </PrimaryButton>
+        
+      </>}>
+
           <Typography variant="body1">
             Are you sure you want to approve <strong>{selectedApplication?.company_name}</strong>? This will register them as a licensed exporter and send login credentials to their email.
           </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
-          <Button variant="outlined" color="inherit" sx={{ borderColor: '#bdbdbd', color: '#616161' }} onClick={() => setApproveConfirmOpen(false)}>
-            Cancel
-          </Button>
-          <Button variant="contained" sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#388e3c' } }}
-            onClick={() => { setApproveConfirmOpen(false); generateApprovalData(); setApproveDialogOpen(true); }}>
-            Yes, Approve
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Reject Confirmation Dialog */}
-      <Dialog open={rejectConfirmOpen} onClose={() => setRejectConfirmOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ borderBottom: '1px solid #e0e0e0', color: '#d32f2f' }}>⚠️ This Cannot Be Undone</DialogTitle>
-        <DialogContent sx={{ pt: 3 }}>
+      <PortalDialog brand="ECTA" title="⚠️ This Cannot Be Undone" open={rejectConfirmOpen} onClose={() => setRejectConfirmOpen(false)} maxWidth="sm" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => setRejectConfirmOpen(false)}>
+            Go Back
+          </GhostButton>
+          <DangerButton brand="ECTA" startIcon={<WarningAmber />} onClick={() => { setRejectConfirmOpen(false); handleRejectApplication(); }}>
+            Yes, Reject Permanently
+          </DangerButton>
+        
+      </>}>
+
           <Alert severity="error" sx={{ mb: 2 }}>Once rejected, this decision is final.</Alert>
           <Typography variant="body1" paragraph>
             You are about to permanently reject <strong>{selectedApplication?.company_name}</strong>'s application. This action cannot be undone.
@@ -3621,137 +3458,12 @@ The exporter can reapply once all requirements are met.`,
           <Typography variant="body2" color="text.secondary">
             The exporter will be notified with the rejection reason and may reapply.
           </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, gap: 1 }}>
-          <Button variant="outlined" color="inherit" sx={{ borderColor: '#bdbdbd', color: '#616161' }} onClick={() => setRejectConfirmOpen(false)}>
-            Go Back
-          </Button>
-          <Button variant="contained" color="error" startIcon={<WarningAmber />}
-            onClick={() => { setRejectConfirmOpen(false); handleRejectApplication(); }}>
-            Yes, Reject Permanently
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Approve Application Dialog */}
-      <Dialog open={approveDialogOpen} onClose={() => setApproveDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Approve Exporter Application</DialogTitle>
-        <DialogContent>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            <Typography variant="body2" fontWeight="bold" gutterBottom>
-              Approval Process
-            </Typography>
-            <Typography variant="caption" component="div">
-              1. Assign Exporter ID and License Number<br />
-              2. Select Primary Bank for LC Processing<br />
-              3. Select Bank Branch (LC Approval Authority)
-            </Typography>
-          </Alert>
-          
-          <Grid container spacing={3} sx={{ mt: 1 }}>
-            {/* Exporter ID */}
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                required
-                label="Exporter ID"
-                placeholder="EXP2026001"
-                value={approvalData.exporterId}
-                onChange={(e) => setApprovalData({ ...approvalData, exporterId: e.target.value })}
-                helperText="Format: EXP followed by 7 digits"
-              />
-            </Grid>
-            
-            {/* License Number */}
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                required
-                label="ECTA License Number"
-                placeholder="ECTA-LIC-2026-001"
-                value={approvalData.ectaLicenseNumber}
-                onChange={(e) => setApprovalData({ ...approvalData, ectaLicenseNumber: e.target.value })}
-                helperText="Format: ECTA-LIC-YYYY-XXX"
-              />
-            </Grid>
-            
-            {/* License Expiry */}
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                required
-                type="date"
-                label="License Expiry Date"
-                value={approvalData.licenseExpiryDate}
-                onChange={(e) => setApprovalData({ ...approvalData, licenseExpiryDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                helperText="Typically 1 year from approval date"
-              />
-            </Grid>
+      <PortalDialog brand="ECTA" title="Approve Exporter Application" open={approveDialogOpen} onClose={() => setApproveDialogOpen(false)} maxWidth="md" actions={<>
 
-            {/* Divider */}
-            <Grid item xs={12}>
-              <Divider sx={{ my: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Banking Information for LC Processing
-                </Typography>
-              </Divider>
-            </Grid>
-
-            {/* Bank Name — pre-filled from exporter's application */}
-            <Grid item xs={12} md={8}>
-              <TextField
-                fullWidth
-                required
-                label="Primary Bank"
-                value={approvalData.bankName}
-                onChange={(e) => setApprovalData({
-                  ...approvalData,
-                  bankName: e.target.value,
-                  bankBranch: '',
-                  bankBranchCode: '',
-                })}
-                helperText="As submitted by the exporter — edit if needed"
-                InputProps={{
-                  endAdornment: selectedApplication?.bank_name && approvalData.bankName === selectedApplication.bank_name
-                    ? <InputAdornment position="end"><CheckCircleOutline sx={{ color: 'success.main', fontSize: 18 }} /></InputAdornment>
-                    : undefined,
-                }}
-              />
-            </Grid>
-
-            {/* Account Number — pre-filled from exporter's application */}
-            <Grid item xs={12} md={4}>
-              <TextField
-                fullWidth
-                label="Account Number"
-                value={approvalData.bankAccountNumber}
-                onChange={(e) => setApprovalData({ ...approvalData, bankAccountNumber: e.target.value })}
-                helperText="As submitted by the exporter"
-              />
-            </Grid>
-            
-            {/* Branch Selection - Cascades from Bank */}
-            <Grid item xs={12}>
-              <BankBranchSelect
-                bankName={approvalData.bankName}
-                value={approvalData.bankBranch}
-                onChange={(branchName, branch) => {
-                  setApprovalData({
-                    ...approvalData,
-                    bankBranch: branchName,
-                    bankBranchCode: branch?.branchCode || '',
-                  });
-                }}
-                label="LC Processing Branch *"
-                helperText="Select the branch that will approve Letters of Credit for this exporter"
-                required
-                showDetails
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
           <AnimatedButton onClick={() => {
             setApproveDialogOpen(false);
             setApprovalData({ 
@@ -3780,29 +3492,128 @@ The exporter can reapply once all requirements are met.`,
           >
             Approve & Register
           </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </>}>
+
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight="bold" gutterBottom>
+              Approval Process
+            </Typography>
+            <Typography variant="caption" component="div">
+              1. Assign Exporter ID and License Number<br />
+              2. Select Primary Bank for LC Processing<br />
+              3. Select Bank Branch (LC Approval Authority)
+            </Typography>
+          </Alert>
+          
+          <Grid container spacing={3} sx={{ mt: 1 }}>
+            {/* Exporter ID */}
+            <Grid item xs={12} md={6}>
+              <PortalField
+                fullWidth
+                required
+                label="Exporter ID"
+                placeholder="EXP2026001"
+                value={approvalData.exporterId}
+                onChange={(e) => setApprovalData({ ...approvalData, exporterId: e.target.value })}
+                helperText="Format: EXP followed by 7 digits"
+              />
+            </Grid>
+            
+            {/* License Number */}
+            <Grid item xs={12} md={6}>
+              <PortalField
+                fullWidth
+                required
+                label="ECTA License Number"
+                placeholder="ECTA-LIC-2026-001"
+                value={approvalData.ectaLicenseNumber}
+                onChange={(e) => setApprovalData({ ...approvalData, ectaLicenseNumber: e.target.value })}
+                helperText="Format: ECTA-LIC-YYYY-XXX"
+              />
+            </Grid>
+            
+            {/* License Expiry */}
+            <Grid item xs={12} md={6}>
+              <PortalField
+                fullWidth
+                required
+                type="date"
+                label="License Expiry Date"
+                value={approvalData.licenseExpiryDate}
+                onChange={(e) => setApprovalData({ ...approvalData, licenseExpiryDate: e.target.value })}
+                InputLabelProps={{ shrink: true }}
+                helperText="Typically 1 year from approval date"
+              />
+            </Grid>
+
+            {/* Divider */}
+            <Grid item xs={12}>
+              <Divider sx={{ my: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Banking Information for LC Processing
+                </Typography>
+              </Divider>
+            </Grid>
+
+            {/* Bank Name — pre-filled from exporter's application */}
+            <Grid item xs={12} md={8}>
+              <PortalField
+                fullWidth
+                required
+                label="Primary Bank"
+                value={approvalData.bankName}
+                onChange={(e) => setApprovalData({
+                  ...approvalData,
+                  bankName: e.target.value,
+                  bankBranch: '',
+                  bankBranchCode: '',
+                })}
+                helperText="As submitted by the exporter — edit if needed"
+                InputProps={{
+                  endAdornment: selectedApplication?.bank_name && approvalData.bankName === selectedApplication.bank_name
+                    ? <InputAdornment position="end"><CheckCircleOutline sx={{ color: 'success.main', fontSize: 18 }} /></InputAdornment>
+                    : undefined,
+                }}
+              />
+            </Grid>
+
+            {/* Account Number — pre-filled from exporter's application */}
+            <Grid item xs={12} md={4}>
+              <PortalField
+                fullWidth
+                label="Account Number"
+                value={approvalData.bankAccountNumber}
+                onChange={(e) => setApprovalData({ ...approvalData, bankAccountNumber: e.target.value })}
+                helperText="As submitted by the exporter"
+              />
+            </Grid>
+            
+            {/* Branch Selection - Cascades from Bank */}
+            <Grid item xs={12}>
+              <BankBranchSelect
+                bankName={approvalData.bankName}
+                value={approvalData.bankBranch}
+                onChange={(branchName, branch) => {
+                  setApprovalData({
+                    ...approvalData,
+                    bankBranch: branchName,
+                    bankBranchCode: branch?.branchCode || '',
+                  });
+                }}
+                label="LC Processing Branch *"
+                helperText="Select the branch that will approve Letters of Credit for this exporter"
+                required
+                showDetails
+              />
+            </Grid>
+          </Grid>
+        
+      </PortalDialog>
 
       {/* Reject Application Dialog */}
-      <Dialog open={rejectDialogOpen} onClose={() => setRejectDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Reject Exporter Application</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="textSecondary" paragraph>
-            Please provide a reason for rejecting this application.
-          </Typography>
-          <TextField
-            fullWidth
-            required
-            multiline
-            rows={4}
-            label="Rejection Reason"
-            value={rejectionReason}
-            onChange={(e) => setRejectionReason(e.target.value)}
-            placeholder="Explain why this application is being rejected..."
-            sx={{ mt: 2 }}
-          />
-        </DialogContent>
-        <DialogActions>
+      <PortalDialog brand="ECTA" title="Reject Exporter Application" open={rejectDialogOpen} onClose={() => setRejectDialogOpen(false)} maxWidth="sm" actions={<>
+
           <AnimatedButton onClick={() => {
             setRejectDialogOpen(false);
             setRejectionReason('');
@@ -3817,80 +3628,29 @@ The exporter can reapply once all requirements are met.`,
           >
             Reject Application
           </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </>}>
+
+          <Typography variant="body2" color="textSecondary" paragraph>
+            Please provide a reason for rejecting this application.
+          </Typography>
+          <PortalField
+            fullWidth
+            required
+            multiline
+            rows={4}
+            label="Rejection Reason"
+            value={rejectionReason}
+            onChange={(e) => setRejectionReason(e.target.value)}
+            placeholder="Explain why this application is being rejected..."
+            sx={{ mt: 2 }}
+          />
+        
+      </PortalDialog>
 
       {/* Exporter Detail Dialog */}
-      <Dialog 
-        open={!!selectedExporter && !qualityDialogOpen} 
-        onClose={() => setSelectedExporter(null)} 
-        maxWidth="md" 
-        fullWidth
-      >
-        <DialogTitle>Exporter Details</DialogTitle>
-        <DialogContent>
-          {selectedExporter && (
-            <Box sx={{ pt: 2 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedExporter.exporterId}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Company Name</Typography>
-                  <Typography variant="body1" fontWeight={600}>{selectedExporter.companyName}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">License Number</Typography>
-                  <Typography variant="body1">{selectedExporter.ectaLicenseNumber}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">License Status</Typography>
-                  <StatusChip status={selectedExporter.licenseStatus} />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Capital Requirement</Typography>
-                  <Typography variant="body1">${selectedExporter.capitalRequirement.toLocaleString()}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Laboratory Certified</Typography>
-                  <Box>
-                    {selectedExporter.laboratoryCertified ? (
-                      <Chip label="Yes" color="success" size="small" icon={<CheckCircle />} />
-                    ) : (
-                      <Chip label="No" color="error" size="small" icon={<Cancel />} />
-                    )}
-                  </Box>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
-                  <Typography variant="body1">{new Date(selectedExporter.createdAt).toLocaleDateString()}</Typography>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Typography variant="body2" color="textSecondary">License Expiry</Typography>
-                  <Typography variant="body1">{new Date(selectedExporter.licenseExpiryDate).toLocaleDateString()}</Typography>
-                </Grid>
-              </Grid>
+      <PortalDialog brand="ECTA" title="Exporter Details" open={!!selectedExporter && !qualityDialogOpen} onClose={() => setSelectedExporter(null)} maxWidth="md" actions={<>
 
-              {selectedExporter.licenseStatus === 'ACTIVE' && (
-                <Alert severity="success" sx={{ mt: 2 }}>
-                  This exporter has an active license and is authorized to export coffee.
-                </Alert>
-              )}
-              {selectedExporter.licenseStatus === 'SUSPENDED' && (
-                <Alert severity="warning" sx={{ mt: 2 }}>
-                  This exporter's license is currently suspended. Export activities are not allowed.
-                </Alert>
-              )}
-              {selectedExporter.licenseStatus === 'EXPIRED' && (
-                <Alert severity="error" sx={{ mt: 2 }}>
-                  This exporter's license has expired. Please renew the license to continue export activities.
-                </Alert>
-              )}
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
           <Button
             variant="outlined"
             size="small"
@@ -3954,8 +3714,71 @@ The exporter can reapply once all requirements are met.`,
               Suspend License
             </AnimatedButton>
           )}
-        </DialogActions>
-      </Dialog>
+        
+      </>}>
+
+          {selectedExporter && (
+            <Box sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Exporter ID</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedExporter.exporterId}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Company Name</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedExporter.companyName}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Number</Typography>
+                  <Typography variant="body1">{selectedExporter.ectaLicenseNumber}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Status</Typography>
+                  <StatusChip status={selectedExporter.licenseStatus} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Capital Requirement</Typography>
+                  <Typography variant="body1">${selectedExporter.capitalRequirement.toLocaleString()}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Laboratory Certified</Typography>
+                  <Box>
+                    {selectedExporter.laboratoryCertified ? (
+                      <Chip label="Yes" color="success" size="small" icon={<CheckCircle />} />
+                    ) : (
+                      <Chip label="No" color="error" size="small" icon={<Cancel />} />
+                    )}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">Registration Date</Typography>
+                  <Typography variant="body1">{new Date(selectedExporter.createdAt).toLocaleDateString()}</Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="textSecondary">License Expiry</Typography>
+                  <Typography variant="body1">{new Date(selectedExporter.licenseExpiryDate).toLocaleDateString()}</Typography>
+                </Grid>
+              </Grid>
+
+              {selectedExporter.licenseStatus === 'ACTIVE' && (
+                <Alert severity="success" sx={{ mt: 2 }}>
+                  This exporter has an active license and is authorized to export coffee.
+                </Alert>
+              )}
+              {selectedExporter.licenseStatus === 'SUSPENDED' && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  This exporter's license is currently suspended. Export activities are not allowed.
+                </Alert>
+              )}
+              {selectedExporter.licenseStatus === 'EXPIRED' && (
+                <Alert severity="error" sx={{ mt: 2 }}>
+                  This exporter's license has expired. Please renew the license to continue export activities.
+                </Alert>
+              )}
+            </Box>
+          )}
+        
+      </PortalDialog>
 
       {/* Notification Dialog for Approval/Rejection Results */}
       <Dialog 
@@ -3980,7 +3803,7 @@ The exporter can reapply once all requirements are met.`,
             {notificationContent.message}
           </Typography>
         </DialogContent>
-        <DialogActions>
+        <PortalDialogActions>
           <AnimatedButton 
             variant="contained"
             brandColor={BRAND_COLOR}
@@ -3995,8 +3818,64 @@ The exporter can reapply once all requirements are met.`,
           >
             Close
           </AnimatedButton>
-        </DialogActions>
+        </PortalDialogActions>
       </Dialog>
+
+      {/* Quality Inspect form (0.9) — real values, sent as entered. The
+          grade is derived server-side from the entered scores; the UI never
+          hardcodes a passing outcome. */}
+      <PortalDialog brand="ECTA" title="Perform Quality Inspection" subtitle={inspectTarget ? `${inspectTarget.inspection_id || inspectTarget.inspectionID || inspectTarget.InspectionID} • Shipment ${inspectTarget.shipment_id || inspectTarget.shipmentID || inspectTarget.ShipmentID}` : undefined} open={inspectDialogOpen} onClose={() => { if (!inspectSubmitting) { setInspectDialogOpen(false); setInspectTarget(null); } }} maxWidth="md" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => { setInspectDialogOpen(false); setInspectTarget(null); }} disabled={inspectSubmitting}>Cancel</GhostButton>
+          <PrimaryButton brand="ECTA" onClick={handleSubmitInspectForm} disabled={inspectSubmitting}>
+            {inspectSubmitting ? 'Submitting…' : 'Submit Inspection Results'}
+          </PrimaryButton>
+        
+      </>}>
+
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} sm={6}>
+              <PortalField fullWidth required label="Inspector Name" value={inspectForm.inspectorName}
+                onChange={(e) => setInspectForm({ ...inspectForm, inspectorName: e.target.value })}
+                placeholder="e.g. Alemayehu Bekele" />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <PortalField fullWidth required type="number" label="Sample Size (g) — must be > 0"
+                value={inspectForm.sampleSize || ''}
+                onChange={(e) => setInspectForm({ ...inspectForm, sampleSize: Number(e.target.value) })}
+                inputProps={{ min: 1 }} />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <PortalField fullWidth required type="number" label="Moisture Content % (8–13)"
+                value={inspectForm.moistureContent || ''}
+                onChange={(e) => setInspectForm({ ...inspectForm, moistureContent: Number(e.target.value) })}
+                inputProps={{ min: 8, max: 13, step: 0.1 }} />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <PortalField fullWidth required type="number" label="Defect Count (0–100)"
+                value={inspectForm.defectCount || ''}
+                onChange={(e) => setInspectForm({ ...inspectForm, defectCount: Number(e.target.value) })}
+                inputProps={{ min: 0, max: 100 }} />
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="subtitle2" gutterBottom>Cupping Scores (0–100 each)</Typography>
+            </Grid>
+            {CUPPING_FIELDS.map(({ key, label }) => (
+              <Grid item xs={6} sm={4} key={key}>
+                <PortalField fullWidth required type="number" label={`${label} (0–100)`}
+                  value={inspectForm[key] || ''}
+                  onChange={(e) => setInspectForm({ ...inspectForm, [key]: Number(e.target.value) })}
+                  inputProps={{ min: 0, max: 100 }} />
+              </Grid>
+            ))}
+            <Grid item xs={12}>
+              <PortalField fullWidth multiline rows={2} label="Remarks" value={inspectForm.remarks}
+                onChange={(e) => setInspectForm({ ...inspectForm, remarks: e.target.value })}
+                placeholder="Inspector remarks (optional)" />
+            </Grid>
+          </Grid>
+        
+      </PortalDialog>
 
       {/* Quality Inspection Workflow Dialog */}
       {inspectionDialogOpen && selectedShipmentForInspection && (
@@ -4067,17 +3946,24 @@ The exporter can reapply once all requirements are met.`,
       )}
 
       {/* Contract Details Dialog */}
-      <Dialog 
-        open={contractDetailsDialogOpen} 
-        onClose={() => setContractDetailsDialogOpen(false)}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Description />
-          Contract Details
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog brand="ECTA" title="Contract Details" icon={<Description />} open={contractDetailsDialogOpen} onClose={() => setContractDetailsDialogOpen(false)} maxWidth="lg" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => setContractDetailsDialogOpen(false)}>
+            Close
+          </GhostButton>
+          {selectedContract?.contractStatus === 'REGISTERED' && (
+            <>
+              <DangerButton brand="ECTA" onClick={() => { setContractDetailsDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); setContractRejectDialogOpen(true); }}>
+                Reject Contract
+              </DangerButton>
+              <PrimaryButton brand="ECTA" onClick={() => { setContractDetailsDialogOpen(false); setContractApprovalDialogOpen(true); }}>
+                Approve Contract
+              </PrimaryButton>
+            </>
+          )}
+        
+      </>}>
+
           {selectedContract && (
             <Box>
               {/* Contract Information */}
@@ -4291,49 +4177,21 @@ The exporter can reapply once all requirements are met.`,
               </Paper>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setContractDetailsDialogOpen(false)}>
-            Close
-          </Button>
-          {selectedContract?.contractStatus === 'REGISTERED' && (
-            <>
-              <Button 
-                variant="contained" 
-                color="error"
-                onClick={() => {
-                  setContractDetailsDialogOpen(false);
-                  setContractRejectionField('');
-                  setContractRejectionReason('');
-                  setContractRejectDialogOpen(true);
-                }}
-              >
-                Reject Contract
-              </Button>
-              <Button 
-                variant="contained" 
-                sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
-                onClick={() => {
-                  setContractDetailsDialogOpen(false);
-                  setContractApprovalDialogOpen(true);
-                }}
-              >
-                Approve Contract
-              </Button>
-            </>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Contract Approval Dialog */}
-      <Dialog 
-        open={contractApprovalDialogOpen} 
-        onClose={() => setContractApprovalDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>Approve Contract for Export</DialogTitle>
-        <DialogContent>
+      <PortalDialog brand="ECTA" title="Approve Contract for Export" open={contractApprovalDialogOpen} onClose={() => setContractApprovalDialogOpen(false)} maxWidth="md" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => setContractApprovalDialogOpen(false)}>
+            Cancel
+          </GhostButton>
+          <PrimaryButton brand="ECTA" onClick={handleApproveContract}>
+            Approve Contract
+          </PrimaryButton>
+        
+      </>}>
+
           {selectedContract && (
             <>
               <Alert severity="info" sx={{ mb: 2 }}>
@@ -4454,34 +4312,21 @@ The exporter can reapply once all requirements are met.`,
               </Alert>
             </>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setContractApprovalDialogOpen(false)}>
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            sx={{ bgcolor: BRAND_COLOR, '&:hover': { bgcolor: '#056620' } }}
-            onClick={handleApproveContract}
-          >
-            Approve Contract
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Contract Rejection Dialog */}
-      <Dialog 
-        open={contractRejectDialogOpen} 
-        onClose={() => {
-          setContractRejectDialogOpen(false);
-          setContractRejectionField('');
-          setContractRejectionReason('');
-        }}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Reject Contract</DialogTitle>
-        <DialogContent>
+      <PortalDialog brand="ECTA" title="Reject Contract" open={contractRejectDialogOpen} onClose={() => { setContractRejectDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); }} maxWidth="sm" actions={<>
+
+          <GhostButton brand="ECTA" onClick={() => { setContractRejectDialogOpen(false); setContractRejectionField(''); setContractRejectionReason(''); }}>
+            Cancel
+          </GhostButton>
+          <DangerButton brand="ECTA" onClick={handleRejectContract} disabled={!contractRejectionField || contractRejectionReason.trim().length < 20}>
+            Reject Contract
+          </DangerButton>
+        
+      </>}>
+
           {selectedContract && (
             <>
               <Alert severity="warning" sx={{ mb: 2 }}>
@@ -4500,7 +4345,7 @@ The exporter can reapply once all requirements are met.`,
                 <strong>Buyer:</strong> {selectedContract.buyerID || selectedContract.buyerId}
               </Typography>
               
-              <TextField
+              <PortalField
                 select
                 fullWidth
                 required
@@ -4513,8 +4358,8 @@ The exporter can reapply once all requirements are met.`,
                 {contractRejectionFields.map((field) => (
                   <MenuItem key={field} value={field}>{field}</MenuItem>
                 ))}
-              </TextField>
-              <TextField
+              </PortalField>
+              <PortalField
                 fullWidth
                 multiline
                 rows={4}
@@ -4528,26 +4373,9 @@ The exporter can reapply once all requirements are met.`,
               />
             </>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setContractRejectDialogOpen(false);
-            setContractRejectionField('');
-            setContractRejectionReason('');
-          }}>
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            color="error"
-            onClick={handleRejectContract}
-            disabled={!contractRejectionField || contractRejectionReason.trim().length < 20}
-          >
-            Reject Contract
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
+        
+      </PortalDialog>
+    </PortalShell>
   );
 };
 

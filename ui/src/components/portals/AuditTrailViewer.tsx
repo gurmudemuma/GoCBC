@@ -543,7 +543,7 @@ Ethiopian Customs Commission (ECC)
                 </IconButton>
               </Tooltip>
               <Typography variant="caption" sx={{ ml: 1 }}>
-                TX: {log.signature.transactionId.substring(0, 16)}...
+                TX: {String(log.signature?.transactionId ?? '').substring(0, 16)}...
               </Typography>
             </Box>
           </Box>
@@ -595,7 +595,7 @@ Ethiopian Customs Commission (ECC)
                   </Typography>
                   {log.reason && (
                     <Typography variant="caption" color="text.secondary">
-                      {log.reason.substring(0, 50)}{log.reason.length > 50 ? '...' : ''}
+                      {String(log.reason).substring(0, 50)}{String(log.reason).length > 50 ? '...' : ''}
                     </Typography>
                   )}
                 </Box>
@@ -610,7 +610,7 @@ Ethiopian Customs Commission (ECC)
                   </IconButton>
                 </Tooltip>
                 <Typography variant="caption">
-                  {log.signature.transactionId.substring(0, 12)}...
+                  {String(log.signature?.transactionId ?? '').substring(0, 12)}...
                 </Typography>
               </TableCell>
             </TableRow>

@@ -4,8 +4,9 @@ import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Grid, T
 import { Close, CheckCircle, Cancel, Send } from '@mui/icons-material';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
 import { useNotification } from '@/hooks/useNotification';
+import { getPortalBrand } from '@/components/shared/portal';
 
-const CUSTOMS_COLORS = { navy: '#1565c0', success: '#4caf50', error: '#d32f2f' };
+const CUSTOMS_COLORS = { navy: getPortalBrand('CUSTOMS').primary, success: '#4caf50', error: '#d32f2f' };
 
 interface ClearanceDecisionDialogProps { open: boolean; onClose: () => void; crossing: any; onSuccess: () => void; }
 
@@ -19,7 +20,7 @@ const ClearanceDecisionDialog: React.FC<ClearanceDecisionDialogProps> = ({ open,
     try {
       setSubmitting(true);
       const endpoint = decision === 'CLEAR' ? 'clear' : 'detain';
-      const response = await apiFetch(`/bordercrossing/${crossing.borderCrossingId}/${endpoint}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
+      const response = await apiFetch(`/bordercrossing/${crossing.crossingId}/${endpoint}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(form) });
       const result = await response.json();
       if (result.success) { showSuccess('Success', decision === 'CLEAR' ? 'Shipment cleared successfully' : 'Shipment detained'); onSuccess(); onClose(); }
       else showError('Error', result.error || 'Failed');
@@ -31,7 +32,7 @@ const ClearanceDecisionDialog: React.FC<ClearanceDecisionDialogProps> = ({ open,
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           {decision === 'CLEAR' ? <CheckCircle sx={{ color: CUSTOMS_COLORS.success }} /> : <Cancel sx={{ color: CUSTOMS_COLORS.error }} />}
-          <Box><Typography variant="h6" fontWeight={600}>Clearance Decision</Typography><Typography variant="caption">{crossing.borderCrossingId}</Typography></Box>
+          <Box><Typography variant="h6" fontWeight={600}>Clearance Decision</Typography><Typography variant="caption">{crossing.crossingId}</Typography></Box>
         </Box>
         <IconButton onClick={onClose} size="small"><Close /></IconButton>
       </DialogTitle>

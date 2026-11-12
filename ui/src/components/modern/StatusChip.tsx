@@ -69,7 +69,9 @@ export type StatusType =
   | 'PAYMENT_RELEASED'
   | 'FREIGHT_BOOKED'
   | 'CUSTOMS_CLEARED'
+  | 'CUSTOMS_DECLARED'
   | 'CUSTOMS_REJECTED'
+  | 'INSPECTION_PENDING'
   | 'LAND_TRANSPORT'
   | 'PORT_ARRIVED'
   | 'CONTAINER_STUFFED'
@@ -197,6 +199,7 @@ const StyledChip = styled(Chip, {
     warning: restrictedColors.pending,
     INSPECTING: restrictedColors.pending,
     UNDER_INSPECTION: restrictedColors.pending,
+    INSPECTION_PENDING: restrictedColors.pending,
     DRAFT: restrictedColors.pending,
     OVERDUE: restrictedColors.pending,
     WAREHOUSED: restrictedColors.pending,
@@ -205,6 +208,7 @@ const StyledChip = styled(Chip, {
     processing: restrictedColors.processing,
     PROCESSING: restrictedColors.processing,
     SUBMITTED: restrictedColors.processing,
+    CUSTOMS_DECLARED: restrictedColors.processing,
     DOCUMENTS_SUBMITTED: restrictedColors.processing,
     UNDER_REVIEW: restrictedColors.processing,
     LOADED: restrictedColors.processing,
@@ -278,6 +282,8 @@ const StyledChip = styled(Chip, {
     UNDER_REVIEW: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     INSPECTING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
     UNDER_INSPECTION: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    INSPECTION_PENDING: { bg: alpha('#ff9800', 0.15), text: '#e65100', border: '#ff9800' },
+    CUSTOMS_DECLARED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },
     QUALITY_APPROVED: { bg: alpha('#8bc34a', 0.15), text: '#558b2f', border: '#8bc34a' },
     PERMIT_ISSUED: { bg: alpha('#4caf50', 0.15), text: '#2e7d32', border: '#4caf50' },
     LOADED: { bg: alpha('#2196f3', 0.15), text: '#1565c0', border: '#2196f3' },

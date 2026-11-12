@@ -148,6 +148,9 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
       REPORTED: { color: '#1976d2', label: 'Reported', icon: <Warning /> },
       RESOLVED: { color: CBE_COLORS.success, label: 'Resolved', icon: <CheckCircle /> },
       WAIVED: { color: CBE_COLORS.success, label: 'Waived', icon: <CheckCircle /> },
+      // Chaincode LCDiscrepancy.Status includes REJECTED — it must not
+      // fall through to the REPORTED chip.
+      REJECTED: { color: CBE_COLORS.error, label: 'Rejected', icon: <Warning /> },
     };
     const c = cfg[status] || cfg.REPORTED;
     return <Chip label={c.label} size="small" icon={c.icon} sx={{ backgroundColor: c.color, color: 'white', fontWeight: 600, '& .MuiChip-icon': { color: 'white' } }} />;
@@ -193,6 +196,7 @@ const LCDiscrepancyTab: React.FC<LCDiscrepancyTabProps> = ({ onStatsUpdate }) =>
                 <MenuItem value="REPORTED">Reported</MenuItem>
                 <MenuItem value="RESOLVED">Resolved</MenuItem>
                 <MenuItem value="WAIVED">Waived</MenuItem>
+                <MenuItem value="REJECTED">Rejected</MenuItem>
               </TextField>
             </Grid>
             <Grid item xs={12} sm={6} md={2}>

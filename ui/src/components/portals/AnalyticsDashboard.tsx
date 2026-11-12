@@ -140,6 +140,7 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
 const AnalyticsDashboard: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
@@ -182,6 +183,41 @@ const AnalyticsDashboard: React.FC = () => {
     }
   };
 
+  // Real export via GET /analytics/export-report (apiFetch resolves against
+  // API_BASE_URL). Previously this button only showed an alert describing
+  // formats that were never generated.
+  const handleExportReport = async () => {
+    setExporting(true);
+    try {
+      const response = await apiFetch('/analytics/export-report?format=csv');
+      if (!response.ok) {
+        let detail = `Export failed (HTTP ${response.status})`;
+        try {
+          const errBody = await response.json();
+          if (errBody?.error?.message) detail = errBody.error.message;
+        } catch {
+          // Keep the HTTP status detail when the body is not JSON.
+        }
+        alert(`Export failed: ${detail}`);
+        return;
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `export-report-${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('[ANALYTICS] Export failed:', error);
+      alert('Export failed: could not reach the analytics API.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (!dashboardStats) {
     return (
       <Box sx={{ p: 3 }}>
@@ -220,12 +256,10 @@ const AnalyticsDashboard: React.FC = () => {
             variant="outlined"
             startIcon={<Download />}
             brandColor={brandPrimary}
-            onClick={() => {
-              // Export dashboard as PDF/CSV
-              alert('📄 Export Dashboard\n\nGenerate comprehensive report in:\n• PDF format (visual dashboard)\n• CSV format (raw data)\n• Excel format (detailed analysis)\n\nImplement using jsPDF or similar library.');
-            }}
+            onClick={handleExportReport}
+            disabled={exporting}
           >
-            Export Report
+            {exporting ? 'Exporting…' : 'Export Report'}
           </AnimatedButton>
         </Box>
       </Box>

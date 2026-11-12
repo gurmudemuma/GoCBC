@@ -43,6 +43,9 @@ interface QualityInspection {
   status: string;
   inspectorName?: string;
   certificateNo?: string;
+  // The list endpoint returns both names for the same PG column;
+  // the by-shipment endpoint returns only certificationNumber.
+  certificationNumber?: string;
   exportPermitNo?: string;
   requestDate?: string;
   approvalDate?: string;
@@ -90,9 +93,16 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
       const result = await response.json();
       
       if (result.success && result.data) {
-        console.log(`[CUSTOMS-INSPECTIONS] Loaded ${result.data.length} quality inspections`);
-        console.log('[CUSTOMS-INSPECTIONS] Sample inspection data:', result.data[0]);
-        console.log('[CUSTOMS-INSPECTIONS] Fields:', Object.keys(result.data[0] || {}));
+        // GET /quality/inspections returns { data: { inspections: [...] } }
+        // (quality.ts list normaliser), not a bare array — the old code
+        // called result.data.filter on the wrapper object, which threw and
+        // left this list permanently empty.
+        const inspectionsList: any[] = Array.isArray(result.data)
+          ? result.data
+          : (result.data.inspections || []);
+        console.log(`[CUSTOMS-INSPECTIONS] Loaded ${inspectionsList.length} quality inspections`);
+        console.log('[CUSTOMS-INSPECTIONS] Sample inspection data:', inspectionsList[0]);
+        console.log('[CUSTOMS-INSPECTIONS] Fields:', Object.keys(inspectionsList[0] || {}));
         
         // Load existing declarations to filter out inspections that already have declarations
         let existingDeclarationShipments: Set<string> = new Set();
@@ -113,10 +123,13 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
         }
         
         // Filter to only show APPROVED inspections with export permits that DON'T have declarations yet
-        const permitReady = result.data.filter((insp: any) => {
+        const permitReady = inspectionsList.filter((insp: any) => {
           const status = (insp.status || insp.Status || '').toString().toUpperCase();
           const permitNo = (insp.exportPermitNo || insp.ExportPermitNo || insp.exportPermit || '').toString();
-          const certificateNo = (insp.certificateNo || insp.CertificateNo || insp.certificate || '').toString();
+          // The list endpoint returns both `certificateNo` and
+          // `certificationNumber` (same PG column); the by-shipment
+          // endpoint returns only `certificationNumber`. Accept both.
+          const certificateNo = (insp.certificationNumber || insp.certificateNo || insp.CertificateNo || insp.certificate || '').toString();
           const shipmentId = (insp.shipmentId || insp.ShipmentID || '').toString();
           
           // Check approval by status OR by having both certificate and permit
@@ -178,7 +191,7 @@ export const CustomsInspection: React.FC<CustomsInspectionProps> = ({ onCreateDe
   };
 
   const getCertificateNo = (inspection: QualityInspection) => {
-    return inspection.certificateNo || 'N/A';
+    return inspection.certificationNumber || inspection.certificateNo || 'N/A';
   };
 
   const getExportPermitNo = (inspection: QualityInspection) => {

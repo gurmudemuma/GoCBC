@@ -6,18 +6,31 @@
  * with all prerequisites met.
  */
 
-// Shipment status constants
+// Shipment status constants — the CLOSED chaincode set, verbatim from
+// chaincodes/coffee main.go validShipmentStatuses (coffee v2.3).
+// There is no BOOKED (chaincode: FREIGHT_BOOKED), no QUALITY_APPROVED
+// (that is a quality-inspection state, never a shipment state), and
+// LOADED (set unconditionally by RecordBillOfLading/RecordAirwayBill)
+// is distinct from VESSEL_LOADED (LoadOnVessel, after CONTAINER_STUFFED).
 export const SHIPMENT_STATUS = {
   CREATED: 'CREATED',
-  QUALITY_APPROVED: 'QUALITY_APPROVED',
+  FREIGHT_BOOKED: 'FREIGHT_BOOKED',
   PERMIT_ISSUED: 'PERMIT_ISSUED',
+  CUSTOMS_DECLARED: 'CUSTOMS_DECLARED',
   CUSTOMS_CLEARED: 'CUSTOMS_CLEARED',
-  BOOKED: 'BOOKED',
-  LOADED: 'LOADED',
+  CUSTOMS_REJECTED: 'CUSTOMS_REJECTED',
+  INSPECTION_PENDING: 'INSPECTION_PENDING',
+  LAND_TRANSPORT: 'LAND_TRANSPORT',
+  PORT_ARRIVED: 'PORT_ARRIVED',
+  CONTAINER_STUFFED: 'CONTAINER_STUFFED',
+  VESSEL_LOADED: 'VESSEL_LOADED',
   DEPARTED: 'DEPARTED',
   IN_TRANSIT: 'IN_TRANSIT',
-  ARRIVED: 'ARRIVED',
+  DESTINATION_ARRIVED: 'DESTINATION_ARRIVED',
   DELIVERED: 'DELIVERED',
+  LOADED: 'LOADED',
+  CANCELLED: 'CANCELLED',
+  ARRIVED: 'ARRIVED',
 } as const;
 
 // Contract status constants
@@ -30,16 +43,28 @@ export const CONTRACT_STATUS = {
   ACTIVE: 'ACTIVE',
 } as const;
 
-// LC status constants
+// LC status constants — chaincode banking.go validLCTransitions.
+// FOREX_ALLOCATED is written by AllocateForex, SETTLED by SettlePayment
+// (only from PAYMENT_RELEASED). SHIPPED was explicitly removed in
+// chaincode and DOCUMENTS_SUBMITTED is never an LC status — neither is listed.
 export const LC_STATUS = {
   REQUESTED: 'REQUESTED',
   APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
   ISSUED: 'ISSUED',
+  FOREX_ALLOCATED: 'FOREX_ALLOCATED',
   UTILIZED: 'UTILIZED',
+  AMENDED: 'AMENDED',
+  PAYMENT_RELEASED: 'PAYMENT_RELEASED',
   EXPIRED: 'EXPIRED',
+  SETTLED: 'SETTLED',
 } as const;
 
-// Payment status constants
+// Payment status constants — chaincode payment.go, LC method machine:
+// PENDING → DOCUMENTS_SUBMITTED → VERIFIED → SWIFT_INITIATED →
+// SWIFT_RECEIVED → SETTLED → CONFIRMED. REJECTED is reachable from
+// DOCUMENTS_SUBMITTED / SWIFT_INITIATED. (DOCUMENTS_RELEASED exists only
+// via the generic UpdatePaymentStatus setter, so it is not listed here.)
 export const PAYMENT_STATUS = {
   PENDING: 'PENDING',
   DOCUMENTS_SUBMITTED: 'DOCUMENTS_SUBMITTED',
@@ -47,6 +72,8 @@ export const PAYMENT_STATUS = {
   SWIFT_INITIATED: 'SWIFT_INITIATED',
   SWIFT_RECEIVED: 'SWIFT_RECEIVED',
   SETTLED: 'SETTLED',
+  CONFIRMED: 'CONFIRMED',
+  REJECTED: 'REJECTED',
 } as const;
 
 // Exporter license status
@@ -113,13 +140,15 @@ export const canRequestLC = (contractStatus: string): {
 
 /**
  * Check if shipment can be created
- * CORRECTED: LC is not mandatory for shipment creation in real world.
- * Exporter can buy coffee and prepare shipment before LC is issued.
- * LC is needed for PAYMENT, not for quality inspection.
+ * Chaincode gate (main.go CreateShipment): the LC for the contract MUST be
+ * FOREX_ALLOCATED, UTILIZED, or PAYMENT_RELEASED — an ISSUED LC is not
+ * enough, and there is no shipment creation without an LC on-chain.
+ * The old comment claiming "LC is not mandatory" was wrong and is removed.
  */
 export const canCreateShipment = (
   contractStatus: string,
-  licenseStatus?: string
+  licenseStatus?: string,
+  lcStatus?: string
 ): {
   allowed: boolean;
   reason?: string;
@@ -141,12 +170,21 @@ export const canCreateShipment = (
     };
   }
 
-  // LC is not mandatory - can proceed without it
-  // In real world: exporter buys coffee from ECX, gets it inspected, THEN LC comes for payment
-  return { 
-    allowed: true,
-    warning: 'Ensure Letter of Credit is issued before shipping to guarantee payment.'
-  };
+  // Chaincode CreateShipment gate: LC must be FOREX_ALLOCATED or later.
+  // ISSUED alone fails on-chain; REJECTED/EXPIRED/REQUESTED/APPROVED fail too.
+  const shippableLcStatuses = [
+    LC_STATUS.FOREX_ALLOCATED,
+    LC_STATUS.UTILIZED,
+    LC_STATUS.PAYMENT_RELEASED,
+  ];
+  if (!lcStatus || !shippableLcStatuses.includes(lcStatus as any)) {
+    return {
+      allowed: false,
+      reason: 'Cannot create shipment. Chaincode CreateShipment requires the contract\u2019s Letter of Credit to be FOREX_ALLOCATED, UTILIZED, or PAYMENT_RELEASED. Current LC status: ' + (lcStatus || 'unknown — no LC found for this contract') + '. Request forex allocation first.',
+    };
+  }
+
+  return { allowed: true };
 };
 
 /**
@@ -168,15 +206,19 @@ export const canInspectShipment = (shipmentStatus: string): {
 
 /**
  * Check if export permit can be issued
+ * Chaincode gate (permit.go IssueCBEExportPermit cascade): the shipment
+ * must still be CREATED — later statuses are skipped, never regressed.
+ * Quality approval is a separate inspection-entity state, not a shipment
+ * state, so it cannot be the shipment gate here.
  */
 export const canIssueExportPermit = (shipmentStatus: string): {
   allowed: boolean;
   reason?: string;
 } => {
-  if (shipmentStatus !== SHIPMENT_STATUS.QUALITY_APPROVED) {
+  if (shipmentStatus !== SHIPMENT_STATUS.CREATED) {
     return {
       allowed: false,
-      reason: 'Export permit can only be issued after quality approval. Current status: ' + shipmentStatus,
+      reason: 'Export permit can only be issued while the shipment is CREATED (chaincode permit cascade is CREATED-only). Current status: ' + shipmentStatus,
     };
   }
 
@@ -185,15 +227,19 @@ export const canIssueExportPermit = (shipmentStatus: string): {
 
 /**
  * Check if customs clearance can be processed
+ * Chaincode: the declaration is cleared (UNDER_REVIEW → CLEARED) only
+ * after it was submitted, which moved the shipment to CUSTOMS_DECLARED.
+ * PERMIT_ISSUED is the precondition for *submitting* the declaration,
+ * not for clearing it.
  */
 export const canClearCustoms = (shipmentStatus: string): {
   allowed: boolean;
   reason?: string;
 } => {
-  if (shipmentStatus !== SHIPMENT_STATUS.PERMIT_ISSUED) {
+  if (shipmentStatus !== SHIPMENT_STATUS.CUSTOMS_DECLARED) {
     return {
       allowed: false,
-      reason: 'Customs clearance requires an export permit. Current status: ' + shipmentStatus,
+      reason: 'Customs clearance requires a submitted declaration (shipment CUSTOMS_DECLARED). Current status: ' + shipmentStatus,
     };
   }
 
@@ -201,16 +247,39 @@ export const canClearCustoms = (shipmentStatus: string): {
 };
 
 /**
- * Check if shipment can be loaded
+ * Check if land transport can start
+ * Chaincode gate (main.go StartLandTransport): strictly CUSTOMS_CLEARED.
  */
-export const canLoadShipment = (shipmentStatus: string): {
+export const canStartLandTransport = (shipmentStatus: string): {
   allowed: boolean;
   reason?: string;
 } => {
   if (shipmentStatus !== SHIPMENT_STATUS.CUSTOMS_CLEARED) {
     return {
       allowed: false,
-      reason: 'Shipment must be customs cleared before loading. Current status: ' + shipmentStatus,
+      reason: 'Land transport can only start from a customs-cleared shipment. Current status: ' + shipmentStatus,
+    };
+  }
+
+  return { allowed: true };
+};
+
+/**
+ * Check if shipment can be loaded on the vessel
+ * Chaincode gate (main.go LoadOnVessel): CONTAINER_STUFFED → VESSEL_LOADED.
+ * LOADED is a different chaincode state, set unconditionally by
+ * RecordBillOfLading / RecordAirwayBill from any status — it is not the
+ * vessel-loading step. (Starting land transport is canStartLandTransport,
+ * which requires CUSTOMS_CLEARED.)
+ */
+export const canLoadShipment = (shipmentStatus: string): {
+  allowed: boolean;
+  reason?: string;
+} => {
+  if (shipmentStatus !== SHIPMENT_STATUS.CONTAINER_STUFFED) {
+    return {
+      allowed: false,
+      reason: 'Shipment must have its container stuffed before vessel loading. Current status: ' + shipmentStatus,
     };
   }
 
@@ -358,6 +427,10 @@ export const getWorkflowStageMessage = (
 ): string => {
   if (paymentStatus) {
     switch (paymentStatus) {
+      case PAYMENT_STATUS.CONFIRMED:
+        return '✅ Payment Confirmed - Settlement confirmed, export transaction complete';
+      case PAYMENT_STATUS.REJECTED:
+        return '❌ Payment Rejected - Payment documents or SWIFT transfer were rejected';
       case PAYMENT_STATUS.SETTLED:
         return '✅ Payment Complete - Export transaction finished successfully';
       case PAYMENT_STATUS.SWIFT_RECEIVED:
@@ -376,22 +449,38 @@ export const getWorkflowStageMessage = (
   switch (shipmentStatus) {
     case SHIPMENT_STATUS.DELIVERED:
       return '✅ Delivered - Coffee received by buyer';
+    case SHIPMENT_STATUS.DESTINATION_ARRIVED:
+      return '🏁 Destination Arrived - Coffee at destination port, awaiting delivery confirmation';
     case SHIPMENT_STATUS.ARRIVED:
-      return '🏁 Arrived - Coffee at destination port';
+      return '🏁 Arrived - Status recorded on the ledger (the transport chain uses DESTINATION_ARRIVED for destination arrival)';
     case SHIPMENT_STATUS.IN_TRANSIT:
       return '🚢 In Transit - Coffee en route to buyer';
     case SHIPMENT_STATUS.DEPARTED:
       return '⚓ Departed - Vessel left port. TIME TO SUBMIT PAYMENT DOCUMENTS!';
+    case SHIPMENT_STATUS.VESSEL_LOADED:
+      return '📦 Loaded on Vessel - Coffee loaded on vessel, awaiting departure';
     case SHIPMENT_STATUS.LOADED:
-      return '📦 Loaded - Coffee loaded on vessel, awaiting departure';
-    case SHIPMENT_STATUS.BOOKED:
-      return '📋 Booked - Container and vessel assigned';
+      return '📦 Loaded - Bill of Lading / Airway Bill recorded. Note: LOADED is set unconditionally by the chaincode and does not advance the transport chain — offer BoL/AWB recording only as post-delivery paperwork.';
+    case SHIPMENT_STATUS.CONTAINER_STUFFED:
+      return '📦 Container Stuffed - Ready for vessel loading';
+    case SHIPMENT_STATUS.PORT_ARRIVED:
+      return '🚢 Arrived at Port - Ready for container stuffing';
+    case SHIPMENT_STATUS.LAND_TRANSPORT:
+      return '🚚 Land Transport - Coffee in transit to the port';
+    case SHIPMENT_STATUS.FREIGHT_BOOKED:
+      return '📋 Freight Booked - Note: FREIGHT_BOOKED has no chaincode exit to land transport (StartLandTransport requires CUSTOMS_CLEARED). Offer booking only after delivery.';
     case SHIPMENT_STATUS.CUSTOMS_CLEARED:
-      return '✓ Customs Cleared - Ready for shipment loading';
+      return '✓ Customs Cleared - Ready for land transport';
+    case SHIPMENT_STATUS.CUSTOMS_REJECTED:
+      return '❌ Customs Rejected - Declaration was rejected; see the rejection reason';
+    case SHIPMENT_STATUS.CUSTOMS_DECLARED:
+      return '📄 Customs Declared - Declaration submitted, awaiting review';
+    case SHIPMENT_STATUS.INSPECTION_PENDING:
+      return '🔍 Inspection Pending - Quality inspection requested for this shipment';
     case SHIPMENT_STATUS.PERMIT_ISSUED:
-      return '✓ Permit Issued - Awaiting customs clearance';
-    case SHIPMENT_STATUS.QUALITY_APPROVED:
-      return '✓ Quality Approved - Awaiting export permit from ECTA';
+      return '✓ Permit Issued - Awaiting customs declaration';
+    case SHIPMENT_STATUS.CANCELLED:
+      return '❌ Cancelled - Shipment cancelled (no chaincode function assigns CANCELLED; set only via the generic status setter)';
     case SHIPMENT_STATUS.CREATED:
       return '📝 Created - Awaiting ECTA quality inspection';
     default:

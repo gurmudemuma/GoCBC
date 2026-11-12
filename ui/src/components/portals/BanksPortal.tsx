@@ -9,10 +9,6 @@ import {
   CardContent,
   Typography,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   TextField,
   MenuItem,
   InputAdornment,
@@ -20,8 +16,6 @@ import {
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   Table,
   TableBody,
   TableCell,
@@ -49,7 +43,7 @@ import {
   Download as DownloadIcon,
 } from '@mui/icons-material';
 import { createOrganizationTheme } from '@/theme/organizationThemes';
-import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
+import { apiFetch, API_BASE_URL, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
 import api from '@/utils/api';
 import { couchDBService } from '@/services/couchdbService';
 import {
@@ -95,11 +89,23 @@ import SwiftComposeDialog from './SwiftComposeDialog';
 
 // Modern Components
 import {
-  ModernCard,
   AnimatedButton,
   DashboardKPI,
   StatusChip,
 } from '@/components/modern';
+import {
+  PortalShell,
+  PortalTabBar,
+  PortalCard,
+  PortalKpiCard,
+  PrimaryButton,
+  SecondaryButton,
+  DangerButton,
+  GhostButton,
+  PortalDialog,
+  PortalField,
+  getPortalBrand,
+} from '@/components/shared/portal';
 import { PaymentDocuments } from './PaymentDocuments';
 import { PaymentMethodForms } from './PaymentMethodForms';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
@@ -212,7 +218,7 @@ const banksTheme = createOrganizationTheme('BANKS');
 
 // CBE Color Palette - Commercial Bank of Ethiopia
 const CBE_COLORS = {
-  purple: '#9b30b7',
+  purple: getPortalBrand('BANKS').primary,
   golden: '#FFD700',
   black: '#000000',
   white: '#ffffff',
@@ -1309,6 +1315,13 @@ const BanksPortal: React.FC = () => {
     });
   };
 
+  // 0.10: StatusChip's `status` prop is a closed union, but LC/forex/
+  // SWIFT rows carry the real chaincode status as a plain string. Pass
+  // the real status through (the chip falls back to its default colour
+  // for any value outside its map) instead of hardcoding
+  // 'pending'/'approved'/'ACTIVE'.
+  const chipStatus = (status?: string | null) => (status || 'PENDING') as any;
+
   const handleViewLCDetails = async (lc: LetterOfCredit) => {
     devLog('[BANKS] 📋 Fetching complete LC details for:', lc.lcId);
     
@@ -1319,15 +1332,11 @@ const BanksPortal: React.FC = () => {
     setLcDetailsLoading(true); // Show loading indicator
     
     try {
-      // ✅ Fetch complete LC data from API (includes all enriched fields)
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`http://localhost:3001/api/v1/banking/lc/${lc.lcId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+      // Fetch complete LC data from API (includes all enriched fields)
+      const response = await apiFetch(`/banking/lc/${encodeURIComponent(lc.lcId)}`, {
+        headers: getAuthHeaders(),
       });
-      
+
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -1490,86 +1499,6 @@ const BanksPortal: React.FC = () => {
     setValidationDialogOpen(true);
   };
 
-  const handleIssueLc = async () => {
-    if (!selectedContract) return;
-
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-
-    try {
-      const lcId = `LC${Date.now()}`;
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + parseInt(lcForm.expiryDays));
-
-      const payload = {
-        lcID: lcId,
-        contractID: selectedContract.contractId,
-        exporterID: selectedContract.exporterId,
-        bankName: lcForm.advisingBank,
-        issuingBank: lcForm.issuingBank,
-        advisingBank: lcForm.advisingBank,
-        beneficiary: lcForm.beneficiary,
-        amount: selectedContract.totalValue.toString(),
-        currency: selectedContract.currency,
-        expiryDate: expiryDate.toISOString().split('T')[0],
-        terms: lcForm.terms,
-      };
-
-      // Only request LC - don't auto-approve or auto-issue
-      const requestResponse = await apiFetch('/banking/lc/request', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const requestResult = await requestResponse.json();
-
-      if (requestResult.success) {
-        showSuccess(
-          'Letter of Credit Request Received',
-          `LC ${lcId} has been requested by exporter and is awaiting bank review`,
-          `Next Steps:\n1. Review the LC request details in the table below\n2. Click "Approve Request" to approve the LC\n3. After approval, click "Issue LC" to send MT700 SWIFT message to buyer's bank\n4. Bank then allocates forex for this LC\n\nNote: In the updated workflow, exporters initiate LC requests, and banks review and approve them.`
-        );
-        handleCloseDialog();
-        loadBankingData();
-      } else {
-        // Handle blockchain errors with better messaging
-        const errorMsg = requestResult.error?.message || 'Unknown error';
-        
-        if (errorMsg.includes('does not exist') || errorMsg.includes('not registered')) {
-          showError(
-            'Exporter Not Registered',
-            `Cannot issue LC: Exporter ${selectedContract.exporterId} is not registered on the blockchain`,
-            `This can happen if:\n• The exporter was recently approved but blockchain hasn't synchronized yet\n• The approval process failed to register the exporter\n\nSolution:\n1. Wait 30 seconds and try again (blockchain may be syncing)\n2. Contact ECTA admin to re-register exporter\n3. ECTA can run: node register-missing-exporters.js`
-          );
-        } else if (errorMsg.includes('Peer endorsements do not match') || errorMsg.includes('not synchronized')) {
-          showWarning(
-            'Blockchain Synchronization Issue',
-            'The blockchain peers are not fully synchronized yet',
-            `This usually happens when:\n• An exporter was just registered (wait 30 seconds)\n• Network is processing other transactions\n\nSolution: Wait 30 seconds and try again.\n\nIf the issue persists, check that all peer containers are running: docker ps | grep peer`
-          );
-        } else {
-          showError(
-            'LC Issuance Failed',
-            errorMsg,
-            'Please contact system administrator if this persists'
-          );
-        }
-      }
-    } catch (error: any) {
-      console.error('Error issuing LC:', error);
-      const errorMsg = error.message || 'Network error';
-      showError(
-        'Network Error',
-        'Failed to issue Letter of Credit',
-        `Error: ${errorMsg}\n\nPlease check:\n• API server is running\n• Blockchain network is connected\n• All peer nodes are healthy`
-      );
-    }
-  };
-
   const handleApproveLC = async (lcId: string, exporterId: string) => {
     const token = localStorage.getItem('authToken');
     if (!token) {
@@ -1668,7 +1597,9 @@ const BanksPortal: React.FC = () => {
   };
 
   const toggleAllLCSelection = () => {
-    const requestedLCs = getFilteredLCs().filter(lc => lc.status === 'REQUESTED');
+    // Select-all applies to the All LCs tab (tab 10) list this button
+    // lives in — getFilteredAllLCs(), not the tab-1 getFilteredLCs().
+    const requestedLCs = getFilteredAllLCs().filter(lc => lc.status === 'REQUESTED');
     if (selectedLCIds.length === requestedLCs.length) {
       setSelectedLCIds([]);
     } else {
@@ -1820,25 +1751,34 @@ const BanksPortal: React.FC = () => {
     const token = localStorage.getItem('authToken');
     if (!selectedPayment) return;
 
+    // VerifyPaymentDocuments only records VERIFIED on-chain — there is no
+    // payment-document reject transition (payment.go VerifyPaymentDocuments
+    // requires DOCUMENTS_SUBMITTED and sets VERIFIED). A discrepant set must
+    // be recorded as an LC discrepancy (Tab 9), never "verified" here.
+    if (!approved) {
+      showError(
+        'Cannot Reject From This Dialog',
+        'Payment documents can only be verified here. Record discrepant documents as an LC discrepancy instead (Tab 9 — LC Discrepancies).',
+        'Chaincode VerifyPaymentDocuments has no reject path: it only moves DOCUMENTS_SUBMITTED → VERIFIED.'
+      );
+      return;
+    }
+
     try {
+      // Route requires verifiedBy (validateRequest) and calls chaincode
+      // VerifyPaymentDocuments, which requires DOCUMENTS_SUBMITTED.
       const response = await apiFetch(`/banking/payment/${selectedPayment.paymentID}/verify-documents`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          approved,
-          verifierComments: comments,
-          documentChecklist: checklist,
-          verificationDate: new Date().toISOString(),
+          verifiedBy: user?.username || user?.fullName || 'Bank Officer',
+          comments: comments || 'Documents verified against LC terms',
         }),
       });
 
       const result = await response.json();
       if (result.success) {
-        if (approved) {
-          showSuccess('Documents Verified', 'Payment documents approved. Payment can proceed to settlement.');
-        } else {
-          showWarning('Documents Rejected', 'Payment documents have discrepancies. Exporter notified.');
-        }
+        showSuccess('Documents Verified', 'Payment documents approved. Payment can proceed to settlement.');
         setVerificationDialogOpen(false);
         setSelectedPayment(null);
         loadBankingData();
@@ -2118,15 +2058,17 @@ const BanksPortal: React.FC = () => {
         return;
       }
       
-      // Step 2: Allocate the forex
+      // Step 2: Allocate the forex. The route reads `officer` and
+      // `approvalRef` (forex.ts) — the dialog collects both from the user,
+      // so send them through instead of inventing an approval reference.
       const payload = {
         forexId: forex.forexId,
         lcId: forex.lcId || '',
         amount: forex.requestedAmount || forex.allocatedAmount || 0,
         exchangeRate: forex.exchangeRate || 0,
         retentionRate: forex.retentionRate || 0,
-        officer: forex.officer || 'Bank Officer',
-        approvalRef: `BANK-${Date.now()}`,
+        officer: forex.officer || user?.username || user?.fullName || 'Bank Officer',
+        approvalRef: forex.approvalRef || '',
         expiryDate: forex.expiryDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
       };
 
@@ -2150,8 +2092,90 @@ const BanksPortal: React.FC = () => {
     }
   };
 
-  // Send SWIFT Message (dispatch)
-  const handleSendSwiftMessage = async (msg: any) => {
+  // Reject Forex — POST /banking/forex/:forexID/reject (BANKS).
+  // Chaincode RejectForex: REQUESTED/CONFIRMED → REJECTED, reason 10–500
+  // chars; impossible once ALLOCATED ("funds are committed").
+  const handleRejectForex = async (forex: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+    const reason = window.prompt(
+      `Reject forex allocation ${forex.forexId}?\nEnter a rejection reason (10–500 characters):`,
+      ''
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 10) {
+      showError('Rejection Reason Too Short', 'The chaincode requires a rejection reason of 10–500 characters.');
+      return;
+    }
+    try {
+      const response = await apiFetch(`/banking/forex/${encodeURIComponent(forex.forexId)}/reject`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rejectionReason: reason.trim() }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Forex Rejected', `Forex allocation ${forex.forexId} was rejected.`);
+        setForexDetailsOpen(false);
+        loadBankingData();
+      } else {
+        showError('Forex Rejection Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message || 'Failed to reject forex allocation');
+    }
+  };
+
+  // Utilise Forex — POST /forex/utilize (BANKS). Chaincode UtilizeForex:
+  // ALLOCATED → UTILIZED, amount > 0 and <= AllocatedAmount.
+  const handleUtilizeForex = async (forex: any) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+    const max = Number(forex.allocatedAmount) || 0;
+    if (max <= 0) {
+      showError('Nothing To Utilise', `Forex ${forex.forexId} has no allocated amount.`);
+      return;
+    }
+    const input = window.prompt(
+      `Utilise forex ${forex.forexId} — enter the amount in USD (max ${max.toLocaleString()}):`,
+      String(max)
+    );
+    if (input === null) return;
+    const utilizedAmount = Number(input);
+    if (!Number.isFinite(utilizedAmount) || utilizedAmount <= 0 || utilizedAmount > max) {
+      showError('Invalid Amount', `Enter an amount greater than 0 and no more than ${max.toLocaleString()} USD.`);
+      return;
+    }
+    try {
+      const response = await apiFetch('/forex/utilize', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forexId: forex.forexId, utilizedAmount }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Forex Utilised', `${utilizedAmount.toLocaleString()} USD of forex ${forex.forexId} utilised.`);
+        setForexDetailsOpen(false);
+        loadBankingData();
+      } else {
+        showError('Forex Utilisation Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message || 'Failed to utilise forex');
+    }
+  };
+
+  // Create a NEW SWIFT message (Compose dialog). This only creates the
+  // message as DRAFT on the ledger — it does not send it. Sending an
+  // existing message is handleSwiftLifecycleAction('send') below, which
+  // calls POST /swift/messages/:id/send (chaincode APPROVED → SENT).
+  const handleCreateSwiftMessage = async (msg: any) => {
     const token = localStorage.getItem('authToken');
     if (!token) {
       showError('Authentication Required', 'You are not authenticated');
@@ -2159,16 +2183,25 @@ const BanksPortal: React.FC = () => {
     }
 
     try {
+      // MT700 requires lcID/applicant/beneficiary/expiryDate (swift.ts
+      // validateRequest); the generic create requires the BIC/reference
+      // fields. Send the full form so both endpoints validate.
       const payload: any = {
-        messageID: msg.messageId || `MSG${Date.now()}`,
+        messageID: msg.messageID || msg.messageId || `MSG${Date.now()}`,
         messageType: msg.messageType || 'MT103',
         swiftReference: msg.swiftReference || `REF${Date.now()}`,
-        senderBIC: msg.senderBic || 'CBETETAA',
-        receiverBIC: msg.receiverBic || '',
+        senderBIC: msg.senderBIC || msg.senderBic || 'CBETETAA',
+        receiverBIC: msg.receiverBIC || msg.receiverBic || '',
         amount: msg.amount || 0,
         currency: msg.currency || 'USD',
         linkedLcId: msg.linkedLcId || msg.lcId || '',
         linkedPaymentId: msg.linkedPaymentId || '',
+        lcID: msg.linkedLcId || msg.lcId || '',
+        applicant: msg.applicant || '',
+        beneficiary: msg.beneficiary || '',
+        expiryDate: msg.lcExpiryDate || '',
+        valueDate: msg.valueDate || '',
+        remittanceInfo: msg.remittanceInfo || '',
       };
 
       // Choose endpoint based on message type
@@ -2182,13 +2215,56 @@ const BanksPortal: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        showSuccess('SWIFT Sent', `Message ${payload.messageID} dispatched`);
+        showSuccess('SWIFT Message Created', `Message ${payload.messageID} created as DRAFT. Approve it from the SWIFT tab, then send it.`);
         loadBankingData();
       } else {
-        showError('SWIFT Failed', result.error?.message || 'Failed to create SWIFT message');
+        showError('SWIFT Creation Failed', result.error?.message || 'Failed to create SWIFT message');
       }
     } catch (error: any) {
-      showError('Network Error', error.message || 'Failed to send SWIFT message');
+      showError('Network Error', error.message || 'Failed to create SWIFT message');
+    }
+  };
+
+  // SWIFT lifecycle on an EXISTING message — chaincode swift.go:
+  // DRAFT → APPROVED → SENT → RECEIVED → PROCESSING → SETTLED, and any
+  // non-terminal state → REJECTED. NBE_APPROVED → APPROVED is the same
+  // approve call. Each route takes only the message ID (reject also
+  // requires a reason). Never re-creates the message.
+  const handleSwiftLifecycleAction = async (msg: any, action: 'approve' | 'send' | 'receive' | 'process' | 'settle' | 'reject') => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      showError('Authentication Required', 'You are not authenticated');
+      return;
+    }
+    const messageId = msg.messageId || msg.messageID || msg.MessageID;
+    if (!messageId) {
+      showError('Missing Message ID', 'This SWIFT record has no message ID to act on.');
+      return;
+    }
+    let reason = '';
+    if (action === 'reject') {
+      reason = window.prompt(`Reject SWIFT message ${messageId}? Enter a rejection reason (required):`, '') || '';
+      if (!reason.trim()) return;
+    }
+    const pastTense: Record<string, string> = {
+      approve: 'approved', send: 'sent', receive: 'received',
+      process: 'moved to processing', settle: 'settled', reject: 'rejected',
+    };
+    try {
+      const response = await apiFetch(`/swift/messages/${encodeURIComponent(messageId)}/${action}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'reject' ? { reason: reason.trim() } : {}),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('SWIFT Message Updated', `Message ${messageId} ${pastTense[action]}.`);
+        loadBankingData();
+      } else {
+        showError('SWIFT Action Failed', result.error?.message || `Failed to ${action} SWIFT message`);
+      }
+    } catch (error: any) {
+      showError('Network Error', error.message || 'Failed to update SWIFT message');
     }
   };
 
@@ -2434,7 +2510,7 @@ const BanksPortal: React.FC = () => {
 
   return (
     <ThemeProvider theme={banksTheme}>
-      <Box sx={{ p: 3 }}>
+      <PortalShell brand="BANKS" title="Banks Portal" subtitle="Commercial Bank of Ethiopia">
         {/* ⛓️ BLOCKCHAIN NETWORK STATUS - Show blockchain features prominently */}
         <Alert 
           severity="info" 
@@ -2897,6 +2973,64 @@ const BanksPortal: React.FC = () => {
                 description: 'Settlements completed.',
                 clickable: false,
               },
+            ] : activeTab === 10 ? [
+              // Tab 10: All LCs KPIs — previously fell through to the
+              // Payment Release KPIs below. Each card filters this tab.
+              {
+                icon: <Description />,
+                label: 'Total LCs',
+                value: letterOfCredits.length,
+                color: '#9b30b7',
+                subtitle: 'All Letters of Credit',
+                description: 'Every LC regardless of status.',
+                clickable: true,
+                selected: allLcFilterStatus === 'ALL',
+                onClick: () => { setAllLcFilterStatus('ALL'); setCurrentPage(0); },
+              },
+              {
+                icon: <AccessTime />,
+                label: 'Requested',
+                value: letterOfCredits.filter(lc => lc.status === 'REQUESTED').length,
+                color: '#ff9800',
+                subtitle: 'Awaiting Approval',
+                description: 'LCs awaiting bank approval.',
+                clickable: true,
+                selected: allLcFilterStatus === 'REQUESTED',
+                onClick: () => { setAllLcFilterStatus('REQUESTED'); setCurrentPage(0); },
+              },
+              {
+                icon: <CheckCircle />,
+                label: 'Approved',
+                value: letterOfCredits.filter(lc => lc.status === 'APPROVED').length,
+                color: '#2196F3',
+                subtitle: 'Ready to Issue',
+                description: 'Approved LCs awaiting issuance.',
+                clickable: true,
+                selected: allLcFilterStatus === 'APPROVED',
+                onClick: () => { setAllLcFilterStatus('APPROVED'); setCurrentPage(0); },
+              },
+              {
+                icon: <AccountBalance />,
+                label: 'Issued',
+                value: letterOfCredits.filter(lc => lc.status === 'ISSUED' || lc.status === 'FOREX_ALLOCATED').length,
+                color: '#4caf50',
+                subtitle: 'Issued / Forex Allocated',
+                description: 'Issued LCs, including forex-allocated ones.',
+                clickable: true,
+                selected: allLcFilterStatus === 'ISSUED',
+                onClick: () => { setAllLcFilterStatus('ISSUED'); setCurrentPage(0); },
+              },
+              {
+                icon: <AttachMoney />,
+                label: 'Settled',
+                value: letterOfCredits.filter(lc => lc.status === 'SETTLED').length,
+                color: '#9b30b7',
+                subtitle: 'Completed',
+                description: 'LCs settled after payment release.',
+                clickable: true,
+                selected: allLcFilterStatus === 'SETTLED',
+                onClick: () => { setAllLcFilterStatus('SETTLED'); setCurrentPage(0); },
+              },
             ] : [
               // Tab 4: Payment Release KPIs - Show data in table
               { 
@@ -2970,84 +3104,16 @@ const BanksPortal: React.FC = () => {
               
               return (
               <Grid item xs={12} sm={6} md={3} key={index}>
-                <Card 
-                  sx={{ 
-                    cursor: kpi.clickable ? 'pointer' : 'default',
-                    height: 140,
-                    border: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
-                    bgcolor: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) ? `${kpi.color}08` : 'white',
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    borderRadius: 2,
-                    boxShadow: kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected) 
-                      ? '0 4px 12px rgba(155, 48, 183, 0.15)' 
-                      : '0 1px 3px rgba(0,0,0,0.05)',
-                    '&:hover': kpi.clickable ? {
-                      boxShadow: '0 8px 24px rgba(155, 48, 183, 0.2)',
-                      transform: 'translateY(-4px)',
-                      borderColor: kpi.color,
-                    } : {},
-                  }}
-                  onClick={kpi.clickable ? (kpi.onClick || (() => kpi.method && setSelectedPaymentMethod(kpi.method))) : undefined}
-                >
-                  <CardContent sx={{ 
-                    textAlign: 'center', 
-                    py: 2.5, 
-                    px: 2,
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}>
-                    <Box sx={{ 
-                      width: 48, 
-                      height: 48, 
-                      borderRadius: '50%', 
-                      bgcolor: `${kpi.color}15`, 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      mb: 1.5
-                    }}>
-                      {React.cloneElement(kpi.icon, { 
-                        sx: { fontSize: 28, color: kpi.color } 
-                      })}
-                    </Box>
-                    <Typography 
-                      variant="caption" 
-                      sx={{ 
-                        color: '#666', 
-                        textTransform: 'uppercase', 
-                        fontWeight: 600, 
-                        fontSize: '0.7rem',
-                        letterSpacing: 0.5,
-                        mb: 0.5
-                      }}
-                    >
-                      {kpi.label}
-                    </Typography>
-                    <Typography 
-                      variant="h4" 
-                      sx={{ 
-                        fontWeight: 700, 
-                        color: kpi.color,
-                        lineHeight: 1,
-                        mb: 0.5
-                      }}
-                    >
-                      {kpi.value}
-                    </Typography>
-                    <Typography 
-                      variant="caption" 
-                      sx={{ 
-                        color: 'text.secondary',
-                        fontSize: '0.7rem'
-                      }}
-                    >
-                      {kpi.subtitle}
-                    </Typography>
-                  </CardContent>
-                </Card>
+                <PortalKpiCard
+                  brand="BANKS"
+                  icon={kpi.icon}
+                  label={kpi.label}
+                  value={kpi.value}
+                  color={kpi.color}
+                  subtitle={kpi.subtitle}
+                  selected={Boolean(kpi.clickable && ((kpi.method && selectedPaymentMethod === kpi.method) || kpi.selected))}
+                  onClick={kpi.clickable ? (kpi.onClick || (() => { if (kpi.method) setSelectedPaymentMethod(kpi.method); })) : undefined}
+                />
               </Grid>
             );
             });
@@ -3055,106 +3121,36 @@ const BanksPortal: React.FC = () => {
         </Grid>
 
         {/* Main Tabs - 5 Tabs Like ShippingPortal */}
-        <Paper sx={{ 
-          mb: 3, 
-          borderRadius: 2, 
-          boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
-          border: '1px solid #e0e0e0',
-          overflow: 'hidden'
-        }}>
+        <PortalCard brand="BANKS" noPadding>
           {/* Parent Tabs */}
-          <Tabs 
-            value={activeParentTab} 
+          <PortalTabBar
+            brand="BANKS"
+            variant="parent"
+            fullWidth
+            value={activeParentTab}
             onChange={(e, v) => {
               setActiveParentTab(v);
               setActiveChildTab(0); // Reset to first child when switching parent
               setCurrentPage(0); // Reset pagination
             }}
-            variant="fullWidth"
-            sx={{
-              bgcolor: '#f5f5f5',
-              borderBottom: '2px solid #e0e0e0',
-              '& .MuiTab-root': {
-                fontSize: '1rem',
-                fontWeight: 700,
-                textTransform: 'none',
-                minHeight: 70,
-                px: 3,
-                color: '#444',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: '#9b30b7',
-                  bgcolor: 'white',
-                  borderBottom: '3px solid #9b30b7',
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(155, 48, 183, 0.08)',
-                  color: '#9b30b7',
-                },
-              },
-              '& .MuiTabs-indicator': {
-                display: 'none', // Hide default indicator, using custom border
-              },
-            }}
-          >
-            {tabStructure.map((parent, idx) => (
-              <Tab 
-                key={parent.id}
-                label={parent.label}
-                icon={parent.icon} 
-                iconPosition="start" 
-              />
-            ))}
-          </Tabs>
+            tabs={tabStructure.map((parent) => ({ label: parent.label, icon: parent.icon }))}
+          />
           
           {/* Child Tabs */}
           {tabStructure[activeParentTab] && tabStructure[activeParentTab].children.length > 0 && (
-            <Tabs 
-              value={activeChildTab} 
+            <PortalTabBar
+              brand="BANKS"
+              variant="child"
+              scrollable
+              value={activeChildTab}
               onChange={(e, v) => {
                 setActiveChildTab(v);
                 setCurrentPage(0); // Reset pagination when switching child tabs
               }}
-              variant="scrollable"
-              scrollButtons="auto"
-              sx={{
-                bgcolor: 'white',
-                borderBottom: '1px solid #e0e0e0',
-                '& .MuiTab-root': {
-                  fontSize: '0.875rem',
-                  fontWeight: 600,
-                  textTransform: 'none',
-                  minHeight: 56,
-                  px: 3,
-                  color: '#666',
-                  transition: 'all 0.3s ease',
-                  '&.Mui-selected': {
-                    color: '#9b30b7',
-                    bgcolor: 'rgba(155, 48, 183, 0.04)',
-                  },
-                  '&:hover': {
-                    bgcolor: 'rgba(155, 48, 183, 0.08)',
-                    color: '#9b30b7',
-                  },
-                },
-                '& .MuiTabs-indicator': {
-                  height: 3,
-                  bgcolor: '#9b30b7',
-                  borderRadius: '3px 3px 0 0',
-                },
-              }}
-            >
-              {tabStructure[activeParentTab].children.map((child, idx) => (
-                <Tab 
-                  key={child.id}
-                  label={child.label}
-                  icon={child.icon} 
-                  iconPosition="start" 
-                />
-              ))}
-            </Tabs>
+              tabs={tabStructure[activeParentTab].children.map((child) => ({ label: child.label, icon: child.icon }))}
+            />
           )}
-        </Paper>
+        </PortalCard>
 
         {/* Tab 0: Payment Methods Selection */}
         {activeTab === 0 && (
@@ -3175,6 +3171,19 @@ const BanksPortal: React.FC = () => {
               onRowsPerPageChange={setRowsPerPage}
             onCreatePayment={(method, data) => {
               console.log('Create payment:', method, data);
+              // 0.3: banks cannot request an LC — POST /banking/lc/request is
+              // EXPORTER/ECTA-only and chaincode RequestLC is ECTAMSP-only.
+              // There is no bank-side create-and-issue API route, so the
+              // bank flow is Approve (REQUESTED) then Issue (APPROVED) on an
+              // LC the exporter/ECTA requested. Do not open the LC form.
+              if (method === 'LC') {
+                showInfo(
+                  'LCs Are Requested by the Exporter',
+                  'A Letter of Credit is requested by the exporter (or ECTA) for an ECTA-approved contract. Once it appears here as REQUESTED, approve it, then issue it from the APPROVED state.',
+                  'Bank actions: All LCs tab → Approve LC → Issue LC (POST /banking/lc/:id/issue).'
+                );
+                return;
+              }
               setSelectedContract(contracts.length > 0 ? contracts[0] : null);
               setDialogType(method.toLowerCase() as any);
               setDialogOpen(true);
@@ -3252,8 +3261,15 @@ const BanksPortal: React.FC = () => {
                 
                 if (contract) {
                   devLog('[BANKS] Found contract:', contract.contractId, 'Status:', contract.status);
-                  // Open LC dialog for this approved contract using handleOpenDialog
-                  handleOpenDialog('lc', contract);
+                  // 0.3: no bank-side "Issue LC" from a bare contract — the
+                  // LC must first be requested by the exporter/ECTA and
+                  // approved by the bank. Open the contract details instead.
+                  showInfo(
+                    'LC Must Be Requested First',
+                    `Contract ${contract.contractId} has no Letter of Credit yet. The exporter (or ECTA) requests the LC; the bank then approves it (REQUESTED) and issues it (APPROVED).`,
+                    'Bank actions: All LCs tab → Approve LC → Issue LC (POST /banking/lc/:id/issue).'
+                  );
+                  handleViewContractDetails(contract);
                   return;
                 }
                 
@@ -3297,6 +3313,35 @@ const BanksPortal: React.FC = () => {
                 return;
               }
               
+              if (step === 'Verify Documents') {
+                // LC document examination: open the examination dialog for
+                // this LC (POST /banking/lc/:lcId/examine-documents).
+                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
+                if (!lc) {
+                  showError('LC Not Found', `Could not find LC ${paymentId}`, 'Please refresh and try again');
+                  return;
+                }
+                setSelectedLC({ ...lc, documents: (lc as any).documents || [] });
+                setDocumentExaminationOpen(true);
+                return;
+              }
+
+              if (step === 'Release Payment') {
+                // UTILIZED LC with verified documents → PAYMENT_RELEASED.
+                const lc = letterOfCredits.find((l: any) => l.lcId === paymentId || l.id === paymentId);
+                if (!lc) {
+                  showError('LC Not Found', `Could not find LC ${paymentId}`, 'Please refresh and try again');
+                  return;
+                }
+                const confirmed = window.confirm(
+                  `Release payment for LC ${lc.lcId}?\n\nExporter: ${lc.exporterId}\nAmount: $${lc.amount?.toLocaleString()} ${lc.currency}\n\nThis will initiate SWIFT payment to the beneficiary bank and create a blockchain signature.`
+                );
+                if (confirmed) {
+                  await handleReleasePayment(lc.lcId, lc.amount, lc.currency);
+                }
+                return;
+              }
+
               // For other steps, show info
               showInfo('Process Step', `Processing ${step} for payment ${paymentId}`);
             }}
@@ -3529,16 +3574,38 @@ const BanksPortal: React.FC = () => {
                           <StatusChip label={payment.status || 'PENDING'} status={payment.status} />
                         </TableCell>
                         <TableCell>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() => {
-                              setSelectedPaymentForDetails(payment);
-                              setPaymentDetailsOpen(true);
-                            }}
-                          >
-                            View Details
-                          </Button>
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => {
+                                setSelectedPaymentForDetails(payment);
+                                setPaymentDetailsOpen(true);
+                              }}
+                            >
+                              View Details
+                            </Button>
+                            {/* 0.4: opens the verification dialog for this
+                                payment. VerifyPaymentDocuments requires
+                                DOCUMENTS_SUBMITTED (chaincode payment.go), so
+                                the button only appears in that state — a
+                                PENDING payment has no submitted documents to
+                                verify yet. */}
+                            {String(payment.status || '').toUpperCase() === 'DOCUMENTS_SUBMITTED' && (
+                              <PrimaryButton brand="BANKS"
+                                size="small"
+                                onClick={() => {
+                                  setSelectedPayment({
+                                    ...payment,
+                                    paymentID: payment.paymentId || payment.paymentID || payment.id,
+                                  });
+                                  setVerificationDialogOpen(true);
+                                }}
+                              >
+                                Verify Documents
+                              </PrimaryButton>
+                            )}
+                          </Box>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -3552,10 +3619,7 @@ const BanksPortal: React.FC = () => {
 
       {/* Tab 1: Forex Allocations ONLY */}
       {activeTab === 1 && (
-        <ModernCard>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Forex Allocation Management
-          </Typography>
+        <PortalCard brand="BANKS" title="Forex Allocation Management">
           {/* Search and Filter Controls */}
           <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
             <TextField
@@ -3584,9 +3648,11 @@ const BanksPortal: React.FC = () => {
             >
               <MenuItem value="ALL">All Status</MenuItem>
               <MenuItem value="REQUESTED">Requested (Awaiting Allocation)</MenuItem>
+              <MenuItem value="CONFIRMED">Confirmed (NBE)</MenuItem>
               <MenuItem value="ALLOCATED">Allocated</MenuItem>
               <MenuItem value="CONFIRMED_OR_ALLOCATED">Confirmed / Allocated</MenuItem>
               <MenuItem value="UTILIZED">Utilized</MenuItem>
+              <MenuItem value="REJECTED">Rejected</MenuItem>
             </TextField>
             <Button
               size="small"
@@ -3601,44 +3667,31 @@ const BanksPortal: React.FC = () => {
             </Button>
             
             {/* NEW: Repatriation Button */}
-            <Button
-              variant="contained"
+            <PrimaryButton brand="BANKS"
               startIcon={<AttachMoney />}
               onClick={() => setRepatriationDialogOpen(true)}
-              sx={{
-                bgcolor: '#9b30b7',
-                '&:hover': { bgcolor: '#7a2692' },
-                ml: 'auto',
-              }}
+              sx={{ ml: 'auto' }}
             >
               Forex Management / Repatriation
-            </Button>
-            <Button
-              variant="outlined"
+            </PrimaryButton>
+            <SecondaryButton brand="BANKS"
               startIcon={<AttachMoney />}
               onClick={() => setRepatriationRecordingOpen(true)}
-              sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
             >
               Record Repatriation
-            </Button>
+            </SecondaryButton>
             
-            <Button
+            <SecondaryButton brand="BANKS"
               size="small"
-              variant="outlined"
               startIcon={<Description />}
               onClick={() => {
                 const csv = generateForexCSV(getFilteredForex());
                 downloadCSV(csv, 'Forex-Allocations.csv');
               }}
-              sx={{
-                borderColor: '#9b30b7',
-                color: '#9b30b7',
-                fontWeight: 600,
-                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-              }}
+              sx={{ fontWeight: 600 }}
             >
               Export CSV
-            </Button>
+            </SecondaryButton>
             <Box sx={{ flexGrow: 1 }} />
             <Typography variant="body2" color="black">
               Showing {getPaginatedData(getFilteredForex()).length} of {getFilteredForex().length} allocations
@@ -3700,9 +3753,9 @@ const BanksPortal: React.FC = () => {
                           {exchangeRate > 0 && retentionRate >= 0 ? `${etbConversion.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB (${100 - retentionRate}%)` : 'Pending allocation'}
                         </TableCell>
                         <TableCell>
-                          <StatusChip 
-                            label={forex.status || 'PENDING'} 
-                            status={forex.status === 'ALLOCATED' ? 'APPROVED' : forex.status === 'REQUESTED' ? 'PENDING' : 'PENDING'} 
+                          <StatusChip
+                            label={forex.status || 'PENDING'}
+                            status={chipStatus(forex.status)}
                           />
                         </TableCell>
                         <TableCell>
@@ -3710,30 +3763,23 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                            <Button
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Visibility />}
                               onClick={() => {
                                 setSelectedForex(forex);
                                 setForexDetailsOpen(true);
                               }}
-                              sx={{
-                                borderColor: '#9b30b7',
-                                color: '#9b30b7',
-                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-                              }}
                             >
                               View Details
-                            </Button>
+                            </SecondaryButton>
                             
                             {forex.status === 'REQUESTED' && (
                               <Chip size="small" color="warning" label="Awaiting NBE confirmation" />
                             )}
                             
-                            <Button
+                            <PrimaryButton brand="BANKS"
                               size="small"
-                              variant="contained"
                               disabled={!forex.isDraft && forex.status !== 'CONFIRMED'}
                               startIcon={<CheckCircle />}
                               onClick={async (event) => {
@@ -3774,13 +3820,36 @@ const BanksPortal: React.FC = () => {
                                   showError('NBE Ledger Data Required', 'Unable to load the current exchange rate and retention policy.');
                                 }
                               }}
-                              sx={{
-                                bgcolor: '#9b30b7',
-                                '&:hover': { bgcolor: '#7a2592' },
-                              }}
                             >
                               {forex.isDraft ? 'Request Forex' : forex.status === 'REQUESTED' ? 'Await NBE' : 'Allocate Forex'}
-                            </Button>
+                            </PrimaryButton>
+
+                            {/* Reject: REQUESTED/CONFIRMED → REJECTED
+                                (chaincode RejectForex; impossible once
+                                ALLOCATED). Utilise: ALLOCATED → UTILIZED. */}
+                            {(forex.status === 'REQUESTED' || forex.status === 'CONFIRMED') && !forex.isDraft && (
+                              <DangerButton brand="BANKS"
+                                size="small"
+                                color="error"
+                                onClick={async (event) => {
+                                  event.stopPropagation();
+                                  await handleRejectForex(forex);
+                                }}
+                              >
+                                Reject
+                              </DangerButton>
+                            )}
+                            {forex.status === 'ALLOCATED' && (
+                              <SecondaryButton brand="BANKS"
+                                size="small"
+                                onClick={async (event) => {
+                                  event.stopPropagation();
+                                  await handleUtilizeForex(forex);
+                                }}
+                              >
+                                Utilise
+                              </SecondaryButton>
+                            )}
                           </Box>
                         </TableCell>
                       </TableRow>
@@ -3862,7 +3931,7 @@ const BanksPortal: React.FC = () => {
               </Grid>
             </Grid>
           </Box>
-        </ModernCard>
+        </PortalCard>
       )}
 
       {/* Tab 9: LC Discrepancies - NEW */}
@@ -3874,9 +3943,19 @@ const BanksPortal: React.FC = () => {
 
       {/* Dialogs and Modals */}
       {/* Contract Detail Dialog */}
-      <Dialog open={!!selectedContract && dialogType === null} onClose={() => setSelectedContract(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Contract Details</DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={!!selectedContract && dialogType === null} onClose={() => setSelectedContract(null)} maxWidth="md" title="Contract Details" actions={<>
+          <GhostButton brand="BANKS" onClick={() => setSelectedContract(null)}>
+            Close
+          </GhostButton>
+          <AnimatedButton
+            variant="contained"
+            startIcon={<Description />}
+            onClick={() => handleOpenDialog('lc', selectedContract!)}
+          >
+            LC Terms
+          </AnimatedButton>
+        </>}>
+
           {selectedContract && (
             <Box sx={{ pt: 2 }}>
               <Grid container spacing={3}>
@@ -3904,7 +3983,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="black">Status</Typography>
-                  <StatusChip label={selectedContract.status} status="approved" />
+                  <StatusChip label={selectedContract.status} status={chipStatus(selectedContract.status)} />
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="black">Registration Date</Typography>
@@ -3925,31 +4004,38 @@ const BanksPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSelectedContract(null)}>
-            Close
-          </Button>
-          <AnimatedButton
-            variant="contained"
-            startIcon={<Description />}
-            onClick={() => handleOpenDialog('lc', selectedContract!)}
-            sx={{
-              bgcolor: '#9b30b7',
-              color: '#fff',
-              fontWeight: 600,
-              '&:hover': { bgcolor: '#7a2592' },
-            }}
-          >
-            Issue LC
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* KPI Data Dialog - Shows data in table format */}
-      <Dialog open={kpiDataDialogOpen} onClose={() => setKpiDataDialogOpen(false)} maxWidth="lg" fullWidth>
-        <DialogTitle>{kpiDataDialogTitle}</DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={kpiDataDialogOpen} onClose={() => setKpiDataDialogOpen(false)} maxWidth="lg" title={kpiDataDialogTitle} actions={<>
+          <GhostButton brand="BANKS" onClick={() => {
+            setKpiDataDialogOpen(false);
+            setKpiDialogPage(0);
+          }}>Close</GhostButton>
+          <PrimaryButton brand="BANKS"
+            startIcon={<Description />}
+            onClick={() => {
+              // Real client-side CSV export of the rows in this dialog
+              // (same generate*/downloadCSV helpers the forex/SWIFT tabs use).
+              if (!kpiDataDialogType || kpiDataDialogData.length === 0) {
+                showError('Nothing to Export', 'There are no rows in this view to export.');
+                return;
+              }
+              const csv = kpiDataDialogType === 'forex'
+                ? generateForexCSV(kpiDataDialogData as ForexAllocation[])
+                : kpiDataDialogType === 'lc'
+                  ? generateLCCSV(kpiDataDialogData as LetterOfCredit[])
+                  : generateSwiftCSV(kpiDataDialogData);
+              const safeTitle = (kpiDataDialogTitle || kpiDataDialogType).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+              downloadCSV(csv, `${safeTitle || kpiDataDialogType}-export.csv`);
+              showSuccess('Export Complete', `${kpiDataDialogData.length} row(s) exported to CSV.`);
+            }}
+          >
+            Export CSV
+          </PrimaryButton>
+        </>}>
+
           {kpiDataDialogType === 'forex' && kpiDataDialogData.length > 0 && (
             <>
               <TableContainer>
@@ -3980,7 +4066,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell>
                             <StatusChip 
                               label={forex.status || 'PENDING'} 
-                              status={forex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                              status={chipStatus(forex.status)}
                             />
                           </TableCell>
                           <TableCell>
@@ -3996,7 +4082,7 @@ const BanksPortal: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Typography variant="body2" color="black">Rows per page:</Typography>
-                  <TextField
+                  <PortalField
                     select
                     size="small"
                     value={kpiDialogRowsPerPage}
@@ -4010,7 +4096,7 @@ const BanksPortal: React.FC = () => {
                     <MenuItem value={10}>10</MenuItem>
                     <MenuItem value={25}>25</MenuItem>
                     <MenuItem value={50}>50</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <Typography variant="body2" color="black">
@@ -4066,7 +4152,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell><strong>${lc.amount?.toLocaleString()} {lc.currency}</strong></TableCell>
                           <TableCell>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <StatusChip label={lc.status} status={lc.status === 'ISSUED' ? 'APPROVED' : 'PENDING'} />
+                              <StatusChip label={lc.status} status={chipStatus(lc.status)} />
                               {lc.blockchainVerified && lc.txId && (
                                 <BlockchainBadge 
                                   txId={lc.txId}
@@ -4091,7 +4177,7 @@ const BanksPortal: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Typography variant="body2" color="black">Rows per page:</Typography>
-                  <TextField
+                  <PortalField
                     select
                     size="small"
                     value={kpiDialogRowsPerPage}
@@ -4105,7 +4191,7 @@ const BanksPortal: React.FC = () => {
                     <MenuItem value={10}>10</MenuItem>
                     <MenuItem value={25}>25</MenuItem>
                     <MenuItem value={50}>50</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <Typography variant="body2" color="black">
@@ -4165,7 +4251,7 @@ const BanksPortal: React.FC = () => {
                           <TableCell>
                             <StatusChip 
                               label={swift.status || 'PENDING'} 
-                              status={swift.status === 'SENT' || swift.status === 'SETTLED' ? 'APPROVED' : 'PENDING'} 
+                              status={chipStatus(swift.status)}
                             />
                           </TableCell>
                           <TableCell>
@@ -4182,7 +4268,7 @@ const BanksPortal: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Typography variant="body2" color="black">Rows per page:</Typography>
-                  <TextField
+                  <PortalField
                     select
                     size="small"
                     value={kpiDialogRowsPerPage}
@@ -4196,7 +4282,7 @@ const BanksPortal: React.FC = () => {
                     <MenuItem value={10}>10</MenuItem>
                     <MenuItem value={25}>25</MenuItem>
                     <MenuItem value={50}>50</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <Typography variant="body2" color="black">
@@ -4230,36 +4316,34 @@ const BanksPortal: React.FC = () => {
               No data available for this selection.
             </Alert>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setKpiDataDialogOpen(false);
-            setKpiDialogPage(0);
-          }}>Close</Button>
-          <Button 
-            variant="contained" 
-            startIcon={<Description />}
-            sx={{
-              bgcolor: '#9b30b7',
-              '&:hover': { bgcolor: '#7a2592' },
-            }}
-            onClick={() => {
-              // Export to CSV logic can be added here
-              showSuccess('Export', 'Data export feature coming soon', '');
-            }}
-          >
-            Export CSV
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Forex Allocation Details Dialog */}
-      <Dialog open={forexDetailsOpen} onClose={() => setForexDetailsOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <CurrencyExchange sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Forex Allocation Details
-        </DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={forexDetailsOpen} onClose={() => setForexDetailsOpen(false)} maxWidth="md" title="Forex Allocation Details" icon={<CurrencyExchange />} actions={<>
+          <GhostButton brand="BANKS" onClick={() => setForexDetailsOpen(false)}>Close</GhostButton>
+          {/* No "Confirm" button here: ConfirmForex is NBE-only
+              (POST /forex/:id/confirm, NBEMSP) — a bank calling it would
+              403, and the old button only showed a success toast without
+              calling anything. The real bank actions on a forex are
+              Reject (REQUESTED/CONFIRMED) and Utilise (ALLOCATED). */}
+          {selectedForex && (selectedForex.status === 'REQUESTED' || selectedForex.status === 'CONFIRMED') && (
+            <DangerButton brand="BANKS"
+              onClick={() => { void handleRejectForex(selectedForex); }}
+              color="error"
+            >
+              Reject
+            </DangerButton>
+          )}
+          {selectedForex && selectedForex.status === 'ALLOCATED' && (
+            <PrimaryButton brand="BANKS" onClick={() => { void handleUtilizeForex(selectedForex); }}
+            startIcon={<CheckCircle />}
+            >
+              Utilise
+            </PrimaryButton>
+          )}
+        </>}>
+
           {selectedForex && (
             <Box sx={{ pt: 2 }}>
               <Grid container spacing={3}>
@@ -4282,7 +4366,7 @@ const BanksPortal: React.FC = () => {
                   <Typography variant="body2" color="text.secondary">Status</Typography>
                   <StatusChip 
                     label={selectedForex.status || 'PENDING'} 
-                    status={selectedForex.status === 'ALLOCATED' ? 'APPROVED' : 'PENDING'} 
+                    status={chipStatus(selectedForex.status)}
                   />
                 </Grid>
 
@@ -4438,34 +4522,46 @@ const BanksPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setForexDetailsOpen(false)}>Close</Button>
-          {selectedForex && selectedForex.status === 'ALLOCATED' && (
-            <Button onClick={() => {
-              showSuccess('Forex Confirmed', `Forex allocation ${selectedForex.forexId} is active and valid`, '');
-              setForexDetailsOpen(false);
-            }}
-            variant="contained"
-            startIcon={<CheckCircle />}
-            sx={{
-              bgcolor: '#9b30b7',
-              '&:hover': { bgcolor: '#7a2592' },
-            }}
-            >
-              Confirm
-            </Button>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Payment Details Dialog */}
-      <Dialog open={paymentDetailsOpen} onClose={() => setPaymentDetailsOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Payment sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Payment Details
-        </DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={paymentDetailsOpen} onClose={() => setPaymentDetailsOpen(false)} maxWidth="md" title="Payment Details" icon={<Payment />} actions={<>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Assignment />}
+            onClick={() => {
+              setAuditEntityType('PAYMENT');
+              setAuditEntityId(selectedPaymentForDetails?.paymentId || '');
+              setShowAuditTrail(true);
+            }}
+            sx={{ textTransform: 'none', mr: 'auto' }}
+          >
+            View Audit Trail
+          </Button>
+          <GhostButton brand="BANKS" onClick={() => setPaymentDetailsOpen(false)}>Close</GhostButton>
+          {selectedPaymentForDetails && ['VERIFIED', 'SWIFT_RECEIVED'].includes(String(selectedPaymentForDetails.status || '').toUpperCase()) && (
+            <PrimaryButton brand="BANKS"
+              variant="contained"
+              onClick={() => {
+                setSettleForm({
+                  exchangeRate: selectedPaymentForDetails.exchangeRate ? String(selectedPaymentForDetails.exchangeRate) : '',
+                  retentionRate: '40',
+                  payingBank: selectedPaymentForDetails.payingBank || 'Commercial Bank of Ethiopia',
+                  payingBankBIC: selectedPaymentForDetails.payingBankBIC || 'CBETETAA',
+                  swiftReference: selectedPaymentForDetails.swiftReference || '',
+                  nbeApprovalRef: '',
+                });
+                setSettleDialogOpen(true);
+              }}
+              sx={{ textTransform: 'none' }}
+            >
+              Settle Payment
+            </PrimaryButton>
+          )}
+        </>}>
+
           {selectedPaymentForDetails && (
             <Box sx={{ pt: 2 }}>
               <Grid container spacing={3}>
@@ -4627,53 +4723,25 @@ const BanksPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Assignment />}
-            onClick={() => {
-              setAuditEntityType('PAYMENT');
-              setAuditEntityId(selectedPaymentForDetails?.paymentId || '');
-              setShowAuditTrail(true);
-            }}
-            sx={{ textTransform: 'none', mr: 'auto' }}
-          >
-            View Audit Trail
-          </Button>
-          <Button onClick={() => setPaymentDetailsOpen(false)}>Close</Button>
-          {selectedPaymentForDetails && ['VERIFIED', 'SWIFT_RECEIVED'].includes(String(selectedPaymentForDetails.status || '').toUpperCase()) && (
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => {
-                setSettleForm({
-                  exchangeRate: selectedPaymentForDetails.exchangeRate ? String(selectedPaymentForDetails.exchangeRate) : '',
-                  retentionRate: '40',
-                  payingBank: selectedPaymentForDetails.payingBank || 'Commercial Bank of Ethiopia',
-                  payingBankBIC: selectedPaymentForDetails.payingBankBIC || 'CBETETAA',
-                  swiftReference: selectedPaymentForDetails.swiftReference || '',
-                  nbeApprovalRef: '',
-                });
-                setSettleDialogOpen(true);
-              }}
-              sx={{ textTransform: 'none' }}
-            >
-              Settle Payment
-            </Button>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Settle Payment Dialog — slice-6 fix: the settle step had no UI */}
-      <Dialog open={settleDialogOpen} onClose={() => setSettleDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Settle Payment {selectedPaymentForDetails?.paymentId ? `— ${selectedPaymentForDetails.paymentId}` : ''}</DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={settleDialogOpen} onClose={() => setSettleDialogOpen(false)} maxWidth="sm" title={<>Settle Payment {selectedPaymentForDetails?.paymentId ? `— ${selectedPaymentForDetails.paymentId}` : ''}</>} actions={<>
+          <GhostButton brand="BANKS" onClick={() => setSettleDialogOpen(false)}>Cancel</GhostButton>
+          <PrimaryButton brand="BANKS"
+            variant="contained"
+            onClick={handleSettlePayment}
+            disabled={settling || !settleForm.exchangeRate || !settleForm.retentionRate || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
+          >
+            {settling ? 'Settling...' : 'Settle Payment'}
+          </PrimaryButton>
+        </>}>
+
           <Box sx={{ pt: 2 }}>
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="Exchange Rate (ETB/USD) *"
                   type="number"
                   value={settleForm.exchangeRate}
@@ -4683,7 +4751,7 @@ const BanksPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="Retention Rate (%) *"
                   type="number"
                   value={settleForm.retentionRate}
@@ -4693,7 +4761,7 @@ const BanksPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="Paying Bank *"
                   value={settleForm.payingBank}
                   onChange={(e) => setSettleForm({ ...settleForm, payingBank: e.target.value })}
@@ -4702,7 +4770,7 @@ const BanksPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="Paying Bank BIC *"
                   value={settleForm.payingBankBIC}
                   onChange={(e) => setSettleForm({ ...settleForm, payingBankBIC: e.target.value })}
@@ -4711,7 +4779,7 @@ const BanksPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="SWIFT Reference *"
                   value={settleForm.swiftReference}
                   onChange={(e) => setSettleForm({ ...settleForm, swiftReference: e.target.value })}
@@ -4720,7 +4788,7 @@ const BanksPortal: React.FC = () => {
                 />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField
+                <PortalField
                   label="NBE Approval Reference *"
                   value={settleForm.nbeApprovalRef}
                   onChange={(e) => setSettleForm({ ...settleForm, nbeApprovalRef: e.target.value })}
@@ -4730,30 +4798,47 @@ const BanksPortal: React.FC = () => {
               </Grid>
             </Grid>
           </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSettleDialogOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSettlePayment}
-            disabled={settling || !settleForm.exchangeRate || !settleForm.retentionRate || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
-          >
-            {settling ? 'Settling...' : 'Settle Payment'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* LC Details Dialog */}
-      <Dialog open={dialogOpen && dialogType === 'lcDetails'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Letter of Credit Details
+            <PortalDialog brand="BANKS" open={dialogOpen && dialogType === 'lcDetails'} onClose={handleCloseDialog} maxWidth="md" title={<>Letter of Credit Details
           {lcDetailsLoading && (
             <CircularProgress size={20} sx={{ ml: 2, verticalAlign: 'middle' }} />
+          )}</>} icon={<Description />} actions={<>
+          <GhostButton brand="BANKS" onClick={handleCloseDialog}>Close</GhostButton>
+          {selectedLC && selectedLC.status === 'ISSUED' && (
+            <>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<CloudUpload />}
+                onClick={() => {
+                  setUploadEntityId(selectedLC.lcId);
+                  setUploadEntityType('LC');
+                  setDocumentUploadDialogOpen(true);
+                }}
+              >
+                Upload Documents
+              </Button>
+              <SecondaryButton brand="BANKS"
+                sx={{ fontWeight: 600 }}
+                onClick={() => {
+                  setDialogType('lcAmend');
+                  setAmendmentForm({
+                    amendmentReason: '',
+                    newAmount: selectedLC.amount.toString(),
+                    newExpiryDate: selectedLC.expiryDate,
+                    newTerms: '',
+                  });
+                }}
+              >
+                Amend LC
+              </SecondaryButton>
+            </>
           )}
-        </DialogTitle>
-        <DialogContent>
+        </>}>
+
           {selectedLC && (
             <Box sx={{ pt: 2, position: 'relative' }}>
               {lcDetailsLoading && (
@@ -4788,7 +4873,7 @@ const BanksPortal: React.FC = () => {
                         <Typography variant="body2" color="black">Status</Typography>
                         <StatusChip 
                           label={selectedLC.status} 
-                          status={selectedLC.status === 'ISSUED' ? 'APPROVED' : selectedLC.status === 'REQUESTED' ? 'PENDING' : 'ACTIVE'} 
+                          status={chipStatus(selectedLC.status)}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -5040,7 +5125,7 @@ const BanksPortal: React.FC = () => {
                                     size="small"
                                     onClick={() => {
                                       window.open(
-                                        `http://localhost:3001/api/v1/documents/${doc.documentId}/view?token=${localStorage.getItem('authToken')}`,
+                                        `${API_BASE_URL}/documents/${doc.documentId}/view?token=${localStorage.getItem('authToken')}`,
                                         '_blank'
                                       );
                                     }}
@@ -5053,7 +5138,7 @@ const BanksPortal: React.FC = () => {
                                     size="small"
                                     onClick={() => {
                                       window.open(
-                                        `http://localhost:3001/api/v1/documents/${doc.documentId}/download?token=${localStorage.getItem('authToken')}`,
+                                        `${API_BASE_URL}/documents/${doc.documentId}/download?token=${localStorage.getItem('authToken')}`,
                                         '_blank'
                                       );
                                     }}
@@ -5128,55 +5213,26 @@ const BanksPortal: React.FC = () => {
               </Grid>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDialog}>Close</Button>
-          {selectedLC && selectedLC.status === 'ISSUED' && (
-            <>
-              <Button
-                variant="outlined"
-                color="secondary"
-                startIcon={<CloudUpload />}
-                onClick={() => {
-                  setUploadEntityId(selectedLC.lcId);
-                  setUploadEntityType('LC');
-                  setDocumentUploadDialogOpen(true);
-                }}
-              >
-                Upload Documents
-              </Button>
-              <Button
-                variant="outlined"
-                sx={{
-                  borderColor: '#9b30b7',
-                  color: '#9b30b7',
-                  fontWeight: 600,
-                  '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-                }}
-                onClick={() => {
-                  setDialogType('lcAmend');
-                  setAmendmentForm({
-                    amendmentReason: '',
-                    newAmount: selectedLC.amount.toString(),
-                    newExpiryDate: selectedLC.expiryDate,
-                    newTerms: '',
-                  });
-                }}
-              >
-                Amend LC
-              </Button>
-            </>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* LC Amendment Dialog */}
-      <Dialog open={dialogOpen && dialogType === 'lcAmend'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Amend Letter of Credit
-        </DialogTitle>
-        <DialogContent>
+            <PortalDialog brand="BANKS" open={dialogOpen && dialogType === 'lcAmend'} onClose={handleCloseDialog} maxWidth="md" title="Amend Letter of Credit" icon={<Description />} actions={<>
+          <GhostButton brand="BANKS" onClick={() => {
+            handleCloseDialog();
+            setDialogType('lcDetails');
+          }}>
+            Cancel
+          </GhostButton>
+          <AnimatedButton
+            variant="contained"
+            onClick={handleAmendLC}
+            disabled={!amendmentForm.amendmentReason}
+          >
+            Submit Amendment
+          </AnimatedButton>
+        </>}>
+
           {selectedLC && (
             <>
               <Alert severity="warning" sx={{ mb: 3 }}>
@@ -5200,7 +5256,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Amendment Reason *"
                     value={amendmentForm.amendmentReason}
@@ -5213,7 +5269,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="New Amount (USD)"
                     type="number"
@@ -5224,7 +5280,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="New Expiry Date"
                     type="date"
@@ -5236,7 +5292,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="New Terms and Conditions"
                     value={amendmentForm.newTerms}
@@ -5257,40 +5313,24 @@ const BanksPortal: React.FC = () => {
               </Alert>
             </>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            handleCloseDialog();
-            setDialogType('lcDetails');
-          }}>
-            Cancel
-          </Button>
-          <AnimatedButton
-            variant="contained"
-            onClick={handleAmendLC}
-            disabled={!amendmentForm.amendmentReason}
-            sx={{
-              bgcolor: '#9b30b7',
-              color: '#fff',
-              fontWeight: 600,
-              '&:hover': { bgcolor: '#7a2592' },
-              '&:disabled': { bgcolor: '#ccc', color: '#666' },
-            }}
-          >
-            Submit Amendment
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
-      {/* LC Issuance Dialog */}
-      <Dialog open={dialogOpen && dialogType === 'lc'} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Description sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Issue Letter of Credit
-        </DialogTitle>
-        <DialogContent>
+      {/* LC Terms Dialog — review-only (0.3). Banks cannot request an LC:
+          POST /banking/lc/request is EXPORTER/ECTA-only and chaincode
+          RequestLC is ECTAMSP-only; there is no bank-side create-and-issue
+          API route. The bank flow is Approve (REQUESTED) then Issue
+          (APPROVED) via POST /banking/lc/:id/issue. */}
+            <PortalDialog brand="BANKS" open={dialogOpen && dialogType === 'lc'} onClose={handleCloseDialog} maxWidth="md" title="Letter of Credit Terms" icon={<Description />} actions={<>
+          <GhostButton brand="BANKS" onClick={handleCloseDialog}>Close</GhostButton>
+        </>}>
+
           {selectedContract && (
             <>
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                <strong>Banks do not request LCs from this portal.</strong><br />
+                The exporter (or ECTA) requests the LC for this approved contract. Once it appears as REQUESTED, the bank approves it, then issues it from the APPROVED state (All LCs tab → Approve LC → Issue LC).
+              </Alert>
               <Alert severity="info" sx={{ mb: 3 }}>
                 <strong>International Trade Finance</strong><br />
                 LC provides payment guarantee to exporter. After issuance, bank allocates forex per NBE policy.
@@ -5312,7 +5352,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Issuing Bank (Buyer's Bank) *"
                     value={lcForm.issuingBank}
@@ -5324,7 +5364,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Advising Bank (Exporter's Bank) *"
                     value={lcForm.advisingBank}
@@ -5336,7 +5376,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Beneficiary (Exporter) *"
                     value={lcForm.beneficiary}
@@ -5348,7 +5388,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="LC Terms"
                     value={lcForm.terms}
@@ -5360,7 +5400,7 @@ const BanksPortal: React.FC = () => {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="LC Validity (Days)"
                     type="number"
@@ -5401,32 +5441,17 @@ const BanksPortal: React.FC = () => {
               </Grid>
 
               <Alert severity="warning" sx={{ mt: 3 }}>
-                <strong>Next Steps After LC Issuance:</strong><br />
-                1. Bank allocates foreign exchange per NBE policy<br />
-                2. Export permit issued by ECTA<br />
-                3. Exporter ships coffee with required documents<br />
-                4. Bank verifies documents and releases payment
+                <strong>Correct LC Flow:</strong><br />
+                1. Exporter/ECTA requests the LC for this approved contract<br />
+                2. Bank approves the REQUESTED LC<br />
+                3. Bank issues the APPROVED LC (MT700)<br />
+                4. Bank allocates foreign exchange per NBE policy<br />
+                5. Bank verifies documents and releases payment
               </Alert>
             </>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDialog}>Cancel</Button>
-          <AnimatedButton
-            variant="contained"
-            onClick={handleIssueLc}
-            startIcon={<CheckCircle />}
-            sx={{
-              bgcolor: '#FFD700',
-              color: '#000',
-              fontWeight: 600,
-              '&:hover': { bgcolor: '#FFC700' },
-            }}
-          >
-            Issue Letter of Credit
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* Payment Method Forms Dialog */}
       <PaymentMethodForms
@@ -5520,7 +5545,7 @@ const BanksPortal: React.FC = () => {
             showError('Validation', 'Linked LC ID is required for MT700');
             return;
           }
-          await handleSendSwiftMessage(f);
+          await handleCreateSwiftMessage(f);
           setSwiftComposeOpen(false);
         }}
       />
@@ -5576,17 +5601,14 @@ const BanksPortal: React.FC = () => {
           setValidationDialogOpen(false);
           setValidationData(null);
         }}
-        approveLabel="Approve & Issue LC"
+        approveLabel="Approve LC"
         rejectLabel="Reject LC"
       />
 
       {/* Tab 4: SWIFT Messages */}
       {activeTab === 4 && (
-        <ModernCard>
+        <PortalCard brand="BANKS" title="SWIFT Message Management">
           <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              SWIFT Message Management
-            </Typography>
             <Button
               size="small"
               variant="outlined"
@@ -5599,6 +5621,33 @@ const BanksPortal: React.FC = () => {
             >
               Reset Filters
             </Button>
+            <PrimaryButton brand="BANKS"
+              size="small"
+              startIcon={<Description />}
+              onClick={() => {
+                // 0.15: a new message can only be created from here — it
+                // starts as DRAFT; approve/send happen per-row below.
+                setSwiftForm({
+                  messageID: `MSG${Date.now()}`,
+                  messageType: 'MT103',
+                  swiftReference: `REF${Date.now()}`,
+                  senderBIC: 'CBETETAA',
+                  receiverBIC: '',
+                  amount: '',
+                  currency: 'USD',
+                  valueDate: '',
+                  beneficiary: '',
+                  remittanceInfo: '',
+                  linkedLcId: '',
+                  linkedPaymentId: '',
+                  applicant: '',
+                  lcExpiryDate: '',
+                });
+                setSwiftComposeOpen(true);
+              }}
+            >
+              Compose / New SWIFT Message
+            </PrimaryButton>
           </Box>
 
           <Alert severity="info" sx={{ mb: 3 }}>
@@ -5660,18 +5709,16 @@ const BanksPortal: React.FC = () => {
               }}
               sx={{ width: 140 }}
             />
-            <Button
+            <SecondaryButton brand="BANKS"
               size="small"
-              variant="outlined"
               startIcon={<Description />}
               onClick={() => {
                 const csv = generateSwiftCSV(getFilteredSwiftMessages());
                 downloadCSV(csv, 'SWIFT-Messages.csv');
               }}
-              sx={{ borderColor: '#9b30b7', color: '#9b30b7' }}
             >
               Export CSV
-            </Button>
+            </SecondaryButton>
           </Box>
 
           {getFilteredSwiftMessages().length === 0 ? (
@@ -5704,46 +5751,71 @@ const BanksPortal: React.FC = () => {
                       <TableCell>{msg.status || 'N/A'}</TableCell>
                       <TableCell>{msg.sentDate ? new Date(msg.sentDate).toLocaleDateString() : msg.createdAt ? new Date(msg.createdAt).toLocaleDateString() : 'N/A'}</TableCell>
                       <TableCell>
-                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                          <Button
+                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                          <SecondaryButton brand="BANKS"
                             size="small"
-                            variant="outlined"
                             startIcon={<Visibility />}
                             onClick={() => {
                               void openSwiftMessageDetails(msg);
                             }}
-                            sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
                           >
                             View Details
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            startIcon={<SendOutlined />}
-                            onClick={() => {
-                              setSwiftForm({
-                                messageID: msg.messageId || `MSG${Date.now()}`,
-                                messageType: msg.messageType || 'MT103',
-                                swiftReference: msg.swiftReference || `REF${Date.now()}`,
-                                senderBIC: msg.senderBic || 'CBETETAA',
-                                receiverBIC: msg.receiverBic || '',
-                                amount: msg.amount || '',
-                                currency: msg.currency || 'USD',
-                                valueDate: msg.sentDate || '',
-                                beneficiary: msg.beneficiary || '',
-                                remittanceInfo: msg.remittanceInfo || '',
-                                linkedLcId: msg.linkedLcId || '',
-                                linkedPaymentId: msg.linkedPaymentId || '',
-                                applicant: msg.applicant || '',
-                                lcExpiryDate: msg.lcExpiryDate || '',
-                              });
-                              setSwiftComposeOpen(true);
-                            }}
-                            sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}
-                            disabled={msg.status === 'SENT'}
-                          >
-                            {msg.status === 'SENT' ? 'Sent' : 'Send'}
-                          </Button>
+                          </SecondaryButton>
+                          {/* 0.15: lifecycle actions on the EXISTING message,
+                              gated on the chaincode states (swift.go):
+                              DRAFT/NBE_APPROVED → APPROVED → SENT →
+                              RECEIVED → PROCESSING → SETTLED; any
+                              non-terminal state → REJECTED. */}
+                          {(msg.status === 'DRAFT' || msg.status === 'NBE_APPROVED') && (
+                            <PrimaryButton brand="BANKS"
+                              size="small"
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'approve')}
+                            >
+                              Approve
+                            </PrimaryButton>
+                          )}
+                          {msg.status === 'APPROVED' && (
+                            <PrimaryButton brand="BANKS"
+                              size="small"
+                              startIcon={<SendOutlined />}
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'send')}
+                            >
+                              Send
+                            </PrimaryButton>
+                          )}
+                          {msg.status === 'SENT' && (
+                            <PrimaryButton brand="BANKS"
+                              size="small"
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'receive')}
+                            >
+                              Receive
+                            </PrimaryButton>
+                          )}
+                          {msg.status === 'RECEIVED' && (
+                            <PrimaryButton brand="BANKS"
+                              size="small"
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'process')}
+                            >
+                              Process
+                            </PrimaryButton>
+                          )}
+                          {msg.status === 'PROCESSING' && (
+                            <PrimaryButton brand="BANKS"
+                              size="small"
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'settle')}
+                            >
+                              Settle
+                            </PrimaryButton>
+                          )}
+                          {!['SETTLED', 'REJECTED', 'CANCELLED', 'FAILED'].includes(msg.status) && (
+                            <DangerButton brand="BANKS"
+                              size="small"
+                              color="error"
+                              onClick={() => void handleSwiftLifecycleAction(msg, 'reject')}
+                            >
+                              Reject
+                            </DangerButton>
+                          )}
                         </Box>
                       </TableCell>
                     </TableRow>
@@ -5796,12 +5868,12 @@ const BanksPortal: React.FC = () => {
               </Box>
             </Box>
           )}
-        </ModernCard>
+        </PortalCard>
       )}
 
       {/* Tab 2: Document Examination */}
       {activeTab === 2 && (
-        <ModernCard title="Document Examination">
+        <PortalCard brand="BANKS" title="Document Examination">
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
               Review and examine export documents submitted by exporters for compliance with LC terms and UCP 600 standards.
@@ -5869,7 +5941,7 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <StatusChip label={lc.status} status="pending" />
+                            <StatusChip label={lc.status} status={chipStatus(lc.status)} />
                             {(lc.approvedByMsp || lc.issuedByMsp) && (
                               <Chip 
                                 label="Blockchain"
@@ -5887,76 +5959,45 @@ const BanksPortal: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                            <Button
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Assignment />}
                               onClick={() => {
                                 setAuditEntityType('LC');
                                 setAuditEntityId(lc.lcId);
                                 setShowAuditTrail(true);
                               }}
-                              sx={{
-                                borderColor: '#9b30b7',
-                                color: '#9b30b7',
-                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-                              }}
                             >
                               Audit Trail
-                            </Button>
-                            <Button
+                            </SecondaryButton>
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Visibility />}
                               onClick={() => handleViewLCDetails(lc)}
-                              sx={{
-                                borderColor: '#9b30b7',
-                                color: '#9b30b7',
-                                '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' },
-                              }}
                             >
                               View Details
-                            </Button>
-                            <Button
+                            </SecondaryButton>
+                            <PrimaryButton brand="BANKS"
                               size="small"
-                              variant="contained"
                               startIcon={<CheckCircle />}
                               onClick={(() => {
                                 console.log('[TAB3] 🔘 Examine Documents button clicked for LC:', lc.lcId);
-                                
                                 // ✅ OPEN DIALOG IMMEDIATELY with loading state
                                 setSelectedLC({ ...lc, documents: lc.documents || [] });
                                 setDocumentExaminationOpen(true);
                                 setLcDetailsLoading(true);
-                                
                                 // ✅ Fetch documents in background (non-blocking)
                                 (async () => {
                                   try {
-                                    const token = localStorage.getItem('authToken');
-                                    console.log('[TAB3] Token exists:', !!token);
-                                    
-                                    if (!token) {
-                                      console.error('[TAB3] No auth token found');
-                                      setLcDetailsLoading(false);
-                                      return;
-                                    }
-                                    
-                                    const apiUrl = `http://localhost:3001/api/v1/banking/lc/${lc.lcId}`;
+                                    const apiUrl = `${API_BASE_URL}/banking/lc/${lc.lcId}`;
                                     console.log('[TAB3] Fetching documents from:', apiUrl);
-                                    
-                                    const response = await fetch(apiUrl, {
-                                      headers: {
-                                        'Authorization': `Bearer ${token}`,
-                                        'Content-Type': 'application/json'
-                                      }
+                                    const response = await apiFetch(`/banking/lc/${encodeURIComponent(lc.lcId)}`, {
+                                      headers: getAuthHeaders(),
                                     });
-                                    
                                     console.log('[TAB3] Response status:', response.status, response.statusText);
-                                    
                                     if (response.ok) {
                                       const result = await response.json();
                                       console.log('[TAB3] Response data received');
-                                      
                                       if (result.success && result.data) {
                                         console.log('[TAB3] ✅ Fetched LC with', result.data.documents?.length || 0, 'documents');
                                         setSelectedLC(result.data);
@@ -5974,13 +6015,9 @@ const BanksPortal: React.FC = () => {
                                   }
                                 })();
                               })}
-                              sx={{
-                                bgcolor: '#9b30b7',
-                                '&:hover': { bgcolor: '#7a2592' },
-                              }}
                             >
                               Examine Documents
-                            </Button>
+                            </PrimaryButton>
                           </Box>
                         </TableCell>
                       </TableRow>
@@ -6035,12 +6072,12 @@ const BanksPortal: React.FC = () => {
               )}
             </Box>
           )}
-        </ModernCard>
+        </PortalCard>
       )}
 
       {/* Tab 10: All LCs Management - Show ALL LCs regardless of status */}
       {activeTab === 10 && (
-        <ModernCard title="LC Management - All Letter of Credits">
+        <PortalCard brand="BANKS" title="LC Management - All Letter of Credits">
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
               View and manage all Letter of Credits in the system regardless of status.
@@ -6086,12 +6123,33 @@ const BanksPortal: React.FC = () => {
             >
               Clear Filter
             </Button>
+            <PrimaryButton brand="BANKS"
+              size="small"
+              disabled={selectedLCIds.length === 0 || bulkApproving}
+              onClick={() => { void handleBulkApproveLC(); }}
+            >
+              Bulk Approve ({selectedLCIds.length})
+            </PrimaryButton>
           </Box>
           <Box sx={{ mb: 3 }}>
             <TableContainer component={Paper}>
               <Table>
                 <TableHead>
                   <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        checked={
+                          getFilteredAllLCs().filter(lc => lc.status === 'REQUESTED').length > 0 &&
+                          getFilteredAllLCs().filter(lc => lc.status === 'REQUESTED').every(lc => selectedLCIds.includes(lc.lcId))
+                        }
+                        indeterminate={
+                          selectedLCIds.length > 0 &&
+                          !getFilteredAllLCs().filter(lc => lc.status === 'REQUESTED').every(lc => selectedLCIds.includes(lc.lcId))
+                        }
+                        onChange={() => toggleAllLCSelection()}
+                        inputProps={{ 'aria-label': 'Select all REQUESTED LCs for bulk approval' }}
+                      />
+                    </TableCell>
                     <TableCell><strong>LC ID</strong></TableCell>
                     <TableCell><strong>Contract ID</strong></TableCell>
                     <TableCell><strong>Exporter</strong></TableCell>
@@ -6105,7 +6163,7 @@ const BanksPortal: React.FC = () => {
                 <TableBody>
                   {getFilteredAllLCs().length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} align="center">
+                      <TableCell colSpan={9} align="center">
                         <Typography variant="body2" color="textSecondary">
                           No LCs found
                         </Typography>
@@ -6113,7 +6171,15 @@ const BanksPortal: React.FC = () => {
                     </TableRow>
                   ) : (
                     getFilteredAllLCs().slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage).map((lc) => (
-                      <TableRow key={lc.lcId} hover>
+                      <TableRow key={lc.lcId} hover selected={selectedLCIds.includes(lc.lcId)}>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={selectedLCIds.includes(lc.lcId)}
+                            disabled={lc.status !== 'REQUESTED'}
+                            onChange={() => toggleLCSelection(lc.lcId)}
+                            inputProps={{ 'aria-label': `Select LC ${lc.lcId} for bulk approval` }}
+                          />
+                        </TableCell>
                         <TableCell>{lc.lcId}</TableCell>
                         <TableCell>{lc.contractId}</TableCell>
                         <TableCell>{lc.exporterId}</TableCell>
@@ -6190,12 +6256,12 @@ const BanksPortal: React.FC = () => {
               }}
             />
           </Box>
-        </ModernCard>
+        </PortalCard>
       )}
 
       {/* Tab 3: Payment Release */}
       {activeTab === 3 && (
-        <ModernCard title="Payment Release">
+        <PortalCard brand="BANKS" title="Payment Release">
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
               Release payments for LCs where documents have been verified and accepted.
@@ -6262,38 +6328,33 @@ const BanksPortal: React.FC = () => {
                           <strong>${lc.amount?.toLocaleString()} {lc.currency}</strong>
                         </TableCell>
                         <TableCell>
-                          <StatusChip label={lc.status} status="approved" />
+                          <StatusChip label={lc.status} status={chipStatus(lc.status)} />
                         </TableCell>
                         <TableCell>
                           {lc.requestDate ? new Date(lc.requestDate).toLocaleDateString() : 'N/A'}
                         </TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                            <Button
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Assignment />}
                               onClick={() => {
                                 setAuditEntityType('LC');
                                 setAuditEntityId(lc.lcId);
                                 setShowAuditTrail(true);
                               }}
-                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
                             >
                               Audit Trail
-                            </Button>
-                            <Button
+                            </SecondaryButton>
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Visibility />}
                               onClick={() => handleViewLCDetails(lc)}
-                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
                             >
                               View Details
-                            </Button>
-                            <Button
+                            </SecondaryButton>
+                            <PrimaryButton brand="BANKS"
                               size="small"
-                              variant="contained"
                               startIcon={<Payment />}
                               onClick={async () => {
                                 // Confirm before releasing payment
@@ -6303,15 +6364,13 @@ const BanksPortal: React.FC = () => {
                                   `Amount: $${lc.amount?.toLocaleString()} ${lc.currency}\n\n` +
                                   `This will initiate SWIFT payment to the beneficiary bank and create a blockchain signature.`
                                 );
-                                
                                 if (confirmed) {
                                   await handleReleasePayment(lc.lcId, lc.amount, lc.currency);
                                 }
                               }}
-                              sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}
                             >
                               Release Payment
-                            </Button>
+                            </PrimaryButton>
                           </Box>
                         </TableCell>
                       </TableRow>
@@ -6366,7 +6425,7 @@ const BanksPortal: React.FC = () => {
               )}
             </Box>
           )}
-        </ModernCard>
+        </PortalCard>
       )}
 
       {/* Tab 6: Analytics */}
@@ -6425,15 +6484,14 @@ const BanksPortal: React.FC = () => {
                             </Typography>
                           </Box>
                           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                            <Button
+                            <SecondaryButton brand="BANKS"
                               size="small"
-                              variant="outlined"
                               startIcon={<Description />}
                               onClick={() => handleIssueExportPermit(shipment)}
-                              sx={{ borderColor: '#9b30b7', color: '#9b30b7', textTransform: 'none', '&:hover': { borderColor: '#7a2592', bgcolor: 'rgba(155, 48, 183, 0.05)' } }}
+                              sx={{ textTransform: 'none' }}
                             >
                               Issue Export Permit
-                            </Button>
+                            </SecondaryButton>
                             <Chip
                               label="Delivered"
                               color="success"
@@ -6473,17 +6531,28 @@ const BanksPortal: React.FC = () => {
 
       {/* ==================== DOCUMENT EXAMINATION DIALOG ==================== */}
       {/* Shows ALL documents attached to LC with comprehensive review interface */}
-      <Dialog 
-        open={documentExaminationOpen} 
-        onClose={() => setDocumentExaminationOpen(false)}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Description sx={{ fontSize: 28 }} />
-          Document Examination - LC {selectedLC?.lcId}
-        </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
+            <PortalDialog brand="BANKS" open={documentExaminationOpen} onClose={() => setDocumentExaminationOpen(false)} maxWidth="lg" title={<>Document Examination - LC {selectedLC?.lcId}</>} icon={<Description />} contentSx={{ mt: 2 }} actions={<>
+          <GhostButton brand="BANKS"
+            onClick={() => setDocumentExaminationOpen(false)}
+          >
+            Close
+          </GhostButton>
+          {selectedLC?.documents?.every((d: any) => d.verificationStatus === 'verified' || d.status === 'verified') && (
+            <Button 
+              variant="contained" 
+              color="success"
+              startIcon={<CheckCircle />}
+              onClick={() => {
+                handleExamineLCDocuments(selectedLC.lcId, true, '');
+                setDocumentExaminationOpen(false);
+              }}
+              sx={{ ml: 1 }}
+            >
+              Mark LC as Compliant & Ready for Payment
+            </Button>
+          )}
+        </>}>
+
           {/* Loading Indicator */}
           {lcDetailsLoading && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, p: 2, bgcolor: '#f5f5f5', borderRadius: 1 }}>
@@ -6653,7 +6722,7 @@ const BanksPortal: React.FC = () => {
                                 startIcon={<Visibility />}
                                 onClick={async () => {
                                   try {
-                                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+                                    const apiUrl = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
                                     const token = localStorage.getItem('authToken');
                                     
                                     // Get document ID (handle both camelCase and snake_case)
@@ -6735,9 +6804,8 @@ const BanksPortal: React.FC = () => {
                                 >
                                   {verifyingDocumentId === doc.documentId ? 'Approving...' : 'Approve'}
                                 </Button>
-                                <Button
+                                <DangerButton brand="BANKS"
                                   size="small"
-                                  variant="contained"
                                   color="error"
                                   startIcon={verifyingDocumentId === doc.documentId ? <CircularProgress size={16} color="inherit" /> : <Cancel />}
                                   onClick={() => handleVerifyDocument(doc.documentId, false)}
@@ -6745,7 +6813,7 @@ const BanksPortal: React.FC = () => {
                                   sx={{ flex: 1 }}
                                 >
                                   {verifyingDocumentId === doc.documentId ? 'Rejecting...' : 'Reject'}
-                                </Button>
+                                </DangerButton>
                               </Box>
                             </Box>
                           </Grid>
@@ -6839,42 +6907,15 @@ const BanksPortal: React.FC = () => {
               )}
             </>
           )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #ddd' }}>
-          <Button 
-            onClick={() => setDocumentExaminationOpen(false)}
-            variant="outlined"
-          >
-            Close
-          </Button>
-          {selectedLC?.documents?.every((d: any) => d.verificationStatus === 'verified' || d.status === 'verified') && (
-            <Button 
-              variant="contained" 
-              color="success"
-              startIcon={<CheckCircle />}
-              onClick={() => {
-                handleExamineLCDocuments(selectedLC.lcId, true, '');
-                setDocumentExaminationOpen(false);
-              }}
-              sx={{ ml: 1 }}
-            >
-              Mark LC as Compliant & Ready for Payment
-            </Button>
-          )}
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
-      <Dialog 
-        open={swiftDetailsDialogOpen} 
-        onClose={() => setSwiftDetailsDialogOpen(false)}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <VerifiedUser sx={{ fontSize: 28 }} />
-          SWIFT Message Details
-        </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
+            <PortalDialog brand="BANKS" open={swiftDetailsDialogOpen} onClose={() => setSwiftDetailsDialogOpen(false)} maxWidth="lg" title="SWIFT Message Details" icon={<VerifiedUser />} contentSx={{ mt: 2 }} actions={<>
+          <PrimaryButton brand="BANKS" onClick={() => setSwiftDetailsDialogOpen(false)}>
+            Close
+          </PrimaryButton>
+        </>}>
+
           {selectedSwiftMessage && (
             <>
               <Box sx={{ mb: 3 }}>
@@ -7148,13 +7189,8 @@ const BanksPortal: React.FC = () => {
               </Grid>
             </>
           )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSwiftDetailsDialogOpen(false)} variant="contained" sx={{ bgcolor: '#9b30b7' }}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
+        
+      </PortalDialog>
 
       {/* NEW: Repatriation Initiation Dialog */}
       <RepatriationInitiationDialog
@@ -7174,7 +7210,7 @@ const BanksPortal: React.FC = () => {
           loadBankingData();
         }}
       />
-    </Box>
+    </PortalShell>
     </ThemeProvider>
   );
 };

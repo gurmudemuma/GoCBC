@@ -9,16 +9,10 @@ import {
   CardContent,
   Typography,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Chip,
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   TextField,
   Stepper,
   Step,
@@ -85,7 +79,7 @@ import {
 } from '@mui/icons-material';
 
 import { alpha } from '@mui/material/styles';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { useForm, Controller } from 'react-hook-form';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
@@ -96,12 +90,26 @@ import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 // Modern Components - 2026 Design
 import {
-  ModernCard,
   AnimatedButton,
   DashboardKPI,
   StatusChip,
   ThemeToggle,
 } from '@/components/modern';
+import {
+  PortalShell,
+  PortalTabBar,
+  PortalTabPanel,
+  PortalKpiCard,
+  PortalCard,
+  PrimaryButton,
+  SecondaryButton,
+  DangerButton,
+  GhostButton,
+  PortalDialog,
+  PortalField,
+  PortalDataGrid,
+  getPortalBrand,
+} from '@/components/shared/portal';
 import { NotificationDialog } from '@/components/common/NotificationDialog';
 import { useNotification } from '@/hooks/useNotification';
 import AuditTrailViewer from './AuditTrailViewer';
@@ -184,76 +192,70 @@ const hasActionableRejectionFeedback = (reason?: string) => {
   return !/^(fill|fix|correct|update|incomplete|missing|wrong|invalid|rejected?)[.!\s]*$/i.test(feedback);
 };
 
-// Helper: Get user-friendly shipment status label
-const getShipmentStatusLabel = (status: string, logisticsStatus?: string): string => {
-  // Primary status labels (workflow)
-  const statusLabels: Record<string, string> = {
-    DRAFT: 'Draft',
-    REGISTERED: 'Registered',
-    QUALITY_PENDING: 'Quality Inspection Pending',
-    QUALITY_APPROVED: 'Quality Approved',
-    QUALITY_REJECTED: 'Quality Rejected',
-    CUSTOMS_CLEARED: 'Customs Cleared',
-    COMPLETED: 'Completed',
-  };
-
-  // Logistics status labels (tracking)
-  const logisticsLabels: Record<string, string> = {
-    PENDING: 'Not Yet Shipped',
-    BOOKED: 'Shipping Booked',
-    LOADED: 'Loaded on Vessel',
-    DEPARTED: 'Departed',
-    IN_TRANSIT: 'In Transit',
-    ARRIVED: 'Arrived at Destination',
-    DELIVERED: 'Delivered',
-    CONFIRMED: 'Delivery Confirmed',
-  };
-
-  // If logistics status exists and is more specific, show it
-  if (logisticsStatus && logisticsStatus !== 'PENDING') {
-    return logisticsLabels[logisticsStatus] || logisticsStatus;
-  }
-
-  // Otherwise show workflow status
-  return statusLabels[status] || status;
+// Helper: Get user-friendly shipment status label.
+// Chaincode `coffee` v2.3 closed set (main.go validShipmentStatuses) —
+// exactly these 18 values, no others. Anything else renders raw so an
+// unexpected value is visible, never silently relabelled.
+const SHIPMENT_STATUS_LABELS: Record<string, string> = {
+  CREATED: 'Created',
+  FREIGHT_BOOKED: 'Freight Booked',
+  PERMIT_ISSUED: 'Export Permit Issued',
+  CUSTOMS_DECLARED: 'Customs Declared',
+  CUSTOMS_CLEARED: 'Customs Cleared',
+  CUSTOMS_REJECTED: 'Customs Rejected',
+  INSPECTION_PENDING: 'Inspection Pending',
+  LAND_TRANSPORT: 'Land Transport',
+  PORT_ARRIVED: 'Arrived at Port',
+  CONTAINER_STUFFED: 'Container Stuffed',
+  VESSEL_LOADED: 'Loaded on Vessel',
+  DEPARTED: 'Departed',
+  IN_TRANSIT: 'In Transit',
+  DESTINATION_ARRIVED: 'Arrived at Destination',
+  DELIVERED: 'Delivered',
+  LOADED: 'Loaded',
+  CANCELLED: 'Cancelled',
+  ARRIVED: 'Arrived',
 };
 
-// Helper: Get user-friendly payment status label
+const getShipmentStatusLabel = (status: string, logisticsStatus?: string): string => {
+  // Shipment status and the legacy logistics status share one namespace;
+  // the more specific logistics value wins only when it is a real
+  // chaincode status, otherwise the workflow status is shown.
+  if (logisticsStatus && SHIPMENT_STATUS_LABELS[logisticsStatus]) {
+    return SHIPMENT_STATUS_LABELS[logisticsStatus];
+  }
+  return SHIPMENT_STATUS_LABELS[status] || status;
+};
+
+// Helper: Get user-friendly payment status label.
+// Chaincode `coffee` v2.3 LC payment machine (payment.go): PENDING →
+// DOCUMENTS_SUBMITTED → VERIFIED → SWIFT_INITIATED → SWIFT_RECEIVED →
+// SETTLED → CONFIRMED. REJECTED is also reachable (DOCUMENTS_SUBMITTED /
+// SWIFT_INITIATED → REJECTED) so it gets a label, but it is not part of
+// the forward path.
 const getPaymentStatusLabel = (status: string, trackingStatus?: string): string => {
-  // Payment processing status labels (backend)
   const statusLabels: Record<string, string> = {
     PENDING: 'Pending Payment',
-    RECEIVED: 'Payment Received',
-    SPLIT: '40% NBE Retention Applied',
-    RETENTION_CONVERTED: 'Retention Converted to Birr',
-    RELEASED: 'Payment Released (60%)',
-    COMPLETED: 'Fully Completed',
-  };
-
-  // Document tracking labels (optional)
-  const trackingLabels: Record<string, string> = {
-    PENDING: 'Documents Pending',
     DOCUMENTS_SUBMITTED: 'Documents Submitted',
     VERIFIED: 'Documents Verified',
     SWIFT_INITIATED: 'SWIFT Payment Initiated',
     SWIFT_RECEIVED: 'SWIFT Payment Received',
     SETTLED: 'Payment Settled',
+    CONFIRMED: 'Settlement Confirmed',
+    REJECTED: 'Payment Rejected',
   };
 
-  // If tracking status exists, show it
   if (trackingStatus) {
-    return trackingLabels[trackingStatus] || trackingStatus;
+    return statusLabels[trackingStatus] || trackingStatus;
   }
-
-  // Otherwise show payment processing status
   return statusLabels[status] || status;
 };
 
 // Helper: Get status color
 const getStatusColor = (status: string): string => {
-  const successStatuses = ['APPROVED', 'ISSUED', 'ALLOCATED', 'CLEARED', 'RELEASED', 'COMPLETED', 'DELIVERED', 'CONFIRMED', 'QUALITY_APPROVED'];
-  const warningStatuses = ['PENDING', 'REQUESTED', 'REGISTERED', 'QUALITY_PENDING', 'RECEIVED', 'SPLIT', 'BOOKED', 'LOADED', 'IN_TRANSIT'];
-  const errorStatuses = ['REJECTED', 'FAILED', 'QUALITY_REJECTED'];
+  const successStatuses = ['APPROVED', 'ISSUED', 'ALLOCATED', 'CLEARED', 'RELEASED', 'DELIVERED', 'CONFIRMED', 'SETTLED', 'VERIFIED'];
+  const warningStatuses = ['PENDING', 'REQUESTED', 'REGISTERED', 'IN_TRANSIT', 'FREIGHT_BOOKED', 'DOCUMENTS_SUBMITTED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED'];
+  const errorStatuses = ['REJECTED', 'FAILED', 'CANCELLED', 'CUSTOMS_REJECTED'];
 
   if (successStatuses.includes(status)) return 'success';
   if (errorStatuses.includes(status)) return 'error';
@@ -270,7 +272,7 @@ interface ForexStatus {
   currency: string;
   exchangeRate: number;
   retentionRate: number;
-  status: 'REQUESTED' | 'ALLOCATED' | 'UTILIZED' | 'CONFIRMED';
+  status: 'REQUESTED' | 'CONFIRMED' | 'ALLOCATED' | 'UTILIZED' | 'REJECTED';
   expiryDate: string;
   allocationDate?: string;
   requestDate?: Date;
@@ -283,7 +285,7 @@ interface LCStatus {
   currency: string;
   issuingBank: string;
   advisingBank: string;
-  status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'UTILIZED' | 'FOREX_ALLOCATED' | 'PAYMENT_RELEASED' | 'SETTLED' | 'REJECTED' | 'EXPIRED';
+  status: 'REQUESTED' | 'APPROVED' | 'ISSUED' | 'AMENDED' | 'FOREX_ALLOCATED' | 'UTILIZED' | 'PAYMENT_RELEASED' | 'SETTLED' | 'REJECTED' | 'EXPIRED';
   expiryDate: string;
   messages?: any[]; // Optional: SWIFT messages related to this LC
 }
@@ -297,14 +299,16 @@ interface ShipmentStatus {
   buyerId?: string;
   quantity: number;
   grade?: string;
-  // Workflow status (backend): DRAFT, REGISTERED, QUALITY_PENDING, QUALITY_APPROVED, QUALITY_REJECTED, CUSTOMS_CLEARED, COMPLETED
-  // plus the lifecycle values the shipment endpoints actually return
-  // (CREATED, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED,
-  // DELIVERED, CONFIRMED — see api/src/routes/shipments.ts). SHIPPED is
-  // in no machine (TEST-STATUS-MATRIX) and must never be written here.
-  status: 'DRAFT' | 'REGISTERED' | 'QUALITY_PENDING' | 'QUALITY_APPROVED' | 'QUALITY_REJECTED' | 'CUSTOMS_CLEARED' | 'COMPLETED' | 'CREATED' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'FREIGHT_BOOKED' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DESTINATION_ARRIVED' | 'INSPECTION_PENDING' | 'CUSTOMS_REJECTED';
-  // Logistics tracking status: PENDING, BOOKED, LOADED, DEPARTED, IN_TRANSIT, ARRIVED, DELIVERED, CONFIRMED
-  logisticsStatus?: 'PENDING' | 'BOOKED' | 'LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'ARRIVED' | 'DELIVERED' | 'CONFIRMED' | 'CREATED';
+  // Shipment status — chaincode `coffee` v2.3 closed set
+  // (main.go validShipmentStatuses): exactly these 18 values. The old
+  // union listed DRAFT / REGISTERED / QUALITY_PENDING / QUALITY_APPROVED /
+  // QUALITY_REJECTED / BOOKED / COMPLETED / CONFIRMED, none of which any
+  // shipment machine ever assigns (quality is an *inspection* state;
+  // quality.go only ever sets a shipment to INSPECTION_PENDING).
+  status: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
+  // Logistics tracking status: same chaincode namespace as `status`
+  // (there is no separate logistics field on-chain).
+  logisticsStatus?: 'CREATED' | 'FREIGHT_BOOKED' | 'PERMIT_ISSUED' | 'CUSTOMS_DECLARED' | 'CUSTOMS_CLEARED' | 'CUSTOMS_REJECTED' | 'INSPECTION_PENDING' | 'LAND_TRANSPORT' | 'PORT_ARRIVED' | 'CONTAINER_STUFFED' | 'VESSEL_LOADED' | 'DEPARTED' | 'IN_TRANSIT' | 'DESTINATION_ARRIVED' | 'DELIVERED' | 'LOADED' | 'CANCELLED' | 'ARRIVED';
   transportMode?: TransportMode;
   billOfLading?: string;
   vesselName?: string;
@@ -315,33 +319,27 @@ interface ShipmentStatus {
 interface PaymentStatus {
   paymentId: string;
   contractId: string;
+  shipmentId?: string;
   amount: number;
   currency: string;
   retainedAmount: number;
   convertedAmount: number;
   amountBirr: number;
-  // Backend status values: PENDING, RECEIVED, SPLIT, RETENTION_CONVERTED, RELEASED, COMPLETED
-  status: 'PENDING' | 'RECEIVED' | 'SPLIT' | 'RETENTION_CONVERTED' | 'RELEASED' | 'COMPLETED' | 'SETTLED';
-  // Document tracking (optional): PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED
-  paymentTrackingStatus?: 'PENDING' | 'DOCUMENTS_SUBMITTED' | 'VERIFIED' | 'SWIFT_INITIATED' | 'SWIFT_RECEIVED' | 'SETTLED';
+  // Chaincode `coffee` v2.3 LC payment machine (payment.go):
+  // PENDING → DOCUMENTS_SUBMITTED → VERIFIED → SWIFT_INITIATED →
+  // SWIFT_RECEIVED → SETTLED → CONFIRMED. The old union (RECEIVED /
+  // SPLIT / RETENTION_CONVERTED / RELEASED / COMPLETED) was a phantom
+  // machine — no payment ever has those statuses.
+  status: 'PENDING' | 'DOCUMENTS_SUBMITTED' | 'VERIFIED' | 'SWIFT_INITIATED' | 'SWIFT_RECEIVED' | 'SETTLED' | 'CONFIRMED';
+  // The chaincode payment's `status` IS the tracking machine, so this
+  // mirrors it (populated from `status` in the loader).
+  paymentTrackingStatus?: 'PENDING' | 'DOCUMENTS_SUBMITTED' | 'VERIFIED' | 'SWIFT_INITIATED' | 'SWIFT_RECEIVED' | 'SETTLED' | 'CONFIRMED';
   swiftReference?: string;
 }
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
-
 const ExporterPortal: React.FC = () => {
   // Professional Brand Colors - Matching Login Page Theme
-  const brandPrimary = '#9b30b7'; // Purple (matching login page)
+  const brandPrimary = getPortalBrand('EXPORTER').primary; // Purple (matching login page)
   const brandSecondary = '#FFD700'; // Gold (matching login page)
   const brandSuccess = '#10B981'; // Emerald (positive actions)
   const brandWarning = '#F59E0B'; // Amber (alerts)
@@ -378,6 +376,12 @@ const ExporterPortal: React.FC = () => {
   const [payments, setPayments] = useState<PaymentStatus[]>([]);
   const [allPayments, setAllPayments] = useState<PaymentStatus[]>([]);
   const [shipmentsWithPermits, setShipmentsWithPermits] = useState<Set<string>>(new Set());
+  // Raw export permits for this exporter, from GET /permits/exporter/:exporterId
+  // (chaincode QueryPermitsByExporter). A permit has no shipmentId — it
+  // links to shipments through contractId (permit.go) — so
+  // shipmentsWithPermits is derived from these + the shipment's own
+  // PERMIT_ISSUED status in the effect below.
+  const [exportPermits, setExportPermits] = useState<any[]>([]);
   const [shipmentsWithDeclarations, setShipmentsWithDeclarations] = useState<Set<string>>(new Set());
   // Latest customs declaration per shipment, joined by shipmentId
   // (GET /customs/declarations returns declaration.status alongside
@@ -408,6 +412,11 @@ const ExporterPortal: React.FC = () => {
   const [isSubmittingCustoms, setIsSubmittingCustoms] = useState(false);
   const [isBookingShipping, setIsBookingShipping] = useState(false);
   const [isInitiatingPayment, setIsInitiatingPayment] = useState(false);
+  const [isSubmittingLCDocuments, setIsSubmittingLCDocuments] = useState(false);
+  // Reports tab (tab 6) — controlled inputs for the real export endpoint
+  const [reportStartDate, setReportStartDate] = useState('2026-01-01');
+  const [reportEndDate, setReportEndDate] = useState('2026-12-31');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [customsForm, setCustomsForm] = useState({
     hsCode: '090111',
     portOfExit: 'Djibouti Port',
@@ -562,10 +571,11 @@ const ExporterPortal: React.FC = () => {
     console.log('[LC DIALOG STATE] lcRequestDialogOpen:', lcRequestDialogOpen, 'selectedContractForLC:', selectedContractForLC?.contractId);
   }, [lcRequestDialogOpen, selectedContractForLC]);
 
-  // Load audit trail stats when Audit Trail tab is active
+  // Load audit trail stats when Audit Trail tab is active (tab 7, not 6 —
+  // tab 6 is Reports)
   useEffect(() => {
     console.log('[Exporter Portal] Tab changed to:', tabValue);
-    if (tabValue === 6) {
+    if (tabValue === 7) {
       console.log('[Exporter Portal] Loading audit stats for Audit Trail tab');
       loadAuditStats();
     }
@@ -691,45 +701,61 @@ const ExporterPortal: React.FC = () => {
     }
   };
   
-  const loadQualityInspections = async (token: string | null) => {
-    if (!token) return;
-    
+  // "Has export permit" comes from the permit endpoint, never from an
+  // inspection row: GET /permits/exporter/:exporterId (permits.ts:334,
+  // chaincode QueryPermitsByExporter). The old code inferred it from a
+  // quality-inspection row whose status lowercased to 'permit_issued' —
+  // that worked only by accident and treated an APPROVED-but-not-permitted
+  // inspection as "no inspection". A permit carries contractId (no
+  // shipmentId — permit.go), so the shipment join happens in the effect
+  // below, via contractId, plus the shipment's own PERMIT_ISSUED status
+  // (the IssueCBEExportPermit cascade sets CREATED shipments to it).
+  const loadExportPermits = async (token: string | null, exporterId: string) => {
+    if (!token || !exporterId) return;
+
     try {
-      console.log('[EXPORTER] Fetching quality inspections...');
-      const response = await apiFetch('/quality/inspections?limit=500', {
+      console.log('[EXPORTER] Fetching export permits...');
+      const response = await apiFetch(`/permits/exporter/${encodeURIComponent(exporterId)}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
-      const result = await response.json();
-      console.log('[EXPORTER] Quality inspections API response:', result);
-      
-      if (result.success && result.data) {
-        const inspections = result.data.inspections || result.data;
-        console.log('[EXPORTER] Total inspections:', inspections.length);
-        console.log('[EXPORTER] First inspection:', inspections[0]);
-        
-        // Find shipments that have export permits
-        // The key check is: status === 'permit_issued' (this is set by the API when permit is issued)
-        const permittedShipments = inspections
-          .filter((insp: any) => {
-            const shipmentId = insp.shipment_id || insp.shipmentId || insp.shipmentID || insp.ShipmentID;
-            const status = (insp.status || insp.Status || '').toLowerCase();
-            
-            // Permit is issued when status is 'permit_issued'
-            const hasPermit = shipmentId && status === 'permit_issued';
-            
-            console.log('[EXPORTER] Inspection', insp.inspection_id || insp.inspectionID, '- status:', status, '- shipment_id:', shipmentId, '- hasPermit:', hasPermit);
-            return hasPermit;
-          })
-          .map((insp: any) => insp.shipment_id || insp.shipmentId || insp.shipmentID || insp.ShipmentID);
-        
-        console.log('[EXPORTER] Shipments with export permits:', permittedShipments);
-        setShipmentsWithPermits(new Set(permittedShipments));
+
+      if (!response.ok) {
+        console.warn('[EXPORTER] Permits API returned status:', response.status);
+        return;
       }
+
+      const result = await response.json();
+      // permits.ts returns the raw array (not {success, data})
+      const permits = Array.isArray(result) ? result : (result.data || []);
+      console.log('[EXPORTER] Export permits:', permits.length);
+      setExportPermits(permits);
     } catch (error) {
-      console.error('[EXPORTER] Failed to load quality inspections:', error);
+      console.error('[EXPORTER] Failed to load export permits:', error);
     }
   };
+
+  // Derive shipmentsWithPermits from the loaded permits + shipments.
+  // A shipment has a permit when its own status is PERMIT_ISSUED, or
+  // when an ISSUED/UTILIZED/SETTLED permit exists for its contract
+  // (permits are usually issued before the shipment is created, so the
+  // cascade may never have touched the shipment row).
+  useEffect(() => {
+    const permitted = new Set<string>();
+    shipments.forEach((shipment) => {
+      if (shipment.status === 'PERMIT_ISSUED') {
+        permitted.add(shipment.shipmentId);
+        return;
+      }
+      const hasPermitForContract = exportPermits.some((permit: any) => {
+        const permitContractId = permit.contractId || permit.ContractID || permit.contract_id;
+        const permitStatus = String(permit.status || permit.Status || '').toUpperCase();
+        return permitContractId === shipment.contractId &&
+          ['ISSUED', 'UTILIZED', 'SETTLED'].includes(permitStatus);
+      });
+      if (hasPermitForContract) permitted.add(shipment.shipmentId);
+    });
+    setShipmentsWithPermits(permitted);
+  }, [shipments, exportPermits]);
   
   const loadCustomsDeclarations = async (token: string | null) => {
     if (!token) return;
@@ -787,8 +813,8 @@ const ExporterPortal: React.FC = () => {
       }
     }
     
-    // SKIP slow API calls - load quality/customs in background
-    loadQualityInspections(token).catch(e => console.warn('Quality inspections failed:', e));
+    // SKIP slow API calls - load permits/customs in background
+    loadExportPermits(token, currentExporterId).catch(e => console.warn('Export permits failed:', e));
     loadCustomsDeclarations(token).catch(e => console.warn('Customs declarations failed:', e));
     
     // SKIP profile API - load in background (don't block blockchain data!)
@@ -1196,16 +1222,17 @@ const ExporterPortal: React.FC = () => {
           const mappedPayments = validPayments.map((p: any) => {
             // The chaincode payment's `status` IS the document-tracking
             // machine (PENDING → DOCUMENTS_SUBMITTED → VERIFIED →
-            // SWIFT_INITIATED → SWIFT_RECEIVED → SETTLED, payment.go) —
-            // there is no separate tracking field on-chain, so populate
-            // paymentTrackingStatus from it (or from a PG row's
+            // SWIFT_INITIATED → SWIFT_RECEIVED → SETTLED → CONFIRMED,
+            // payment.go) — there is no separate tracking field on-chain,
+            // so populate paymentTrackingStatus from it (or from a PG row's
             // payment_tracking_status). The dashboard KPIs read this
             // field; without it Processing/Received/Settled were always 0.
             const rawTracking = p.paymentTrackingStatus || p.payment_tracking_status || p.status || p.Status || 'PENDING';
-            const trackingStatus = ['PENDING', 'DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SETTLED'].includes(rawTracking) ? rawTracking : 'PENDING';
+            const trackingStatus = ['PENDING', 'DOCUMENTS_SUBMITTED', 'VERIFIED', 'SWIFT_INITIATED', 'SWIFT_RECEIVED', 'SETTLED', 'CONFIRMED'].includes(rawTracking) ? rawTracking : 'PENDING';
             return {
               paymentId: p.paymentID || p.paymentId,
               contractId: p.contractID || p.contractId,
+              shipmentId: p.shipmentId || p.ShipmentID || p.shipment_id || '',
               amount: p.amount || p.Amount || 0,
               currency: p.currency || p.Currency || 'USD',
               retainedAmount: p.retainedAmount || p.RetainedAmount || 0,
@@ -1886,9 +1913,6 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
-      const containerNumber = `CONT${Date.now()}`;
-      const billOfLading = `BL-${Date.now()}`;
-
       // Book freight through the shipping endpoint: POST /shipping/bookings
       // moves the real shipment row to FREIGHT_BOOKED (aa0947f fix). The
       // old PUT /shipments/:id/status {status:'SHIPPED'} wrote a status no
@@ -1915,19 +1939,21 @@ const ExporterPortal: React.FC = () => {
       const result = await response.json();
       
       if (result.success) {
+        // Only the booking ID / status come back from the API — the
+        // container number and bill of lading are assigned by the shipping
+        // line, so they must not be invented client-side here.
+        const bookingId = result.data?.bookingID || result.data?.bookingId || '';
         showSuccess(
           '🚢 Shipping Booked Successfully',
           `Container booking confirmed for ${selectedShipmentForShipping.shipmentId}`,
-          `Container: ${containerNumber}\n` +
-          `Bill of Lading: ${billOfLading}\n` +
+          (bookingId ? `Booking: ${bookingId}\n` : '') +
           `Shipping Line: ${shippingForm.shippingLine}\n` +
           `Port of Loading: ${shippingForm.portOfLoading}\n` +
           `Estimated Departure: ${new Date(shippingForm.estimatedDeparture).toLocaleDateString()}\n\n` +
           'What happens next:\n' +
-          '• Container loading scheduled at port\n' +
-          '• Vessel departure tracking activated\n' +
-          '• You can track shipment in real-time\n' +
-          '• After delivery, proceed to Payment Settlement'
+          '• Container and bill of lading are issued by the shipping line\n' +
+          '• This is a post-delivery booking: the shipment status is now FREIGHT_BOOKED, which has no on-chain exit to land transport\n' +
+          '• Proceed to Payment Settlement'
         );
         setBookShippingDialogOpen(false);
         setSelectedShipmentForShipping(null);
@@ -2021,7 +2047,11 @@ const ExporterPortal: React.FC = () => {
         const retentionRate = Number(selectedForex.retentionRate);
         const amountETB = amountUSD * exchangeRate;
         const retainedETB = (amountETB * retentionRate) / 100;
-        
+        // Chaincode settle math (payment.go): the exporter receives the
+        // CONVERTED amount — amountETB − retainedETB — not the retained
+        // portion, which NBE holds in FCY.
+        const receivedETB = amountETB - retainedETB;
+
         showSuccess(
           '💰 Payment Settlement Initiated',
           `Payment process started for ${selectedShipmentForPayment.shipmentId}`,
@@ -2029,7 +2059,8 @@ const ExporterPortal: React.FC = () => {
           `Amount: $${amountUSD.toLocaleString()} USD\n` +
           `Exchange Rate: ${exchangeRate} ETB/USD\n` +
           `Amount in ETB: ${amountETB.toLocaleString()} ETB\n` +
-          `NBE Retention: ${retentionRate}% = ${retainedETB.toLocaleString()} ETB\n\n` +
+          `NBE Retention: ${retentionRate}% = ${retainedETB.toLocaleString()} ETB (held in FCY)\n` +
+          `You will receive: ${receivedETB.toLocaleString()} ETB\n\n` +
           'What happens next:\n' +
           '• Bank reviews and verifies shipping documents\n' +
           '• SWIFT payment initiated by buyer\'s bank\n' +
@@ -2105,7 +2136,50 @@ const ExporterPortal: React.FC = () => {
       );
     }
   };
-  
+
+  // Real caller for POST /shipments/:shipmentId/lc-documents (0.2/Tier 1):
+  // the document IDs come from the shipment's uploaded documents
+  // (GET /documents/entity/SHIPMENT/:shipmentId) — never invented, and
+  // never submitted empty. Gated on an LC in ISSUED / FOREX_ALLOCATED,
+  // the only states chaincode SubmitLCDocuments accepts.
+  const handleSubmitLCDocumentsForShipment = async (shipment: { shipmentId: string; contractId: string }) => {
+    const lc = getLCForDocumentSubmission(shipment.contractId);
+    if (!lc) {
+      showError('LC Not Ready', 'LC documents can only be submitted while the LC is ISSUED or FOREX_ALLOCATED', 'Wait for the bank to issue the LC, then try again');
+      return;
+    }
+    setIsSubmittingLCDocuments(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+      const response = await apiFetch(`/documents/entity/SHIPMENT/${encodeURIComponent(shipment.shipmentId)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        showError('Documents Unavailable', `Could not list documents for shipment ${shipment.shipmentId} (${response.status})`, 'Upload the LC documents first, then try again');
+        return;
+      }
+      const result = await response.json();
+      const docs = Array.isArray(result) ? result : (result.data || []);
+      const documentIds = docs
+        .map((doc: any) => doc.document_id || doc.documentId || doc.id)
+        .filter(Boolean);
+      if (documentIds.length === 0) {
+        showError('No Documents To Submit', `No documents have been uploaded for shipment ${shipment.shipmentId} yet`, 'Upload the bill of lading, commercial invoice, packing list and other LC documents first, then submit them here');
+        return;
+      }
+      await handleSubmitLCDocuments(shipment.shipmentId, lc.lcId, documentIds);
+    } catch (error: any) {
+      console.error('Error listing shipment documents:', error);
+      showError('Network Error', 'Failed to list shipment documents', error.message || 'Please check if the API server is running and try again');
+    } finally {
+      setIsSubmittingLCDocuments(false);
+    }
+  };
+
   const handleRequestLC = async () => {
     if (!selectedContractForLC || !profile) {
       showError('Error', 'Contract or profile not loaded', 'Please try again');
@@ -2237,6 +2311,98 @@ const ExporterPortal: React.FC = () => {
     shipment.status === 'CUSTOMS_CLEARED' ||
     declarationsByShipment.get(shipment.shipmentId)?.status === 'CLEARED';
 
+  // Payment already initiated for a shipment, if any. GET /payments
+  // returns shipmentId (payments.ts:1151); fall back to the deterministic
+  // PAY-<shipmentId> id the initiate handler creates.
+  const getPaymentForShipment = (shipmentId: string) =>
+    payments.find((p) => p.shipmentId === shipmentId || p.paymentId === `PAY-${shipmentId}`);
+
+  // LC that can receive documents: chaincode SubmitLCDocuments requires
+  // the LC to be ISSUED or FOREX_ALLOCATED (banking.go:1512) and leaves
+  // the status unchanged.
+  const getLCForDocumentSubmission = (contractId: string) =>
+    lcStatuses.find((lc) => lc.contractId === contractId &&
+      ['ISSUED', 'FOREX_ALLOCATED'].includes(lc.status));
+
+  // Freight booking (0.12): offer ONLY after delivery. Booking mirrors
+  // FREIGHT_BOOKED onto the shipment, which breaks the CREATED-only
+  // permit cascade and the CUSTOMS_CLEARED gate of StartLandTransport,
+  // so it must never be offered mid-chain.
+  const canBookFreight = (shipment: { shipmentId: string; status: string; _isPending?: boolean } | null | undefined) => {
+    if (!shipment) return false;
+    return !shipment._isPending && shipment.status === 'DELIVERED';
+  };
+
+  // Payment initiation (0.2): the chaincode gate for InitiatePayment
+  // (payment.go) is an LC in ISSUED / FOREX_ALLOCATED / UTILIZED plus a
+  // ledger-backed forex allocation (the handler also requires forex
+  // ALLOCATED/UTILIZED with a real rate + retention). There is no
+  // shipment-status gate on-chain, so delivery is NOT required here —
+  // but a payment that already exists for the shipment must not be
+  // re-initiated: the handler uses the deterministic id PAY-<shipmentId>,
+  // so a second initiation would collide with the existing payment.
+  // When a payment exists, its real status is shown instead (see the
+  // grid/detail actions) and settlement continues in the bank flow.
+  const canInitiatePayment = (shipment: { shipmentId: string; contractId: string; status: string; _isPending?: boolean } | null | undefined) => {
+    if (!shipment) return false;
+    if (shipment._isPending) return false;
+    if (getPaymentForShipment(shipment.shipmentId)) return false;
+    const lc = lcStatuses.find((item) => item.contractId === shipment.contractId);
+    if (!lc || !['ISSUED', 'FOREX_ALLOCATED', 'UTILIZED'].includes(lc.status)) return false;
+    const forex = forexStatuses.find((fx) => fx.contractId === shipment.contractId);
+    return !!forex && ['ALLOCATED', 'UTILIZED'].includes(String(forex.status).toUpperCase()) &&
+      Number(forex.exchangeRate) > 0 && Number.isFinite(Number(forex.retentionRate));
+  };
+
+  const canSubmitLCDocuments = (shipment: { shipmentId: string; contractId: string; _isPending?: boolean } | null | undefined) => {
+    if (!shipment) return false;
+    return !shipment._isPending && !!getLCForDocumentSubmission(shipment.contractId);
+  };
+
+  // Reports tab (tab 6): download the real export report as CSV.
+  const handleGenerateReport = async () => {
+    if (!reportStartDate || !reportEndDate) {
+      showError('Missing Dates', 'Select a start and end date for the report', 'Both dates are required');
+      return;
+    }
+    if (reportEndDate < reportStartDate) {
+      showError('Invalid Date Range', 'End date must be on or after the start date', 'Adjust the dates and try again');
+      return;
+    }
+    setIsGeneratingReport(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+      const response = await apiFetch(
+        `/analytics/export-report?format=csv&dateFrom=${encodeURIComponent(reportStartDate)}&dateTo=${encodeURIComponent(reportEndDate)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        showError('Report Failed', `The report endpoint returned ${response.status}`, errorText || 'Please try again');
+        return;
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `export-report-${reportStartDate}_to_${reportEndDate}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showSuccess('Report Generated', `Export report downloaded for ${reportStartDate} to ${reportEndDate}`, 'The CSV contains the KPIs for your organisation for the selected period.');
+    } catch (error: any) {
+      console.error('Error generating report:', error);
+      showError('Network Error', 'Failed to generate report', error.message || 'Please check if the API server is running and try again');
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
   // Calculate Dashboard KPIs - Similar to CustomsPortal pattern
   const getExporterStats = () => {
     // Overall counts
@@ -2252,9 +2418,9 @@ const ExporterPortal: React.FC = () => {
     
     // Shipment statuses
     const shipmentsCreated = shipments.filter(s => s.status === 'CREATED').length;
-    const shipmentsBooked = shipments.filter(s => s.status === 'FREIGHT_BOOKED' || s.status === 'BOOKED').length;
+    const shipmentsBooked = shipments.filter(s => s.status === 'FREIGHT_BOOKED').length;
     const shipmentsInTransit = shipments.filter(s => ['IN_TRANSIT', 'DEPARTED'].includes(s.status)).length;
-    const shipmentsDelivered = shipments.filter(s => s.status === 'DELIVERED' || s.status === 'ARRIVED').length;
+    const shipmentsDelivered = shipments.filter(s => s.status === 'DELIVERED').length;
     
     // Forex statuses
     const forexRequested = forexStatuses.filter(f => f.status === 'REQUESTED').length;
@@ -2643,7 +2809,7 @@ const ExporterPortal: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 320,
+      width: 440,
       sortable: false,
       renderCell: (params) => {
         const shipment = params.row;
@@ -2651,25 +2817,24 @@ const ExporterPortal: React.FC = () => {
         // Check if this is a pending contract (ready for shipment)
         if (shipment._isPending) {
           return (
-            <Button
-              variant="contained"
+            <PrimaryButton brand='EXPORTER'
               size="small"
               startIcon={<Add />}
-              sx={{ bgcolor: brandPrimary }}
               onClick={() => {
                 // Pre-fill the dialog with contract data
                 setCreateShipmentDialogOpen(true);
               }}
             >
               Register New Shipment
-            </Button>
+            </PrimaryButton>
           );
         }
         
         // Shipments tab only shows actual shipments (no pending contracts)
         const status = shipment.status || shipment.Status;
-        const isDelivered = ['DELIVERED', 'COMPLETED'].includes(status);
-        
+        const isDelivered = status === 'DELIVERED';
+        const existingPayment = getPaymentForShipment(shipment.shipmentId);
+
         return (
           <Box sx={{ display: 'flex', gap: 0.5 }}>
             <Tooltip title="View Shipment Details">
@@ -2684,7 +2849,82 @@ const ExporterPortal: React.FC = () => {
                 <Visibility />
               </IconButton>
             </Tooltip>
-            
+
+            {/* 0.12: freight booking is offered ONLY after delivery.
+                Booking mirrors FREIGHT_BOOKED, which breaks the
+                CREATED-only permit cascade and the CUSTOMS_CLEARED gate
+                of StartLandTransport — never offer it mid-chain. */}
+            {canBookFreight(shipment) && (
+              <Tooltip title="Book Freight (post-delivery only)">
+                <IconButton
+                  size="small"
+                  color="primary"
+                  onClick={() => {
+                    setSelectedShipmentForShipping(shipment);
+                    setBookShippingDialogOpen(true);
+                  }}
+                >
+                  <LocalShipping />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {/* 0.12: an existing FREIGHT_BOOKED row has no on-chain exit
+                to land transport — show the real status with a note, and
+                no onward button. Same for LOADED / ARRIVED: BoL/AWB
+                recording sets LOADED unconditionally and DepartFromPort
+                needs VESSEL_LOADED, so those rows have no onward step. */}
+            {status === 'FREIGHT_BOOKED' && (
+              <Tooltip title="Freight booked. This status has no on-chain exit to land transport — booking is post-delivery paperwork only.">
+                <Chip label="No onward transport" size="small" sx={{ bgcolor: '#FF980015', color: '#FF9800', fontWeight: 600 }} />
+              </Tooltip>
+            )}
+            {(status === 'LOADED' || status === 'ARRIVED') && (
+              <Tooltip title="Recorded as post-delivery paperwork (bill of lading / airway bill sets LOADED). DepartFromPort requires VESSEL_LOADED, so this row has no onward chain step.">
+                <Chip label="No onward step" size="small" sx={{ bgcolor: '#FF980015', color: '#FF9800', fontWeight: 600 }} />
+              </Tooltip>
+            )}
+
+            {/* 0.2: payment initiation — only while no payment exists for
+                this shipment and the LC/forex gates are met (see
+                canInitiatePayment). A payment that already exists is shown
+                with its real status instead of re-initiating it. */}
+            {canInitiatePayment(shipment) && (
+              <Tooltip title="Initiate Payment Settlement">
+                <IconButton
+                  size="small"
+                  color="success"
+                  onClick={() => {
+                    setSelectedShipmentForPayment(shipment);
+                    setPaymentSettlementDialogOpen(true);
+                  }}
+                >
+                  <AttachMoney />
+                </IconButton>
+              </Tooltip>
+            )}
+            {existingPayment && (
+              <Tooltip title={`Payment ${existingPayment.paymentId} is ${existingPayment.status} — settlement continues in the bank flow; it cannot be re-initiated`}>
+                <Chip label={`Payment: ${existingPayment.status}`} size="small" color="info" sx={{ fontWeight: 600 }} />
+              </Tooltip>
+            )}
+
+            {/* Tier 1: submit the shipment's uploaded documents to the
+                bank for the LC (POST /shipments/:id/lc-documents). Only
+                while the LC is ISSUED or FOREX_ALLOCATED. */}
+            {canSubmitLCDocuments(shipment) && (
+              <Tooltip title="Submit LC Documents to Bank">
+                <IconButton
+                  size="small"
+                  color="secondary"
+                  disabled={isSubmittingLCDocuments}
+                  onClick={() => handleSubmitLCDocumentsForShipment(shipment)}
+                >
+                  <Description />
+                </IconButton>
+              </Tooltip>
+            )}
+
             {isDelivered && (
               <Tooltip title="View Post-Delivery Workflow">
                 <IconButton
@@ -2754,13 +2994,10 @@ const ExporterPortal: React.FC = () => {
 
   return (
     <ThemeProvider theme={exporterTheme}>
-      <Box
-        sx={{
-          width: '100%',
-          minHeight: '100vh',
-          background: 'linear-gradient(135deg, #fcf7ff 0%, #f7f3ff 45%, #fffef5 100%)',
-          p: { xs: 2, md: 3 },
-        }}
+      <PortalShell
+        brand='EXPORTER'
+        title={(profile?.companyName && profile.companyName !== 'CECBS') ? profile.companyName : 'Export Dashboard'}
+        subtitle="Track your contracts, shipments, and payments"
       >
         {/* Forex Allocation Notification Banner */}
         {forexAllocatedAlert?.show && (
@@ -2808,20 +3045,6 @@ const ExporterPortal: React.FC = () => {
             </Typography>
           </Alert>
         )}
-        {/* Header */}
-        <Box sx={{ mb: 4 }}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12}>
-              <Typography variant="h4" fontWeight="700" gutterBottom sx={{ color: brandPrimary }}>
-                {(profile?.companyName && profile.companyName !== 'CECBS') ? profile.companyName : 'Export Dashboard'}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Track your contracts, shipments, and payments
-              </Typography>
-            </Grid>
-          </Grid>
-        </Box>
-
         {/* Professional KPI Cards - Dynamic based on active tab (CustomsPortal pattern) */}
         <Grid container spacing={3} sx={{ mb: 3 }}>
           {/* Define KPI cards for each tab */}
@@ -2890,118 +3113,30 @@ const ExporterPortal: React.FC = () => {
             ]
           ) : []).map((kpi: any, idx: number) => (
             <Grid item xs={12} sm={6} md={3} key={idx}>
-              <Card 
-                sx={{ 
-                  cursor: kpi.clickTab !== undefined ? 'pointer' : 'default',
-                  height: 140,
-                  border: kpi.clickTab === tabValue ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
-                  bgcolor: 'white',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  borderRadius: 2,
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                  '&:hover': kpi.clickTab !== undefined ? {
-                    boxShadow: `0 8px 24px ${kpi.color}40`,
-                    transform: 'translateY(-4px)',
-                    borderColor: kpi.color,
-                  } : {},
-                }}
-                onClick={() => kpi.clickTab !== undefined && setTabValue(kpi.clickTab)}
-              >
-                <CardContent sx={{ 
-                  textAlign: 'center', 
-                  py: 2.5, 
-                  px: 2,
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}>
-                  <Box sx={{ 
-                    width: 48, 
-                    height: 48, 
-                    borderRadius: '50%', 
-                    bgcolor: `${kpi.color}15`, 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    mb: 1.5
-                  }}>
-                    {React.cloneElement(kpi.icon as React.ReactElement, { 
-                      sx: { fontSize: 28, color: kpi.color } 
-                    })}
-                  </Box>
-                  <Typography 
-                    variant="caption" 
-                    sx={{ 
-                      color: '#666', 
-                      textTransform: 'uppercase', 
-                      fontWeight: 600, 
-                      fontSize: '0.7rem', 
-                      letterSpacing: 0.5, 
-                      mb: 0.5, 
-                      display: 'block' 
-                    }}
-                  >
-                    {kpi.label}
-                  </Typography>
-                  <Typography 
-                    variant="h4" 
-                    sx={{ 
-                      fontWeight: 700, 
-                      color: kpi.color,
-                      lineHeight: 1,
-                    }}
-                  >
-                    {kpi.value}
-                  </Typography>
-                </CardContent>
-              </Card>
+              <PortalKpiCard
+                brand='EXPORTER'
+                icon={kpi.icon}
+                label={kpi.label}
+                value={kpi.value}
+                color={kpi.color}
+                onClick={kpi.clickTab !== undefined ? () => setTabValue(kpi.clickTab) : undefined}
+                selected={kpi.clickTab !== undefined && kpi.clickTab === tabValue}
+              />
             </Grid>
           ))}
         </Grid>
 
         {/* Tabs */}
-        <Box sx={{ borderBottom: 2, borderColor: 'divider', mb: 3 }}>
-          <Tabs 
-            value={tabValue} 
+        <Box sx={{ mb: 3 }}>
+          <PortalTabBar
+            brand='EXPORTER'
+            value={tabValue}
             onChange={handleTabChange}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{ 
-              '& .MuiTab-root': {
-                minHeight: 48,
-                textTransform: 'none',
-                fontSize: '0.95rem',
-                fontWeight: 600,
-                color: '#666',
-                transition: 'all 0.3s ease',
-                '&.Mui-selected': {
-                  color: brandPrimary,
-                  fontWeight: 700,
-                },
-                '&:hover': {
-                  color: brandPrimary,
-                  opacity: 0.8,
-                }
-              },
-              '& .MuiTabs-indicator': {
-                height: 3,
-                backgroundColor: brandPrimary,
-                borderRadius: '3px 3px 0 0',
-              }
-            }}
-          >
-            <Tab value={0} label="Dashboard" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab 
-              value={1}
-              label={`Contracts (${contracts.length})`}
-              icon={<Description sx={{ fontSize: 20 }} />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              value={2}
-              label={`Forex & Banking (${(() => {
+            scrollable
+            tabs={[
+      { label: 'Dashboard', icon: <Assessment sx={{ fontSize: 20 }} /> },
+      { label: `Contracts (${contracts.length})`, icon: <Description sx={{ fontSize: 20 }} /> },
+      { label: `Forex & Banking (${(() => {
                 const allocatedForex = forexStatuses.filter(f => f.status === 'ALLOCATED').length;
                 const issuedLCs = lcStatuses.filter(lc => ['ISSUED', 'UTILIZED', 'FOREX_ALLOCATED'].includes(lc.status)).length;
                 const pendingLCContracts = contracts.filter(c => {
@@ -3010,47 +3145,24 @@ const ExporterPortal: React.FC = () => {
                   return isApproved && !hasLC;
                 }).length;
                 return allocatedForex + issuedLCs + pendingLCContracts;
-              })()})`}
-              icon={<AccountBalance sx={{ fontSize: 20 }} />} 
-              iconPosition="start" 
-            />
-            <Tab 
-              value={3}
-              label={`Shipments (${shipments.length})`}
-              icon={<LocalShipping sx={{ fontSize: 20 }} />} 
-              iconPosition="start" 
-            />
-            <Tab value={4} label={`Customs (${shipments.length})`} icon={<Assignment sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab 
-              value={5}
-              label={`LC & Payments (${lcStatuses.length})`}
-              icon={<AttachMoney sx={{ fontSize: 20 }} />} 
-              iconPosition="start" 
-            />
-            <Tab value={6} label="Reports" icon={<TrendingUp sx={{ fontSize: 20 }} />} iconPosition="start" />
-            <Tab value={7} label="Audit Trail" icon={<Assessment sx={{ fontSize: 20 }} />} iconPosition="start" />
-          </Tabs>
+              })()})`, icon: <AccountBalance sx={{ fontSize: 20 }} /> },
+      { label: `Shipments (${shipments.length})`, icon: <LocalShipping sx={{ fontSize: 20 }} /> },
+      { label: `Customs (${shipments.length})`, icon: <Assignment sx={{ fontSize: 20 }} /> },
+      { label: `LC & Payments (${lcStatuses.length})`, icon: <AttachMoney sx={{ fontSize: 20 }} /> },
+      { label: 'Reports', icon: <TrendingUp sx={{ fontSize: 20 }} /> },
+      { label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} /> },
+            ]}
+          />
         </Box>
 
         {/* Tab Content */}
-        <TabPanel value={tabValue} index={0}>
+        <PortalTabPanel value={tabValue} index={0}>
           {/* Dashboard Tab */}
           <Grid container spacing={3}>
 
             {/* Export Activity Trends Chart */}
             <Grid item xs={12} md={8}>
-            <ModernCard>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-                  <Box>
-                    <Typography variant="h6" fontWeight={700}>
-                      Export Activity Trends
-                    </Typography>
-                    <Typography variant="caption" color="textSecondary">
-                      Contract value and volume over time
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
+            <PortalCard brand='EXPORTER' title="Export Activity Trends" subtitle="Contract value and volume over time" headerActions={<Box sx={{ display: 'flex', gap: 1 }}>
                     <Chip 
                       label="Value" 
                       size="small" 
@@ -3061,8 +3173,7 @@ const ExporterPortal: React.FC = () => {
                       size="small" 
                       sx={{ bgcolor: brandSecondary, color: '#000000' }}
                     />
-                  </Box>
-                </Box>
+                  </Box>}>
                 
                 {/* Line Chart */}
                 <Box sx={{ height: 350, width: '100%' }}>
@@ -3188,8 +3299,7 @@ const ExporterPortal: React.FC = () => {
                     </Typography>
                   </Box>
                 </Box>
-              </CardContent>
-            </ModernCard>
+              </PortalCard>
           </Grid>
 
           {/* Quick Stats Cards */}
@@ -3267,17 +3377,15 @@ const ExporterPortal: React.FC = () => {
 
 
         </Grid>
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={1}>
+      <PortalTabPanel value={tabValue} index={1}>
         {/* My Contracts Tab */}
         <Box>
           <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography variant="h6">My Sales Contracts</Typography>
-            <Button
-              variant="contained"
+            <PrimaryButton brand='EXPORTER'
               startIcon={<Add />}
-              sx={{ bgcolor: brandPrimary }}
               onClick={() => {
                 setCorrectingRejectedContractId(null);
                 setDraftContractId(''); // Empty string for new contract - ID will be generated on submit
@@ -3291,10 +3399,10 @@ const ExporterPortal: React.FC = () => {
               }}
             >
               Register New Contract
-            </Button>
+            </PrimaryButton>
           </Box>
 
-          <DataGrid
+          <PortalDataGrid brand='EXPORTER'
             rows={contracts}
             columns={contractColumns}
             getRowId={(row) => row.contractId}
@@ -3303,30 +3411,25 @@ const ExporterPortal: React.FC = () => {
             initialState={{
               pagination: { paginationModel: { pageSize: 10 } },
             }}
-            sx={{
-              '& .MuiDataGrid-row:hover': {
-                bgcolor: 'action.hover',
-              },
-            }}
           />
         </Box>
 
         {/* Contract Details Dialog */}
-        <Dialog 
+        <PortalDialog brand='EXPORTER' 
           open={contractDialogOpen} 
           onClose={handleContractDialogClose}
           maxWidth="md"
-          fullWidth
-        >
-          <DialogTitle>
-            Contract Details
-            {selectedContract && (
-              <Typography variant="body2" color="text.secondary">
-                {selectedContract.contractId}
-              </Typography>
-            )}
-          </DialogTitle>
-          <DialogContent dividers>
+        
+  title="Contract Details"
+  subtitle={selectedContract?.contractId}
+  actions={<>
+            <GhostButton brand='EXPORTER' onClick={handleContractDialogClose}>Close</GhostButton>
+            <Button variant="contained" startIcon={<Download />}>
+              Download PDF
+            </Button>
+          
+  </>}
+>
             {selectedContract && (
               <>
                 {/* BLOCKCHAIN PROOF BADGE */}
@@ -3441,40 +3544,42 @@ const ExporterPortal: React.FC = () => {
               </Grid>
               </>
             )}
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={handleContractDialogClose}>Close</Button>
-            <Button variant="contained" startIcon={<Download />}>
-              Download PDF
-            </Button>
-          </DialogActions>
-        </Dialog>
+          </PortalDialog>
 
         {/* Create Contract Dialog */}
-        <Dialog 
+        <PortalDialog brand='EXPORTER' 
           open={createContractDialogOpen} 
           onClose={() => setCreateContractDialogOpen(false)}
           maxWidth="lg"
-          fullWidth
-        >
-          <DialogTitle sx={{ bgcolor: brandPrimary, color: 'white' }}>
-            <Box display="flex" alignItems="center" gap={1}>
-              <Description />
-              <Box>
-                <Typography variant="h6">
-                  {draftContractId && !correctingRejectedContractId ? 'Edit Contract' : correctingRejectedContractId ? 'Register Corrected Contract' : 'Register New Sales Contract'}
-                </Typography>
-                <Typography variant="caption">
-                  {draftContractId && !correctingRejectedContractId
+        
+  icon={<Description />}
+  title={draftContractId && !correctingRejectedContractId ? 'Edit Contract' : correctingRejectedContractId ? 'Register Corrected Contract' : 'Register New Sales Contract'}
+  subtitle={draftContractId && !correctingRejectedContractId
                     ? `Editing Contract ${draftContractId} - Update buyer details, shipping preferences, or additional notes`
                     : correctingRejectedContractId
                     ? `Correct the rejected details below. This creates a new contract linked to ${correctingRejectedContractId}.`
                     : 'Complete all required fields to register your export contract'}
-                </Typography>
-              </Box>
-            </Box>
-          </DialogTitle>
-          <DialogContent dividers sx={{ p: 3 }}>
+  actions={<>
+            <GhostButton brand='EXPORTER' onClick={() => setCreateContractDialogOpen(false)} size="large">
+              Cancel
+            </GhostButton>
+            <PrimaryButton brand='EXPORTER' 
+              onClick={handleCreateContract}
+              disabled={isCreatingContract || !newContract.buyerCompany || !newContract.buyerCountry || 
+                        !newContract.buyerBank || !newContract.exporterBank ||
+                        !newContract.buyerEmail || !newContract.coffeeType || !newContract.quantity || 
+                        !newContract.pricePerKg || !newContract.portOfDestination || !newContract.deliveryDate || 
+                        (parseFloat(newContract.pricePerKg) < 5.0) || contractDocuments.some((doc) => doc.status !== 'success')}
+              size="large"
+              sx={{ minWidth: 150 }}
+            >
+              {isCreatingContract 
+                ? (isEditMode ? 'Updating...' : 'Registering...') 
+                : (isEditMode ? 'Update Contract' : 'Register Contract')}
+            </PrimaryButton>
+          
+  </>}
+>
             <Grid container spacing={3}>
               <Grid item xs={12}>
                 <Alert severity="info" icon={<Warning />}>
@@ -3509,7 +3614,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Contact Person Name"
                   value={newContract.buyerName}
@@ -3520,7 +3625,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Company Name"
                   value={newContract.buyerCompany}
@@ -3581,7 +3686,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Email Address"
                   type="email"
@@ -3593,7 +3698,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Phone Number"
                   value={newContract.buyerPhone}
@@ -3637,7 +3742,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Quantity (kg)"
                   type="number"
@@ -3650,7 +3755,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={4}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Price per kg (USD)"
                   type="number"
@@ -3784,7 +3889,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Port of Destination"
                   value={newContract.portOfDestination}
@@ -3796,7 +3901,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Expected Delivery Date"
                   type="date"
@@ -3859,7 +3964,7 @@ const ExporterPortal: React.FC = () => {
               </Grid>
 
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Special Instructions"
                   multiline
@@ -3930,36 +4035,33 @@ const ExporterPortal: React.FC = () => {
                       📥 Download Sample Templates:
                     </Typography>
                     <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Button 
-                        size="small" 
-                        variant="outlined" 
+                      <SecondaryButton brand="EXPORTER"
+                        size="small"
                         startIcon={<Download />}
                         href="/samples/Quality_Certificate_Sample.md"
                         download
                         sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
                       >
                         Quality Certificate
-                      </Button>
-                      <Button 
-                        size="small" 
-                        variant="outlined" 
+                      </SecondaryButton>
+                      <SecondaryButton brand="EXPORTER"
+                        size="small"
                         startIcon={<Download />}
                         href="/samples/Certificate_of_Origin_Sample.md"
                         download
                         sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
                       >
                         Certificate of Origin
-                      </Button>
-                      <Button 
-                        size="small" 
-                        variant="outlined" 
+                      </SecondaryButton>
+                      <SecondaryButton brand="EXPORTER"
+                        size="small"
                         startIcon={<Download />}
                         href="/samples/Export_Permit_Sample.md"
                         download
                         sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
                       >
                         Export Permit
-                      </Button>
+                      </SecondaryButton>
                     </Stack>
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
@@ -3993,7 +4095,7 @@ const ExporterPortal: React.FC = () => {
                             </Typography>
                           )}
                         </Box>
-                        <Button component="label" variant="outlined" size="small" startIcon={<Upload />}>
+                        <SecondaryButton brand='EXPORTER' component="label" size="small" startIcon={<Upload />}>
                           Upload
                           <input
                             hidden
@@ -4002,7 +4104,7 @@ const ExporterPortal: React.FC = () => {
                             accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
                             onChange={(event) => handleContractDocumentSelect(documentType.value, event)}
                           />
-                        </Button>
+                        </SecondaryButton>
                       </Box>
                       {documentsForType.map((doc) => (
                         <Box key={doc.localId} sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -4029,31 +4131,10 @@ const ExporterPortal: React.FC = () => {
                 })}
               </Grid>
             </Grid>
-          </DialogContent>
-          <DialogActions sx={{ p: 2, gap: 1 }}>
-            <Button onClick={() => setCreateContractDialogOpen(false)} size="large">
-              Cancel
-            </Button>
-            <Button 
-              variant="contained" 
-              onClick={handleCreateContract}
-              disabled={isCreatingContract || !newContract.buyerCompany || !newContract.buyerCountry || 
-                        !newContract.buyerBank || !newContract.exporterBank ||
-                        !newContract.buyerEmail || !newContract.coffeeType || !newContract.quantity || 
-                        !newContract.pricePerKg || !newContract.portOfDestination || !newContract.deliveryDate || 
-                        (parseFloat(newContract.pricePerKg) < 5.0) || contractDocuments.some((doc) => doc.status !== 'success')}
-              size="large"
-              sx={{ minWidth: 150 }}
-            >
-              {isCreatingContract 
-                ? (isEditMode ? 'Updating...' : 'Registering...') 
-                : (isEditMode ? 'Update Contract' : 'Register Contract')}
-            </Button>
-          </DialogActions>
-        </Dialog>
-      </TabPanel>
+          </PortalDialog>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={2}>
+      <PortalTabPanel value={tabValue} index={2}>
         {/* Forex & Banking Tab */}
         <Grid container spacing={3}>
           {/* Info Alert: Show Approved Contracts Pending LC Request */}
@@ -4094,12 +4175,8 @@ const ExporterPortal: React.FC = () => {
             if (approvedContractsWithoutLC.length > 0) {
               return (
                 <Grid item xs={12}>
-                  <ModernCard>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom sx={{ color: '#FF9800', mb: 2 }}>
-                        📋 Approved Contracts (Pending LC Request)
-                      </Typography>
-                      <DataGrid
+                  <PortalCard brand='EXPORTER' title="📋 Approved Contracts (Pending LC Request)">
+                      <PortalDataGrid brand='EXPORTER'
                         rows={approvedContractsWithoutLC.map(contract => ({
                           id: contract.contractId,
                           contractId: contract.contractId,
@@ -4257,21 +4334,8 @@ const ExporterPortal: React.FC = () => {
                         initialState={{
                           pagination: { paginationModel: { pageSize: 5 } },
                         }}
-                        sx={{
-                          '& .MuiDataGrid-row': {
-                            bgcolor: 'rgba(255, 152, 0, 0.05)',
-                            '&:hover': {
-                              bgcolor: 'rgba(255, 152, 0, 0.15)',
-                            },
-                          },
-                          '& .MuiDataGrid-columnHeaders': {
-                            bgcolor: 'rgba(255, 152, 0, 0.1)',
-                            fontWeight: 700,
-                          },
-                        }}
                       />
-                    </CardContent>
-                  </ModernCard>
+                    </PortalCard>
                 </Grid>
               );
             }
@@ -4288,12 +4352,8 @@ const ExporterPortal: React.FC = () => {
             if (contractsWithRequestedLC.length > 0) {
               return (
                 <Grid item xs={12}>
-                  <ModernCard>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom sx={{ color: '#2196F3', mb: 2 }}>
-                        📋 LC Requested (Awaiting Bank Approval)
-                      </Typography>
-                      <DataGrid
+                  <PortalCard brand='EXPORTER' title="📋 LC Requested (Awaiting Bank Approval)">
+                      <PortalDataGrid brand='EXPORTER'
                         rows={contractsWithRequestedLC.map(contract => {
                           const lc = lcStatuses.find(lc => lc.contractId === contract.contractId);
                           return {
@@ -4380,26 +4440,13 @@ const ExporterPortal: React.FC = () => {
                         initialState={{
                           pagination: { paginationModel: { pageSize: 5 } },
                         }}
-                        sx={{
-                          '& .MuiDataGrid-row': {
-                            bgcolor: 'rgba(33, 150, 243, 0.05)',
-                            '&:hover': {
-                              bgcolor: 'rgba(33, 150, 243, 0.15)',
-                            },
-                          },
-                          '& .MuiDataGrid-columnHeaders': {
-                            bgcolor: 'rgba(33, 150, 243, 0.1)',
-                            fontWeight: 700,
-                          },
-                        }}
                       />
                       <Alert severity="info" sx={{ mt: 2 }}>
                         <Typography variant="body2">
                           Your bank is reviewing the LC request. This typically takes 1-2 business days. Once approved, the bank will issue the LC and allocate forex, which will appear in the "Forex Allocations" section below.
                         </Typography>
                       </Alert>
-                    </CardContent>
-                  </ModernCard>
+                    </PortalCard>
                 </Grid>
               );
             }
@@ -4408,10 +4455,8 @@ const ExporterPortal: React.FC = () => {
           
           {/* Forex Allocations */}
           <Grid item xs={12}>
-            <ModernCard>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>Forex Allocations</Typography>
-                <DataGrid
+            <PortalCard brand='EXPORTER' title="Forex Allocations">
+                <PortalDataGrid brand='EXPORTER'
                   rows={forexStatuses}
                   columns={[
                     { field: 'forexId', headerName: 'Forex ID', width: 200 },
@@ -4453,22 +4498,14 @@ const ExporterPortal: React.FC = () => {
                   initialState={{
                     pagination: { paginationModel: { pageSize: 10 } },
                   }}
-                  sx={{
-                    '& .MuiDataGrid-row:hover': {
-                      bgcolor: 'action.hover',
-                    },
-                  }}
                 />
-              </CardContent>
-            </ModernCard>
+              </PortalCard>
           </Grid>
 
           {/* Letters of Credit - Only show those with forex-related statuses */}
           <Grid item xs={12}>
-            <ModernCard>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>Letters of Credit</Typography>
-                <DataGrid
+            <PortalCard brand='EXPORTER' title="Letters of Credit">
+                <PortalDataGrid brand='EXPORTER'
                   rows={lcStatuses}
                   columns={[
                     { field: 'lcId', headerName: 'LC Number', width: 220 },
@@ -4500,27 +4537,19 @@ const ExporterPortal: React.FC = () => {
                   initialState={{
                     pagination: { paginationModel: { pageSize: 10 } },
                   }}
-                  sx={{
-                    '& .MuiDataGrid-row:hover': {
-                      bgcolor: 'action.hover',
-                    },
-                  }}
                 />
                 {lcStatuses.length === 0 && (
                   <Alert severity="info" sx={{ mt: 2 }}>
                     No Letters of Credit yet. Request LC from the "My Contracts" tab for approved contracts.
                   </Alert>
                 )}
-              </CardContent>
-            </ModernCard>
+              </PortalCard>
           </Grid>
 
           {/* Payments */}
           <Grid item xs={12}>
-            <ModernCard>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>Payment Status</Typography>
-                <DataGrid
+            <PortalCard brand='EXPORTER' title="Payment Status">
+                <PortalDataGrid brand='EXPORTER'
                   rows={payments}
                   columns={[
                     { field: 'paymentId', headerName: 'Payment ID', width: 220 },
@@ -4557,19 +4586,13 @@ const ExporterPortal: React.FC = () => {
                   initialState={{
                     pagination: { paginationModel: { pageSize: 10 } },
                   }}
-                  sx={{
-                    '& .MuiDataGrid-row:hover': {
-                      bgcolor: 'action.hover',
-                    },
-                  }}
                 />
-              </CardContent>
-            </ModernCard>
+              </PortalCard>
           </Grid>
         </Grid>
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={3}>
+      <PortalTabPanel value={tabValue} index={3}>
         {/* Shipments Tab */}
         <Box>
           {/* Header */}
@@ -4660,7 +4683,7 @@ const ExporterPortal: React.FC = () => {
                   </Alert>
                 )}
                 
-                <DataGrid
+                <PortalDataGrid brand='EXPORTER'
                   rows={allRows}
                   columns={shipmentColumns}
                   getRowId={(row) => row.shipmentId}
@@ -4671,16 +4694,6 @@ const ExporterPortal: React.FC = () => {
                   }}
                   getRowClassName={(params) => params.row.isPending ? 'pending-shipment-row' : ''}
                   sx={{
-                    '& .MuiDataGrid-row:hover': {
-                      bgcolor: 'action.hover',
-                    },
-                    '& .MuiDataGrid-cell': {
-                      borderColor: 'rgba(0, 0, 0, 0.08)',
-                    },
-                    '& .MuiDataGrid-columnHeaders': {
-                      bgcolor: 'rgba(0, 0, 0, 0.04)',
-                      fontWeight: 700,
-                    },
                     '& .pending-shipment-row': {
                       bgcolor: 'rgba(155, 48, 183, 0.08)',
                       '&:hover': {
@@ -4693,9 +4706,9 @@ const ExporterPortal: React.FC = () => {
             );
           })()}
         </Box>
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={4}>
+      <PortalTabPanel value={tabValue} index={4}>
         {/* Customs Declaration Tab */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -4710,7 +4723,7 @@ const ExporterPortal: React.FC = () => {
 
           {/* DataGrid Table */}
           <Card sx={{ boxShadow: 3 }}>
-            <DataGrid
+            <PortalDataGrid brand='EXPORTER'
               key={`customs-grid-${shipmentsWithDeclarations.size}`}
               rows={shipments.map((shipment) => {
                 const contract = contracts.find(c => c.contractId === shipment.contractId);
@@ -4904,8 +4917,7 @@ const ExporterPortal: React.FC = () => {
                       <Box sx={{ display: 'flex', gap: 0.5 }}>
                         {params.row.hasPermit && !params.row.hasDeclared && !params.row.isCleared ? (
                           <Tooltip title="Submit customs declaration with required documents">
-                            <Button
-                              variant="contained"
+                            <PrimaryButton brand='EXPORTER'
                               size="small"
                               startIcon={<Upload />}
                               onClick={() => {
@@ -4920,16 +4932,10 @@ const ExporterPortal: React.FC = () => {
                                 });
                                 setCustomsDeclarationDialogOpen(true);
                               }}
-                              sx={{
-                                backgroundColor: '#9c27b0',
-                                '&:hover': { backgroundColor: '#7b1fa2' },
-                                textTransform: 'none',
-                                fontWeight: 600,
-                                fontSize: '0.8rem',
-                              }}
+                              sx={{ fontSize: '0.8rem' }}
                             >
                               Declare
-                            </Button>
+                            </PrimaryButton>
                           </Tooltip>
                         ) : params.row.hasDeclared && !params.row.isCleared ? (
                           <Tooltip title="Declaration submitted, awaiting customs officer review">
@@ -4973,14 +4979,6 @@ const ExporterPortal: React.FC = () => {
               pageSizeOptions={[5, 10, 25]}
               autoHeight
               disableRowSelectionOnClick
-              sx={{
-                '& .MuiDataGrid-cell:focus': {
-                  outline: 'none',
-                },
-                '& .MuiDataGrid-row:hover': {
-                  backgroundColor: '#f5f5f5',
-                },
-              }}
             />
           </Card>
 
@@ -4995,17 +4993,17 @@ const ExporterPortal: React.FC = () => {
             </Alert>
           )}
         </Box>
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={5}>
+      <PortalTabPanel value={tabValue} index={5}>
         {/* LC & Payments (SWIFT Messages) Tab */}
         <SWIFTMessagesViewWrapper 
           lcStatuses={lcStatuses}
           exporterId={profile?.exporterId}
         />
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={6}>
+      <PortalTabPanel value={tabValue} index={6}>
         {/* Reports Tab */}
         <Grid container spacing={3}>
           
@@ -5022,7 +5020,8 @@ const ExporterPortal: React.FC = () => {
                       type="date"
                       size="small"
                       InputLabelProps={{ shrink: true }}
-                      defaultValue="2026-01-01"
+                      value={reportStartDate}
+                      onChange={(e) => setReportStartDate(e.target.value)}
                     />
                   </Grid>
                   <Grid item xs={12} sm={3}>
@@ -5032,29 +5031,24 @@ const ExporterPortal: React.FC = () => {
                       type="date"
                       size="small"
                       InputLabelProps={{ shrink: true }}
-                      defaultValue="2026-12-31"
+                      value={reportEndDate}
+                      onChange={(e) => setReportEndDate(e.target.value)}
                     />
                   </Grid>
                   <Grid item xs={12} sm={3}>
-                    <FormControl fullWidth size="small">
-                      <InputLabel>Report Type</InputLabel>
-                      <Select defaultValue="all">
-                        <MenuItem value="all">All Activities</MenuItem>
-                        <MenuItem value="contracts">Contracts</MenuItem>
-                        <MenuItem value="financial">Financial</MenuItem>
-                        <MenuItem value="shipments">Shipments</MenuItem>
-                      </Select>
-                    </FormControl>
+                    <Typography variant="body2" color="text.secondary">
+                      Exports all activities for the selected period as CSV (contracts, shipments, forex, payments) via GET /analytics/export-report.
+                    </Typography>
                   </Grid>
                   <Grid item xs={12} sm={3}>
-                    <Button 
-                      fullWidth 
-                      variant="contained" 
-                      sx={{ bgcolor: brandPrimary }}
+                    <PrimaryButton brand='EXPORTER'
+                      fullWidth
                       startIcon={<Download />}
+                      disabled={isGeneratingReport}
+                      onClick={handleGenerateReport}
                     >
-                      Generate
-                    </Button>
+                      {isGeneratingReport ? 'Generating...' : 'Generate'}
+                    </PrimaryButton>
                   </Grid>
                 </Grid>
               </CardContent>
@@ -5088,9 +5082,9 @@ const ExporterPortal: React.FC = () => {
             </Card>
           </Grid>
         </Grid>
-      </TabPanel>
+      </PortalTabPanel>
 
-      <TabPanel value={tabValue} index={7}>
+      <PortalTabPanel value={tabValue} index={7}>
         {/* Audit Trail Tab */}
         <AuditTrailTable
           title="Exporter Portal - Complete Transaction History"
@@ -5099,37 +5093,43 @@ const ExporterPortal: React.FC = () => {
           showStats={false}
           maxHeight={700}
         />
-      </TabPanel>
-    </Box>
+      </PortalTabPanel>
+    </PortalShell>
 
     {/* LC Request Dialog - Global (Outside TabPanels) */}
-    <Dialog 
+    <PortalDialog brand='EXPORTER' 
       open={lcRequestDialogOpen} 
       onClose={() => {
         setLcRequestDialogOpen(false);
         setSelectedContractForLC(null);
       }}
       maxWidth="md"
-      fullWidth
       PaperProps={{
         sx: {
           borderRadius: 2,
           boxShadow: 24,
         }
       }}
-    >
-      <DialogTitle sx={{ bgcolor: '#9b30b7', color: 'white' }}>
-        <Box display="flex" alignItems="center" gap={1}>
-          <AccountBalance />
-          <Box>
-            <Typography variant="h6">Request Letter of Credit</Typography>
-            <Typography variant="caption">
-              {selectedContractForLC && `Contract: ${selectedContractForLC.contractId}`}
-            </Typography>
-          </Box>
-        </Box>
-      </DialogTitle>
-      <DialogContent dividers sx={{ p: 3 }}>
+    
+  icon={<AccountBalance />}
+  title="Request Letter of Credit"
+  subtitle={selectedContractForLC ? `Contract: ${selectedContractForLC.contractId}` : undefined}
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => {
+          setLcRequestDialogOpen(false);
+          setSelectedContractForLC(null);
+        }}>
+          Cancel
+        </GhostButton>
+        <PrimaryButton brand='EXPORTER'
+          onClick={handleRequestLC}
+          disabled={isRequestingLC || !lcRequestForm.advisingBank || !lcRequestForm.beneficiaryName}
+        >
+          {isRequestingLC ? 'Submitting...' : 'Submit LC Request'}
+        </PrimaryButton>
+      
+  </>}
+>
         {selectedContractForLC ? (
           <Grid container spacing={3}>
             <Grid item xs={12}>
@@ -5181,7 +5181,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Advising Bank (Your Bank)"
                 value={lcRequestForm.advisingBank}
@@ -5192,7 +5192,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Beneficiary Name"
                 value={lcRequestForm.beneficiaryName}
@@ -5203,7 +5203,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="LC Amount"
                 type="number"
@@ -5217,7 +5217,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 select
                 label="Currency"
@@ -5228,11 +5228,11 @@ const ExporterPortal: React.FC = () => {
                 <MenuItem value="USD">USD</MenuItem>
                 <MenuItem value="EUR">EUR</MenuItem>
                 <MenuItem value="GBP">GBP</MenuItem>
-              </TextField>
+              </PortalField>
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="LC Validity (Days)"
                 type="number"
@@ -5244,7 +5244,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Latest Shipment (Days)"
                 type="number"
@@ -5264,7 +5264,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 select
                 label="Transport Mode"
@@ -5274,11 +5274,11 @@ const ExporterPortal: React.FC = () => {
               >
                 <MenuItem value="SEA">Sea Freight</MenuItem>
                 <MenuItem value="AIR">Air Freight</MenuItem>
-              </TextField>
+              </PortalField>
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Port of Loading"
                 value={lcRequestForm.portOfLoading}
@@ -5288,7 +5288,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Port of Discharge"
                 value={lcRequestForm.portOfDischarge}
@@ -5299,7 +5299,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 select
                 label="Payment Terms"
@@ -5311,7 +5311,7 @@ const ExporterPortal: React.FC = () => {
                 <MenuItem value="Usance LC 30 days">Usance LC - 30 days</MenuItem>
                 <MenuItem value="Usance LC 60 days">Usance LC - 60 days</MenuItem>
                 <MenuItem value="Usance LC 90 days">Usance LC - 90 days</MenuItem>
-              </TextField>
+              </PortalField>
             </Grid>
 
             <Grid item xs={12} sm={6}>
@@ -5339,7 +5339,7 @@ const ExporterPortal: React.FC = () => {
             </Grid>
 
             <Grid item xs={12}>
-              <TextField
+              <PortalField
                 fullWidth
                 multiline
                 rows={3}
@@ -5357,29 +5357,74 @@ const ExporterPortal: React.FC = () => {
             </Typography>
           </Alert>
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => {
-          setLcRequestDialogOpen(false);
-          setSelectedContractForLC(null);
-        }}>
-          Cancel
-        </Button>
-        <Button 
-          variant="contained"
-          onClick={handleRequestLC}
-          disabled={isRequestingLC || !lcRequestForm.advisingBank || !lcRequestForm.beneficiaryName}
-          sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2692' } }}
-        >
-          {isRequestingLC ? 'Submitting...' : 'Submit LC Request'}
-        </Button>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Contract Detail Dialog */}
-    <Dialog open={contractDialogOpen} onClose={handleContractDialogClose} maxWidth="md" fullWidth>
-      <DialogTitle>Contract Details</DialogTitle>
-      <DialogContent>
+    <PortalDialog brand='EXPORTER' open={contractDialogOpen} onClose={handleContractDialogClose} maxWidth="md"
+  title="Contract Details"
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={handleContractDialogClose}>Close</GhostButton>
+        {selectedContract && isContractApproved(selectedContract) && hasIssuedLC(selectedContract.contractId) && (
+          <AnimatedButton
+            variant="contained"
+            brandColor={brandPrimary}
+            startIcon={<Download />}
+            onClick={() => {
+              if (!selectedContract) return;
+              
+              // Generate contract document package
+              const docData = {
+                contractId: selectedContract.contractId,
+                buyer: selectedContract.buyerName || 'Buyer Company',
+                buyerCountry: selectedContract.buyerCountry || 'Unknown',
+                seller: 'Your Coffee Export Company',
+                coffeeType: selectedContract.coffeeType,
+                quantity: selectedContract.quantity,
+                price: selectedContract.pricePerKg,
+                totalValue: selectedContract.totalValue,
+                currency: selectedContract.currency || 'USD',
+                nbeRef: selectedContract.nbeReferenceNumber || 'N/A',
+              };
+              
+              // In production, this would generate PDF with contract terms
+              const textContent = `
+SALES CONTRACT
+Contract ID: ${docData.contractId}
+Date: ${new Date().toLocaleDateString()}
+NBE Reference: ${docData.nbeRef}
+
+SELLER: ${docData.seller}
+BUYER: ${docData.buyer}
+DESTINATION: ${docData.buyerCountry}
+
+COMMODITY: ${docData.coffeeType}
+QUANTITY: ${docData.quantity} kg
+UNIT PRICE: ${docData.currency} ${docData.price}/kg
+TOTAL VALUE: ${docData.currency} ${docData.totalValue.toLocaleString()}
+
+DELIVERY TERMS: FOB Djibouti
+PAYMENT TERMS: Letter of Credit at sight
+
+This contract is registered with ECTA and approved by NBE.
+`;
+              
+              const blob = new Blob([textContent], { type: 'text/plain' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `Contract_${selectedContract.contractId}.txt`;
+              a.click();
+              window.URL.revokeObjectURL(url);
+              
+              alert(`📄 Contract Documents Downloaded\n\nContract ID: ${selectedContract.contractId}\n\nIn production, this package would include:\n• Signed sales contract PDF\n• ECTA registration certificate\n• NBE approval letter\n• Quality inspection reports\n• Export permit documents\n• Insurance certificates`);
+            }}
+          >
+            Download Documents
+          </AnimatedButton>
+        )}
+      
+  </>}
+>
         {selectedContract && (
           <Box sx={{ pt: 2 }}>
             <Grid container spacing={2}>
@@ -5484,97 +5529,104 @@ const ExporterPortal: React.FC = () => {
             )}
           </Box>
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={handleContractDialogClose}>Close</Button>
-        {selectedContract && isContractApproved(selectedContract) && hasIssuedLC(selectedContract.contractId) && (
-          <AnimatedButton
-            variant="contained"
-            brandColor={brandPrimary}
-            startIcon={<Download />}
-            onClick={() => {
-              if (!selectedContract) return;
-              
-              // Generate contract document package
-              const docData = {
-                contractId: selectedContract.contractId,
-                buyer: selectedContract.buyerName || 'Buyer Company',
-                buyerCountry: selectedContract.buyerCountry || 'Unknown',
-                seller: 'Your Coffee Export Company',
-                coffeeType: selectedContract.coffeeType,
-                quantity: selectedContract.quantity,
-                price: selectedContract.pricePerKg,
-                totalValue: selectedContract.totalValue,
-                currency: selectedContract.currency || 'USD',
-                nbeRef: selectedContract.nbeReferenceNumber || 'N/A',
-              };
-              
-              // In production, this would generate PDF with contract terms
-              const textContent = `
-SALES CONTRACT
-Contract ID: ${docData.contractId}
-Date: ${new Date().toLocaleDateString()}
-NBE Reference: ${docData.nbeRef}
-
-SELLER: ${docData.seller}
-BUYER: ${docData.buyer}
-DESTINATION: ${docData.buyerCountry}
-
-COMMODITY: ${docData.coffeeType}
-QUANTITY: ${docData.quantity} kg
-UNIT PRICE: ${docData.currency} ${docData.price}/kg
-TOTAL VALUE: ${docData.currency} ${docData.totalValue.toLocaleString()}
-
-DELIVERY TERMS: FOB Djibouti
-PAYMENT TERMS: Letter of Credit at sight
-
-This contract is registered with ECTA and approved by NBE.
-`;
-              
-              const blob = new Blob([textContent], { type: 'text/plain' });
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `Contract_${selectedContract.contractId}.txt`;
-              a.click();
-              window.URL.revokeObjectURL(url);
-              
-              alert(`📄 Contract Documents Downloaded\n\nContract ID: ${selectedContract.contractId}\n\nIn production, this package would include:\n• Signed sales contract PDF\n• ECTA registration certificate\n• NBE approval letter\n• Quality inspection reports\n• Export permit documents\n• Insurance certificates`);
-            }}
-          >
-            Download Documents
-          </AnimatedButton>
-        )}
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Professional Contract Detail Dialog - for Shipments Tab PENDING rows */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={contractDetailDialogOpen}
       onClose={() => {
         setContractDetailDialogOpen(false);
         setSelectedContractForDetail(null);
       }}
       maxWidth="md"
-      fullWidth
       PaperProps={{
         sx: {
           borderRadius: 2,
           boxShadow: 24,
         }
       }}
-    >
-      <DialogTitle sx={{ bgcolor: brandPrimary, color: 'white', display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Description />
-        <Box>
-          <Typography variant="h6">Contract Details</Typography>
-          <Typography variant="caption" sx={{ opacity: 0.9 }}>
-            {selectedContractForDetail?.contractId}
-          </Typography>
-        </Box>
-      </DialogTitle>
+    
+  icon={<Description />}
+  title="Contract Details"
+  subtitle={selectedContractForDetail?.contractId}
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => {
+          setContractDetailDialogOpen(false);
+          setSelectedContractForDetail(null);
+        }}>
+          Close
+        </GhostButton>
+        {(() => {
+          // Only show "Create Shipment" button if contract has forex allocated
+          if (selectedContractForDetail) {
+            const hasForex = forexStatuses.some(f => 
+              f.contractId === selectedContractForDetail.contractId && 
+              f.status === 'ALLOCATED'
+            );
+            
+            if (hasForex) {
+              return (
+                <PrimaryButton brand='EXPORTER'
+                  startIcon={<Add />}
+                  onClick={() => {
+                    setContractDetailDialogOpen(false);
+                    setCreateShipmentDialogOpen(true);
+                    if (selectedContractForDetail) {
+                      const forex = forexStatuses.find(f => f.contractId === selectedContractForDetail.contractId);
+                      setNewShipment({
+                        ...newShipment,
+                        contractId: selectedContractForDetail.contractId,
+                      });
+                      if (forex) {
+                        applyContractToShipment(selectedContractForDetail, forex.exchangeRate);
+                      }
+                    }
+                  }}
+                >
+                  Create Shipment
+                </PrimaryButton>
+              );
+            } else {
+              // Show info button to request LC instead
+              return (
+                <SecondaryButton brand='EXPORTER'
+                  startIcon={<AccountBalance />}
+                  onClick={() => {
+                    // Close contract details dialog
+                    setContractDetailDialogOpen(false);
+                    
+                    // Directly open LC request dialog with pre-filled data
+                    if (selectedContractForDetail) {
+                      setSelectedContractForLC(selectedContractForDetail);
+                      setLcRequestForm({
+                        advisingBank: profile?.bankName || '',
+                        beneficiaryName: profile?.companyName || '',
+                        expiryDays: '90',
+                        amount: (selectedContractForDetail.totalValue || 0).toString(),
+                        currency: selectedContractForDetail.currency || 'USD',
+                        transportMode: 'SEA' as 'SEA' | 'AIR',
+                        portOfLoading: 'Djibouti Port',
+                        portOfDischarge: selectedContractForDetail.buyerCountry || '',
+                        latestShipmentDays: '60',
+                        partialShipment: false,
+                        transhipment: true,
+                        paymentTerms: 'Sight LC',
+                        specialInstructions: '',
+                      });
+                      setLcRequestDialogOpen(true);
+                    }
+                  }}
+                >
+                  Request LC
+                </SecondaryButton>
+              );
+            }
+          }
+          return null;
+        })()}
       
-      <DialogContent sx={{ pt: 3 }}>
+  </>}
+>
         {selectedContractForDetail && (
           <Box>
             {/* Status Banner */}
@@ -5613,15 +5665,13 @@ This contract is registered with ECTA and approved by NBE.
                           : ''}
                       </Typography>
                     )}
-                    <Button
+                    <DangerButton brand='EXPORTER'
                       size="small"
-                      variant="contained"
-                      color="error"
                       sx={{ mt: 1.5 }}
                       onClick={() => handleCorrectRejectedContract(selectedContractForDetail)}
                     >
                       Correct details and register replacement
-                    </Button>
+                    </DangerButton>
                 </Box>
               )}
             </Alert>
@@ -5879,92 +5929,10 @@ This contract is registered with ECTA and approved by NBE.
             </Alert>
           </Box>
         )}
-      </DialogContent>
-      
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={() => {
-          setContractDetailDialogOpen(false);
-          setSelectedContractForDetail(null);
-        }}>
-          Close
-        </Button>
-        {(() => {
-          // Only show "Create Shipment" button if contract has forex allocated
-          if (selectedContractForDetail) {
-            const hasForex = forexStatuses.some(f => 
-              f.contractId === selectedContractForDetail.contractId && 
-              f.status === 'ALLOCATED'
-            );
-            
-            if (hasForex) {
-              return (
-                <Button
-                  variant="contained"
-                  startIcon={<Add />}
-                  sx={{ bgcolor: brandPrimary }}
-                  onClick={() => {
-                    setContractDetailDialogOpen(false);
-                    setCreateShipmentDialogOpen(true);
-                    if (selectedContractForDetail) {
-                      const forex = forexStatuses.find(f => f.contractId === selectedContractForDetail.contractId);
-                      setNewShipment({
-                        ...newShipment,
-                        contractId: selectedContractForDetail.contractId,
-                      });
-                      if (forex) {
-                        applyContractToShipment(selectedContractForDetail, forex.exchangeRate);
-                      }
-                    }
-                  }}
-                >
-                  Create Shipment
-                </Button>
-              );
-            } else {
-              // Show info button to request LC instead
-              return (
-                <Button
-                  variant="outlined"
-                  startIcon={<AccountBalance />}
-                  color="primary"
-                  onClick={() => {
-                    // Close contract details dialog
-                    setContractDetailDialogOpen(false);
-                    
-                    // Directly open LC request dialog with pre-filled data
-                    if (selectedContractForDetail) {
-                      setSelectedContractForLC(selectedContractForDetail);
-                      setLcRequestForm({
-                        advisingBank: profile?.bankName || '',
-                        beneficiaryName: profile?.companyName || '',
-                        expiryDays: '90',
-                        amount: (selectedContractForDetail.totalValue || 0).toString(),
-                        currency: selectedContractForDetail.currency || 'USD',
-                        transportMode: 'SEA' as 'SEA' | 'AIR',
-                        portOfLoading: 'Djibouti Port',
-                        portOfDischarge: selectedContractForDetail.buyerCountry || '',
-                        latestShipmentDays: '60',
-                        partialShipment: false,
-                        transhipment: true,
-                        paymentTerms: 'Sight LC',
-                        specialInstructions: '',
-                      });
-                      setLcRequestDialogOpen(true);
-                    }
-                  }}
-                >
-                  Request LC
-                </Button>
-              );
-            }
-          }
-          return null;
-        })()}
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Customs Declaration Dialog */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={customsDeclarationDialogOpen}
       onClose={() => {
         setCustomsDeclarationDialogOpen(false);
@@ -5972,17 +5940,28 @@ This contract is registered with ECTA and approved by NBE.
         setCustomsDocuments([]);
       }}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <Box display="flex" alignItems="center" gap={1}>
-          <Description sx={{ color: '#2196F3' }} />
-          <Typography variant="h6">
-            Submit Customs Declaration
-          </Typography>
-        </Box>
-      </DialogTitle>
-      <DialogContent>
+    
+  icon={<Description sx={{ color: '#2196F3' }} />}
+  title="Submit Customs Declaration"
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => {
+          setCustomsDeclarationDialogOpen(false);
+          setSelectedShipmentForCustoms(null);
+          setCustomsDocuments([]);
+        }}>
+          Cancel
+        </GhostButton>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={isSubmittingCustoms || customsDocuments.some((document) => document.status !== 'success')}
+          onClick={handleSubmitCustomsDeclaration}
+        >
+          {isSubmittingCustoms ? 'Submitting...' : 'Submit to ECC'}
+        </AnimatedButton>
+      
+  </>}
+>
         {selectedShipmentForCustoms && (
           <>
             {/* Previous Steps Summary - Professional Form View */}
@@ -5992,7 +5971,7 @@ This contract is registered with ECTA and approved by NBE.
                 return (
                   <Grid container spacing={3}>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Contract ID"
                         value={contract?.contractId || 'N/A'}
@@ -6001,7 +5980,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Destination"
                         value={contract?.buyerCountry || 'N/A'}
@@ -6010,7 +5989,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Coffee Type"
                         value={contract?.coffeeType || selectedShipmentForCustoms.grade || 'N/A'}
@@ -6019,7 +5998,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Quantity (kg)"
                         value={contract?.quantity ? Number(contract.quantity).toLocaleString() : (selectedShipmentForCustoms.quantity ? Number(selectedShipmentForCustoms.quantity).toLocaleString() : '0')}
@@ -6028,7 +6007,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Price per Kg"
                         value={`$${contract?.pricePerKg || '9.25'}/kg (${contract?.currency || 'USD'})`}
@@ -6037,7 +6016,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Payment Method"
                         value="LC"
@@ -6047,7 +6026,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Incoterm"
                         value="FOB"
@@ -6057,7 +6036,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Contract Status"
                         value="Approved"
@@ -6070,7 +6049,7 @@ This contract is registered with ECTA and approved by NBE.
                     </Grid>
 
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Shipment ID"
                         value={selectedShipmentForCustoms.shipmentId}
@@ -6079,7 +6058,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Origin"
                         value="Yirgacheffe"
@@ -6088,7 +6067,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Grade"
                         value={selectedShipmentForCustoms.grade || 'Grade 1'}
@@ -6097,7 +6076,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="ICO Number"
                         value="ET-2105-34593"
@@ -6106,7 +6085,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="Channel"
                         value="Direct Export"
@@ -6164,7 +6143,7 @@ This contract is registered with ECTA and approved by NBE.
                   <Box key={documentType.value} sx={{ p: 1.5, mb: 1, bgcolor: 'white', borderRadius: 1, border: '1px solid #e0e0e0' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                       <Typography variant="body2" fontWeight={600}>{documentType.label}</Typography>
-                      <Button component="label" variant="outlined" size="small" startIcon={<AttachFile />}>
+                      <SecondaryButton brand='EXPORTER' component="label" size="small" startIcon={<AttachFile />}>
                         Upload
                         <input
                           hidden
@@ -6173,7 +6152,7 @@ This contract is registered with ECTA and approved by NBE.
                           accept=".pdf,.jpg,.jpeg,.png"
                           onChange={(event) => handleCustomsDocumentSelect(documentType.value, event)}
                         />
-                      </Button>
+                      </SecondaryButton>
                     </Box>
                     {documentsForType.map((doc) => (
                       <Box key={doc.localId} sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -6201,45 +6180,37 @@ This contract is registered with ECTA and approved by NBE.
             </Paper>
           </>
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => {
-          setCustomsDeclarationDialogOpen(false);
-          setSelectedShipmentForCustoms(null);
-          setCustomsDocuments([]);
-        }}>
-          Cancel
-        </Button>
-        <AnimatedButton
-          variant="contained"
-          brandColor={brandPrimary}
-          disabled={isSubmittingCustoms || customsDocuments.some((document) => document.status !== 'success')}
-          onClick={handleSubmitCustomsDeclaration}
-        >
-          {isSubmittingCustoms ? 'Submitting...' : 'Submit to ECC'}
-        </AnimatedButton>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Book Shipping Dialog */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={bookShippingDialogOpen}
       onClose={() => {
         setBookShippingDialogOpen(false);
         setSelectedShipmentForShipping(null);
       }}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <Box display="flex" alignItems="center" gap={1}>
-          <LocalShipping />
-          <Typography variant="h6">
-            🚢 Book Shipping & Container
-          </Typography>
-        </Box>
-      </DialogTitle>
-      <DialogContent>
+    
+  icon={<LocalShipping />}
+  title="🚢 Book Shipping & Container"
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => {
+          setBookShippingDialogOpen(false);
+          setSelectedShipmentForShipping(null);
+        }}>
+          Cancel
+        </GhostButton>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={isBookingShipping || !shippingForm.portOfDischarge || !shippingForm.estimatedDeparture}
+          onClick={handleBookShipping}
+        >
+          {isBookingShipping ? 'Booking...' : 'Confirm Booking'}
+        </AnimatedButton>
+      
+  </>}
+>
         {selectedShipmentForShipping && (
           <>
             <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
@@ -6249,7 +6220,7 @@ This contract is registered with ECTA and approved by NBE.
               <Typography variant="body2">
                 Shipment: <strong>{selectedShipmentForShipping.shipmentId}</strong> • Quantity: <strong>{selectedShipmentForShipping.quantity ? Number(selectedShipmentForShipping.quantity).toLocaleString() : '0'} kg</strong>
                 <br />
-                Customs cleared — ready for container booking and shipping
+                Delivered — post-delivery freight booking. Booking sets the shipment to FREIGHT_BOOKED, which has no on-chain exit to land transport.
               </Typography>
             </Alert>
 
@@ -6292,7 +6263,7 @@ This contract is registered with ECTA and approved by NBE.
                 </FormControl>
               </Grid>
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Port of Loading"
                   value={shippingForm.portOfLoading}
@@ -6301,7 +6272,7 @@ This contract is registered with ECTA and approved by NBE.
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   required
                   label="Port of Discharge"
@@ -6311,7 +6282,7 @@ This contract is registered with ECTA and approved by NBE.
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   label="Vessel Name (Optional)"
                   value={shippingForm.vesselName}
@@ -6320,7 +6291,7 @@ This contract is registered with ECTA and approved by NBE.
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
-                <TextField
+                <PortalField
                   fullWidth
                   required
                   type="date"
@@ -6332,7 +6303,7 @@ This contract is registered with ECTA and approved by NBE.
                 />
               </Grid>
               <Grid item xs={12}>
-                <TextField
+                <PortalField
                   fullWidth
                   multiline
                   rows={3}
@@ -6349,59 +6320,55 @@ This contract is registered with ECTA and approved by NBE.
               <Typography variant="body2">
                 <strong>What happens after booking:</strong>
                 <br />
-                1. Container assigned and tracking number generated
+                1. Booking recorded against this delivered shipment
                 <br />
-                2. Bill of Lading (B/L) issued by shipping line
+                2. Bill of Lading (B/L) issued by the shipping line as post-delivery paperwork
                 <br />
-                3. Coffee loaded into container at port
+                3. Shipment status becomes FREIGHT_BOOKED — it cannot advance to land transport on-chain
                 <br />
-                4. Vessel departs on scheduled date
-                <br />
-                5. Real-time tracking available throughout journey (15-25 days)
-                <br />
-                6. After delivery confirmation → proceed to Payment Settlement
+                4. Proceed to Payment Settlement
               </Typography>
             </Alert>
           </>
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => {
-          setBookShippingDialogOpen(false);
-          setSelectedShipmentForShipping(null);
-        }}>
-          Cancel
-        </Button>
-        <AnimatedButton
-          variant="contained"
-          brandColor={brandPrimary}
-          disabled={isBookingShipping || !shippingForm.portOfDischarge || !shippingForm.estimatedDeparture}
-          onClick={handleBookShipping}
-        >
-          {isBookingShipping ? 'Booking...' : 'Confirm Booking'}
-        </AnimatedButton>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Payment Settlement Dialog */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={paymentSettlementDialogOpen}
       onClose={() => {
         setPaymentSettlementDialogOpen(false);
         setSelectedShipmentForPayment(null);
       }}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <Box display="flex" alignItems="center" gap={1}>
-          <AttachMoney />
-          <Typography variant="h6">
-            💰 Initiate Payment Settlement
-          </Typography>
-        </Box>
-      </DialogTitle>
-      <DialogContent>
+    
+  icon={<AttachMoney />}
+  title="💰 Initiate Payment Settlement"
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => {
+          setPaymentSettlementDialogOpen(false);
+          setSelectedShipmentForPayment(null);
+        }}>
+          Cancel
+        </GhostButton>
+        <AnimatedButton
+          variant="contained"
+          brandColor={brandPrimary}
+          disabled={
+            isInitiatingPayment || 
+            !paymentForm.beneficiaryName || 
+            !paymentForm.beneficiaryAccount ||
+            !paymentForm.beneficiaryBank ||
+            !paymentForm.beneficiaryBankBIC ||
+            !forexStatuses.some((fx) => fx.contractId === selectedShipmentForPayment?.contractId && ['ALLOCATED', 'UTILIZED'].includes(String(fx.status).toUpperCase()) && Number(fx.exchangeRate) > 0 && Number.isFinite(Number(fx.retentionRate)))
+          }
+          onClick={handleInitiatePayment}
+        >
+          {isInitiatingPayment ? 'Processing...' : 'Submit to Bank'}
+        </AnimatedButton>
+      
+  </>}
+>
         {selectedShipmentForPayment && (
           <>
             <Alert severity="success" sx={{ mb: 3, mt: 2 }}>
@@ -6409,9 +6376,11 @@ This contract is registered with ECTA and approved by NBE.
                 Final Step — Payment Settlement (Step 11 of 11)
               </Typography>
               <Typography variant="body2">
-                Shipment: <strong>{selectedShipmentForPayment.shipmentId}</strong> • Status: <strong>Delivered</strong>
+                Shipment: <strong>{selectedShipmentForPayment.shipmentId}</strong> • Status: <strong>{selectedShipmentForPayment.status}</strong>
                 <br />
-                Coffee successfully delivered — ready to receive payment
+                {selectedShipmentForPayment.status === 'DELIVERED'
+                  ? 'Coffee successfully delivered — ready to receive payment'
+                  : 'Payment settlement can be initiated once the LC is issued and forex is allocated (see the checks below)'}
               </Typography>
             </Alert>
 
@@ -6443,6 +6412,10 @@ This contract is registered with ECTA and approved by NBE.
               const retentionRate = Number(selectedForex.retentionRate);
               const amountETB = amountUSD * exchangeRate;
               const retainedETB = (amountETB * retentionRate) / 100;
+              // Chaincode settle math (payment.go): the exporter receives
+              // the CONVERTED amount — amountETB − retainedETB — not the
+              // retained portion, which NBE holds in FCY.
+              const receivedETB = amountETB - retainedETB;
 
               return (
                 <>
@@ -6457,9 +6430,9 @@ This contract is registered with ECTA and approved by NBE.
                       <br />
                       Amount in ETB: <strong>{amountETB.toLocaleString()} ETB</strong>
                       <br />
-                      NBE Retention Rate: <strong>{retentionRate}%</strong>
+                      NBE Retention Rate: <strong>{retentionRate}%</strong> — retained in FCY: <strong>{retainedETB.toLocaleString()} ETB</strong>
                       <br />
-                      <strong>You will receive: {retainedETB.toLocaleString()} ETB</strong>
+                      <strong>You will receive: {receivedETB.toLocaleString()} ETB</strong>
                     </Typography>
                   </Alert>
 
@@ -6483,7 +6456,7 @@ This contract is registered with ECTA and approved by NBE.
                       </FormControl>
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         label="LC Reference"
                         value={selectedLC?.lcId || ''}
@@ -6492,7 +6465,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         required
                         label="Beneficiary Name"
@@ -6502,7 +6475,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         required
                         label="Beneficiary Account Number"
@@ -6512,7 +6485,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         required
                         label="Beneficiary Bank"
@@ -6522,7 +6495,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12} sm={6}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         required
                         label="Bank SWIFT/BIC Code"
@@ -6533,7 +6506,7 @@ This contract is registered with ECTA and approved by NBE.
                       />
                     </Grid>
                     <Grid item xs={12}>
-                      <TextField
+                      <PortalField
                         fullWidth
                         multiline
                         rows={3}
@@ -6588,31 +6561,7 @@ This contract is registered with ECTA and approved by NBE.
             })()}
           </>
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => {
-          setPaymentSettlementDialogOpen(false);
-          setSelectedShipmentForPayment(null);
-        }}>
-          Cancel
-        </Button>
-        <AnimatedButton
-          variant="contained"
-          brandColor={brandPrimary}
-          disabled={
-            isInitiatingPayment || 
-            !paymentForm.beneficiaryName || 
-            !paymentForm.beneficiaryAccount ||
-            !paymentForm.beneficiaryBank ||
-            !paymentForm.beneficiaryBankBIC ||
-            !forexStatuses.some((fx) => fx.contractId === selectedShipmentForPayment?.contractId && ['ALLOCATED', 'UTILIZED'].includes(String(fx.status).toUpperCase()) && Number(fx.exchangeRate) > 0 && Number.isFinite(Number(fx.retentionRate)))
-          }
-          onClick={handleInitiatePayment}
-        >
-          {isInitiatingPayment ? 'Processing...' : 'Submit to Bank'}
-        </AnimatedButton>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     <NotificationDialog
       open={notification.open}
@@ -6624,7 +6573,7 @@ This contract is registered with ECTA and approved by NBE.
     />
 
     {/* Create Shipment Dialog */}
-    <Dialog 
+    <PortalDialog brand='EXPORTER' 
       open={createShipmentDialogOpen} 
       onClose={() => {
         setCreateShipmentDialogOpen(false);
@@ -6643,13 +6592,36 @@ This contract is registered with ECTA and approved by NBE.
         });
       }}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <LocalShipping sx={{ mr: 1, verticalAlign: 'middle' }} />
-        Create New Shipment
-      </DialogTitle>
-      <DialogContent>
+    
+  icon={<LocalShipping />}
+  title="Create New Shipment"
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => setCreateShipmentDialogOpen(false)}>
+          Cancel
+        </GhostButton>
+        <AnimatedButton
+          variant="contained"
+          onClick={handleCreateShipment}
+          disabled={
+            isCreatingShipment || 
+            !newShipment.contractId || 
+            !newShipment.quantity || 
+            !newShipment.origin || 
+            !newShipment.grade ||
+            !newShipment.icoNumber ||
+            (shipmentFieldValidation.ecxLotRequired && !newShipment.ecxLotNumber) ||
+            (shipmentFieldValidation.unionApprovalRequired && !newShipment.unionApprovalReference) ||
+            (shipmentFieldValidation.bondReferenceRequired && !newShipment.bondReference) ||
+            // DUPLICATE PREVENTION: Disable if shipment already exists for this contract
+            Boolean(newShipment.contractId && shipments.some(s => s.contractId === newShipment.contractId))
+          }
+          brandColor={brandPrimary}
+        >
+          {isCreatingShipment ? 'Creating...' : 'Create Shipment'}
+        </AnimatedButton>
+      
+  </>}
+>
         <Alert severity="info" sx={{ mb: 2, mt: 2 }}>
           <Typography variant="body2" fontWeight="bold" gutterBottom>
             Ethiopian Coffee Export — Shipment Registration
@@ -6771,7 +6743,7 @@ This contract is registered with ECTA and approved by NBE.
           </Grid>
 
           <Grid item xs={12} sm={6}>
-            <TextField
+            <PortalField
               fullWidth
               label="Quantity (kg)"
               type="number"
@@ -6832,7 +6804,7 @@ This contract is registered with ECTA and approved by NBE.
           </Grid>
 
           <Grid item xs={12} sm={6}>
-            <TextField
+            <PortalField
               fullWidth
               label="ICO Number"
               value={newShipment.icoNumber}
@@ -6848,7 +6820,7 @@ This contract is registered with ECTA and approved by NBE.
           </Grid>
 
           <Grid item xs={12} sm={6}>
-            <TextField
+            <PortalField
               fullWidth
               label="ECX Lot Number"
               value={newShipment.ecxLotNumber}
@@ -6866,7 +6838,7 @@ This contract is registered with ECTA and approved by NBE.
 
           {shipmentFieldValidation.unionApprovalRequired && (
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Union Approval Reference"
                 value={newShipment.unionApprovalReference}
@@ -6880,7 +6852,7 @@ This contract is registered with ECTA and approved by NBE.
 
           {shipmentFieldValidation.bondReferenceRequired && (
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="Bond Reference"
                 value={newShipment.bondReference}
@@ -6919,7 +6891,7 @@ This contract is registered with ECTA and approved by NBE.
           </Grid>
 
           <Grid item xs={12}>
-            <TextField
+            <PortalField
               fullWidth
               label="Destination"
               value={newShipment.destination}
@@ -6988,33 +6960,7 @@ This contract is registered with ECTA and approved by NBE.
             </Alert>
           </Grid>
         </Grid>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => setCreateShipmentDialogOpen(false)}>
-          Cancel
-        </Button>
-        <AnimatedButton
-          variant="contained"
-          onClick={handleCreateShipment}
-          disabled={
-            isCreatingShipment || 
-            !newShipment.contractId || 
-            !newShipment.quantity || 
-            !newShipment.origin || 
-            !newShipment.grade ||
-            !newShipment.icoNumber ||
-            (shipmentFieldValidation.ecxLotRequired && !newShipment.ecxLotNumber) ||
-            (shipmentFieldValidation.unionApprovalRequired && !newShipment.unionApprovalReference) ||
-            (shipmentFieldValidation.bondReferenceRequired && !newShipment.bondReference) ||
-            // DUPLICATE PREVENTION: Disable if shipment already exists for this contract
-            Boolean(newShipment.contractId && shipments.some(s => s.contractId === newShipment.contractId))
-          }
-          brandColor={brandPrimary}
-        >
-          {isCreatingShipment ? 'Creating...' : 'Create Shipment'}
-        </AnimatedButton>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Audit Trail Viewer */}
     {showAuditTrail && auditEntityType && (
@@ -7027,26 +6973,18 @@ This contract is registered with ECTA and approved by NBE.
     )}
 
     {/* Post-Delivery Workflow Dialog */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={postDeliveryDialogOpen}
       onClose={() => setPostDeliveryDialogOpen(false)}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Typography variant="h6">Post-Delivery Workflow Status</Typography>
-          <IconButton onClick={() => setPostDeliveryDialogOpen(false)} size="small">
-            <Delete />
-          </IconButton>
-        </Box>
-        {selectedShipmentForPostDelivery && (
-          <Typography variant="body2" color="text.secondary">
-            Shipment: {selectedShipmentForPostDelivery.shipmentId}
-          </Typography>
-        )}
-      </DialogTitle>
-      <DialogContent>
+    
+  title="Post-Delivery Workflow Status"
+  subtitle={selectedShipmentForPostDelivery ? `Shipment: ${selectedShipmentForPostDelivery.shipmentId}` : undefined}
+  actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => setPostDeliveryDialogOpen(false)}>Close</GhostButton>
+      
+  </>}
+>
         {selectedShipmentForPostDelivery && (
           <PostDeliveryWorkflowPanel
             shipmentId={selectedShipmentForPostDelivery.shipmentId}
@@ -7056,33 +6994,93 @@ This contract is registered with ECTA and approved by NBE.
             }}
           />
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => setPostDeliveryDialogOpen(false)}>Close</Button>
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
 
     {/* Shipment Detail Dialog */}
-    <Dialog
+    <PortalDialog brand='EXPORTER'
       open={shipmentDetailDialogOpen}
       onClose={() => setShipmentDetailDialogOpen(false)}
       maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Typography variant="h6">📦 Shipment Details</Typography>
-          <IconButton onClick={() => setShipmentDetailDialogOpen(false)} size="small">
-            <Delete />
-          </IconButton>
-        </Box>
-        {selectedShipmentForDetail && (
-          <Typography variant="body2" color="text.secondary">
-            Shipment ID: {selectedShipmentForDetail.shipmentId}
-          </Typography>
+    
+  title="📦 Shipment Details"
+  subtitle={selectedShipmentForDetail ? `Shipment ID: ${selectedShipmentForDetail.shipmentId}` : undefined}
+  actions={<>
+        {selectedShipmentForDetail?._isPending ? (
+          // PENDING shipment - show "Register Shipment" button
+          <>
+            <GhostButton brand='EXPORTER' onClick={() => setShipmentDetailDialogOpen(false)}>Cancel</GhostButton>
+            <PrimaryButton brand='EXPORTER'
+              startIcon={<LocalShipping />}
+              onClick={() => {
+                setShipmentDetailDialogOpen(false);
+                // Pre-fill the contract in shipment dialog
+                const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
+                if (contract) {
+                  const forex = forexStatuses.find(f => f.contractId === contract.contractId);
+                  applyContractToShipment(contract, forex?.exchangeRate || 0);
+                }
+                setCreateShipmentDialogOpen(true);
+              }}
+            >
+              Register Shipment Now
+            </PrimaryButton>
+          </>
+        ) : (
+          // REAL shipment - show audit trail button
+          <>
+            <GhostButton brand='EXPORTER' onClick={() => setShipmentDetailDialogOpen(false)}>Close</GhostButton>
+            {canBookFreight(selectedShipmentForDetail) && (
+              <PrimaryButton brand='EXPORTER'
+                size="small"
+                startIcon={<LocalShipping />}
+                onClick={() => {
+                  setSelectedShipmentForShipping(selectedShipmentForDetail);
+                  setShipmentDetailDialogOpen(false);
+                  setBookShippingDialogOpen(true);
+                }}
+              >
+                Book Freight
+              </PrimaryButton>
+            )}
+            {canInitiatePayment(selectedShipmentForDetail) && (
+              <PrimaryButton brand='EXPORTER'
+                size="small"
+                startIcon={<AttachMoney />}
+                onClick={() => {
+                  setSelectedShipmentForPayment(selectedShipmentForDetail);
+                  setShipmentDetailDialogOpen(false);
+                  setPaymentSettlementDialogOpen(true);
+                }}
+              >
+                Initiate Payment
+              </PrimaryButton>
+            )}
+            {canSubmitLCDocuments(selectedShipmentForDetail) && (
+              <SecondaryButton brand='EXPORTER'
+                size="small"
+                startIcon={<Description />}
+                disabled={isSubmittingLCDocuments}
+                onClick={() => handleSubmitLCDocumentsForShipment(selectedShipmentForDetail)}
+              >
+                Submit LC Documents
+              </SecondaryButton>
+            )}
+            <SecondaryButton brand='EXPORTER'
+              size="small"
+              startIcon={<Assignment />}
+              onClick={() => {
+                setAuditEntityType('SHIPMENT');
+                setAuditEntityId(selectedShipmentForDetail?.shipmentId || '');
+                setShowAuditTrail(true);
+              }}
+            >
+              View Audit Trail
+            </SecondaryButton>
+          </>
         )}
-      </DialogTitle>
-      <DialogContent>
+      
+  </>}
+>
         {selectedShipmentForDetail && (() => {
           const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
           return (
@@ -7133,7 +7131,30 @@ This contract is registered with ECTA and approved by NBE.
                       {selectedShipmentForDetail.currentLocation || selectedShipmentForDetail.CurrentLocation || 'Warehouse'}
                     </Typography>
                   </Grid>
-                  
+
+                  {/* 0.12: terminal-ish freight states — real status, note, no fake onward button */}
+                  {selectedShipmentForDetail.status === 'FREIGHT_BOOKED' && (
+                    <Grid item xs={12}>
+                      <Alert severity="warning">
+                        Freight booked. This status has no on-chain exit to land transport — booking is post-delivery paperwork only.
+                      </Alert>
+                    </Grid>
+                  )}
+                  {(selectedShipmentForDetail.status === 'LOADED' || selectedShipmentForDetail.status === 'ARRIVED') && (
+                    <Grid item xs={12}>
+                      <Alert severity="warning">
+                        Recorded as post-delivery paperwork (bill of lading / airway bill sets LOADED). DepartFromPort requires VESSEL_LOADED, so this row has no onward chain step.
+                      </Alert>
+                    </Grid>
+                  )}
+                  {getPaymentForShipment(selectedShipmentForDetail.shipmentId) && (
+                    <Grid item xs={12}>
+                      <Alert severity="info">
+                        Payment {getPaymentForShipment(selectedShipmentForDetail.shipmentId)?.paymentId} is {getPaymentForShipment(selectedShipmentForDetail.shipmentId)?.status} — settlement continues in the bank flow.
+                      </Alert>
+                    </Grid>
+                  )}
+
                   {/* Additional Details for REAL shipments */}
                   {!selectedShipmentForDetail._isPending && (
                     <>
@@ -7350,8 +7371,7 @@ This contract is registered with ECTA and approved by NBE.
 
                     {/* Button to see DETAILED audit trail with all field changes */}
                     <Box sx={{ mt: 2 }}>
-                      <Button
-                        variant="contained"
+                      <PrimaryButton brand='EXPORTER'
                         size="small"
                         startIcon={<Assignment />}
                         onClick={() => {
@@ -7362,7 +7382,7 @@ This contract is registered with ECTA and approved by NBE.
                         fullWidth
                       >
                         View Detailed Audit Trail (Field-Level Changes)
-                      </Button>
+                      </PrimaryButton>
                     </Box>
                   </Box>
                 )}
@@ -7370,50 +7390,7 @@ This contract is registered with ECTA and approved by NBE.
             </Box>
           );
         })()}
-      </DialogContent>
-      <DialogActions>
-        {selectedShipmentForDetail?._isPending ? (
-          // PENDING shipment - show "Register Shipment" button
-          <>
-            <Button onClick={() => setShipmentDetailDialogOpen(false)}>Cancel</Button>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<LocalShipping />}
-              onClick={() => {
-                setShipmentDetailDialogOpen(false);
-                // Pre-fill the contract in shipment dialog
-                const contract = contracts.find(c => c.contractId === selectedShipmentForDetail.contractId);
-                if (contract) {
-                  const forex = forexStatuses.find(f => f.contractId === contract.contractId);
-                  applyContractToShipment(contract, forex?.exchangeRate || 0);
-                }
-                setCreateShipmentDialogOpen(true);
-              }}
-            >
-              Register Shipment Now
-            </Button>
-          </>
-        ) : (
-          // REAL shipment - show audit trail button
-          <>
-            <Button onClick={() => setShipmentDetailDialogOpen(false)}>Close</Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Assignment />}
-              onClick={() => {
-                setAuditEntityType('SHIPMENT');
-                setAuditEntityId(selectedShipmentForDetail?.shipmentId || '');
-                setShowAuditTrail(true);
-              }}
-            >
-              View Audit Trail
-            </Button>
-          </>
-        )}
-      </DialogActions>
-    </Dialog>
+      </PortalDialog>
     </ThemeProvider>
   );
 };

@@ -385,6 +385,12 @@ class CECBSApi {
   }
 
   // NBE Portal Operations
+  // NOTE: kept only because NBEPortal.tsx:552 still calls it. The route
+  // POST /contracts/:id/nbe-approve always returns 400 ENDPOINT_DEPRECATED
+  // (api/src/routes/contracts.ts:1823) — NBE contract approval does not
+  // exist; contract approval is ECTA-only and forex goes through
+  // POST /forex/allocate. The NBE portal caller must be removed/replaced
+  // (NBE worker's item), then this helper can be deleted.
   async approveContractForForex(contractId: string, nbeOfficer: string): Promise<ApiResponse<any>> {
     // DEPRECATED: NBE should not approve contracts, only allocate forex
     console.warn('approveContractForForex is deprecated. NBE should use forex allocation.');
@@ -420,7 +426,15 @@ class CECBSApi {
     nbeApprovalRef: string;
     expiryDate: string;
   }): Promise<ApiResponse<any>> {
-    const response = await this.client.post('/forex/allocate', forexData);
+    // Route reads officer/approvalRef (forex.ts:796); callers pass the
+    // dialog field names nbeOfficer/nbeApprovalRef — translate on the wire
+    // (2026-11-11: approvalRef was silently dropped to '' before this).
+    const { nbeOfficer, nbeApprovalRef, ...rest } = forexData;
+    const response = await this.client.post('/forex/allocate', {
+      ...rest,
+      officer: nbeOfficer,
+      approvalRef: nbeApprovalRef,
+    });
     return response.data;
   }
 
@@ -434,27 +448,13 @@ class CECBSApi {
     return response.data;
   }
 
-  async updateExchangeRate(rateData: {
-    currency: string;
-    buyingRate: number;
-    sellingRate: number;
-    effectiveDate: string;
-    justification: string;
-  }): Promise<ApiResponse<any>> {
-    const response = await this.client.post('/banking/exchange-rates', rateData);
-    return response.data;
-  }
-
-  // Banking Analytics for NBE Portal
-  async getBankingMetrics(): Promise<ApiResponse<{
-    totalExports: number;
-    forexVolume: number;
-    complianceRate: number;
-    avgProcessingTime: number;
-  }>> {
-    const response = await this.client.get('/analytics/banking');
-    return response.data;
-  }
+  // NOTE: updateExchangeRate (POST /banking/exchange-rates) was removed
+  // 2026-11-11: no such route exists and it had zero callers. The real
+  // endpoint is POST /forex/rates — see createExchangeRate below.
+  // NOTE: getBankingMetrics (GET /analytics/banking) was removed
+  // 2026-11-11: no such route exists (analytics.ts has only /dashboard,
+  // /timeseries, /blockchain, /export-report, /breakdown) and its last
+  // caller (NBEPortal) was removed in the frontend fix pass.
 
   // Exchange Rates for NBE Portal
   async getExchangeRates(): Promise<ApiResponse<Array<{
@@ -530,6 +530,19 @@ export const getStatusColor = (status: string, organization?: string): string =>
       SHIPPED: '#9b30b7',
       PENDING: '#9b30b7',
       IN_PROGRESS: '#9b30b7',
+
+      // Workflow states — each gets its own distinct colour (they used to
+      // fall through to the purple default, so REQUESTED looked identical
+      // to PENDING, SETTLED identical to CREATED, etc.)
+      REQUESTED: '#7b1fa2',
+      CONFIRMED: '#43a047',
+      ALLOCATED: '#ef6c00',
+      UTILIZED: '#00838f',
+      DRAFT: '#78909c',
+      NBE_APPROVED: '#ad1457',
+      SENT: '#1565c0',
+      SETTLED: '#1b5e20',
+      COMPLIED: '#00695c',
       
       // Negative/Inactive states - Black
       SUSPENDED: '#000000',
@@ -558,6 +571,19 @@ export const getStatusColor = (status: string, organization?: string): string =>
       SHIPPED: '#8B6F47',
       PENDING: '#8B6F47',
       IN_PROGRESS: '#8B6F47',
+
+      // Workflow states — distinct colours (same mapping as the BANKS
+      // palette, so a status renders identically in every portal; they
+      // used to fall through to the bronze default)
+      REQUESTED: '#7b1fa2',
+      CONFIRMED: '#43a047',
+      ALLOCATED: '#ef6c00',
+      UTILIZED: '#00838f',
+      DRAFT: '#78909c',
+      NBE_APPROVED: '#ad1457',
+      SENT: '#1565c0',
+      SETTLED: '#1b5e20',
+      COMPLIED: '#00695c',
       
       // Negative/Inactive states - Dark Brown
       SUSPENDED: '#5C4A33',
@@ -581,6 +607,17 @@ export const getStatusColor = (status: string, organization?: string): string =>
     QUALITY_CONTROL: '#ff9800',
     SHIPPED: '#9c27b0',
     DELIVERED: '#4caf50',
+    // Workflow states — distinct colours (same mapping as the BANKS/NBE
+    // palettes); previously all fell through to the grey default.
+    REQUESTED: '#7b1fa2',
+    CONFIRMED: '#43a047',
+    ALLOCATED: '#ef6c00',
+    UTILIZED: '#00838f',
+    DRAFT: '#78909c',
+    NBE_APPROVED: '#ad1457',
+    SENT: '#1565c0',
+    SETTLED: '#1b5e20',
+    COMPLIED: '#00695c',
   };
   return colors[status] || '#757575';
 };

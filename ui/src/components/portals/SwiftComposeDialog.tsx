@@ -54,7 +54,7 @@ const SwiftComposeDialog: React.FC<Props> = ({ open, form, onChange, onClose, on
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={async () => await onConfirm(form)} sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}>Send</Button>
+        <Button variant="contained" onClick={async () => await onConfirm(form)} sx={{ bgcolor: '#9b30b7', '&:hover': { bgcolor: '#7a2592' } }}>Create Message</Button>
       </DialogActions>
     </Dialog>
   );

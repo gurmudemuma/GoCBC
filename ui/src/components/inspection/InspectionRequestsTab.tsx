@@ -11,6 +11,10 @@ import {
   Typography,
   Button,
   TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
   MenuItem,
   Chip,
   IconButton,
@@ -40,9 +44,15 @@ import { apiFetch, API_ENDPOINTS, getAuthHeaders } from '@/config/api.config';
 import { DashboardKPI } from '@/components/modern';
 import { BlockchainStatusIcon, BlockchainTxChip } from '@/components/blockchain';
 import { useNotification } from '@/hooks/useNotification';
-import InspectionSchedulingDialog from './InspectionSchedulingDialog';
-import InspectionConductDialog from './InspectionConductDialog';
-import InspectionReportDialog from './InspectionReportDialog';
+
+// NOTE (0.8): the old InspectionSchedulingDialog / InspectionConductDialog /
+// InspectionReportDialog components are NOT used here any more — they called
+// the wrong endpoints (PUT /inspection/:id/schedule with {scheduledDate,
+// inspectorId, ...}; POST /quality/inspections/:id/perform for a
+// pre-shipment entity; report `passed = status === 'PASSED'`, a status no
+// PreShipmentInspection ever carries). The corrected Schedule / Conduct /
+// Report dialogs live inline below so this tab calls the real pre-shipment
+// routes. Those three dialog files are now dead code and can be deleted.
 
 // ECTA Green Theme
 const ECTA_COLORS = {
@@ -116,6 +126,35 @@ const InspectionRequestsTab: React.FC = () => {
   const [conductDialogOpen, setConductDialogOpen] = useState(false);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [selectedInspection, setSelectedInspection] = useState<Inspection | null>(null);
+
+  // 0.8 — Schedule form. These are exactly the fields the route reads
+  // (api/src/routes/inspection.ts:291 POST /inspection/:id/schedule):
+  // { inspectorName, inspectorLicense, inspectionDate }. The old dialog
+  // sent { scheduledDate, inspectorId, location, notes } via PUT — the
+  // route ignores all of them, so scheduling silently did nothing.
+  const [scheduleForm, setScheduleForm] = useState({ inspectorName: '', inspectorLicense: '', inspectionDate: '' });
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+
+  // 0.8 — Conduct form. Fields are exactly what POST /inspection/:id/results
+  // reads (inspection.ts:335): inspectedQuantity, actualGrade, cuppingScore,
+  // defectsCount, moistureContent, beanSize, bagsInspected,
+  // packagingCondition, overallResult, inspectionNotes. This is the
+  // pre-shipment entity — NOT POST /quality/inspections/:id/perform, which
+  // 404s because the id is not in quality_inspections.
+  const [conductForm, setConductForm] = useState({
+    inspectedQuantity: 0,
+    actualGrade: 'Grade 1',
+    cuppingScore: 80,
+    defectsCount: 0,
+    moistureContent: 11,
+    beanSize: '',
+    bagsInspected: 0,
+    packagingCondition: 'GOOD',
+    overallResult: 'PASS',
+    inspectionNotes: '',
+  });
+  const [conductSubmitting, setConductSubmitting] = useState(false);
+  const [decisionSubmitting, setDecisionSubmitting] = useState(false);
   
   // Pagination
   const [page, setPage] = useState(0);
@@ -192,15 +231,16 @@ const InspectionRequestsTab: React.FC = () => {
       filtered = filtered.filter(i => i.status === statusFilter);
     }
     
-    // Search filter
+    // Search filter — every field may be undefined on rows the chaincode
+    // returns (e.g. coffeeType is absent on all rows), so guard all of them.
     if (searchTerm) {
       const search = searchTerm.toLowerCase();
       filtered = filtered.filter(i =>
-        i.inspectionId.toLowerCase().includes(search) ||
-        i.shipmentId.toLowerCase().includes(search) ||
-        i.exporterId.toLowerCase().includes(search) ||
+        (i.inspectionId || '').toLowerCase().includes(search) ||
+        (i.shipmentId || '').toLowerCase().includes(search) ||
+        (i.exporterId || '').toLowerCase().includes(search) ||
         i.exporterName?.toLowerCase().includes(search) ||
-        i.coffeeType.toLowerCase().includes(search)
+        (i.coffeeType || '').toLowerCase().includes(search)
       );
     }
     
@@ -228,13 +268,173 @@ const InspectionRequestsTab: React.FC = () => {
   // Handle schedule inspection
   const handleSchedule = (inspection: Inspection) => {
     setSelectedInspection(inspection);
+    setScheduleForm({ inspectorName: '', inspectorLicense: '', inspectionDate: '' });
     setSchedulingDialogOpen(true);
+  };
+
+  // 0.8 — Schedule: POST /inspection/:id/schedule with the route's fields.
+  const handleScheduleSubmit = async () => {
+    if (!selectedInspection) return;
+    if (!scheduleForm.inspectorName.trim() || !scheduleForm.inspectorLicense.trim() || !scheduleForm.inspectionDate) {
+      showError('Validation Error', 'Inspector name, licence and inspection date are all required');
+      return;
+    }
+    try {
+      setScheduleSubmitting(true);
+      const response = await apiFetch(`/inspection/${selectedInspection.inspectionId}/schedule`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          inspectorName: scheduleForm.inspectorName.trim(),
+          inspectorLicense: scheduleForm.inspectorLicense.trim(),
+          inspectionDate: scheduleForm.inspectionDate,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (result.success) {
+        showSuccess('Success', 'Inspection scheduled successfully');
+        setSchedulingDialogOpen(false);
+        setSelectedInspection(null);
+        fetchInspections();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to schedule inspection');
+      }
+    } catch (error: any) {
+      showError('Error', error?.message || 'Failed to schedule inspection');
+    } finally {
+      setScheduleSubmitting(false);
+    }
   };
 
   // Handle conduct inspection
   const handleConduct = (inspection: Inspection) => {
     setSelectedInspection(inspection);
+    setConductForm({
+      inspectedQuantity: inspection.quantity || 0,
+      actualGrade: 'Grade 1',
+      cuppingScore: 80,
+      defectsCount: 0,
+      moistureContent: 11,
+      beanSize: '',
+      bagsInspected: 0,
+      packagingCondition: 'GOOD',
+      overallResult: 'PASS',
+      inspectionNotes: '',
+    });
     setConductDialogOpen(true);
+  };
+
+  // 0.8 — Conduct: POST /inspection/:id/results (pre-shipment entity).
+  // Chaincode RecordInspectionResults has no from-state guard and can
+  // re-open APPROVED/REJECTED inspections, so this button is only offered
+  // on SCHEDULED rows (see the actions column) — never re-record results
+  // on a decided inspection.
+  const handleConductSubmit = async () => {
+    if (!selectedInspection) return;
+    const moisture = Number(conductForm.moistureContent);
+    const cupping = Number(conductForm.cuppingScore);
+    const defects = Number(conductForm.defectsCount);
+    if (!(Number(conductForm.inspectedQuantity) > 0)) {
+      showError('Validation Error', 'Inspected quantity must be greater than 0');
+      return;
+    }
+    if (!(moisture >= 8 && moisture <= 13)) {
+      showError('Validation Error', 'Moisture content must be between 8% and 13%');
+      return;
+    }
+    if (!(cupping >= 0 && cupping <= 100)) {
+      showError('Validation Error', 'Cupping score must be between 0 and 100');
+      return;
+    }
+    if (!(defects >= 0 && defects <= 100)) {
+      showError('Validation Error', 'Defect count must be between 0 and 100');
+      return;
+    }
+    if (!['PASS', 'CONDITIONAL_PASS', 'FAIL'].includes(conductForm.overallResult)) {
+      showError('Validation Error', 'Overall result must be PASS, CONDITIONAL_PASS or FAIL');
+      return;
+    }
+    try {
+      setConductSubmitting(true);
+      const response = await apiFetch(`/inspection/${selectedInspection.inspectionId}/results`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          inspectedQuantity: Number(conductForm.inspectedQuantity),
+          actualGrade: conductForm.actualGrade,
+          cuppingScore: cupping,
+          defectsCount: defects,
+          moistureContent: moisture,
+          beanSize: conductForm.beanSize,
+          bagsInspected: Number(conductForm.bagsInspected),
+          packagingCondition: conductForm.packagingCondition,
+          overallResult: conductForm.overallResult,
+          inspectionNotes: conductForm.inspectionNotes,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (result.success) {
+        showSuccess('Success', `Inspection results recorded (${conductForm.overallResult})`);
+        setConductDialogOpen(false);
+        setSelectedInspection(null);
+        fetchInspections();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to record inspection results');
+      }
+    } catch (error: any) {
+      showError('Error', error?.message || 'Failed to record inspection results');
+    } finally {
+      setConductSubmitting(false);
+    }
+  };
+
+  // 0.8 — COMPLETED → APPROVED / REJECTED (chaincode ApproveInspection /
+  // RejectInspection, routes inspection.ts:432/469). Only offered on
+  // COMPLETED rows; APPROVED/REJECTED are terminal for this UI.
+  const handleApproveInspection = async (inspection: Inspection) => {
+    try {
+      setDecisionSubmitting(true);
+      const response = await apiFetch(`/inspection/${inspection.inspectionId}/approve`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ comments: '' }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (result.success) {
+        showSuccess('Success', 'Inspection approved');
+        fetchInspections();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to approve inspection');
+      }
+    } catch (error: any) {
+      showError('Error', error?.message || 'Failed to approve inspection');
+    } finally {
+      setDecisionSubmitting(false);
+    }
+  };
+
+  const handleRejectInspection = async (inspection: Inspection) => {
+    const rejectionReason = window.prompt('Enter rejection reason:');
+    if (!rejectionReason?.trim()) return;
+    try {
+      setDecisionSubmitting(true);
+      const response = await apiFetch(`/inspection/${inspection.inspectionId}/reject`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ rejectionReason: rejectionReason.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (result.success) {
+        showSuccess('Success', 'Inspection rejected');
+        fetchInspections();
+      } else {
+        showError('Error', result.error?.message || result.error || 'Failed to reject inspection');
+      }
+    } catch (error: any) {
+      showError('Error', error?.message || 'Failed to reject inspection');
+    } finally {
+      setDecisionSubmitting(false);
+    }
   };
 
   // Handle view report
@@ -310,7 +510,7 @@ const InspectionRequestsTab: React.FC = () => {
       width: 120,
       renderCell: (params: GridRenderCellParams) => (
         <Typography variant="body2">
-          {params.value.toLocaleString()} kg
+          {params.value != null ? Number(params.value).toLocaleString() : '—'} kg
         </Typography>
       ),
     },
@@ -364,7 +564,7 @@ const InspectionRequestsTab: React.FC = () => {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 180,
+      width: 260,
       sortable: false,
       renderCell: (params: GridRenderCellParams) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -379,7 +579,7 @@ const InspectionRequestsTab: React.FC = () => {
               </IconButton>
             </Tooltip>
           )}
-          
+
           {params.row.status === 'SCHEDULED' && (
             <Tooltip title="Conduct Inspection">
               <IconButton
@@ -391,17 +591,39 @@ const InspectionRequestsTab: React.FC = () => {
               </IconButton>
             </Tooltip>
           )}
-          
+
           {params.row.status === 'COMPLETED' && (
-            <Tooltip title="View Report">
-              <IconButton
-                size="small"
-                onClick={() => handleViewReport(params.row)}
-                sx={{ color: ECTA_COLORS.green }}
-              >
-                <Visibility fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Tooltip title="View Report">
+                <IconButton
+                  size="small"
+                  onClick={() => handleViewReport(params.row)}
+                  sx={{ color: ECTA_COLORS.green }}
+                >
+                  <Visibility fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Approve Inspection">
+                <IconButton
+                  size="small"
+                  disabled={decisionSubmitting}
+                  onClick={() => handleApproveInspection(params.row)}
+                  sx={{ color: ECTA_COLORS.success }}
+                >
+                  <CheckCircle fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Reject Inspection">
+                <IconButton
+                  size="small"
+                  disabled={decisionSubmitting}
+                  onClick={() => handleRejectInspection(params.row)}
+                  sx={{ color: ECTA_COLORS.error }}
+                >
+                  <Cancel fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Box>
       ),
@@ -532,43 +754,217 @@ const InspectionRequestsTab: React.FC = () => {
         />
       </Paper>
 
-      {/* Scheduling Dialog */}
+      {/* Scheduling Dialog — POST /inspection/:id/schedule
+          {inspectorName, inspectorLicense, inspectionDate} */}
       {selectedInspection && (
-        <InspectionSchedulingDialog
+        <Dialog
           open={schedulingDialogOpen}
-          onClose={() => {
-            setSchedulingDialogOpen(false);
-            setSelectedInspection(null);
-          }}
-          inspection={selectedInspection}
-          onSuccess={fetchInspections}
-        />
+          onClose={() => { if (!scheduleSubmitting) { setSchedulingDialogOpen(false); setSelectedInspection(null); } }}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>Schedule Inspection — {selectedInspection.inspectionId}</DialogTitle>
+          <DialogContent>
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid item xs={12}>
+                <TextField fullWidth required label="Inspector Name" value={scheduleForm.inspectorName}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, inspectorName: e.target.value })}
+                  placeholder="e.g. Alemayehu Bekele" />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField fullWidth required label="Inspector Licence" value={scheduleForm.inspectorLicense}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, inspectorLicense: e.target.value })}
+                  placeholder="e.g. ECTA-INS-001" />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField fullWidth required type="date" label="Inspection Date" value={scheduleForm.inspectionDate}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, inspectionDate: e.target.value })}
+                  InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary">
+                  Shipment {selectedInspection.shipmentId} • {selectedInspection.coffeeType} • {selectedInspection.quantity?.toLocaleString()} kg
+                </Typography>
+              </Grid>
+            </Grid>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => { setSchedulingDialogOpen(false); setSelectedInspection(null); }} disabled={scheduleSubmitting}>Cancel</Button>
+            <Button variant="contained" onClick={handleScheduleSubmit} disabled={scheduleSubmitting}
+              sx={{ bgcolor: ECTA_COLORS.green }}>
+              {scheduleSubmitting ? 'Scheduling…' : 'Schedule Inspection'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
 
-      {/* Conduct Inspection Dialog */}
+      {/* Conduct Inspection Dialog — POST /inspection/:id/results
+          (pre-shipment entity, not /quality/inspections/:id/perform) */}
       {selectedInspection && (
-        <InspectionConductDialog
+        <Dialog
           open={conductDialogOpen}
-          onClose={() => {
-            setConductDialogOpen(false);
-            setSelectedInspection(null);
-          }}
-          inspection={selectedInspection}
-          onSuccess={fetchInspections}
-        />
+          onClose={() => { if (!conductSubmitting) { setConductDialogOpen(false); setSelectedInspection(null); } }}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>Conduct Inspection — {selectedInspection.inspectionId}</DialogTitle>
+          <DialogContent>
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="number" label="Inspected Quantity (kg)"
+                  value={conductForm.inspectedQuantity}
+                  onChange={(e) => setConductForm({ ...conductForm, inspectedQuantity: Number(e.target.value) })}
+                  inputProps={{ min: 1 }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth select required label="Actual Grade" value={conductForm.actualGrade}
+                  onChange={(e) => setConductForm({ ...conductForm, actualGrade: e.target.value })}>
+                  {['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5'].map((g) => (
+                    <MenuItem key={g} value={g}>{g}</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="number" label="Cupping Score (0–100)"
+                  value={conductForm.cuppingScore}
+                  onChange={(e) => setConductForm({ ...conductForm, cuppingScore: Number(e.target.value) })}
+                  inputProps={{ min: 0, max: 100, step: 0.1 }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="number" label="Defect Count (0–100)"
+                  value={conductForm.defectsCount}
+                  onChange={(e) => setConductForm({ ...conductForm, defectsCount: Number(e.target.value) })}
+                  inputProps={{ min: 0, max: 100 }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="number" label="Moisture Content % (8–13)"
+                  value={conductForm.moistureContent}
+                  onChange={(e) => setConductForm({ ...conductForm, moistureContent: Number(e.target.value) })}
+                  inputProps={{ min: 8, max: 13, step: 0.1 }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Bean Size" value={conductForm.beanSize}
+                  onChange={(e) => setConductForm({ ...conductForm, beanSize: e.target.value })}
+                  placeholder="e.g. 15+" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth type="number" label="Bags Inspected"
+                  value={conductForm.bagsInspected}
+                  onChange={(e) => setConductForm({ ...conductForm, bagsInspected: Number(e.target.value) })}
+                  inputProps={{ min: 0 }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth select label="Packaging Condition" value={conductForm.packagingCondition}
+                  onChange={(e) => setConductForm({ ...conductForm, packagingCondition: e.target.value })}>
+                  {['NEW', 'GOOD', 'ACCEPTABLE', 'POOR'].map((p) => (
+                    <MenuItem key={p} value={p}>{p}</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth select required label="Overall Result" value={conductForm.overallResult}
+                  onChange={(e) => setConductForm({ ...conductForm, overallResult: e.target.value })}>
+                  <MenuItem value="PASS">PASS</MenuItem>
+                  <MenuItem value="CONDITIONAL_PASS">CONDITIONAL_PASS</MenuItem>
+                  <MenuItem value="FAIL">FAIL</MenuItem>
+                </TextField>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField fullWidth multiline rows={3} label="Inspection Notes" value={conductForm.inspectionNotes}
+                  onChange={(e) => setConductForm({ ...conductForm, inspectionNotes: e.target.value })}
+                  placeholder="Record inspection findings..." />
+              </Grid>
+            </Grid>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => { setConductDialogOpen(false); setSelectedInspection(null); }} disabled={conductSubmitting}>Cancel</Button>
+            <Button variant="contained" onClick={handleConductSubmit} disabled={conductSubmitting}
+              sx={{ bgcolor: ECTA_COLORS.green }}>
+              {conductSubmitting ? 'Saving…' : 'Complete Inspection'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
 
-      {/* Report Dialog */}
-      {selectedInspection && (
-        <InspectionReportDialog
-          open={reportDialogOpen}
-          onClose={() => {
-            setReportDialogOpen(false);
-            setSelectedInspection(null);
-          }}
-          inspection={selectedInspection}
-        />
-      )}
+      {/* Report Dialog — pass/fail derives from the recorded overallResult
+          (PASS / CONDITIONAL_PASS / FAIL), never from status: no
+          PreShipmentInspection ever carries status PASSED/FAILED. There is
+          no certificate-download endpoint, so no fake Download button. */}
+      {selectedInspection && (() => {
+        const result = getOverallResult(selectedInspection);
+        const passed = result === 'PASS' || result === 'CONDITIONAL_PASS';
+        const hasResult = ['PASS', 'FAIL', 'CONDITIONAL_PASS'].includes(result);
+        return (
+          <Dialog
+            open={reportDialogOpen}
+            onClose={() => { setReportDialogOpen(false); setSelectedInspection(null); }}
+            maxWidth="md"
+            fullWidth
+          >
+            <DialogTitle>
+              Inspection Report — {selectedInspection.inspectionId}
+              {selectedInspection.txId && (
+                <Box sx={{ mt: 1 }}><BlockchainTxChip txId={selectedInspection.txId} /></Box>
+              )}
+            </DialogTitle>
+            <DialogContent>
+              <Box sx={{ p: 2, bgcolor: hasResult ? (passed ? '#e8f5e9' : '#ffebee') : '#f5f5f5', borderRadius: 1, mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {hasResult ? (passed
+                    ? <CheckCircle sx={{ fontSize: 48, color: ECTA_COLORS.green }} />
+                    : <Cancel sx={{ fontSize: 48, color: ECTA_COLORS.error }} />)
+                    : <Assessment sx={{ fontSize: 48, color: '#757575' }} />}
+                  <Box>
+                    <Typography variant="h5" fontWeight={700}
+                      color={hasResult ? (passed ? ECTA_COLORS.green : ECTA_COLORS.error) : 'text.secondary'}>
+                      {hasResult ? (passed ? 'INSPECTION PASSED' : 'INSPECTION FAILED') : 'NO RESULT RECORDED'}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Status: {selectedInspection.status}
+                      {hasResult ? ` • Overall result: ${result}` : ' • Results have not been recorded yet'}
+                    </Typography>
+                    {selectedInspection.certificateNumber && (
+                      <Typography variant="body2">Certificate: {selectedInspection.certificateNumber}</Typography>
+                    )}
+                  </Box>
+                </Box>
+              </Box>
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="caption" color="text.secondary">Quality Grade</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedInspection.qualityGrade || 'N/A'}</Typography>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="caption" color="text.secondary">Moisture Content</Typography>
+                  <Typography variant="body1" fontWeight={600}>
+                    {selectedInspection.moistureContent != null ? `${selectedInspection.moistureContent}%` : 'N/A'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="caption" color="text.secondary">Defect Percentage</Typography>
+                  <Typography variant="body1" fontWeight={600}>
+                    {selectedInspection.defectPercentage != null ? `${selectedInspection.defectPercentage}%` : 'N/A'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="caption" color="text.secondary">Inspector</Typography>
+                  <Typography variant="body1" fontWeight={600}>{selectedInspection.inspectorName || 'N/A'}</Typography>
+                </Grid>
+              </Grid>
+              {selectedInspection.failureReason && (
+                <Box sx={{ mt: 3, p: 2, bgcolor: '#ffebee', borderRadius: 1 }}>
+                  <Typography variant="subtitle2" fontWeight={600} color="error">Failure Reason:</Typography>
+                  <Typography variant="body2">{selectedInspection.failureReason}</Typography>
+                </Box>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => window.print()}>Print Report</Button>
+              <Button onClick={() => { setReportDialogOpen(false); setSelectedInspection(null); }}>Close</Button>
+            </DialogActions>
+          </Dialog>
+        );
+      })()}
     </Box>
   );
 };

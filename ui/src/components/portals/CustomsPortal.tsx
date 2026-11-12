@@ -6,20 +6,12 @@ import { viewDocument, downloadDocument } from '@/utils/documentHelpers';
 import {
   Box,
   Grid,
-  Card,
-  CardContent,
   Typography,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Chip,
   IconButton,
   Tooltip,
   Alert,
-  Tabs,
-  Tab,
   Table,
   TableBody,
   TableCell,
@@ -29,9 +21,11 @@ import {
   Paper,
   LinearProgress,
   Divider,
-  TextField,
   MenuItem,
   Checkbox,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
   List,
   ListItem,
   ListItemText,
@@ -56,7 +50,7 @@ import {
   Person,
   Assessment,
 } from '@mui/icons-material';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { GridColDef } from '@mui/x-data-grid';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api, { formatDate, formatCurrency, getStatusColor } from '@/utils/api';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
@@ -65,16 +59,24 @@ import AuditTrailViewer from './AuditTrailViewer';
 
 // Modern Components - 2026 Design
 import {
-  ModernCard,
-  AnimatedButton,
-  DashboardKPI,
+  PortalShell,
+  PortalTabBar,
+  PortalTabPanel,
+  PortalKpiCard,
+  PortalCard,
+  PrimaryButton,
+  SecondaryButton,
+  DangerButton,
+  GhostButton,
+  PortalDialog,
+  PortalField,
+  PortalDataGrid,
+  getPortalBrand,
   StatusChip,
-  ThemeToggle,
-} from '@/components/modern';
+} from '@/components/shared/portal';
 import { CustomsInspection } from './CustomsInspection';
 import { CustomsClearedShipments } from './CustomsClearedShipments';
 import { DocumentUploadDialog } from './DocumentUploadDialog';
-import { DocumentValidationDialog } from './DocumentValidationDialog';
 import UserManagement from '@/components/admin/UserManagement';
 import { DocumentManagementPanel } from '@/components/documents';
 import BlockchainSignatureVerification from '@/components/documents/BlockchainSignatureVerification';
@@ -106,19 +108,14 @@ interface CustomsDeclaration {
   customsOfficer: string;
   inspectionRequired: boolean;
   eudrCompliant: boolean;
+  // Stored by the API, not the chaincode: GET /customs/declarations
+  // returns dutyAmount (duty_amount, written by POST .../calculate-duty)
+  // and dutyPaid (duty_paid). The loadData mapper already selected
+  // rejectionReason; the interface just never declared it.
+  rejectionReason?: string;
+  dutyAmount?: number;
+  dutyPaid?: boolean | string;
 }
-
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
-  <div hidden={value !== index}>
-    {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-  </div>
-);
 
 // ✅ FIX: Normalize shipment IDs for fuzzy matching (handles different formats)
 const normalizeShipmentId = (id: string): string => {
@@ -186,9 +183,6 @@ const CustomsPortal: React.FC = () => {
     customsDuties: '0',
     validityDays: '30',
     expiryDate: '',
-    fobValueETB: '0',
-    processingFee: '0',
-    documentationFee: '0',
   });
 
   // Inspection Dialog Form State
@@ -390,10 +384,32 @@ const CustomsPortal: React.FC = () => {
           console.log(`[CUSTOMS] 📝 Found inspection for shipment ${shipmentId}`);
           console.log('[CUSTOMS] 📝 Inspection data:', inspection);
           
-          // ✅ FIX: Fields are already normalized by the API endpoint
+          // ✅ FIX: GET /quality/inspections/by-shipment/:id normalises to
+          // `certificationNumber` and returns NO `exportPermitNo` key at all
+          // (quality.ts by-shipment normaliser), so the old reads of
+          // inspection.exportPermitNo / .certificateNo were always '' and
+          // every approved + permitted shipment hit the blocking
+          // "No Export Permit Issued" alert. Certificate comes from
+          // certificationNumber; the permit number lives on the same PG row
+          // (export_permit_no) and the list endpoint DOES return it, so
+          // look it up there when the by-shipment row does not carry it.
           const inspStatus = inspection.status || '';
-          const exportPermitNo = inspection.exportPermitNo || '';
-          const certificateNo = inspection.certificateNo || '';
+          const certificateNo = inspection.certificationNumber || inspection.certificateNo || inspection.CertificationNumber || '';
+          let exportPermitNo = inspection.exportPermitNo || inspection.ExportPermitNo || '';
+          if (!exportPermitNo) {
+            try {
+              const listResponse = await apiFetch(`/quality/inspections?limit=1000`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              const listResult = await listResponse.json();
+              const list = Array.isArray(listResult.data) ? listResult.data : (listResult.data?.inspections || []);
+              const match = list.find((insp: any) =>
+                normalizeShipmentId(insp.shipmentId || insp.ShipmentID || insp.shipmentID || '') === normalizeShipmentId(shipmentId));
+              if (match) exportPermitNo = match.exportPermitNo || match.ExportPermitNo || '';
+            } catch (lookupErr) {
+              console.warn('[CUSTOMS] Could not look up export permit from inspection list:', lookupErr);
+            }
+          }
           
           console.log('[CUSTOMS] 🔍 Extracted inspection details:');
           console.log('  - Status:', inspStatus || '(empty)');
@@ -667,6 +683,31 @@ ${solution}`);
     organizationsInvolved: 0,
   });
   const [rejectionDetailsDialogOpen, setRejectionDetailsDialogOpen] = useState(false);
+
+  // API-computed duty for the declaration in the clearance dialog.
+  // POST /customs/declaration/:id/calculate-duty returns the tariff-table
+  // rates (10% duty / 15% VAT defaults, 125.50 ETB/USD) and the amounts;
+  // nothing here is computed client-side any more (see autoMapClearanceData).
+  const [dutyCalc, setDutyCalc] = useState<{
+    dutyAmount: number; vatAmount: number; exciseAmount: number; totalDuty: number;
+    exchangeRate: number; dutyRate: number; vatRate: number;
+  } | null>(null);
+  const [dutyCalcLoading, setDutyCalcLoading] = useState(false);
+  // Valuation (POST /customs/declaration/:id/valuation): method + adjusted
+  // value are required by the route; the API stores the adjustment and
+  // updates the declaration's customs value.
+  const [valuationForm, setValuationForm] = useState({ method: 'TRANSACTION', adjustedValue: '', reason: '' });
+  const [valuationResult, setValuationResult] = useState<string | null>(null);
+
+  // Complete-inspection outcome dialog. The chaincode customs machine has
+  // no FAILED inspection state: CompleteInspection only ever moves
+  // UNDER_INSPECTION → UNDER_REVIEW, and the API route ignores
+  // inspectionResult for the status (always UNDER_REVIEW). So a failed
+  // outcome must NOT call complete-inspection — it routes to the rejection
+  // flow (RejectDeclaration, the only chaincode negative transition).
+  const [completeInspectionDialogOpen, setCompleteInspectionDialogOpen] = useState(false);
+  const [completeInspectionResult, setCompleteInspectionResult] = useState<'PASSED' | 'FAILED'>('PASSED');
+  const [completeInspectionComments, setCompleteInspectionComments] = useState('');
   
   // Document viewer state
   const [documentViewerOpen, setDocumentViewerOpen] = useState(false);
@@ -820,36 +861,109 @@ ${solution}`);
     }
   };
 
-  // Auto-map data for clearance
+  // Duty + VAT for the clearance dialog, from the API — never computed here.
+  // POST /customs/declaration/:id/calculate-duty reads the tariff table
+  // (10% duty / 15% VAT defaults, 125.50 ETB/USD) and stores the result in
+  // duty_calculations + customs_declarations.duty_amount. The old code
+  // invented the numbers client-side (56.5 ETB/USD, 0.5% processing fee +
+  // fixed 500 ETB doc fee, 0% duty/VAT "by assumption") and displayed them
+  // as real duties. That computation is deleted; the values below come
+  // from the API response, and the clearance form is prefilled from them.
+  const handleCalculateDuty = async (declaration: CustomsDeclaration) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return null;
+    setDutyCalcLoading(true);
+    try {
+      const response = await apiFetch(`/customs/declaration/${declaration.declarationId}/calculate-duty`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customsValueUSD: declaration.value,
+          hsCode: declaration.hsCode,
+          applyPreferences: true,
+        }),
+      });
+      const result = await response.json();
+      if (!result.success) {
+        setSnackbar({ open: true, message: `Duty calculation failed: ${result.error?.message || result.error || 'Unknown error'}`, severity: 'error' });
+        return null;
+      }
+      const calc = {
+        dutyAmount: result.data.amounts.dutyAmount,
+        vatAmount: result.data.amounts.vatAmount,
+        exciseAmount: result.data.amounts.exciseAmount,
+        totalDuty: result.data.amounts.totalDuty,
+        exchangeRate: result.data.exchangeRate,
+        dutyRate: result.data.rates.dutyRate,
+        vatRate: result.data.rates.vatRate,
+      };
+      setDutyCalc(calc);
+      // Prefill the clearance form from the API-computed amounts: the clear
+      // route sends exportDuty + vatAmount to the chaincode.
+      setClearanceForm((prev) => ({
+        ...prev,
+        customsDuties: String(calc.dutyAmount),
+        vatAmount: String(calc.vatAmount),
+      }));
+      return calc;
+    } catch (error) {
+      setSnackbar({ open: true, message: `Duty calculation failed: ${error}`, severity: 'error' });
+      return null;
+    } finally {
+      setDutyCalcLoading(false);
+    }
+  };
+
+  // Valuation adjustment (POST /customs/declaration/:id/valuation).
+  // Requires valuationMethod + a numeric adjustedValue; the API stores the
+  // adjustment and updates the declaration's customs value.
+  const handleRecordValuation = async (declaration: CustomsDeclaration) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+    const adjustedValue = parseFloat(valuationForm.adjustedValue);
+    if (!Number.isFinite(adjustedValue) || adjustedValue <= 0) {
+      setSnackbar({ open: true, message: 'Adjusted value must be a number greater than 0', severity: 'error' });
+      return;
+    }
+    try {
+      const response = await apiFetch(`/customs/declaration/${declaration.declarationId}/valuation`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          valuationMethod: valuationForm.method,
+          adjustedValue,
+          adjustmentReason: valuationForm.reason || undefined,
+        }),
+      });
+      const result = await response.json();
+      if (!result.success) {
+        setSnackbar({ open: true, message: `Valuation failed: ${result.error?.message || result.error || 'Unknown error'}`, severity: 'error' });
+        return;
+      }
+      setValuationResult(`Valuation recorded: $${result.data.declaredValue} → $${result.data.adjustedValue} (${result.data.valuationMethod}, ${result.data.adjustmentPercentage}%). Declaration customs value updated.`);
+      setSnackbar({ open: true, message: 'Valuation recorded successfully', severity: 'success' });
+      await loadData();
+    } catch (error) {
+      setSnackbar({ open: true, message: `Valuation failed: ${error}`, severity: 'error' });
+    }
+  };
+
+  // Auto-map data for clearance: clearance number, officer, company and
+  // validity only. Duty/VAT come from handleCalculateDuty (API) — called
+  // here so the dialog opens with real tariff-table figures.
   const autoMapClearanceData = async (declaration: CustomsDeclaration) => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
 
     try {
       console.log('[CUSTOMS] Auto-mapping clearance data for:', declaration.declarationId);
-      
+
       // Generate clearance number
       const clearanceNumber = `CLR-${Date.now()}-${declaration.exporterId.substring(3, 8)}`;
-      
+
       // Get inspector name from declaration if available
       const inspectorName = declaration.customsOfficer || 'Officer Alemayehu T.';
-      
-      // Calculate customs duties and VAT
-      // Ethiopian coffee export duties:
-      // - Standard export duty: 0% (coffee is promoted export)
-      // - VAT: 0% (export goods are VAT-exempt)
-      // - Processing fee: 0.5% of FOB value
-      // - Documentation fee: Fixed 500 ETB
-      
-      const fobValueUSD = declaration.value;
-      const exchangeRate = 56.5; // ETB/USD approximate rate
-      const fobValueETB = fobValueUSD * exchangeRate;
-      
-      const processingFeeRate = 0.005; // 0.5%
-      const processingFee = fobValueETB * processingFeeRate;
-      const documentationFee = 500; // Fixed 500 ETB
-      const totalDuties = processingFee + documentationFee;
-      
+
       // Calculate clearance validity based on destination
       // Standard: 30 days
       // Air freight: 14 days (faster transit)
@@ -860,17 +974,17 @@ ${solution}`);
       } else if (declaration.eudrCompliant) {
         validityDays = 14;
       }
-      
+
       // Calculate expiry date
       const clearanceDate = new Date();
       const expiryDate = new Date(clearanceDate);
       expiryDate.setDate(expiryDate.getDate() + validityDays);
-      
+
       // Fetch exporter company name
       const exporterResponse = await apiFetch(`/users/by-exporter/${declaration.exporterId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       let companyName = '';
       if (exporterResponse) {
         const exporterResult = await exporterResponse.json();
@@ -878,26 +992,26 @@ ${solution}`);
           companyName = exporterResult.data.organization || exporterResult.data.companyName || '';
         }
       }
-      
+
       setClearanceAutoData({
         inspectorName,
         clearanceNumber,
         companyName,
-        customsDuties: Math.round(totalDuties).toString(),
+        // No client-side duty figures any more — duty/VAT come from
+        // handleCalculateDuty (API) below and live in `dutyCalc`.
+        customsDuties: '0',
         validityDays: validityDays.toString(),
         expiryDate: expiryDate.toISOString().split('T')[0],
-        fobValueETB: Math.round(fobValueETB).toString(),
-        processingFee: Math.round(processingFee).toString(),
-        documentationFee: documentationFee.toString(),
       });
-      
+
+      // Real duty/VAT from the tariff-table API (also prefills the form).
+      await handleCalculateDuty(declaration);
+
       console.log('[CUSTOMS] ✅ Auto-mapped clearance data:', {
         clearanceNumber,
         inspectorName,
         companyName,
-        customsDuties: Math.round(totalDuties),
         validityDays,
-        fobValueETB: Math.round(fobValueETB),
       });
     } catch (error) {
       console.warn('[CUSTOMS] Could not auto-map clearance data:', error);
@@ -1018,6 +1132,10 @@ ${solution}`);
             destination: d.destination || d.Destination || 'Unknown',
             status: d.status || d.DeclarationStatus || d.declarationStatus || 'SUBMITTED',
             rejectionReason: d.rejectionReason || d.rejection_reason || d.additionalNotes || d.additional_notes || undefined,
+            // Stored duty from GET /customs/declarations (duty_amount is
+            // written by POST .../calculate-duty; duty_paid likewise).
+            dutyAmount: parseFloat(d.dutyAmount || d.duty_amount || '0'),
+            dutyPaid: d.dutyPaid ?? d.duty_paid ?? false,
             submissionDate: d.submissionDate || d.SubmissionDate || d.createdAt || new Date().toISOString(),
             clearanceDate: d.clearanceDate || d.ClearanceDate || '',
             customsOfficer: d.customsOfficer || d.CustomsOfficer || d.clearedBy || d.reviewedBy || 'Officer Alemayehu T.',
@@ -1230,13 +1348,19 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
     }
   };
 
-  const handleCompleteInspection = async (declarationId: string) => {
+  // Complete a physical inspection. `inspectionResult` is the officer's
+  // recorded outcome — but it only ever reaches the API as a note: the
+  // route and the chaincode move UNDER_INSPECTION → UNDER_REVIEW
+  // unconditionally, so a FAILED result must never be sent here (it would
+  // wrongly advance a failed inspection). Callers send FAILED only via the
+  // rejection dialog — see the complete-inspection dialog below.
+  const handleCompleteInspection = async (declarationId: string, inspectionResult: 'PASSED' | 'FAILED' = 'PASSED', inspectorComments?: string) => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
-    
+
     try {
       console.log('[CUSTOMS] Completing inspection for:', declarationId);
-      
+
       const response = await apiFetch(`/customs/declaration/${declarationId}/complete-inspection`, {
         method: 'POST',
         headers: {
@@ -1244,16 +1368,16 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          inspectionResult: 'PASSED',
-          inspectorComments: 'All requirements met',
+          inspectionResult,
+          inspectorComments: inspectorComments || (inspectionResult === 'PASSED' ? 'All requirements met' : 'Inspection failed — see rejection record'),
           completedDate: new Date().toISOString(),
         })
       });
-      
+
       const result = await response.json();
       if (result.success) {
         console.log('[CUSTOMS] ✅ Inspection completed successfully');
-        alert(`✅ Inspection Completed\n\nDeclaration: ${declarationId}\nResult: PASSED\n\nStatus updated to UNDER_REVIEW for final clearance`);
+        alert(`✅ Inspection Completed\n\nDeclaration: ${declarationId}\nResult: ${inspectionResult}\n\nStatus updated to UNDER_REVIEW for final clearance`);
         loadData();
       } else {
         console.error('[CUSTOMS] ❌ Failed to complete inspection:', result);
@@ -1278,9 +1402,12 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
       // Get declaration for shipment linking
       const declaration = declarations.find(d => d.declarationId === declarationId);
       
-      // Generate a fresh unique clearance number for this submission
-      const uniqueClearanceNumber = `CLR-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      
+      // Use the clearance number from the dialog (auto-generated by
+      // autoMapClearanceData, editable by the officer); only generate one
+      // if the field is empty. The old code always generated a fresh
+      // number here and ignored the dialog field entirely.
+      const uniqueClearanceNumber = clearanceForm.clearanceNumber || `CLR-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
       // Proceed with customs clearance
       const response = await apiFetch(`/customs/declaration/${declarationId}/clear`, {
         method: 'POST',
@@ -1290,6 +1417,7 @@ ${inspectionForm.internalNotes ? '\n🔒 Internal Notes:\n' + inspectionForm.int
         },
         body: JSON.stringify({
           clearanceNumber: uniqueClearanceNumber,
+          clearanceDate: clearanceForm.clearanceDate,
           exportDuty: parseFloat(clearanceForm.customsDuties) || 0,
           vatAmount: parseFloat(clearanceForm.vatAmount) || 0,
           clearanceType: clearanceForm.clearanceType,
@@ -1575,8 +1703,8 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
         // Reload declarations to show the new one
         await loadData();
 
-        // Switch to Tab 1 (Submitted) to show the new declaration
-        setTabValue(1);
+        // Switch to Tab 0 (Submitted) to show the new declaration
+        setTabValue(0);
         
         console.log('[CUSTOMS] ✅ Declaration submitted, switched to Submitted tab');
       } else {
@@ -1623,6 +1751,25 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       width: 110,
       renderCell: (params) => formatCurrency(params.value, params.row.currency),
     },
+    {
+      // Stored duty from GET /customs/declarations (written by the API
+      // calculate-duty endpoint). Never a client-side computation.
+      field: 'dutyAmount',
+      headerName: 'Duty Assessed (ETB)',
+      width: 140,
+      renderCell: (params) => (
+        <Box>
+          <Typography variant="body2" fontWeight={600}>
+            {params.value ? `${Number(params.value).toLocaleString()} ETB` : '—'}
+          </Typography>
+          {params.row.dutyPaid ? (
+            <Chip label="Paid" size="small" color="success" />
+          ) : params.value ? (
+            <Chip label="Unpaid" size="small" color="warning" />
+          ) : null}
+        </Box>
+      ),
+    },
     { field: 'destination', headerName: 'Destination', width: 120 },
     {
       field: 'tabStatus',
@@ -1631,11 +1778,9 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       renderCell: (params) => {
         const isCurrentStage = params.row.status === currentStage;
         return (
-          <Chip
+          <StatusChip
+            status={isCurrentStage ? 'pending' : 'COMPLETED'}
             label={isCurrentStage ? `${stageLabel} - Pending` : `${stageLabel} - Completed`}
-            size="small"
-            color={isCurrentStage ? 'warning' : 'success'}
-            icon={isCurrentStage ? <Warning /> : <CheckCircle />}
           />
         );
       },
@@ -1710,7 +1855,10 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   color="success"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleCompleteInspection(params.row.declarationId);
+                    setSelectedDeclaration(params.row);
+                    setCompleteInspectionResult('PASSED');
+                    setCompleteInspectionComments('');
+                    setCompleteInspectionDialogOpen(true);
                   }}
                 >
                   <CheckCircle />
@@ -1728,6 +1876,9 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedDeclaration(params.row);
+                      setDutyCalc(null);
+                      setValuationResult(null);
+                      setValuationForm({ method: 'TRANSACTION', adjustedValue: '', reason: '' });
                       autoMapClearanceData(params.row);
                       setClearanceDialogOpen(true);
                     }}
@@ -1749,6 +1900,23 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                   </IconButton>
                 </Tooltip>
               </>
+            )}
+
+            {/* REJECTED → View Rejection Details (stored reason) */}
+            {params.row.status === 'REJECTED' && (
+              <Tooltip title="View Rejection Details">
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedDeclaration(params.row);
+                    setRejectionDetailsDialogOpen(true);
+                  }}
+                >
+                  <Visibility />
+                </IconButton>
+              </Tooltip>
             )}
           </Box>
         );
@@ -1929,18 +2097,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
   const stats = getDeclarationStats();
 
-  // Brand colors for Customs Portal
-  const brandPrimary = '#0F47AF'; // Government Blue
-  const brandSecondary = '#FCDD09'; // Ethiopian Gold
+  // Brand colors for Customs Portal — from the shared portal token
+  const brandPrimary = getPortalBrand('CUSTOMS').primary;
+  const brandSecondary = getPortalBrand('CUSTOMS').secondary
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f8fbff 0%, #eef5ff 48%, #fffaf0 100%)',
-        p: { xs: 2, md: 3 },
-      }}
-    >
+    <PortalShell brand="CUSTOMS" title="Customs Portal" subtitle="Ethiopian Customs Commission">
       {/* Workflow Status Cards - Clickable KPI Cards (Banks/ECTA Portal Style) */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {[
@@ -1951,133 +2113,33 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           { icon: <Cancel />, label: 'Rejected', value: stats.rejected, color: '#f44336', index: 4 },
         ].map((kpi, idx) => (
           <Grid item xs={12} sm={6} md={2} key={idx}>
-            <Card 
-              sx={{ 
-                cursor: 'pointer',
-                height: 140,
-                border: tabValue === kpi.index ? `2px solid ${kpi.color}` : `1px solid #e0e0e0`,
-                bgcolor: tabValue === kpi.index ? `${kpi.color}08` : 'white',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                borderRadius: 2,
-                boxShadow: tabValue === kpi.index 
-                  ? `0 4px 12px ${kpi.color}40` 
-                  : '0 1px 3px rgba(0,0,0,0.05)',
-                '&:hover': {
-                  boxShadow: `0 8px 24px ${kpi.color}40`,
-                  transform: 'translateY(-4px)',
-                  borderColor: kpi.color,
-                },
-              }}
-              onClick={() => setTabValue(kpi.index)}
-            >
-              <CardContent sx={{ 
-                textAlign: 'center', 
-                py: 2.5, 
-                px: 2,
-                height: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}>
-                <Box sx={{ 
-                  width: 48, 
-                  height: 48, 
-                  borderRadius: '50%', 
-                  bgcolor: `${kpi.color}15`, 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  justifyContent: 'center',
-                  mb: 1.5
-                }}>
-                  {React.cloneElement(kpi.icon, { 
-                    sx: { fontSize: 28, color: kpi.color } 
-                  })}
-                </Box>
-                <Typography 
-                  variant="caption" 
-                  sx={{ 
-                    color: '#666', 
-                    textTransform: 'uppercase', 
-                    fontWeight: 600, 
-                    fontSize: '0.7rem',
-                    letterSpacing: 0.5,
-                    mb: 0.5
-                  }}
-                >
-                  {kpi.label}
-                </Typography>
-                <Typography 
-                  variant="h4" 
-                  sx={{ 
-                    fontWeight: 700, 
-                    color: kpi.color,
-                    lineHeight: 1,
-                    mb: 0.5
-                  }}
-                >
-                  {kpi.value}
-                </Typography>
-              </CardContent>
-            </Card>
+            <PortalKpiCard brand="CUSTOMS" icon={kpi.icon} label={kpi.label} value={kpi.value} color={kpi.color} onClick={() => setTabValue(kpi.index)} selected={tabValue === kpi.index} />
           </Grid>
         ))}
       </Grid>
+      {/* New declaration entry point — previously the dialog existed but
+          nothing ever opened it (only the dead CustomsInspection's
+          onCreateDeclaration prop called setNewDeclarationDialogOpen). */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 3 }}>
+        <PrimaryButton brand="CUSTOMS" startIcon={<Add />} onClick={() => setNewDeclarationDialogOpen(true)}>
+          Submit New Declaration
+        </PrimaryButton>
+      </Box>
       {/* Tabs - Customs Workflow (Banks/ECTA Portal Style) */}
-      <Paper sx={{ 
-        mb: 3, 
-        borderRadius: 2, 
-        boxShadow: '0 2px 8px rgba(0,0,0,0.05)', 
-        border: '1px solid #e0e0e0',
-        overflow: 'hidden'
-      }}>
-        <Tabs 
-          value={tabValue} 
-          onChange={(e, newValue) => setTabValue(newValue)} 
-          variant="fullWidth"
-          sx={{ 
-            borderBottom: 2,
-            borderColor: 'divider',
-            '& .MuiTab-root': {
-              minHeight: 64,
-              textTransform: 'none',
-              fontSize: '0.95rem',
-              fontWeight: 600,
-              color: '#666',
-              transition: 'all 0.3s ease',
-              '&.Mui-selected': {
-                color: '#0F47AF',
-                fontWeight: 700,
-                bgcolor: 'rgba(15, 71, 175, 0.05)',
-              },
-              '&:hover': {
-                color: '#0F47AF',
-                bgcolor: 'rgba(15, 71, 175, 0.03)',
-              }
-            },
-            '& .MuiTabs-indicator': {
-              height: 4,
-              backgroundColor: '#0F47AF',
-              borderRadius: '4px 4px 0 0',
-            }
-          }}
-        >
-          {visibleTabs.map(tab => (
-            <Tab 
-              key={tab.index}
-              value={tab.index}
-              label={tab.label} 
-              icon={tab.icon} 
-              iconPosition="start" 
-            />
-          ))}
-        </Tabs>
-      </Paper>
+      <PortalCard brand="CUSTOMS" noPadding>
+        <PortalTabBar
+          brand="CUSTOMS"
+          value={tabValue}
+          onChange={(e, newValue) => setTabValue(newValue)}
+          fullWidth
+          tabs={visibleTabs.map((tab) => ({ label: tab.label, icon: tab.icon, value: tab.index }))}
+        />
+      </PortalCard>
 
       <Box>
 
         {/* Tab 0: Inspection Scheduled */}
-        <TabPanel value={tabValue} index={0}>
+        <PortalTabPanel value={tabValue} index={0}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             📤 Submitted Declarations
           </Typography>
@@ -2088,8 +2150,17 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
             </Typography>
           </Alert>
 
+          {/* Permit-ready inspections (ECTA-approved, export permit issued)
+              that do not have a declaration yet — creating one from here
+              opens the new-declaration dialog prefilled for that shipment.
+              Previously imported but never rendered, which also made the
+              "Submit New Declaration" dialog unreachable except via this list. */}
+          <Box sx={{ mb: 3 }}>
+            <CustomsInspection onCreateDeclaration={handleCreateDeclarationFromPermit} />
+          </Box>
+
           <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
+            <PortalDataGrid brand="CUSTOMS"
               rows={declarations.filter(d => d.status === 'SUBMITTED')}
               columns={getSmartColumns('SUBMITTED', 'Inspection Scheduled')}
               getRowId={(row) => row.declarationId}
@@ -2100,10 +2171,10 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
         {/* Tab 1: Inspection Completed */}
-        <TabPanel value={tabValue} index={1}>
+        <PortalTabPanel value={tabValue} index={1}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             🔍 Under Inspection
           </Typography>
@@ -2115,7 +2186,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
+            <PortalDataGrid brand="CUSTOMS"
               rows={declarations.filter(d => d.status === 'UNDER_INSPECTION')}
               columns={getSmartColumns('UNDER_INSPECTION', 'Inspection Completed')}
               getRowId={(row) => row.declarationId}
@@ -2126,10 +2197,10 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
         {/* Tab 2: Under Review */}
-        <TabPanel value={tabValue} index={2}>
+        <PortalTabPanel value={tabValue} index={2}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             ⚖️ Under Review
           </Typography>
@@ -2141,7 +2212,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
+            <PortalDataGrid brand="CUSTOMS"
               rows={declarations.filter(d => d.status === 'UNDER_REVIEW')}
               columns={getSmartColumns('UNDER_REVIEW', 'Review Completed')}
               getRowId={(row) => row.declarationId}
@@ -2152,10 +2223,10 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
         {/* Tab 3: Cleared */}
-        <TabPanel value={tabValue} index={3}>
+        <PortalTabPanel value={tabValue} index={3}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             ✅ Cleared Declarations
           </Typography>
@@ -2167,7 +2238,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
+            <PortalDataGrid brand="CUSTOMS"
               rows={declarations.filter(d => d.status === 'CLEARED')}
               columns={getSmartColumns('CLEARED', 'Declaration Cleared')}
               getRowId={(row) => row.declarationId}
@@ -2178,10 +2249,17 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
-        </TabPanel>
+
+          {/* Cleared-shipments history view — previously imported but never
+              rendered, so the richer cleared view (with the Shipping Portal
+              handoff) was dead code. */}
+          <Box sx={{ mt: 3 }}>
+            <CustomsClearedShipments />
+          </Box>
+        </PortalTabPanel>
 
         {/* Tab 4: Rejected */}
-        <TabPanel value={tabValue} index={4}>
+        <PortalTabPanel value={tabValue} index={4}>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             ❌ Rejected Declarations
           </Typography>
@@ -2193,7 +2271,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
           </Alert>
 
           <Box sx={{ height: 600, width: '100%' }}>
-            <DataGrid
+            <PortalDataGrid brand="CUSTOMS"
               rows={declarations.filter(d => d.status === 'REJECTED')}
               columns={getSmartColumns('REJECTED', 'Declaration Rejected')}
               getRowId={(row) => row.declarationId}
@@ -2204,24 +2282,24 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               }}
             />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={5}>
+        <PortalTabPanel value={tabValue} index={5}>
           {/* Border Crossing Tab */}
           <Box>
-            <Typography variant="h5" gutterBottom sx={{ color: '#1565c0', fontWeight: 700, mb: 3 }}>
+            <Typography variant="h5" gutterBottom sx={{ color: brandPrimary, fontWeight: 700, mb: 3 }}>
               🚛 Border Crossing Documentation
             </Typography>
             <BorderCrossingTab />
           </Box>
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={6}>
+        <PortalTabPanel value={tabValue} index={6}>
           {/* User Management Tab */}
           <UserManagement />
-        </TabPanel>
+        </PortalTabPanel>
 
-        <TabPanel value={tabValue} index={7}>
+        <PortalTabPanel value={tabValue} index={7}>
           {/* Audit Trail Tab */}
           <AuditTrailTable
             title="Customs Portal - Complete Transaction History"
@@ -2230,30 +2308,39 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
             showStats={false}
             maxHeight={700}
           />
-        </TabPanel>
+        </PortalTabPanel>
       </Box>
 
       {/* Declaration Detail Dialog - Comprehensive View */}
-      <Dialog 
-        open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen && !rejectionDialogOpen} 
-        onClose={() => setSelectedDeclaration(null)} 
-        maxWidth="lg" 
-        fullWidth
+      <PortalDialog
+        brand="CUSTOMS"
+        open={!!selectedDeclaration && !clearanceDialogOpen && !inspectionDialogOpen && !rejectionDialogOpen && !rejectionDetailsDialogOpen && !completeInspectionDialogOpen}
+        onClose={() => setSelectedDeclaration(null)}
+        maxWidth="lg"
+        title="Customs Declaration Details"
+        subtitle={`Declaration ID: ${selectedDeclaration?.declarationId}`}
+        icon={<Assignment sx={{ color: brandPrimary, fontSize: 32 }} />}
+        actions={
+          <>
+            <SecondaryButton
+              brand="CUSTOMS"
+              size="small"
+              startIcon={<Assignment />}
+              onClick={() => {
+                setAuditEntityType('DECLARATION');
+                setAuditEntityId(selectedDeclaration?.declarationId || '');
+                setShowAuditTrail(true);
+              }}
+              sx={{ textTransform: 'none', mr: 'auto' }}
+            >
+              View Audit Trail
+            </SecondaryButton>
+            <GhostButton brand="CUSTOMS" onClick={() => setSelectedDeclaration(null)}>
+              Close
+            </GhostButton>
+          </>
+        }
       >
-        <DialogTitle sx={{ bgcolor: '#f5f5f5', borderBottom: '2px solid #0F47AF' }}>
-          <Box display="flex" alignItems="center" gap={2}>
-            <Assignment sx={{ color: '#0F47AF', fontSize: 32 }} />
-            <Box>
-              <Typography variant="h6" fontWeight={700}>
-                Customs Declaration Details
-              </Typography>
-              <Typography variant="body2" color="textSecondary">
-                Declaration ID: {selectedDeclaration?.declarationId}
-              </Typography>
-            </Box>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
           {selectedDeclaration && (
             <Box sx={{ pt: 3 }}>
               {/* Status Banner */}
@@ -2340,6 +2427,21 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <Typography variant="body2" color="textSecondary">Declared Value</Typography>
                     <Typography variant="h6" color="primary" fontWeight={700}>
                       {formatCurrency(selectedDeclaration.value, selectedDeclaration.currency)}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Duty Assessed (stored)</Typography>
+                    <Typography variant="body1" fontWeight={600}>
+                      {selectedDeclaration.dutyAmount ? `${Number(selectedDeclaration.dutyAmount).toLocaleString()} ETB` : 'Not yet calculated'}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      From GET /customs/declarations — written by the API duty calculation, not computed here.
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="textSecondary">Duty Paid</Typography>
+                    <Typography variant="body1" fontWeight={600}>
+                      {selectedDeclaration.dutyPaid ? 'Yes' : 'No'}
                     </Typography>
                   </Grid>
                   <Grid item xs={12} md={6}>
@@ -2522,36 +2624,121 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Paper>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions sx={{ p: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0' }}>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Assignment />}
-            onClick={() => {
-              setAuditEntityType('DECLARATION');
-              setAuditEntityId(selectedDeclaration?.declarationId || '');
-              setShowAuditTrail(true);
-            }}
-            sx={{ textTransform: 'none', mr: 'auto' }}
-          >
-            View Audit Trail
-          </Button>
-          <AnimatedButton onClick={() => setSelectedDeclaration(null)}>
-            Close
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
+
+      {/* Complete Inspection — outcome dialog. The old flow one-clicked
+          straight to complete-inspection with a hardcoded PASSED, so a
+          failed inspection could never be recorded. PASSED completes the
+          inspection (UNDER_INSPECTION → UNDER_REVIEW). FAILED does NOT call
+          complete-inspection — the route/chaincode would move the
+          declaration to UNDER_REVIEW regardless — it opens the rejection
+          dialog instead, the chaincode's only failed outcome. */}
+      <PortalDialog
+        brand="CUSTOMS"
+        open={completeInspectionDialogOpen}
+        onClose={() => setCompleteInspectionDialogOpen(false)}
+        maxWidth="sm"
+        title="Complete Physical Inspection"
+        icon={<Security color="primary" />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setCompleteInspectionDialogOpen(false)}>
+              Cancel
+            </GhostButton>
+            {completeInspectionResult === 'PASSED' ? (
+              <PrimaryButton brand="CUSTOMS" onClick={() => {
+              if (!selectedDeclaration) return;
+              // Rendered only when completeInspectionResult === 'PASSED'.
+              setCompleteInspectionDialogOpen(false);
+              handleCompleteInspection(selectedDeclaration.declarationId, 'PASSED', completeInspectionComments);
+            }}>
+                Complete Inspection (Passed)
+              </PrimaryButton>
+            ) : (
+              <DangerButton brand="CUSTOMS" onClick={() => {
+              if (!selectedDeclaration) return;
+              // Rendered only when completeInspectionResult === 'FAILED'.
+              setCompleteInspectionDialogOpen(false);
+              if (completeInspectionComments.trim()) {
+                setRejectionForm((prev) => ({ ...prev, detailedReason: completeInspectionComments }));
+              }
+              setSnackbar({
+                open: true,
+                message: 'Failed inspection — record the rejection reason to reject this declaration.',
+                severity: 'warning',
+              });
+              setRejectionDialogOpen(true);
+            }}>
+                Continue to Rejection
+              </DangerButton>
+            )}
+          </>
+        }
+      >
+          {selectedDeclaration && (
+            <Box sx={{ pt: 2 }}>
+              <Alert severity="info" sx={{ mb: 3 }}>
+                <Typography variant="body2">
+                  <strong>Declaration:</strong> {selectedDeclaration.declarationId}<br />
+                  <strong>Shipment:</strong> {selectedDeclaration.shipmentId}<br />
+                  <strong>Exporter:</strong> {selectedDeclaration.exporterId}
+                </Typography>
+              </Alert>
+              <Typography variant="subtitle2" gutterBottom>Inspection Outcome</Typography>
+              <RadioGroup
+                value={completeInspectionResult}
+                onChange={(e) => setCompleteInspectionResult(e.target.value as 'PASSED' | 'FAILED')}
+              >
+                <FormControlLabel value="PASSED" control={<Radio />} label="Passed — move to Under Review for clearance" />
+                <FormControlLabel value="FAILED" control={<Radio />} label="Failed — record a rejection instead" />
+              </RadioGroup>
+              <PortalField
+                fullWidth
+                sx={{ mt: 2 }}
+                label="Inspector Comments"
+                multiline
+                rows={3}
+                value={completeInspectionComments}
+                onChange={(e) => setCompleteInspectionComments(e.target.value)}
+                placeholder="Record the inspection findings..."
+                helperText={completeInspectionResult === 'FAILED' ? 'These comments will prefill the rejection reason.' : 'Recorded with the inspection completion.'}
+              />
+              {completeInspectionResult === 'FAILED' && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    A failed inspection rejects the declaration (chaincode RejectDeclaration → REJECTED). The rejection dialog will open next so the reason can be recorded.
+                  </Typography>
+                </Alert>
+              )}
+            </Box>
+          )}
+      </PortalDialog>
 
       {/* Rejection Dialog */}
-      <Dialog open={rejectionDialogOpen} onClose={() => setRejectionDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Cancel color="error" />
-            <Typography variant="h6">Reject Customs Declaration</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="CUSTOMS"
+        open={rejectionDialogOpen}
+        onClose={() => setRejectionDialogOpen(false)}
+        maxWidth="md"
+        title="Reject Customs Declaration"
+        icon={<Cancel color="error" />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setRejectionDialogOpen(false)}>
+              Cancel
+            </GhostButton>
+            <DangerButton
+              brand="CUSTOMS"
+              onClick={() => {
+                if (!selectedDeclaration) return;
+                handleRejectDeclaration(selectedDeclaration.declarationId);
+              }}
+            >
+              Confirm Rejection
+            </DangerButton>
+          </>
+        }
+      >
           {selectedDeclaration && (
             <Box sx={{ pt: 2 }}>
               {/* Declaration Summary */}
@@ -2568,12 +2755,13 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               <Grid container spacing={2}>
                 {/* Rejection Category */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
                     label="Rejection Category"
-                    defaultValue="DOCUMENTATION"
+                    value={rejectionForm.rejectionCategory}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, rejectionCategory: e.target.value })}
                     helperText="Primary reason for rejection"
                   >
                     <MenuItem value="DOCUMENTATION">Documentation Incomplete/Invalid</MenuItem>
@@ -2586,51 +2774,54 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="FRAUD">Suspected Fraud/Misrepresentation</MenuItem>
                     <MenuItem value="SANCTIONS">Trade Sanctions/Restrictions</MenuItem>
                     <MenuItem value="OTHER">Other (Specify in notes)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Severity Level */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
                     label="Severity Level"
-                    defaultValue="CORRECTABLE"
+                    value={rejectionForm.severityLevel}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, severityLevel: e.target.value })}
                     helperText="Can this be corrected?"
                   >
                     <MenuItem value="CORRECTABLE">🟡 Correctable (Can resubmit after fix)</MenuItem>
                     <MenuItem value="MAJOR">🟠 Major Issue (Requires significant correction)</MenuItem>
                     <MenuItem value="CRITICAL">🔴 Critical (Permanent rejection)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Rejected By (Officer) */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
                     label="Rejected By (Officer)"
-                    defaultValue="OFFICER_ALEMAYEHU"
+                    value={rejectionForm.rejectedBy}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, rejectedBy: e.target.value })}
                     helperText="Customs officer rejecting declaration"
                   >
                     <MenuItem value="OFFICER_ALEMAYEHU">Officer Alemayehu T. (Senior Inspector)</MenuItem>
                     <MenuItem value="OFFICER_TIGIST">Officer Tigist M. (EUDR Specialist)</MenuItem>
                     <MenuItem value="OFFICER_DAWIT">Officer Dawit K. (Physical Inspection)</MenuItem>
                     <MenuItem value="OFFICER_SARA">Officer Sara H. (Documentary Review)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Rejection Date */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="date"
                     label="Rejection Date"
                     InputLabelProps={{ shrink: true }}
-                    defaultValue={new Date().toISOString().split('T')[0]}
+                    value={rejectionForm.rejectionDate}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, rejectionDate: e.target.value })}
                     helperText="Date of rejection decision"
                   />
                 </Grid>
@@ -2674,12 +2865,14 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Detailed Rejection Reason */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     label="Detailed Rejection Reason"
                     multiline
                     rows={4}
+                    value={rejectionForm.detailedReason}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, detailedReason: e.target.value })}
                     placeholder="Provide specific details about why this declaration is being rejected. Be clear and factual..."
                     helperText="This will be visible to the exporter - be professional and specific"
                   />
@@ -2687,11 +2880,13 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Required Actions for Resubmission */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Required Actions for Resubmission"
                     multiline
                     rows={3}
+                    value={rejectionForm.requiredActions}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, requiredActions: e.target.value })}
                     placeholder="List specific actions the exporter must take to correct this declaration..."
                     helperText="e.g., 'Obtain new phytosanitary certificate', 'Correct valuation to match invoice', etc."
                   />
@@ -2699,9 +2894,11 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Legal Reference */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Legal Reference (Optional)"
+                    value={rejectionForm.legalReference}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, legalReference: e.target.value })}
                     placeholder="Article/Section reference"
                     helperText="Cite relevant regulation or law"
                   />
@@ -2709,26 +2906,29 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Appeal Rights Deadline */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     label="Appeal Deadline"
-                    defaultValue="14"
+                    value={rejectionForm.appealDeadline}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, appealDeadline: e.target.value })}
                     helperText="Exporter's right to appeal"
                   >
                     <MenuItem value="7">7 Days</MenuItem>
                     <MenuItem value="14">14 Days (Standard)</MenuItem>
                     <MenuItem value="30">30 Days (Extended)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Officer Notes (Internal) */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Officer Notes (Internal)"
                     multiline
                     rows={2}
+                    value={rejectionForm.officerNotes}
+                    onChange={(e) => setRejectionForm({ ...rejectionForm, officerNotes: e.target.value })}
                     placeholder="Internal customs notes (not visible to exporter)..."
                     helperText="Risk assessment, investigation notes, escalation required, etc."
                   />
@@ -2749,33 +2949,33 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Alert>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setRejectionDialogOpen(false)}>
-            Cancel
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#f44336"
-            onClick={() => {
-              if (!selectedDeclaration) return;
-              handleRejectDeclaration(selectedDeclaration.declarationId);
-            }}
-          >
-            Confirm Rejection
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Clearance Dialog */}
-      <Dialog open={clearanceDialogOpen} onClose={() => setClearanceDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <CheckCircle color="success" />
-            <Typography variant="h6">Clear Export Declaration</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="CUSTOMS"
+        open={clearanceDialogOpen}
+        onClose={() => setClearanceDialogOpen(false)}
+        maxWidth="md"
+        title="Clear Export Declaration"
+        icon={<CheckCircle color="success" />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setClearanceDialogOpen(false)}>
+              Cancel
+            </GhostButton>
+            <PrimaryButton
+              brand="CUSTOMS"
+              onClick={() => {
+                if (!selectedDeclaration) return;
+                handleClearDeclaration(selectedDeclaration.declarationId);
+              }}
+            >
+              Authorize Clearance
+            </PrimaryButton>
+          </>
+        }
+      >
           {selectedDeclaration && (
             <Box sx={{ pt: 2 }}>
               {/* Declaration Summary Card */}
@@ -2807,7 +3007,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <Typography variant="caption" color="textSecondary">FOB Value</Typography>
                     <Typography variant="body2" fontWeight={600}>
                       ${selectedDeclaration?.value.toLocaleString()} USD
-                      {clearanceAutoData.fobValueETB && <><br /><Typography variant="caption">≈ {clearanceAutoData.fobValueETB} ETB</Typography></>}
+                      {dutyCalc && <><br /><Typography variant="caption">≈ {(selectedDeclaration.value * dutyCalc.exchangeRate).toLocaleString()} ETB @ {dutyCalc.exchangeRate} ETB/USD (API rate)</Typography></>}
                     </Typography>
                   </Grid>
                   <Grid item xs={6} md={4}>
@@ -2833,25 +3033,55 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                 </Grid>
               </Paper>
 
-              {/* Calculated Fees Summary */}
+              {/* Duty & VAT — computed by the API (POST .../calculate-duty,
+                  tariff table: 10% duty / 15% VAT defaults, 125.50 ETB/USD),
+                  never client-side. The old panel showed invented
+                  "Processing Fee (0.5%) + Documentation Fee (500 ETB)" figures
+                  from a hardcoded 56.5 ETB/USD rate. */}
               {clearanceAutoData.clearanceNumber && (
                 <Paper elevation={2} sx={{ p: 2.5, mb: 3, bgcolor: '#f0f9ff', borderLeft: '4px solid #4caf50' }}>
                   <Typography variant="h6" gutterBottom sx={{ color: '#2e7d32', fontWeight: 600, mb: 2 }}>
-                    💰 Calculated Fees & Duties
+                    💰 Duty &amp; VAT (API-calculated)
                   </Typography>
-                  <Grid container spacing={2}>
-                    <Grid item xs={6} md={3}>
-                      <Typography variant="caption" color="textSecondary">Processing Fee (0.5%)</Typography>
-                      <Typography variant="body2" fontWeight={600}>{clearanceAutoData.processingFee} ETB</Typography>
+                  {dutyCalc ? (
+                    <Grid container spacing={2}>
+                      <Grid item xs={6} md={3}>
+                        <Typography variant="caption" color="textSecondary">Duty ({(dutyCalc.dutyRate * 100).toFixed(1)}%)</Typography>
+                        <Typography variant="body2" fontWeight={600}>{dutyCalc.dutyAmount.toLocaleString()} ETB</Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography variant="caption" color="textSecondary">VAT ({(dutyCalc.vatRate * 100).toFixed(1)}%)</Typography>
+                        <Typography variant="body2" fontWeight={600}>{dutyCalc.vatAmount.toLocaleString()} ETB</Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography variant="caption" color="textSecondary">Excise</Typography>
+                        <Typography variant="body2" fontWeight={600}>{dutyCalc.exciseAmount.toLocaleString()} ETB</Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography variant="caption" color="textSecondary">Total Duty Payable</Typography>
+                        <Typography variant="body1" fontWeight={700} color="primary">{dutyCalc.totalDuty.toLocaleString()} ETB</Typography>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <Typography variant="caption" color="textSecondary">
+                          Exchange rate used: {dutyCalc.exchangeRate} ETB/USD (API default/tariff table). Stored duty for this declaration: {selectedDeclaration.dutyAmount ? `${Number(selectedDeclaration.dutyAmount).toLocaleString()} ETB` : 'none yet'}.
+                        </Typography>
+                      </Grid>
                     </Grid>
-                    <Grid item xs={6} md={3}>
-                      <Typography variant="caption" color="textSecondary">Documentation Fee</Typography>
-                      <Typography variant="body2" fontWeight={600}>{clearanceAutoData.documentationFee} ETB</Typography>
-                    </Grid>
-                    <Grid item xs={6} md={4}>
-                      <Typography variant="caption" color="textSecondary">Total Customs Duties</Typography>
-                      <Typography variant="body1" fontWeight={700} color="primary">{clearanceAutoData.customsDuties} ETB</Typography>
-                    </Grid>
+                  ) : (
+                    <Box>
+                      <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                        Duty has not been calculated for this declaration yet.
+                      </Typography>
+                      <Button
+                        variant="outlined"
+                        disabled={dutyCalcLoading}
+                        onClick={() => selectedDeclaration && handleCalculateDuty(selectedDeclaration)}
+                      >
+                        {dutyCalcLoading ? 'Calculating…' : 'Calculate Duty (API)'}
+                      </Button>
+                    </Box>
+                  )}
+                  <Grid container spacing={2} sx={{ mt: 1 }}>
                     <Grid item xs={12}>
                       <Divider sx={{ my: 1 }} />
                       <Box display="flex" justifyContent="space-between" alignItems="center">
@@ -2867,6 +3097,68 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                 </Paper>
               )}
 
+              {/* Valuation — POST /customs/declaration/:id/valuation.
+                  Adjusts the declared customs value when the declared value
+                  does not match the transaction value. */}
+              <Paper elevation={2} sx={{ p: 2.5, mb: 3, bgcolor: '#fff8e1', borderLeft: '4px solid #ff9800' }}>
+                <Typography variant="h6" gutterBottom sx={{ color: '#e65100', fontWeight: 600, mb: 2 }}>
+                  📊 Customs Valuation
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={4}>
+                    <PortalField
+                      fullWidth
+                      select
+                      label="Valuation Method"
+                      value={valuationForm.method}
+                      onChange={(e) => setValuationForm({ ...valuationForm, method: e.target.value })}
+                      helperText="WTO valuation method"
+                    >
+                      <MenuItem value="TRANSACTION">Transaction Value</MenuItem>
+                      <MenuItem value="IDENTICAL">Identical Goods</MenuItem>
+                      <MenuItem value="SIMILAR">Similar Goods</MenuItem>
+                      <MenuItem value="DEDUCTIVE">Deductive Value</MenuItem>
+                      <MenuItem value="COMPUTED">Computed Value</MenuItem>
+                      <MenuItem value="FALLBACK">Fallback Method</MenuItem>
+                    </PortalField>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <PortalField
+                      fullWidth
+                      type="number"
+                      label="Adjusted Value (USD)"
+                      value={valuationForm.adjustedValue}
+                      onChange={(e) => setValuationForm({ ...valuationForm, adjustedValue: e.target.value })}
+                      helperText={`Declared value: $${selectedDeclaration.value.toLocaleString()}`}
+                      InputProps={{ startAdornment: <Typography sx={{ mr: 1 }}>$</Typography> }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <PortalField
+                      fullWidth
+                      label="Adjustment Reason"
+                      value={valuationForm.reason}
+                      onChange={(e) => setValuationForm({ ...valuationForm, reason: e.target.value })}
+                      helperText="Why the value is being adjusted"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Button
+                      variant="outlined"
+                      onClick={() => selectedDeclaration && handleRecordValuation(selectedDeclaration)}
+                      disabled={!valuationForm.adjustedValue}
+                    >
+                      Record Valuation (API)
+                    </Button>
+                    {valuationResult && (
+                      <Alert severity="success" sx={{ mt: 2 }}>
+                        <Typography variant="body2">{valuationResult}</Typography>
+                      </Alert>
+                    )}
+                  </Grid>
+                </Grid>
+              </Paper>
+
               {/* Clearance Form Fields */}
               <Typography variant="h6" gutterBottom sx={{ color: '#0F47AF', fontWeight: 600, mb: 2, mt: 3 }}>
                 📝 Clearance Details
@@ -2875,11 +3167,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               <Grid container spacing={2}>
                 {/* Clearance Number */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     label="Clearance Number"
-                    defaultValue={clearanceAutoData.clearanceNumber || `CLR-${Date.now()}`}
+                    value={clearanceForm.clearanceNumber}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, clearanceNumber: e.target.value })}
                     helperText="Auto-generated official clearance reference"
                     InputProps={{
                       sx: clearanceAutoData.clearanceNumber ? { bgcolor: 'success.50' } : {}
@@ -2889,20 +3182,21 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Clearance Date */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="date"
                     label="Clearance Date"
                     InputLabelProps={{ shrink: true }}
-                    defaultValue={new Date().toISOString().split('T')[0]}
+                    value={clearanceForm.clearanceDate}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, clearanceDate: e.target.value })}
                     helperText="Date of customs clearance"
                   />
                 </Grid>
 
                 {/* Cleared By (Officer) */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -2923,36 +3217,37 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     ) : (
                       <MenuItem value="" disabled>Loading users...</MenuItem>
                     )}
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Clearance Type */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
                     label="Clearance Type"
-                    defaultValue="FULL"
+                    value={clearanceForm.clearanceType}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, clearanceType: e.target.value })}
                     helperText="Type of customs clearance granted"
                   >
                     <MenuItem value="FULL">Full Clearance (Unrestricted Export)</MenuItem>
                     <MenuItem value="CONDITIONAL">Conditional (With restrictions)</MenuItem>
                     <MenuItem value="PARTIAL">Partial Clearance (Specific lots only)</MenuItem>
                     <MenuItem value="EXPEDITED">Expedited (Fast-track)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Customs Duties */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="number"
                     label="Customs Duties (ETB)"
                     value={clearanceForm.customsDuties}
                     onChange={(e) => setClearanceForm({ ...clearanceForm, customsDuties: e.target.value })}
-                    helperText={`Processing fee (0.5%) + Documentation fee (500 ETB)`}
+                    helperText={`Duty from the API calculation (tariff table)${dutyCalc ? ` — ${dutyCalc.dutyRate * 100}% of FOB value in ETB` : ' — run Calculate Duty above if empty'}`}
                     InputProps={{
                       startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>,
                       sx: clearanceAutoData.customsDuties !== '0' ? { bgcolor: 'success.50' } : {}
@@ -2962,14 +3257,14 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* VAT Amount */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="number"
                     label="VAT Amount (ETB)"
                     value={clearanceForm.vatAmount}
                     onChange={(e) => setClearanceForm({ ...clearanceForm, vatAmount: e.target.value })}
-                    helperText={`Value Added Tax (typically 15% for domestic sales, 0% for exports)`}
+                    helperText={`VAT from the API calculation (tariff table)${dutyCalc ? ` — ${dutyCalc.vatRate * 100}% of (FOB + duty)` : ' — run Calculate Duty above if empty'}`}
                     InputProps={{
                       startAdornment: <Typography sx={{ mr: 1 }}>ETB</Typography>,
                     }}
@@ -2978,24 +3273,25 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Port of Exit */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
                     label="Exit Point"
-                    defaultValue="DJIBOUTI"
+                    value={clearanceForm.exitPoint}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, exitPoint: e.target.value })}
                     helperText="Authorized exit point for export"
                   >
                     <MenuItem value="DJIBOUTI">Djibouti Port (Main Route)</MenuItem>
                     <MenuItem value="MOYALE">Moyale Border (Kenya)</MenuItem>
                     <MenuItem value="GALAFI">Galafi Border (Djibouti)</MenuItem>
                     <MenuItem value="BOLE_AIRPORT">Addis Ababa Bole Airport</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Validity Period */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -3011,16 +3307,18 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="14">14 Days (Air Freight / EUDR)</MenuItem>
                     <MenuItem value="30">30 Days (Standard Sea Freight)</MenuItem>
                     <MenuItem value="CUSTOM">Custom Period</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Clearance Remarks */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Clearance Remarks"
                     multiline
                     rows={3}
+                    value={clearanceForm.clearanceRemarks}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, clearanceRemarks: e.target.value })}
                     placeholder="Enter any special conditions, restrictions, or notes for this clearance..."
                     helperText="e.g., 'Export approved pending payment confirmation', 'Route via Djibouti only', etc."
                   />
@@ -3028,11 +3326,13 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Officer Notes */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Officer Notes (Internal)"
                     multiline
                     rows={2}
+                    value={clearanceForm.officerNotes}
+                    onChange={(e) => setClearanceForm({ ...clearanceForm, officerNotes: e.target.value })}
                     placeholder="Internal customs notes (not visible to exporter)..."
                     helperText="Risk assessment, verification details, follow-up required, etc."
                   />
@@ -3075,33 +3375,34 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               )}
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setClearanceDialogOpen(false)}>
-            Cancel
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#4caf50"
-            onClick={() => {
-              if (!selectedDeclaration) return;
-              handleClearDeclaration(selectedDeclaration.declarationId);
-            }}
-          >
-            Authorize Clearance
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Inspection Dialog */}
-      <Dialog open={inspectionDialogOpen} onClose={() => setInspectionDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Security color="primary" />
-            <Typography variant="h6">Schedule Customs Inspection</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="CUSTOMS"
+        open={inspectionDialogOpen}
+        onClose={() => setInspectionDialogOpen(false)}
+        maxWidth="md"
+        title="Schedule Customs Inspection"
+        icon={<Security color="primary" />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setInspectionDialogOpen(false)}>
+              Cancel
+            </GhostButton>
+            <PrimaryButton
+              brand="CUSTOMS"
+              onClick={() => {
+                if (selectedDeclaration) {
+                  handleScheduleInspection(selectedDeclaration.declarationId);
+                }
+              }}
+            >
+              Schedule Inspection
+            </PrimaryButton>
+          </>
+        }
+      >
           {selectedDeclaration && (
             <Box sx={{ pt: 2 }}>
               {/* Declaration Summary */}
@@ -3130,7 +3431,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               <Grid container spacing={2}>
                 {/* Inspection Type */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -3145,12 +3446,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="RISK_BASED">Risk-Based Targeted Inspection</MenuItem>
                     <MenuItem value="XRAY">X-Ray Scanning</MenuItem>
                     <MenuItem value="FULL">Full Container Inspection</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Priority Level */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -3163,12 +3464,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="HIGH">🟠 High (Within 48 hours)</MenuItem>
                     <MenuItem value="NORMAL">🟢 Normal (3-5 business days)</MenuItem>
                     <MenuItem value="LOW">⚪ Low (Routine schedule)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Scheduled Date */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="date"
@@ -3185,7 +3486,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Scheduled Time */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     type="time"
@@ -3199,7 +3500,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Inspection Location */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -3213,12 +3514,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="FACTORY">Exporter's Facility</MenuItem>
                     <MenuItem value="CUSTOMS_OFFICE">Customs Office</MenuItem>
                     <MenuItem value="ECX">ECX Warehouse</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Inspector Assignment */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     select
                     required
@@ -3232,12 +3533,12 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     <MenuItem value="OFFICER_DAWIT">Officer Dawit K. (Physical Inspection)</MenuItem>
                     <MenuItem value="OFFICER_SARA">Officer Sara H. (Documentary Review)</MenuItem>
                     <MenuItem value="AUTO_ASSIGN">Auto-Assign (System will assign)</MenuItem>
-                  </TextField>
+                  </PortalField>
                 </Grid>
 
                 {/* Contact Person */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     label="Exporter Contact Person"
@@ -3253,7 +3554,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Contact Phone */}
                 <Grid item xs={12} md={6}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     required
                     label="Contact Phone"
@@ -3302,7 +3603,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Special Instructions */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Special Instructions"
                     multiline
@@ -3316,7 +3617,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
                 {/* Internal Notes (Officer Only) */}
                 <Grid item xs={12}>
-                  <TextField
+                  <PortalField
                     fullWidth
                     label="Internal Notes (Officer Only)"
                     multiline
@@ -3344,24 +3645,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               )}
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setInspectionDialogOpen(false)}>
-            Cancel
-          </AnimatedButton>
-          <AnimatedButton 
-            variant="contained" 
-            brandColor="#0F47AF"
-            onClick={() => {
-              if (selectedDeclaration) {
-                handleScheduleInspection(selectedDeclaration.declarationId);
-              }
-            }}
-          >
-            Schedule Inspection
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Audit Trail Viewer */}
       {showAuditTrail && auditEntityType && (
@@ -3374,19 +3658,38 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       )}
 
       {/* New Declaration Dialog */}
-      <Dialog 
-        open={newDeclarationDialogOpen} 
+      <PortalDialog
+        brand="CUSTOMS"
+        open={newDeclarationDialogOpen}
         onClose={() => setNewDeclarationDialogOpen(false)}
         maxWidth="md"
-        fullWidth
+        title="Submit New Customs Declaration"
+        icon={<Add />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setNewDeclarationDialogOpen(false)}>
+              Cancel
+            </GhostButton>
+            <PrimaryButton
+              brand="CUSTOMS"
+              onClick={handleSubmitNewDeclaration}
+              disabled={
+                !newDeclarationForm.shipmentId ||
+                !newDeclarationForm.exporterId ||
+                !newDeclarationForm.quantity ||
+                parseFloat(newDeclarationForm.quantity) <= 0 ||
+                !newDeclarationForm.value ||
+                parseFloat(newDeclarationForm.value) <= 0 ||
+                !newDeclarationForm.destination ||
+                !newDeclarationForm.portOfExit ||
+                isLoadingShipmentData
+              }
+            >
+              Submit Declaration
+            </PrimaryButton>
+          </>
+        }
       >
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Add />
-            <Typography variant="h6">Submit New Customs Declaration</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
           <Alert severity="info" sx={{ mb: 3, mt: 2 }}>
             <Typography variant="body2">
               <strong>Manual Declaration Entry with Auto-Mapping</strong>
@@ -3400,7 +3703,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
 
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 label="Shipment ID"
@@ -3422,7 +3725,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 label="Exporter ID"
@@ -3436,7 +3739,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 select
                 label="Declaration Type"
@@ -3446,10 +3749,10 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                 <MenuItem value="STANDARD">Standard Declaration</MenuItem>
                 <MenuItem value="SIMPLIFIED">Simplified (Authorized Traders)</MenuItem>
                 <MenuItem value="EUDR_ENHANCED">EUDR Enhanced (EU Destinations)</MenuItem>
-              </TextField>
+              </PortalField>
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 label="HS Code"
                 value={newDeclarationForm.hsCode}
@@ -3458,7 +3761,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 type="number"
@@ -3473,7 +3776,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 type="number"
@@ -3488,7 +3791,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 label="Destination Country"
@@ -3503,7 +3806,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
+              <PortalField
                 fullWidth
                 required
                 label="Port of Exit"
@@ -3524,7 +3827,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Box>
             </Grid>
             <Grid item xs={12}>
-              <TextField
+              <PortalField
                 fullWidth
                 multiline
                 rows={3}
@@ -3569,41 +3872,24 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Button>
             </Grid>
           </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setNewDeclarationDialogOpen(false)}>
-            Cancel
-          </Button>
-          <AnimatedButton
-            variant="contained"
-            brandColor={brandPrimary}
-            onClick={handleSubmitNewDeclaration}
-            disabled={
-              !newDeclarationForm.shipmentId || 
-              !newDeclarationForm.exporterId ||
-              !newDeclarationForm.quantity ||
-              parseFloat(newDeclarationForm.quantity) <= 0 ||
-              !newDeclarationForm.value ||
-              parseFloat(newDeclarationForm.value) <= 0 ||
-              !newDeclarationForm.destination ||
-              !newDeclarationForm.portOfExit ||
-              isLoadingShipmentData
-            }
-          >
-            Submit Declaration
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Rejection Details Dialog */}
-      <Dialog open={rejectionDetailsDialogOpen} onClose={() => setRejectionDetailsDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Cancel color="error" />
-            <Typography variant="h6">Rejection Details</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
+      <PortalDialog
+        brand="CUSTOMS"
+        open={rejectionDetailsDialogOpen}
+        onClose={() => setRejectionDetailsDialogOpen(false)}
+        maxWidth="md"
+        title="Rejection Details"
+        icon={<Cancel color="error" />}
+        actions={
+          <>
+            <GhostButton brand="CUSTOMS" onClick={() => setRejectionDetailsDialogOpen(false)}>
+              Close
+            </GhostButton>
+          </>
+        }
+      >
           {selectedDeclaration && (
             <Box sx={{ pt: 2 }}>
               <Alert severity="error" sx={{ mb: 3 }}>
@@ -3639,18 +3925,14 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
                     Rejection Reason
                   </Typography>
                   <Paper variant="outlined" sx={{ p: 2, bgcolor: '#fff3e0' }}>
-                    <Typography variant="body2">
-                      {/* This would come from blockchain data */}
-                      <strong>Category:</strong> Documentation Incomplete/Invalid<br /><br />
-                      <strong>Details:</strong> The following issues were found:<br />
-                      • Missing phytosanitary certificate<br />
-                      • Packing list does not match declared quantity<br />
-                      • Commercial invoice has discrepancies<br /><br />
-                      <strong>Required Actions:</strong><br />
-                      1. Obtain valid phytosanitary certificate from Ministry of Agriculture<br />
-                      2. Correct packing list to match actual shipment quantity<br />
-                      3. Verify commercial invoice matches contract terms<br />
-                      4. Resubmit declaration with corrected documents
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {/* Stored reason: the reject handler writes the full
+                          reason (category, severity, officer, detailed reason,
+                          required actions, appeal deadline) into the
+                          declaration record; loadData maps it to
+                          rejectionReason. Never show the old hardcoded
+                          "Missing phytosanitary certificate…" text. */}
+                      {selectedDeclaration.rejectionReason || 'No rejection reason was recorded for this declaration.'}
                     </Typography>
                   </Paper>
                 </Grid>
@@ -3698,13 +3980,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Grid>
             </Box>
           )}
-        </DialogContent>
-        <DialogActions>
-          <AnimatedButton onClick={() => setRejectionDetailsDialogOpen(false)}>
-            Close
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
+      </PortalDialog>
 
       {/* Document Upload Dialog */}
       <DocumentUploadDialog
@@ -3736,32 +4012,33 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       </Snackbar>
       
       {/* Document Viewer Dialog */}
-      <Dialog 
-        open={documentViewerOpen} 
-        onClose={() => setDocumentViewerOpen(false)} 
-        maxWidth="lg" 
-        fullWidth
-        PaperProps={{
-          sx: { height: '90vh' }
-        }}
-      >
-        <DialogTitle sx={{ bgcolor: '#f5f5f5', borderBottom: '1px solid #e0e0e0' }}>
-          <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Box display="flex" alignItems="center" gap={2}>
-              <Visibility sx={{ color: '#0F47AF' }} />
-              <Typography variant="h6" fontWeight={600}>
-                {currentDocumentTitle}
-              </Typography>
-            </Box>
-            <IconButton 
-              onClick={() => setDocumentViewerOpen(false)}
-              size="small"
+      <PortalDialog
+        brand="CUSTOMS"
+        open={documentViewerOpen}
+        onClose={() => setDocumentViewerOpen(false)}
+        maxWidth="lg"
+        title={currentDocumentTitle}
+        icon={<Visibility sx={{ color: brandPrimary }} />}
+        PaperProps={{ sx: { height: '90vh' } }}
+        contentSx={{ p: 0, display: 'flex', flexDirection: 'column' }}
+        actions={
+          <>
+            <SecondaryButton
+              brand="CUSTOMS"
+              startIcon={<Download />}
+              onClick={() => {
+                const downloadUrl = currentDocumentUrl.replace('/view?', '/download?');
+                window.open(downloadUrl, '_blank');
+              }}
             >
-              <Cancel />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
+              Download
+            </SecondaryButton>
+            <GhostButton brand="CUSTOMS" onClick={() => setDocumentViewerOpen(false)}>
+              Close
+            </GhostButton>
+          </>
+        }
+      >
           <Box sx={{ flex: 1, width: '100%', height: '100%' }}>
             <iframe
               src={currentDocumentUrl}
@@ -3773,24 +4050,8 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               title={currentDocumentTitle}
             />
           </Box>
-        </DialogContent>
-        <DialogActions sx={{ p: 2, bgcolor: '#f5f5f5', borderTop: '1px solid #e0e0e0' }}>
-          <Button
-            variant="outlined"
-            startIcon={<Download />}
-            onClick={() => {
-              const downloadUrl = currentDocumentUrl.replace('/view?', '/download?');
-              window.open(downloadUrl, '_blank');
-            }}
-          >
-            Download
-          </Button>
-          <AnimatedButton onClick={() => setDocumentViewerOpen(false)}>
-            Close
-          </AnimatedButton>
-        </DialogActions>
-      </Dialog>
-    </Box>
+      </PortalDialog>
+    </PortalShell>
   );
 };
 

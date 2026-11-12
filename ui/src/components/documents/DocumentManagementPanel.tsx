@@ -40,6 +40,7 @@ import {
   VerifiedUser as VerifiedIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { API_BASE_URL } from '@/config/api.config';
 import SignDocumentButton from './SignDocumentButton';
 import DocumentSignatureTracker from './DocumentSignatureTracker';
 import SignatureStatusBadge from './SignatureStatusBadge';
@@ -114,7 +115,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
       
       const token = localStorage.getItem('authToken'); // Fixed: was 'token', should be 'authToken'
       const response = await axios.get(
-        `http://localhost:3001/api/v1/documents/entity/${entityType}/${entityId}`,
+        `${API_BASE_URL}/documents/entity/${entityType}/${entityId}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -172,7 +173,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
 
       const token = localStorage.getItem('authToken'); // Fixed: was 'token', should be 'authToken'
       const response = await axios.post(
-        'http://localhost:3001/api/v1/documents/upload',
+        `${API_BASE_URL}/documents/upload`,
         formData,
         {
           headers: {
@@ -222,7 +223,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
 
       const token = localStorage.getItem('authToken');
       const response = await axios.post(
-        'http://localhost:3001/api/v1/documents/upload',
+        `${API_BASE_URL}/documents/upload`,
         formData,
         {
           headers: {
@@ -255,7 +256,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
       
       const token = localStorage.getItem('authToken'); // Fixed: was 'token', should be 'authToken'
       const response = await axios.get(
-        `http://localhost:3001/api/v1/documents/${doc.document_id}/download`,
+        `${API_BASE_URL}/documents/${doc.document_id}/download`,
         {
           headers: { Authorization: `Bearer ${token}` },
           responseType: 'blob',
@@ -285,7 +286,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
       
       const token = localStorage.getItem('authToken');
       const response = await axios.get(
-        `http://localhost:3001/api/v1/documents/${document.document_id}/signatures`,
+        `${API_BASE_URL}/documents/${document.document_id}/signatures`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -737,7 +738,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                     authToken ? (
                       <>
                         <img
-                          src={`http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/download?token=${authToken}`}
+                          src={`${API_BASE_URL}/documents/${viewingDocument.document_id}/download?token=${authToken}`}
                           alt={viewingDocument.file_name}
                           style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                         />
@@ -830,7 +831,7 @@ export const DocumentManagementPanel: React.FC<DocumentManagementPanelProps> = (
                           
                           const token = localStorage.getItem('authToken');
                           const response = await axios.get(
-                            `http://localhost:3001/api/v1/documents/${viewingDocument.document_id}/signatures`,
+                            `${API_BASE_URL}/documents/${viewingDocument.document_id}/signatures`,
                             {
                               headers: { Authorization: `Bearer ${token}` },
                             }

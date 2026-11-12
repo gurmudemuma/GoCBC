@@ -471,7 +471,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
             borderLeft: `4px solid ${CBE_COLORS.purple}`,
           }}
         >
-          <strong>Pending LC Requests:</strong> {payments.filter(p => p.isContract).length} approved {payments.filter(p => p.isContract).length === 1 ? 'contract is' : 'contracts are'} ready for Letter of Credit issuance. Review contract details and issue LCs below.
+          <strong>Pending LC Requests:</strong> {payments.filter(p => p.isContract).length} approved {payments.filter(p => p.isContract).length === 1 ? 'contract is' : 'contracts are'} awaiting an LC request from the exporter/ECTA. Once requested, approve it here, then issue it.
         </Alert>
       )}
       
@@ -729,14 +729,20 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                             View Details
                           </Button>
                           
-                          {/* Special handling for approved-contract rows (not LCs yet) */}
+                          {/* Special handling for approved-contract rows (not LCs yet).
+                              0.3: banks cannot issue an LC from a bare contract —
+                              the LC must first be requested by the exporter/ECTA
+                              (POST /banking/lc/request is EXPORTER/ECTA-only,
+                              chaincode RequestLC is ECTAMSP-only). Review the
+                              contract; once its LC is REQUESTED, Approve then
+                              Issue it from the LC rows. */}
                           {payment.isContract && (
                             <>
                               <Button
                                 size="small"
                                 variant="contained"
-                                startIcon={<CheckCircle fontSize="small" />}
-                                onClick={() => onProcessStep(payment.id, 'Issue LC')}
+                                startIcon={<Visibility fontSize="small" />}
+                                onClick={() => onViewDetails(payment)}
                                 sx={{
                                   bgcolor: CBE_COLORS.golden,
                                   color: CBE_COLORS.black,
@@ -747,7 +753,7 @@ export const UnifiedPaymentWorkflow: React.FC<UnifiedPaymentWorkflowProps> = ({
                                   },
                                 }}
                               >
-                                Issue LC
+                                Review Contract
                               </Button>
                               <Button
                                 size="small"

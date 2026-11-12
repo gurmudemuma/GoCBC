@@ -66,6 +66,9 @@ export const PhytosanitaryCertificates: React.FC = () => {
     numberOfPackages: 0,
     distinguishingMarks: '',
     meansOfConveyance: '',
+    // Chaincode validity is 14 days (phytosanitary.go) — the old code used
+    // +365 days. The form collects the period; validUntil is derived from it.
+    validityPeriod: '14',
     pestsDetected: false,
     diseaseDetected: false,
     inspectionNotes: 'No pests or disease detected'
@@ -103,11 +106,40 @@ export const PhytosanitaryCertificates: React.FC = () => {
     try {
       setLoading(true);
 
+      // Chaincode RequestPhytosanitaryCertificate requires quantity > 0 —
+      // the route default '0' fails, so reject an empty quantity here.
+      if (!(formData.quantity > 0)) {
+        throw new Error('Quantity must be greater than 0 kg');
+      }
+      const validityDays = Number(formData.validityPeriod) || 14;
+
       // Generate certificate ID
       const certificateID = `PHYTO-${Date.now()}`;
       const certificateNumber = `CERT-${Date.now()}`;
       const inspectionDate = new Date().toISOString().split('T')[0];
-      const validUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const validUntil = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      // The fields the form collects (placeOfOrigin, pointOfEntry,
+      // packagingType, numberOfPackages, distinguishingMarks,
+      // meansOfConveyance, validityPeriod) are sent with every step, so no
+      // collected value is silently dropped by this component. NOTE: the API
+      // routes currently do NOT read them (phytosanitary.ts request reads
+      // only certificateID/shipmentID/exporterID/plantDescription/quantity/
+      // treatmentApplied; inspect/issue read only their own fields) and the
+      // chaincode RequestPhytosanitaryCertificate takes only those six
+      // arguments — so today the API drops these fields before they reach
+      // the ledger, and the issue route can only pass back what the ledger
+      // already stored. Sending them here is necessary but not sufficient;
+      // persisting them needs an API (and chaincode) change — see report.
+      const collectedFields = {
+        placeOfOrigin: formData.placeOfOrigin,
+        pointOfEntry: formData.pointOfEntry,
+        packagingType: formData.packagingType,
+        numberOfPackages: formData.numberOfPackages,
+        distinguishingMarks: formData.distinguishingMarks,
+        meansOfConveyance: formData.meansOfConveyance,
+        validityPeriod: formData.validityPeriod,
+      };
 
       // Step 1 — request the certificate on-chain (PENDING)
       const requestResponse = await api.post('/phytosanitary/request', {
@@ -117,6 +149,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
         plantDescription: formData.botanicalName,
         quantity: formData.quantity,
         treatmentApplied: formData.treatment,
+        ...collectedFields,
       });
       if (!requestResponse.data?.success) {
         throw new Error(requestResponse.data?.error?.message || 'Failed to request phytosanitary certificate');
@@ -130,9 +163,16 @@ export const PhytosanitaryCertificates: React.FC = () => {
         pestsDetected: formData.pestsDetected,
         diseaseDetected: formData.diseaseDetected,
         inspectionNotes: formData.inspectionNotes,
+        ...collectedFields,
       });
       if (!inspectResponse.data?.success) {
         throw new Error(inspectResponse.data?.error?.message || 'Phytosanitary inspection failed');
+      }
+      // A FAILED inspection stays INSPECTED and can never be issued
+      // (chaincode: Issue requires InspectionResult != FAILED) — stop here
+      // instead of calling issue and failing opaquely.
+      if (formData.pestsDetected || formData.diseaseDetected) {
+        throw new Error('Inspection FAILED (pests/disease detected) — certificate cannot be issued, only revoked');
       }
 
       // Step 3 — issue the inspected certificate (INSPECTED → ISSUED)
@@ -140,6 +180,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
         certificateNumber,
         issuingAuthority: 'Ministry of Agriculture',
         validUntil,
+        ...collectedFields,
       });
 
       if (response.data.success) {
@@ -236,6 +277,7 @@ export const PhytosanitaryCertificates: React.FC = () => {
       numberOfPackages: 0,
       distinguishingMarks: '',
       meansOfConveyance: '',
+      validityPeriod: '14',
       pestsDetected: false,
       diseaseDetected: false,
       inspectionNotes: 'No pests or disease detected'
@@ -244,6 +286,11 @@ export const PhytosanitaryCertificates: React.FC = () => {
 
   const getStatusChip = (status: string) => {
     const statusConfig: any = {
+      // PENDING / INSPECTED are the states the request → inspect → issue
+      // flow actually produces; the old config only styled ISSUED/EXPIRED/
+      // REVOKED, so in-flight certificates rendered as a bare default chip.
+      PENDING: { color: 'info', icon: null },
+      INSPECTED: { color: 'primary', icon: null },
       ISSUED: { color: 'success', icon: <CheckCircleIcon /> },
       EXPIRED: { color: 'error', icon: <CancelIcon /> },
       REVOKED: { color: 'warning', icon: <CancelIcon /> }
@@ -478,6 +525,18 @@ export const PhytosanitaryCertificates: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, meansOfConveyance: e.target.value })}
                 fullWidth
                 placeholder="MSC MARIA - Container MSCU1234567"
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                label="Validity Period (days)"
+                type="number"
+                value={formData.validityPeriod}
+                onChange={(e) => setFormData({ ...formData, validityPeriod: e.target.value })}
+                fullWidth
+                required
+                helperText="Chaincode validity is 14 days"
+                inputProps={{ min: 1 }}
               />
             </Grid>
             <Grid item xs={12} md={6}>

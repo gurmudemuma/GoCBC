@@ -524,8 +524,7 @@ check_prerequisites() {
     # It is gitignored (untracked since the secrets cleanup), so a pull /
     # reset that moves the branch can DELETE the host's copy — the compose
     # file then fails hard on the missing env_file. If it is gone, try to
-    # recover it from the local git history first (the previous HEAD, or
-    # the most recent reflog entry that still has it), and do the same for
+    # recover it from the local git history first, and do the same for
     # api/.env.blockchain (the two files are identical). If neither is
     # recoverable, warn with the manual steps; compose will fail at the
     # env_file, so the user must restore from their backup.
@@ -535,24 +534,29 @@ check_prerequisites() {
             continue
         fi
         _recovered=false
-        # Previous HEAD (the commit before a fetch + reset --hard / pull)
-        if git -C "$PROJECT_ROOT" show "HEAD@{1}:api/$_bc_file" > "$API_DIR/$_bc_file" 2>/dev/null && [ -s "$API_DIR/$_bc_file" ]; then
-            _recovered=true
-        else
-            rm -f "$API_DIR/$_bc_file"
-            # Most recent reflog entry that still has the file
-            _old_ref=$(git -C "$PROJECT_ROOT" log -g --format=%H -- "api/$_bc_file" 2>/dev/null | head -1)
-            if [ -n "$_old_ref" ] && git -C "$PROJECT_ROOT" show "$_old_ref:api/$_bc_file" > "$API_DIR/$_bc_file" 2>/dev/null && [ -s "$API_DIR/$_bc_file" ]; then
-                _recovered=true
-            else
-                rm -f "$API_DIR/$_bc_file"
+        # Newest commit in any branch history whose tree still contains
+        # the file. NOTE: HEAD@{1} does NOT work here — the file has been
+        # untracked since the secrets cleanup, so every HEAD since then
+        # (including HEAD@{1}) lacks it, and `git log -g -- <path>`
+        # returns nothing when no reflog entry touched the file. The
+        # rev-list walk below skips the commit that deleted the file
+        # (e1c333b2) and takes the newest commit that actually has it
+        # (b016b957 for .fixed, 0194c54f for .env.blockchain).
+        for _c in $(git -C "$PROJECT_ROOT" rev-list --all -- "api/$_bc_file" 2>/dev/null); do
+            if git -C "$PROJECT_ROOT" cat-file -e "$_c:api/$_bc_file" 2>/dev/null; then
+                if git -C "$PROJECT_ROOT" show "$_c:api/$_bc_file" > "$API_DIR/$_bc_file" 2>/dev/null && [ -s "$API_DIR/$_bc_file" ]; then
+                    _recovered=true
+                else
+                    rm -f "$API_DIR/$_bc_file"
+                fi
+                break
             fi
-        fi
+        done
         if [ "$_recovered" = true ]; then
             write_success "Recovered api/$_bc_file from git history (it was deleted by the pull/reset — back it up outside the repo)"
         else
             write_warning "api/$_bc_file not found — the API's Fabric connection settings come from it"
-            warnings+=("Restore api/$_bc_file from your backup outside the repo (or: git show HEAD@{1}:api/$_bc_file > api/$_bc_file)")
+            warnings+=("Restore api/$_bc_file from your backup outside the repo")
         fi
     done
     

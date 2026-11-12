@@ -261,7 +261,7 @@ const InspectionSchedulingDialog: React.FC<InspectionSchedulingDialogProps> = ({
                     Quantity
                   </Typography>
                   <Typography variant="body2" fontWeight={600}>
-                    {inspection.quantity.toLocaleString()} kg
+                    {inspection.quantity != null ? Number(inspection.quantity).toLocaleString() : '—'} kg
                   </Typography>
                 </Grid>
               </Grid>
