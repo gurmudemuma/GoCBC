@@ -604,6 +604,64 @@ router.post('/messages/:messageID/approve',
 );
 
 /**
+ * POST /api/v1/swift/messages/:messageID/documents
+ * LEG3 M-2: attach documents to an existing SWIFT message. There was no
+ * attach path at all — the compose dialog had no documents field and the
+ * only AddSWIFTDocuments call rode along with message creation
+ * (swift.ts create route). The chaincode accepts a JSON array of bare
+ * strings (document names) or objects {id, name, hash}, and only for
+ * DRAFT or NBE_APPROVED messages.
+ */
+router.post('/messages/:messageID/documents',
+  authMiddleware,
+  requireRole('BANKS', 'BANK_ADMIN'),
+  [
+    param('messageID').notEmpty().withMessage('Message ID is required'),
+    body('documents').isArray({ min: 1 }).withMessage('documents must be a non-empty array'),
+  ],
+  validateRequest,
+  async (req: Request, res: Response) => {
+    try {
+      const { messageID } = req.params;
+      const { documents } = req.body;
+
+      logger.info(`[SWIFT] Attaching ${documents.length} document(s) to message: ${messageID}`);
+
+      const result = await fabricService.invokeChaincode('AddSWIFTDocuments', [
+        messageID,
+        JSON.stringify(documents),
+      ]);
+
+      if (result.success) {
+        logger.info(`✅ SWIFT documents attached to message: ${messageID}`);
+        res.status(201).json({
+          success: true,
+          data: { messageID, attachedCount: documents.length },
+          txId: result.txId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        const message = result.error || 'Failed to attach documents';
+        // F-8: a missing message is a client error (404); a message in
+        // the wrong state (already APPROVED/SENT) is a conflict (409).
+        const status = /not found/i.test(message) ? 404
+          : /can only be added to/i.test(message) ? 409 : 400;
+        res.status(status).json({
+          success: false,
+          error: { code: 'ATTACH_DOCUMENTS_FAILED', message },
+        });
+      }
+    } catch (error: any) {
+      logger.error('[SWIFT] Error attaching documents:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: error.message },
+      });
+    }
+  }
+);
+
+/**
  * POST /api/v1/swift/messages/:messageID/nbe-approve
  * NBE (National Bank of Ethiopia) approval for SWIFT messages
  * Additional regulatory approval layer for high-value transactions
