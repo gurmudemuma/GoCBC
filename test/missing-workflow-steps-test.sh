@@ -1205,14 +1205,20 @@ else
     \"hsCode\": \"${DECL_HS:-090111}\"
 }"
     call POST "/customs/declaration/$DECLARATION_ID/calculate-duty" "$CUSTOMS_TOKEN" "$DUTY_DATA"
+    CALC_DUTY=$(echo "$RESP_BODY" | jq -r '.data.amounts.dutyAmount // empty')
     check_success "Calculate customs duty" ".data.amounts.totalDuty"
 fi
 
 log_test "Clear customs declaration (POST /customs/declaration/$DECLARATION_ID/clear, customs.ts:2289)"
 if [ -z "$CREATED_DEC_ID" ]; then
     log_blocked "Clear customs declaration — no declaration (submit failed)"
+elif [ -z "$CALC_DUTY" ] || [ "$CALC_DUTY" = "null" ]; then
+    log_blocked "Clear customs declaration — no calculated duty (calculate-duty failed)"
 else
-    call POST "/customs/declaration/$DECLARATION_ID/clear" "$CUSTOMS_TOKEN" ""
+    # Clear requires the submitted exportDuty to equal the stored
+    # basic_duty_amount (±0.01) — echo the duty just calculated.
+    CLEAR_DATA="{\"exportDuty\": $CALC_DUTY}"
+    call POST "/customs/declaration/$DECLARATION_ID/clear" "$CUSTOMS_TOKEN" "$CLEAR_DATA"
     check_success "Clear customs declaration"
 fi
 
