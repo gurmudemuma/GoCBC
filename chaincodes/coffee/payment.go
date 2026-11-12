@@ -722,7 +722,9 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("SettlePayment: payment %s cannot be settled, current status: %s", paymentID, payment.Status)
 	}
 
-	// AUTO-MAP: Fetch forex allocation for exchange rate and retention rate
+	// AUTO-MAP: Fetch forex allocation for exchange rate and retention rate.
+	// LEG3 M-3: the linked forex allocation is the ONLY fallback for a
+	// zero/unparseable caller rate; there is no hardcoded default below.
 	exchangeRate, err := strconv.ParseFloat(exchangeRateStr, 64)
 	retentionRate, err2 := strconv.ParseFloat(retentionRateStr, 64)
 
@@ -744,14 +746,15 @@ func (c *CoffeeContract) SettlePayment(ctx contractapi.TransactionContextInterfa
 			}
 		}
 
-		// Fallback defaults if still not found (NBE FXD/01/2024)
+		// LEG3 M-3: no hardcoded fallback. A zero rate with no forex
+		// allocation rate is a caller error, not a default — the old
+		// 120.0 ETB/USD / 100% retention silently confiscated the
+		// exporter's proceeds on a typo of 0. Fail honestly instead.
 		if exchangeRate == 0 {
-			exchangeRate = 120.0
-			fmt.Printf("SettlePayment: Using default exchange rate: %f\n", exchangeRate)
+			return fmt.Errorf("SettlePayment: exchange rate must be positive: no rate supplied and no forex allocation rate found for LC %s", payment.LCID)
 		}
 		if retentionRate == 0 {
-			retentionRate = 100.0 // NBE FXD/01/2024: 100% retention allowed
-			fmt.Printf("SettlePayment: Using default retention rate: %f%% (NBE FXD/01/2024)\n", retentionRate)
+			return fmt.Errorf("SettlePayment: retention rate must be positive: no rate supplied and no forex allocation rate found for LC %s", payment.LCID)
 		}
 	}
 

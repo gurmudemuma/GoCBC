@@ -2735,8 +2735,8 @@ router.post('/payment/:paymentID/settle',
   requireRole(['BANKS', 'BANK_ADMIN']),
   [
     param('paymentID').notEmpty().withMessage('Payment ID is required'),
-    body('exchangeRate').isFloat({ min: 0 }).withMessage('Exchange rate must be positive'),
-    body('retentionRate').isFloat({ min: 0, max: 100 })
+    body('exchangeRate').isFloat({ gt: 0 }).withMessage('Exchange rate must be greater than 0'),
+    body('retentionRate').isFloat({ gt: 0, max: 100 })
       .withMessage('Retention rate must be between 0 and 100'),
     body('payingBank').notEmpty().withMessage('Paying bank is required'),
     body('payingBankBIC').notEmpty().withMessage('Paying bank BIC is required'),

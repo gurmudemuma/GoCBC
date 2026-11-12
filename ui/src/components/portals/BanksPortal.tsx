@@ -4865,7 +4865,7 @@ const BanksPortal: React.FC = () => {
           <PrimaryButton brand="BANKS"
             variant="contained"
             onClick={handleSettlePayment}
-            disabled={settling || !settleForm.exchangeRate || !settleForm.retentionRate || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
+            disabled={settling || !(Number(settleForm.exchangeRate) > 0) || !(Number(settleForm.retentionRate) > 0) || !settleForm.payingBank || !settleForm.payingBankBIC || !settleForm.swiftReference || !settleForm.nbeApprovalRef}
           >
             {settling ? 'Settling...' : 'Settle Payment'}
           </PrimaryButton>
@@ -4881,6 +4881,8 @@ const BanksPortal: React.FC = () => {
                   onChange={(e) => setSettleForm({ ...settleForm, exchangeRate: e.target.value })}
                   fullWidth
                   required
+                  error={settleForm.exchangeRate !== '' && !(Number(settleForm.exchangeRate) > 0)}
+                  helperText={settleForm.exchangeRate !== '' && !(Number(settleForm.exchangeRate) > 0) ? 'Rate must be greater than 0 — a 0 rate is rejected, never settled at a default rate.' : 'Use the live NBE rate; 0 is not accepted.'}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
@@ -4891,6 +4893,8 @@ const BanksPortal: React.FC = () => {
                   onChange={(e) => setSettleForm({ ...settleForm, retentionRate: e.target.value })}
                   fullWidth
                   required
+                  error={settleForm.retentionRate !== '' && !(Number(settleForm.retentionRate) > 0 && Number(settleForm.retentionRate) <= 100)}
+                  helperText={settleForm.retentionRate !== '' && !(Number(settleForm.retentionRate) > 0 && Number(settleForm.retentionRate) <= 100) ? 'Retention must be greater than 0 and at most 100.' : undefined}
                 />
               </Grid>
               <Grid item xs={12} md={6}>
