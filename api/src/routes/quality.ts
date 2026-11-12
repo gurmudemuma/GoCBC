@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
-import axios from 'axios';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
@@ -14,48 +13,49 @@ const fabricService = FabricService.getInstance();
 const shipmentService = ShipmentService.getInstance();
 
 /**
- * Best-effort chaincode sync for quality approve/reject
- * (TEST-STATUS-MATRIX §17 #6). The QualityInspection entity
- * (quality.go) has no approve/reject function yet; the chaincode agent is
- * adding ApproveQualityInspection / RejectQualityInspection. Until those
- * are committed the call fails and is logged — it must never fail the
- * Postgres update, following the NBE forex approve pattern (nbe.ts).
- * Args mirror the existing ApproveInspection / RejectInspection forms
- * (inspectionID + approver / reason). If the implemented functions take
- * different args, update the call sites below.
+ * STRICT chaincode write for quality approve/reject.
+ *
+ * ApproveQualityInspection / RejectQualityInspection exist in
+ * chaincodes/coffee/quality.go and in the deployed chaincode v2.3
+ * (the ledger-proof run saw ApproveQualityInspection execute and fail
+ * with "inspection does not exist" — the function is there, the
+ * inspection was not, because create never wrote it on-chain). Both
+ * operate on the QualityInspection entity keyed INSPECTION_<id> and
+ * guard INSPECTED -> APPROVED / REJECTED.
+ *
+ * This is deliberately NOT best-effort: the old best-effort sync wrote
+ * APPROVED to Postgres first and then reported HTTP 200 with
+ * blockchainSynced:false when the ledger write failed — a phantom
+ * success (LEDGER-PROOF-REPORT §4). A failed ledger write here is a
+ * failed decision: the caller returns non-2xx and no Postgres mirror
+ * is written. The old "no function yet" comment above was stale.
  */
-async function syncQualityDecisionBestEffort(
+async function syncQualityDecision(
   functionName: 'ApproveQualityInspection' | 'RejectQualityInspection',
   args: string[]
-): Promise<{ blockchainSynced: boolean; blockchainWarning: string | null; blockchain_tx_id: string | null }> {
+): Promise<{ ok: true; txId: string | null } | { ok: false; error: string }> {
   try {
     const chainResult = await fabricService.invokeChaincode(functionName, args);
     if (chainResult.success) {
-      return { blockchainSynced: true, blockchainWarning: null, blockchain_tx_id: chainResult.txId || null };
+      return { ok: true, txId: chainResult.txId || null };
     }
-    const warning = `Chaincode ${functionName} did not sync ${args[0]}: ${chainResult.error || 'unknown error'}`;
-    logger.warn(`[QUALITY] ${warning}`);
-    return { blockchainSynced: false, blockchainWarning: warning, blockchain_tx_id: null };
+    return { ok: false, error: chainResult.error || `Chaincode ${functionName} failed` };
   } catch (chainError: any) {
-    const warning = `Could not sync ${args[0]} to the ledger via ${functionName} (no Fabric here?): ${chainError.message}`;
-    logger.warn(`[QUALITY] ${warning}`);
-    return { blockchainSynced: false, blockchainWarning: warning, blockchain_tx_id: null };
+    return { ok: false, error: chainError.message };
   }
 }
 
 /**
  * Shared approve/reject core (TEST-STATUS-MATRIX §17 #14): the POST and
  * PUT approve routes — and the POST and PUT reject routes — duplicated
- * this logic with diverging writes. The POST approve wrote CouchDB
- * first and signed documents, the PUT approve wrote remarks; the POST
- * reject wrote remarks + cleared blockchain_tx_id, the PUT reject wrote
- * notes and never cleared it. One core now does the guard (the
- * inspection must exist and be INSPECTED), the Postgres decision write,
- * and the best-effort chaincode sync (ApproveQualityInspection /
- * RejectQualityInspection). The routes add only their own extras — the
- * POST approve's CouchDB write and document signing — and their own
- * response shape (POST: certificateNo + customsAutoTriggered; PUT:
- * certificateNumber + grade).
+ * this logic with diverging writes. One core now does the guard (the
+ * inspection must exist and be INSPECTED), the LEDGER write FIRST, and
+ * only then the Postgres mirror. If the ledger write fails the decision
+ * fails honestly (503, no Postgres write) — never HTTP 200 APPROVED
+ * with blockchainSynced:false. The routes add only their own extras —
+ * the POST approve's document signing — and their own response shape
+ * (POST: certificateNo + customsAutoTriggered; PUT: certificateNumber
+ * + grade).
  */
 async function decideQualityInspection(
   inspectionID: string,
@@ -82,6 +82,29 @@ async function decideQualityInspection(
   const certificateNumber = opts.certificateNumber || `CERT-${inspectionID}`;
   const grade = opts.grade || 'Grade 1';
 
+  // LEDGER FIRST: the Postgres mirror below is written only after the
+  // on-chain decision succeeds. ApproveQualityInspection requires the
+  // inspection to exist on-chain in INSPECTED status — which is why
+  // create/perform/lab-results must also go on-chain (see those
+  // handlers). A failure here returns 503 and writes nothing.
+  const chainFn = decision === 'APPROVED' ? 'ApproveQualityInspection' : 'RejectQualityInspection';
+  const chainArgs = decision === 'APPROVED'
+    ? [inspectionID, opts.approvedBy || 'ECTA Quality Director']
+    : [inspectionID, opts.reason || ''];
+  const chainResult = await syncQualityDecision(chainFn, chainArgs);
+  if (!chainResult.ok) {
+    logger.error(`[QUALITY] ${chainFn} failed for ${inspectionID}: ${chainResult.error}`);
+    return {
+      ok: false,
+      status: 503,
+      error: {
+        code: decision === 'APPROVED' ? 'INSPECTION_APPROVE_FAILED' : 'INSPECTION_REJECT_FAILED',
+        message: chainResult.error,
+      },
+    };
+  }
+  const chainSync = { blockchainSynced: true, blockchainWarning: null, blockchain_tx_id: chainResult.txId };
+
   if (decision === 'APPROVED') {
     await postgresDb.run(
       `UPDATE quality_inspections SET
@@ -90,10 +113,10 @@ async function decideQualityInspection(
         certification_number = $2,
         grade = COALESCE($3, grade, 'Grade 1'),
         remarks = COALESCE($4, remarks),
-        blockchain_tx_id = NULL,
+        blockchain_tx_id = $5,
         updated_at = NOW()
        WHERE inspection_id = $1`,
-      [inspectionID, certificateNumber, opts.grade || null, opts.remarks || null]
+      [inspectionID, certificateNumber, opts.grade || null, opts.remarks || null, chainSync.blockchain_tx_id]
     );
   } else {
     await postgresDb.run(
@@ -102,22 +125,10 @@ async function decideQualityInspection(
         passed = false,
         remarks = $2,
         notes = $2,
-        blockchain_tx_id = NULL,
+        blockchain_tx_id = $3,
         updated_at = NOW()
        WHERE inspection_id = $1`,
-      [inspectionID, `REJECTED: ${opts.reason || ''}`]
-    );
-  }
-
-  const chainFn = decision === 'APPROVED' ? 'ApproveQualityInspection' : 'RejectQualityInspection';
-  const chainArgs = decision === 'APPROVED'
-    ? [inspectionID, opts.approvedBy || 'ECTA Quality Director']
-    : [inspectionID, opts.reason || ''];
-  const chainSync = await syncQualityDecisionBestEffort(chainFn, chainArgs);
-  if (chainSync.blockchainSynced) {
-    await postgresDb.run(
-      `UPDATE quality_inspections SET blockchain_tx_id = $2 WHERE inspection_id = $1`,
-      [inspectionID, chainSync.blockchain_tx_id]
+      [inspectionID, `REJECTED: ${opts.reason || ''}`, chainSync.blockchain_tx_id]
     );
   }
 
@@ -425,72 +436,76 @@ router.post('/inspections',
         });
       }
 
-      // ⚠️ WRITE TO COUCHDB DIRECTLY to bypass blockchain propagation delays
-      // RequestInspection chaincode has endorsement policy issues
-      logger.info(`[INSPECTION] Writing inspection ${inspectionID} directly to CouchDB`);
-      
-      const inspectionDoc = {
-        _id: `inspection:${inspectionID}`,
-        docType: 'inspection',
+      // ✅ BLOCKCHAIN-FIRST: create the inspection on the ledger via
+      // RequestInspection (chaincodes/coffee/quality.go:103) —
+      // (inspectionID, shipmentID, contractID, exporterID, scheduledDate).
+      // It writes INSPECTION_<id> with status PENDING and replicates
+      // through the orderer to all 6 peers. The old code PUT a doc with
+      // _id `inspection:<id>` straight into ECTA's CouchDB only: no
+      // endorsement, no block, invisible to chaincode on the other five
+      // peers (LEDGER-PROOF-REPORT §4 — `inspection:<id>` existed only
+      // on couchdb.ecta:5985, GetHistory 0 entries), while the API
+      // returned 200. The Postgres insert below runs ONLY after the
+      // ledger write succeeds, so a failed create reports 503 and
+      // leaves no phantom PG row for approve to act on.
+      const scheduledDate = requestedDate || new Date().toISOString().split('T')[0];
+      const chainResult = await fabricService.invokeChaincode('RequestInspection', [
         inspectionID,
-        shipmentID: shipmentID || '',
-        contractID: contractID || '',
+        shipmentID,
+        contractID || '',
         exporterID,
-        coffeeType,
-        quantity,
-        sampleSize: sampleSize || 100,
-        requestedDate: requestedDate || new Date().toISOString().split('T')[0],
-        status: 'PENDING',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      // Best-effort: the perform route below already treats the CouchDB
-      // update as non-blocking (logs and continues to the PG update), and
-      // the shipment-create route does the same for its CouchDB write.
-      // Previously this throw made inspection creation impossible
-      // whenever CouchDB was unreachable, so no PG row existed for the
-      // approve route to read (handoff H5 could not start). PG is the
-      // authoritative off-chain store; the CouchDB write is a shortcut
-      // around chaincode endorsement delays, not a precondition.
-      let couchdbSynced = true;
-      let couchdbWarning: string | undefined;
-      try {
-        const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
-        const couchResponse = await axios.put(
-          `${couchDbUrl}/coffeechannel_coffee/${inspectionDoc._id}`,
-          inspectionDoc,
-          {
-            auth: { username: 'admin', password: 'adminpw' },
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-        logger.info(`✅ [INSPECTION] Inspection ${inspectionID} written to CouchDB`);
-      } catch (couchError: any) {
-        if (couchError.response?.status === 409) {
-          logger.warn(`[INSPECTION] Inspection ${inspectionID} already exists in CouchDB (409 conflict)`);
-        } else {
-          couchdbSynced = false;
-          couchdbWarning = `CouchDB write failed (${couchError.code || couchError.message}); inspection saved to Postgres only and will need a CouchDB sync on the Fabric host.`;
-          logger.warn(`[INSPECTION] ${couchdbWarning}`);
+        scheduledDate,
+      ]);
+      let blockchain_tx_id: string | null = null;
+      if (!chainResult.success) {
+        const message = chainResult.error || 'RequestInspection failed';
+        logger.error(`[INSPECTION] RequestInspection failed for ${inspectionID}: ${message}`);
+        // Idempotent recovery: the inspection IS on the ledger but has
+        // no Postgres mirror (e.g. a crash between the two writes).
+        // Mirror it instead of failing — the ledger write demonstrably
+        // happened, so this is a recovery, not a phantom success.
+        if (/already exists/i.test(message)) {
+          logger.warn(`[INSPECTION] Inspection ${inspectionID} already exists on-chain; restoring Postgres mirror`);
+          await postgresDb.run(
+            `INSERT INTO quality_inspections (
+              inspection_id, exporter_id, contract_id, shipment_id, coffee_type,
+              quantity, sample_size, requested_date, status, blockchain_tx_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [inspectionID, exporterID, contractID || null, shipmentID || null, coffeeType,
+             quantity, sampleSize || null, scheduledDate, 'PENDING', null]
+          );
+          return res.json({
+            success: true,
+            data: { inspectionID, status: 'PENDING', blockchain_tx_id: null, blockchainSynced: true, recoveredFromLedger: true },
+            timestamp: new Date().toISOString()
+          });
         }
+        return res.status(503).json({
+          success: false,
+          error: { code: 'INSPECTION_CREATE_FAILED', message },
+          timestamp: new Date().toISOString()
+        });
       }
+      blockchain_tx_id = chainResult.txId || null;
+      logger.info(`✅ [INSPECTION] Inspection ${inspectionID} created on-chain (tx ${blockchain_tx_id})`);
 
-      // Insert to PostgreSQL database without blockchain TX ID
+      // Postgres mirror AFTER the successful ledger write. coffeeType /
+      // quantity are mirror-only fields — the chaincode QualityInspection
+      // struct carries IDs, dates and status, not the coffee details.
       await postgresDb.run(
         `INSERT INTO quality_inspections (
           inspection_id, exporter_id, contract_id, shipment_id, coffee_type,
           quantity, sample_size, requested_date, status, blockchain_tx_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [inspectionID, exporterID, contractID || null, shipmentID || null, coffeeType, 
-         quantity, sampleSize || null, requestedDate || new Date().toISOString().split('T')[0], 'PENDING', null]
+        [inspectionID, exporterID, contractID || null, shipmentID || null, coffeeType,
+         quantity, sampleSize || null, scheduledDate, 'PENDING', blockchain_tx_id]
       );
 
       logger.info(`Quality inspection requested: ${inspectionID}`);
 
       res.json({
         success: true,
-        data: { inspectionID, status: 'PENDING', blockchain_tx_id: null, couchdbSynced, couchdbWarning },
+        data: { inspectionID, status: 'PENDING', blockchain_tx_id, blockchainSynced: true },
         timestamp: new Date().toISOString()
       });
     } catch (error: any) {
@@ -559,7 +574,7 @@ router.post('/inspections/:inspectionID/perform',
         });
       }
 
-      if (inspection.status !== 'PENDING' && inspection.status !== 'REQUESTED') {
+      if (inspection.status !== 'PENDING' && inspection.status !== 'REQUESTED' && inspection.status !== 'SAMPLE_COLLECTED') {
         return res.status(400).json({
           success: false,
           error: {
@@ -570,11 +585,17 @@ router.post('/inspections/:inspectionID/perform',
         });
       }
 
+      // The overall cupping score may arrive as `cuppingScore` (the
+      // missing-steps suite and the lab-results route send cupScore /
+      // cuppingScore, not `overall`). Resolve it once so the Postgres
+      // grade below and the chaincode total score agree.
+      const resolvedOverall = overall ?? (req.body as any).cuppingScore ?? 0;
+
       // Calculate grade from overall score
       let grade = 'Grade 1';
-      if (overall >= 85) grade = 'Grade 1';
-      else if (overall >= 80) grade = 'Grade 2';
-      else if (overall >= 75) grade = 'Grade 3';
+      if (resolvedOverall >= 85) grade = 'Grade 1';
+      else if (resolvedOverall >= 80) grade = 'Grade 2';
+      else if (resolvedOverall >= 75) grade = 'Grade 3';
       else grade = 'Below Grade';
 
       // Build cup quality summary with all scores
@@ -588,7 +609,7 @@ router.post('/inspections/:inspectionID/perform',
         uniformity: uniformity || 0,
         cleanCup: cleanCup || 0,
         sweetness: sweetness || 0,
-        overall: overall || 0
+        overall: resolvedOverall
       };
       
       const cupQualityJson = JSON.stringify(cupQualityScores);
@@ -629,53 +650,67 @@ INSPECTOR REMARKS:
 ${remarks || 'No additional remarks'}
 `.trim();
 
-      // ⚠️ UPDATE COUCHDB DIRECTLY to bypass blockchain propagation delays
-      logger.info(`[INSPECTION] Updating inspection ${inspectionID} in CouchDB`);
-      
-      try {
-        // Get existing doc to preserve _rev
-        const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
-        const existingDoc = await axios.get(
-          `${couchDbUrl}/fabricchannel_cecbschannel/inspection:${inspectionID}`,
-          { auth: { username: 'admin', password: 'adminpw' } }
-        );
-
-        const updatedDoc = {
-          ...existingDoc.data,
-          status: 'INSPECTED',
-          inspectionDate: new Date().toISOString(),
-          inspectorID: inspectorID || 'AUTO',
-          inspectorName: inspectorName || 'ECTA Quality Lab',
-          sampleSize: sampleSize || 100,
-          moistureContent: parseFloat(String(moistureContent)),
-          defectCount: parseInt(String(defectCount)),
-          beanSize: beanSize || 'Screen 17',
-          color: color || 'Green',
-          odor: odor || 'Fresh',
-          cupQuality: cupQualityScores,
-          grade: grade,
-          classification: classification || grade,
-          pesticideTest: pesticideTest || 'PASS',
-          heavyMetalTest: heavyMetalTest || 'PASS',
-          mycotoxinTest: mycotoxinTest || 'PASS',
-          remarks: comprehensiveRemarks,
-          updatedAt: new Date().toISOString()
-        };
-
-        await axios.put(
-          `${couchDbUrl}/fabricchannel_cecbschannel/inspection:${inspectionID}`,
-          updatedDoc,
-          {
-            auth: { username: 'admin', password: 'adminpw' },
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-        logger.info(`✅ [INSPECTION] Inspection ${inspectionID} updated in CouchDB`);
-      } catch (couchError: any) {
-        logger.error(`❌ [INSPECTION] Failed to update CouchDB:`, couchError.message);
+      // ✅ BLOCKCHAIN-FIRST: record results on the ledger via
+      // PerformInspection (chaincodes/coffee/quality.go:184) —
+      // (inspectionID, inspectorID, inspectorName, sampleSize,
+      // moistureContent, defectCount, beanSize, color, odor,
+      // fragrance, flavor, aftertaste, acidity, body, balance,
+      // uniformity, cleanCup, sweetness, overall, classification,
+      // pesticideTest, heavyMetalTest, mycotoxinTest, remarks).
+      // It guards PENDING -> INSPECTED and grades on-chain. The old
+      // code PUT the result into one peer's CouchDB under the wrong
+      // database/key (fabricchannel_cecbschannel, `inspection:<id>`)
+      // and swallowed failures, then wrote INSPECTED to Postgres
+      // regardless — the phantom the approve step then inherited.
+      // Moisture 8–13% is enforced by the chaincode itself
+      // (ValidateMoistureContent, validation.go:300); this route does
+      // NOT pre-block any moisture value — an out-of-range value
+      // fails here, honestly, with 503. Sparse callers (the
+      // missing-steps suite sends only inspectorName / moisture /
+      // defect / remarks; the UI conduct dialog sends moisture /
+      // defectPercentage / findings) get the same defaults the old
+      // CouchDB/PG writes used, so a valid chaincode call is still
+      // built: inspectorID 'AUTO', sampleSize 100, beanSize
+      // 'Screen 17', lab tests 'PASS', cup scores 0.
+      const performResult = await fabricService.performInspection(
+        inspectionID,
+        inspectorID || 'AUTO',
+        inspectorName || 'ECTA Quality Lab',
+        String(sampleSize ?? 100),
+        String(moistureContent ?? 12),
+        String(defectCount ?? (req.body as any).defectPercentage ?? 0),
+        beanSize || 'Screen 17',
+        color || 'Green',
+        odor || 'Fresh',
+        String(fragrance ?? 0),
+        String(flavor ?? 0),
+        String(aftertaste ?? 0),
+        String(acidity ?? 0),
+        String(body ?? 0),
+        String(balance ?? 0),
+        String(uniformity ?? 0),
+        String(cleanCup ?? 0),
+        String(sweetness ?? 0),
+        String(resolvedOverall),
+        classification || grade,
+        pesticideTest || 'PASS',
+        heavyMetalTest || 'PASS',
+        mycotoxinTest || 'PASS',
+        comprehensiveRemarks
+      );
+      if (!performResult.success) {
+        const message = performResult.error || 'PerformInspection failed';
+        logger.error(`[INSPECTION] PerformInspection failed for ${inspectionID}: ${message}`);
+        return res.status(503).json({
+          success: false,
+          error: { code: 'INSPECTION_PERFORM_FAILED', message },
+          timestamp: new Date().toISOString()
+        });
       }
+      const blockchain_tx_id = performResult.txId || null;
+      logger.info(`✅ [INSPECTION] Inspection ${inspectionID} performed on-chain (tx ${blockchain_tx_id})`);
 
-      // Now update inspection with ALL results in PostgreSQL
+      // Postgres mirror AFTER the successful ledger write
       await postgresDb.run(
         `UPDATE quality_inspections SET
           status = 'INSPECTED',
@@ -688,7 +723,7 @@ ${remarks || 'No additional remarks'}
           grade = $7,
           cup_quality = $8,
           remarks = $9,
-          blockchain_tx_id = NULL,
+          blockchain_tx_id = $10,
           updated_at = NOW()
         WHERE inspection_id = $1`,
         [
@@ -700,21 +735,23 @@ ${remarks || 'No additional remarks'}
           parseInt(beanSize) || 17,
           grade,
           cupQualityJson,  // Store all cup scores as JSON
-          comprehensiveRemarks
+          comprehensiveRemarks,
+          blockchain_tx_id
         ]
       );
 
-      logger.info(`Quality inspection performed: ${inspectionID}, Overall: ${overall}, Grade: ${grade}`);
+      logger.info(`Quality inspection performed: ${inspectionID}, Overall: ${resolvedOverall}, Grade: ${grade}`);
 
       res.json({
         success: true,
-        data: { 
-          inspectionID, 
+        data: {
+          inspectionID,
           status: 'INSPECTED',
           grade,
-          overall,
+          overall: resolvedOverall,
           cupQuality: cupQualityScores,
-          blockchain_tx_id: null
+          blockchain_tx_id,
+          blockchainSynced: true
         },
         timestamp: new Date().toISOString()
       });
@@ -758,8 +795,10 @@ router.post('/inspections/:inspectionID/approve',
       const { approvedBy, certificateNo } = req.body;
 
       // Shared approve core (TEST-STATUS-MATRIX §17 #14): guard +
-      // Postgres write + best-effort chaincode sync. The CouchDB write
-      // and document signing below are this route's own extras.
+      // LEDGER write first + Postgres mirror. The decision is already
+      // on-chain by the time this returns ok — the old direct CouchDB
+      // PUT here (one peer only, swallowed failures) is deleted, not
+      // moved. Document signing below is this route's own extra.
       const decision = await decideQualityInspection(inspectionID, 'APPROVED', {
         certificateNumber: certificateNo,
         approvedBy,
@@ -772,40 +811,6 @@ router.post('/inspections/:inspectionID/approve',
         });
       }
       const { chainSync, certificateNumber } = decision;
-
-      // ⚠️ UPDATE COUCHDB DIRECTLY to bypass blockchain propagation delays
-      logger.info(`[INSPECTION] Approving inspection ${inspectionID} in CouchDB`);
-
-      try {
-        // Get existing doc to preserve _rev
-        const couchDbUrl = process.env.COUCHDB_URL || 'http://couchdb.ecta:5984';
-        const existingDoc = await axios.get(
-          `${couchDbUrl}/coffeechannel_coffee/inspection:${inspectionID}`,
-          { auth: { username: 'admin', password: 'adminpw' } }
-        );
-
-        const updatedDoc = {
-          ...existingDoc.data,
-          status: 'APPROVED',
-          passed: true,
-          approvedBy: approvedBy || 'ECTA Quality Director',
-          certificateNo: certificateNumber,
-          approvalDate: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-
-        await axios.put(
-          `${couchDbUrl}/coffeechannel_coffee/inspection:${inspectionID}`,
-          updatedDoc,
-          {
-            auth: { username: 'admin', password: 'adminpw' },
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-        logger.info(`✅ [INSPECTION] Inspection ${inspectionID} approved in CouchDB`);
-      } catch (couchError: any) {
-        logger.error(`❌ [INSPECTION] Failed to update CouchDB:`, couchError.message);
-      }
 
       logger.info(`Quality inspection approved: ${inspectionID}, Certificate: ${certificateNumber}`);
 
@@ -992,7 +997,7 @@ router.put('/inspections/:inspectionID/approve',
       const user = (req as any).user;
 
       // Shared approve core (TEST-STATUS-MATRIX §17 #14) — same guard,
-      // Postgres write and chaincode sync as the POST approve route.
+      // ledger write first + Postgres mirror as the POST approve route.
       const decision = await decideQualityInspection(inspectionID, 'APPROVED', {
         certificateNumber,
         grade,
@@ -1052,9 +1057,9 @@ router.post('/inspections/:inspectionID/reject',
       const { inspectionID } = req.params;
       const { reason, rejectedBy } = req.body;
 
-      // Shared reject core (TEST-STATUS-MATRIX §17 #14): guard + PG
-      // write + best-effort chaincode sync, same as the PUT reject
-      // route. NOTE: `rejectedBy` is accepted from the caller but not
+      // Shared reject core (TEST-STATUS-MATRIX §17 #14): guard +
+      // ledger write first + PG mirror, same as the PUT reject route.
+      // NOTE: `rejectedBy` is accepted from the caller but not
       // passed to the chaincode — RejectQualityInspection sets
       // RejectedBy from the client identity.
       // (The old handler called RejectInspection blockchain-first —
@@ -1693,7 +1698,11 @@ router.post('/inspections/:inspectionID/collect-sample',
         });
       }
 
-      // Update inspection with sample collection details
+      // NOTE: deliberately Postgres-only — there is no chaincode
+      // function or QualityInspection status for sample collection
+      // (quality.go statuses: PENDING, INSPECTED, APPROVED, REJECTED,
+      // REWORK). The ledger transition happens at lab-results /
+      // perform (PerformInspection, PENDING -> INSPECTED).
       await postgresDb.run(
         `UPDATE quality_inspections SET
           sample_size = $1,
@@ -1769,7 +1778,53 @@ router.post('/inspections/:inspectionID/lab-results',
         });
       }
 
-      // Update inspection with lab results
+      // ✅ BLOCKCHAIN-FIRST (unless already INSPECTED on-chain): lab
+      // results ARE the inspection results, and PerformInspection
+      // (quality.go:184) is the only chaincode function that moves a
+      // QualityInspection PENDING -> INSPECTED. The old handler wrote
+      // INSPECTED to Postgres only, so the ledger stayed PENDING and
+      // the next step — ApproveQualityInspection, which requires
+      // INSPECTED on-chain — could never succeed; approve then failed
+      // on-chain while the API reported 200 APPROVED. If Postgres
+      // already says INSPECTED, the results were already recorded
+      // on-chain (via perform or an earlier lab-results call), so the
+      // ledger write is skipped and only the Postgres mirror is
+      // refreshed. Moisture 8–13% is enforced by the chaincode
+      // itself; this route does not pre-block any moisture value.
+      let labTxId: string | null = null;
+      if (inspection.status !== 'INSPECTED') {
+        const labResult = await fabricService.performInspection(
+          inspectionID,
+          'LAB',
+          labTechnician || 'Lab Technician',
+          '100',
+          String(moistureContent),
+          String(defectCount),
+          String(screenSize || 'Screen 17'),
+          'Green',
+          'Fresh',
+          '0', '0', '0', '0', '0', '0', '0', '0', '0',
+          String(cupScore ?? 0),
+          (req.body as any).grade || 'Grade 1',
+          'PASS',
+          'PASS',
+          'PASS',
+          `Lab results recorded by ${labTechnician || 'Lab Technician'}${testDate ? ` on ${testDate}` : ''}`
+        );
+        if (!labResult.success) {
+          const message = labResult.error || 'PerformInspection failed';
+          logger.error(`[INSPECTION] Lab-results PerformInspection failed for ${inspectionID}: ${message}`);
+          return res.status(503).json({
+            success: false,
+            error: { code: 'LAB_RESULTS_FAILED', message },
+            timestamp: new Date().toISOString()
+          });
+        }
+        labTxId = labResult.txId || null;
+        logger.info(`✅ [INSPECTION] Lab results recorded on-chain for ${inspectionID} (tx ${labTxId})`);
+      }
+
+      // Postgres mirror AFTER the successful ledger write
       await postgresDb.run(
         `UPDATE quality_inspections SET
           moisture_content = $1,
@@ -1779,6 +1834,7 @@ router.post('/inspections/:inspectionID/lab-results',
           inspector_name = $5,
           inspection_date = $6,
           status = 'INSPECTED',
+          blockchain_tx_id = COALESCE($8, blockchain_tx_id),
           updated_at = NOW()
          WHERE inspection_id = $7`,
         [
@@ -1788,7 +1844,8 @@ router.post('/inspections/:inspectionID/lab-results',
           screenSize || null,
           labTechnician || 'Lab Technician',
           testDate || new Date().toISOString().split('T')[0],
-          inspectionID
+          inspectionID,
+          labTxId
         ]
       );
 
@@ -1803,7 +1860,9 @@ router.post('/inspections/:inspectionID/lab-results',
           defectCount,
           cupScore,
           screenSize,
-          testDate
+          testDate,
+          blockchain_tx_id: labTxId,
+          blockchainSynced: true
         },
         timestamp: new Date().toISOString()
       });
@@ -1838,9 +1897,9 @@ router.put('/inspections/:inspectionID/reject',
       const user = (req as any).user;
 
       // Shared reject core (TEST-STATUS-MATRIX §17 #14) — same guard,
-      // Postgres write and chaincode sync as the POST reject route.
+      // ledger write first + Postgres mirror as the POST reject route.
       // (The old handler rejected from any state and wrote notes only;
-      // the core also sets passed=false, remarks and clears the tx id.)
+      // the core also sets passed=false and remarks.)
       const decision = await decideQualityInspection(inspectionID, 'REJECTED', {
         reason: rejectionReason,
       });
