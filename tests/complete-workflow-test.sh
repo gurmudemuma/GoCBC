@@ -253,22 +253,17 @@ sleep 3
 
 log_step "SHIPMENT RECORD CREATION - Create Shipment Record"
 
-# Login as shipping admin
-TOKEN_SHIPPING=$(curl -s -X POST ${API_BASE}/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"shipping_admin","password":"password123"}' | jq -r '.data.token // empty')
-
-if [ -z "$TOKEN_SHIPPING" ]; then
-    log_warn "Shipping login failed, using ECTA token"
-    TOKEN_SHIPPING="$TOKEN_ECTA"
-fi
+# Shipment creation requires EXPORTER, ECTA or ECTA_ADMIN (shipments.ts) —
+# SHIPPING cannot create shipments, so the old shipping-admin login here
+# always 403'd. Use the ECTA token logged in above (missing-steps uses its
+# EXPORTER token for the same step).
 
 log_action "Creating shipment record (PascalCase fields with all required fields)"
 NEW_SHIPMENT_ID="SHIP-$(date +%Y%m%d%H%M%S)"
 
 SHIPMENT_RESPONSE=$(curl -s -X POST ${API_BASE}/shipments \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN_SHIPPING" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
   -d "{
     \"shipmentID\": \"$NEW_SHIPMENT_ID\",
     \"contractID\": \"$NEW_CONTRACT_ID\",
@@ -503,7 +498,7 @@ fi
 
 # Check shipment
 if [ -n "$NEW_SHIPMENT_ID" ]; then
-    SHIPMENT_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_SHIPPING" \
+    SHIPMENT_CHECK=$(curl -s -H "Authorization: Bearer $TOKEN_ECTA" \
       "${API_BASE}/shipments?shipmentId=$NEW_SHIPMENT_ID" 2>/dev/null || echo '{}')
     if echo "$SHIPMENT_CHECK" | jq -e '.data' > /dev/null 2>&1; then
         log_pass "Shipping: Shipment record verified"

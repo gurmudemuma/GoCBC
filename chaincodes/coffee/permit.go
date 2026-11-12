@@ -458,23 +458,20 @@ func (c *CoffeeContract) ReadExportPermit(ctx contractapi.TransactionContextInte
 func (c *CoffeeContract) QueryPermitsByExporter(ctx contractapi.TransactionContextInterface,
 	exporterID string) ([]*ExportPermit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"exporterId":"%s"}}`, exporterID)
-	return c.queryPermits(ctx, queryString)
+	return c.queryPermits(ctx, fmt.Sprintf(`{"exporterId":"%s"}`, exporterID))
 }
 
 // QueryOutstandingPermits - Get all outstanding permits (awaiting repatriation)
 func (c *CoffeeContract) QueryOutstandingPermits(ctx contractapi.TransactionContextInterface) ([]*ExportPermit, error) {
 
-	queryString := `{"selector":{"outstanding":true}}`
-	return c.queryPermits(ctx, queryString)
+	return c.queryPermits(ctx, `{"outstanding":true}`)
 }
 
 // QueryPermitsByStatus - Get permits by status
 func (c *CoffeeContract) QueryPermitsByStatus(ctx contractapi.TransactionContextInterface,
 	status string) ([]*ExportPermit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"status":"%s"}}`, status)
-	return c.queryPermits(ctx, queryString)
+	return c.queryPermits(ctx, fmt.Sprintf(`{"status":"%s"}`, status))
 }
 
 // QueryAllPermits - Get all export permits
@@ -495,7 +492,7 @@ func (c *CoffeeContract) QueryAllPermits(ctx contractapi.TransactionContextInter
 		var permit ExportPermit
 		err = json.Unmarshal(queryResponse.Value, &permit)
 		if err != nil {
-			return nil, err
+			continue // Skip invalid documents: one bad row must not fail the list
 		}
 		permits = append(permits, &permit)
 	}
@@ -507,14 +504,23 @@ func (c *CoffeeContract) QueryAllPermits(ctx contractapi.TransactionContextInter
 func (c *CoffeeContract) QueryPermitsByContract(ctx contractapi.TransactionContextInterface,
 	contractID string) ([]*ExportPermit, error) {
 
-	queryString := fmt.Sprintf(`{"selector":{"contractId":"%s"}}`, contractID)
-	return c.queryPermits(ctx, queryString)
+	return c.queryPermits(ctx, fmt.Sprintf(`{"contractId":"%s"}`, contractID))
 }
 
-// Helper function for querying permits
+// Helper function for querying permits.
+//
+// Every rich query is scoped to PERMIT_ keys: a bare {"exporterId": ...}
+// selector also matches contracts, LCs, forex records and payments of the
+// same exporter, and unmarshalling one of those as ExportPermit fails the
+// whole query — e.g. a REQUESTED LC legitimately carries issueDate:"",
+// which time.Time cannot parse ("failed to unmarshal permit: parsing time
+// \"\" ..."). The _id scope follows the pattern already used by QueryAllLCs
+// (banking.go) and the forex queries. A row that still fails to unmarshal
+// is skipped, as in QueryAllLCs, so one bad row can never fail the list.
 func (c *CoffeeContract) queryPermits(ctx contractapi.TransactionContextInterface,
-	queryString string) ([]*ExportPermit, error) {
+	conditions string) ([]*ExportPermit, error) {
 
+	queryString := fmt.Sprintf(`{"selector":{"$and":[{"_id":{"$regex":"^PERMIT_"}},%s]}}`, conditions)
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query permits: %v", err)
@@ -531,7 +537,7 @@ func (c *CoffeeContract) queryPermits(ctx contractapi.TransactionContextInterfac
 		var permit ExportPermit
 		err = json.Unmarshal(queryResponse.Value, &permit)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal permit: %v", err)
+			continue // Skip invalid documents
 		}
 		permits = append(permits, &permit)
 	}
