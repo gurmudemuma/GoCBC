@@ -417,6 +417,48 @@ export class ShipmentService {
   }
 
   /**
+   * Validate a shipment exists in BOTH stores before a write that names
+   * it (permit issuance, customs submission). Two holes this closes:
+   * (1) issue-permit returned 200/201 for a shipmentID that exists
+   * nowhere — the chaincode IssueCBEExportPermit never sees a
+   * shipmentID (it links shipments through ContractID only) and the PG
+   * mirror silently no-opped; (2) SubmitCustomsDeclaration's guard only
+   * fires when the shipment IS found, so a missing shipment silently
+   * passed it and the declaration was stored on-chain and in PG.
+   * The ledger is checked via ReadShipment: its error text is
+   * "shipment <id> does not exist" for a missing shipment, which is
+   * what distinguishes "not found" (404) from "the ledger could not be
+   * reached to verify" (503, unavailable:true — the caller must not
+   * report a missing shipment it could not actually check).
+   */
+  async assertShipmentExists(shipmentId: string): Promise<
+    | { ok: true; pg: any; ledger: any }
+    | { ok: false; missing: 'postgres' | 'ledger'; unavailable?: boolean; message: string }
+  > {
+    const pg = await this.dbService.get(
+      'SELECT shipment_id, contract_id, exporter_id, status FROM shipments WHERE shipment_id = $1',
+      [shipmentId]
+    );
+    if (!pg) {
+      return { ok: false, missing: 'postgres', message: `Shipment ${shipmentId} not found in the database` };
+    }
+    let ledgerRes;
+    try {
+      ledgerRes = await this.fabricService.getShipment(shipmentId);
+    } catch (err: any) {
+      return { ok: false, missing: 'ledger', unavailable: true, message: `Could not verify shipment ${shipmentId} on the ledger: ${err?.message || String(err)}` };
+    }
+    if (!ledgerRes?.success || !ledgerRes?.data) {
+      const errMsg = String(ledgerRes?.error || '');
+      if (/does not exist/i.test(errMsg)) {
+        return { ok: false, missing: 'ledger', message: `Shipment ${shipmentId} not found on the ledger` };
+      }
+      return { ok: false, missing: 'ledger', unavailable: true, message: `Could not verify shipment ${shipmentId} on the ledger: ${errMsg || 'query failed'}` };
+    }
+    return { ok: true, pg, ledger: ledgerRes.data };
+  }
+
+  /**
    * Get shipments by contract
    */
   async getShipmentsByContract(contractID: string) {

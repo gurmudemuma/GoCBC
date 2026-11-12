@@ -71,6 +71,26 @@ router.post('/',
         });
       }
 
+      // Same shipment-existence gate as /declaration/submit: the
+      // declaration must name a shipment that exists in Postgres AND on
+      // the ledger (proven live pre-fix: SHIP-FAKE-BUG2B →
+      // CD-BUG2-FAKE2, 201, stored on-chain and in PG).
+      const shipmentCheck = await shipmentService.assertShipmentExists(shipmentId);
+      if (!shipmentCheck.ok) {
+        if (shipmentCheck.unavailable) {
+          return res.status(503).json({
+            success: false,
+            error: { code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: shipmentCheck.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+        return res.status(404).json({
+          success: false,
+          error: { code: 'SHIPMENT_NOT_FOUND', message: shipmentCheck.message },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Leg2 #9/#18: no invented commercial terms. The old defaults
       // (value 85000, destination 'Germany', HS '0901.21', quantity
       // 10000) fabricated a declaration whenever the caller omitted a
@@ -790,6 +810,30 @@ router.post('/declaration/submit',
       } = req.body;
 
       logger.info(`[CUSTOMS] Submitting declaration ${declarationID} for shipment ${shipmentID}`);
+
+      // The declaration names a shipment: it must exist in Postgres AND
+      // on the ledger before anything is submitted. Before this fix the
+      // route stored a SUBMITTED declaration (ledger + PG) for a
+      // shipmentID that exists nowhere — the chaincode guard only fires
+      // when the shipment IS found, so a missing shipment silently
+      // passed it (proven live: SHIP-FAKE-BUG2 → CD-BUG2-FAKE1, 200,
+      // blockchainSynced:true). The check runs first, so the failure
+      // is a clean 404, not a chaincode error — and nothing is stored.
+      const shipmentCheck = await shipmentService.assertShipmentExists(shipmentID);
+      if (!shipmentCheck.ok) {
+        if (shipmentCheck.unavailable) {
+          return res.status(503).json({
+            success: false,
+            error: { code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: shipmentCheck.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+        return res.status(404).json({
+          success: false,
+          error: { code: 'SHIPMENT_NOT_FOUND', message: shipmentCheck.message },
+          timestamp: new Date().toISOString()
+        });
+      }
 
       // F-7: a REJECTED (or CANCELLED) declaration is terminal and no
       // longer blocks a fresh declaration for the same shipment — the

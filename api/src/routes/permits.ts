@@ -44,6 +44,70 @@ async function mirrorPermitCascadePG(contractId: string, shipmentId?: string): P
   }
 }
 
+// Re-read the named shipment after the cascade mirror and report whether
+// it actually moved to PERMIT_ISSUED. The mirror is best-effort and used
+// to silently no-op on a missing shipment while the route returned 201;
+// the pre-check in each issue handler now makes "missing" impossible,
+// but an eligible shipment that still did not move is a real mirror
+// failure and must be reported in the response, not hidden behind the
+// 201. A shipment already past the permit stage is correctly left alone.
+async function readShipmentMirror(shipmentId: string, statusBefore: string): Promise<{
+  shipmentId: string; statusBefore: string; statusAfter?: string; moved: boolean; note?: string; error?: string;
+}> {
+  const mirror: { shipmentId: string; statusBefore: string; statusAfter?: string; moved: boolean; note?: string; error?: string } = {
+    shipmentId, statusBefore, moved: false,
+  };
+  try {
+    const after = await dbService.get(
+      'SELECT status FROM shipments WHERE shipment_id = $1',
+      [shipmentId]
+    );
+    if (!after) {
+      mirror.error = 'shipment row not found in Postgres after issuance';
+      logger.error(`[PERMITS] Shipment ${shipmentId} missing from Postgres after permit issuance`);
+    } else {
+      mirror.statusAfter = after.status;
+      if (after.status === 'PERMIT_ISSUED' && statusBefore !== 'PERMIT_ISSUED') {
+        mirror.moved = true;
+      } else if (after.status === 'PERMIT_ISSUED') {
+        mirror.note = 'shipment already PERMIT_ISSUED; mirror correctly left it';
+      } else if (['CREATED', 'INSPECTION_COMPLETE'].includes(statusBefore)) {
+        mirror.error = `shipment still ${after.status} after mirror`;
+        logger.error(`[PERMITS] Shipment ${shipmentId} still ${after.status} after permit issuance — PG mirror did not move it`);
+      } else {
+        mirror.note = `shipment already ${statusBefore}; mirror correctly left it`;
+      }
+    }
+  } catch (err: any) {
+    mirror.error = err?.message || String(err);
+  }
+  return mirror;
+}
+
+// The permit names a shipment: it must exist in Postgres AND on the
+// ledger before anything is issued. Returns the shipment's PG status
+// (for the mirror report) or the 404/503 response that was already sent.
+async function requireShipmentForPermit(res: any, shipmentId: string): Promise<string | null> {
+  const check = await shipmentService.assertShipmentExists(shipmentId);
+  if (!check.ok) {
+    if (check.unavailable) {
+      res.status(503).json({
+        success: false,
+        error: { code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: check.message },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: { code: 'SHIPMENT_NOT_FOUND', message: check.message },
+        timestamp: new Date().toISOString()
+      });
+    }
+    return null;
+  }
+  return String(check.pg?.status || '');
+}
+
 
 // Resolve the commercial terms of a permit from the contract — never
 // invent them. The old handlers defaulted amount 85000, destination
@@ -142,6 +206,15 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
       });
     }
 
+    // The permit names a shipment: it must exist in Postgres AND on the
+    // ledger before anything is issued. Before this fix the route issued
+    // the permit on-chain and returned 201 for a shipmentID that exists
+    // nowhere — the chaincode never sees the shipmentID (it is only in
+    // the description string) and the cascade found nothing to move
+    // (proven live: SHIP-FAKE-BUG1 → PERMIT-1794509624195, 201).
+    const shipmentStatusBefore = await requireShipmentForPermit(res, shipmentID);
+    if (shipmentStatusBefore === null) return;
+
     // Export permits are issued by Banks (Commercial Bank of Ethiopia)
     await fabricService.connectAsOrg('BanksMSP');
 
@@ -168,6 +241,12 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId, shipmentID);
+      // Report the shipment mirror honestly: re-read the named shipment
+      // and confirm it actually moved (or was already past the permit
+      // stage). The mirror used to silently no-op on a missing shipment
+      // behind a 201; the pre-check above makes "missing" impossible,
+      // but an eligible shipment that still did not move must be visible.
+      const shipmentMirror = await readShipmentMirror(shipmentID, shipmentStatusBefore);
       // Auto-create the customs declaration when the inspection already
       // passed (literal order inspect → permit → customs). Best-effort:
       // the helper never throws and never duplicates.
@@ -176,7 +255,7 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
       res.status(201).json({ 
         success: true, 
         message: 'Export permit issued successfully',
-        data: { permitID: permitId, permitId, status: 'ISSUED' },
+        data: { permitID: permitId, permitId, status: 'ISSUED', shipment: shipmentMirror },
         txId: result.txId,
         timestamp: new Date().toISOString()
       });
@@ -249,6 +328,15 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
       });
     }
 
+    // The permit names a shipment: it must exist in Postgres AND on the
+    // ledger before anything is issued. Before this fix the route issued
+    // the permit on-chain and returned 201 for a shipmentID that exists
+    // nowhere — the chaincode never sees the shipmentID (it is only in
+    // the description string) and the cascade found nothing to move
+    // (proven live: SHIP-FAKE-BUG1 → PERMIT-1794509624195, 201).
+    const shipmentStatusBefore = await requireShipmentForPermit(res, shipmentID);
+    if (shipmentStatusBefore === null) return;
+
     // Export permits are issued by Banks (Commercial Bank of Ethiopia)
     await fabricService.connectAsOrg('BanksMSP');
 
@@ -275,6 +363,12 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId, shipmentID);
+      // Report the shipment mirror honestly: re-read the named shipment
+      // and confirm it actually moved (or was already past the permit
+      // stage). The mirror used to silently no-op on a missing shipment
+      // behind a 201; the pre-check above makes "missing" impossible,
+      // but an eligible shipment that still did not move must be visible.
+      const shipmentMirror = await readShipmentMirror(shipmentID, shipmentStatusBefore);
       // Auto-create the customs declaration when the inspection already
       // passed (literal order inspect → permit → customs). Best-effort:
       // the helper never throws and never duplicates.
@@ -283,7 +377,7 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
       res.status(201).json({ 
         success: true, 
         message: 'Export permit issued successfully',
-        data: { permitID: permitId, permitId, status: 'ISSUED' },
+        data: { permitID: permitId, permitId, status: 'ISSUED', shipment: shipmentMirror },
         txId: result.txId,
         timestamp: new Date().toISOString()
       });
@@ -323,6 +417,24 @@ router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async 
       bankBranch,
       approvedBy
     } = req.body;
+
+    // This route is contract-scoped: it takes no shipmentID, so bug 1
+    // (a permit for a nonexistent shipment) cannot occur here — the
+    // chaincode's own contract check (APPROVED) guards it. But two
+    // honest-failure gaps remain: a shipmentID passed in the body was
+    // silently ignored (validate it if present), and a missing amount
+    // threw a 500 on amount.toString() before any check.
+    const namedShipmentId: string = req.body.shipmentID || req.body.shipmentId || '';
+    if (namedShipmentId) {
+      const statusBefore = await requireShipmentForPermit(res, namedShipmentId);
+      if (statusBefore === null) return;
+    }
+    if (!contractId) {
+      return permitValidationError(res, 'contractId is required to issue an export permit');
+    }
+    if (amount == null || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return permitValidationError(res, 'A positive permit amount is required');
+    }
 
     // Export permits are issued by Banks (Commercial Bank of Ethiopia)
     await fabricService.connectAsOrg('BanksMSP');

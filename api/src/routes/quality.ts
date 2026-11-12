@@ -1343,6 +1343,40 @@ router.post('/inspections/:inspectionID/issue-permit',
         });
       }
 
+      // The permit names a shipment (inspection.shipment_id): it must
+      // exist in Postgres AND on the ledger before anything is issued.
+      // Before this fix the route resolved the contract from the
+      // inspection, issued the permit on-chain, returned 200, and the
+      // shipment mirror silently no-opped — a permit for a shipment
+      // that does not exist anywhere (proven live: INSP-BUG1-FAKE →
+      // SHIP-FAKE-BUG1C issued PERMIT-1794509648620 with 200).
+      if (!inspection.shipment_id) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Cannot issue export permit: the inspection has no shipment'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const shipmentCheck = await shipmentService.assertShipmentExists(inspection.shipment_id);
+      if (!shipmentCheck.ok) {
+        if (shipmentCheck.unavailable) {
+          return res.status(503).json({
+            success: false,
+            error: { code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: shipmentCheck.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+        return res.status(404).json({
+          success: false,
+          error: { code: 'SHIPMENT_NOT_FOUND', message: shipmentCheck.message },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const shipmentStatusBefore: string = String(shipmentCheck.pg?.status || '');
+
       // Resolve the IssueCBEExportPermit inputs from Postgres (request-body
       // values override). IssueCBEExportPermit (permit.go:48) requires an
       // ACTIVE exporter licence, an APPROVED contract (when a contract id
@@ -1517,6 +1551,41 @@ router.post('/inspections/:inspectionID/issue-permit',
         await shipmentService.mirrorShipmentStatus(inspection.shipment_id, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
       }
 
+      // The shipment mirror must report honestly: re-read the named
+      // shipment and confirm it actually moved (or was already past
+      // the permit stage). Before this fix the mirror silently no-opped
+      // on a missing shipment and the response still claimed success.
+      // The pre-check above makes "missing" impossible here, but an
+      // eligible shipment that still did not move is a real mirror
+      // failure and must be reported, not hidden behind the 200.
+      const shipmentMirror: { shipmentId: string; statusBefore: string; statusAfter?: string; moved: boolean; note?: string; error?: string } = {
+        shipmentId: inspection.shipment_id, statusBefore: shipmentStatusBefore, moved: false,
+      };
+      try {
+        const shipmentAfter = await postgresDb.get(
+          'SELECT status FROM shipments WHERE shipment_id = $1',
+          [inspection.shipment_id]
+        );
+        if (!shipmentAfter) {
+          shipmentMirror.error = 'shipment row not found in Postgres after issuance';
+          logger.error(`[PERMIT] Shipment ${inspection.shipment_id} missing from Postgres after permit ${permitId} issued (tx ${blockchain_tx_id})`);
+        } else {
+          shipmentMirror.statusAfter = shipmentAfter.status;
+          if (shipmentAfter.status === 'PERMIT_ISSUED' && shipmentStatusBefore !== 'PERMIT_ISSUED') {
+            shipmentMirror.moved = true;
+          } else if (shipmentAfter.status === 'PERMIT_ISSUED') {
+            shipmentMirror.note = 'shipment already PERMIT_ISSUED; mirror correctly left it';
+          } else if (['CREATED', 'INSPECTION_COMPLETE'].includes(shipmentStatusBefore)) {
+            shipmentMirror.error = `shipment still ${shipmentAfter.status} after mirror`;
+            logger.error(`[PERMIT] Shipment ${inspection.shipment_id} still ${shipmentAfter.status} after permit ${permitId} issued (tx ${blockchain_tx_id}) — PG mirror did not move it`);
+          } else {
+            shipmentMirror.note = `shipment already ${shipmentStatusBefore}; mirror correctly left it`;
+          }
+        }
+      } catch (reReadErr: any) {
+        shipmentMirror.error = reReadErr?.message || String(reReadErr);
+      }
+
       // Auto-create the customs declaration now that the permit exists:
       // the inspection is already APPROVED here, so this is the first
       // moment both preconditions hold (literal order inspect → permit
@@ -1550,10 +1619,15 @@ router.post('/inspections/:inspectionID/issue-permit',
           status: 'PERMIT_ISSUED',
           blockchain_tx_id,
           // #6: the ledger issuance is the truth; a failed PG mirror is
-          // reported here, never hidden behind a 500.
-          postgresMirror: inspectionMirrorError
-            ? { inspection: false, error: inspectionMirrorError }
-            : { inspection: true },
+          // reported here, never hidden behind a 500. The shipment
+          // mirror is reported the same way: moved / already-past /
+          // or an error when an eligible shipment did not move.
+          postgresMirror: {
+            ...(inspectionMirrorError
+              ? { inspection: false, error: inspectionMirrorError }
+              : { inspection: true }),
+            shipment: shipmentMirror,
+          },
         },
         txId: blockchain_tx_id,
         message: inspectionMirrorError
