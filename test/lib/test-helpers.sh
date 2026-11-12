@@ -20,7 +20,9 @@ export FAILED_TESTS=0
 
 # API Configuration
 export API_URL="${API_URL:-http://localhost:3001/api/v1}"
-export OUTPUT_DIR="${OUTPUT_DIR:-./tests/results}"
+# NOTE (2026-11-12, W3 reorg): was ./tests/results — the tests/ directory
+# was merged into test/, so the default must not recreate tests/ on run.
+export OUTPUT_DIR="${OUTPUT_DIR:-./test-results}"
 export TIMESTAMP=$(date +%s)
 
 ################################################################################
