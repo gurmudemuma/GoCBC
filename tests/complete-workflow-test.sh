@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Complete End-to-End Workflow Test with Form Submissions and Document Uploads
-# Version 2: Fixed API field names and workflow order
+# Version 3: Reordered to the chaincode enforced order (LC issue +
+#   forex NBE-approve/rate/allocate BEFORE shipment creation; shipment
+#   creation requires LC FOREX_ALLOCATED)
 # Simulates a real user journey through the entire coffee export process
 
 set -e
@@ -248,87 +250,7 @@ log_action "Waiting 3 seconds for approval propagation..."
 sleep 3
 
 # ==================================================================================
-# PHASE 4: SHIPMENT RECORD CREATION (before quality inspection)
-# ==================================================================================
-
-log_step "SHIPMENT RECORD CREATION - Create Shipment Record"
-
-# Shipment creation requires EXPORTER, ECTA or ECTA_ADMIN (shipments.ts) —
-# SHIPPING cannot create shipments, so the old shipping-admin login here
-# always 403'd. Use the ECTA token logged in above (missing-steps uses its
-# EXPORTER token for the same step).
-
-log_action "Creating shipment record (PascalCase fields with all required fields)"
-NEW_SHIPMENT_ID="SHIP-$(date +%Y%m%d%H%M%S)"
-
-SHIPMENT_RESPONSE=$(curl -s -X POST ${API_BASE}/shipments \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN_ECTA" \
-  -d "{
-    \"shipmentID\": \"$NEW_SHIPMENT_ID\",
-    \"contractID\": \"$NEW_CONTRACT_ID\",
-    \"exporterID\": \"$NEW_EXPORTER_ID\",
-    \"buyerID\": \"$BUYER_ID\",
-    \"grade\": \"Grade 1\",
-    \"icoNumber\": \"ICO-${TIMESTAMP}\",
-    \"channel\": \"SEA\",
-    \"forexRate\": 57.50,
-    \"valueUSD\": 275000,
-    \"eudrCompliant\": true,
-    \"origin\": \"Djibouti Port, Ethiopia\",
-    \"destination\": \"New York Port, USA\",
-    \"transportMode\": \"SEA\",
-    \"carrier\": \"Maersk Line\",
-    \"vesselName\": \"MV Test Vessel\",
-    \"containerNumber\": \"CONT-$TIMESTAMP\",
-    \"billOfLading\": \"BL-$TIMESTAMP\",
-    \"departureDate\": \"$(date +%Y-%m-%d)\",
-    \"estimatedArrival\": \"$(date -d '+30 days' +%Y-%m-%d)\",
-    \"quantity\": 50000,
-    \"status\": \"PENDING\"
-  }")
-
-if echo "$SHIPMENT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
-    log_pass "Shipment record created: $NEW_SHIPMENT_ID"
-else
-    log_fail "Shipment creation failed"
-    log_info "Response: $SHIPMENT_RESPONSE"
-fi
-
-# ==================================================================================
-# PHASE 5: QUALITY INSPECTION REQUEST
-# ==================================================================================
-
-log_step "QUALITY INSPECTION - Request Quality Certificate"
-
-log_action "Submitting quality inspection request (PascalCase fields)"
-NEW_INSPECTION_ID="QI-$(date +%Y%m%d%H%M%S)"
-
-INSPECTION_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN_ECTA" \
-  -d "{
-    \"inspectionID\": \"$NEW_INSPECTION_ID\",
-    \"contractID\": \"$NEW_CONTRACT_ID\",
-    \"exporterID\": \"$NEW_EXPORTER_ID\",
-    \"shipmentID\": \"$NEW_SHIPMENT_ID\",
-    \"coffeeType\": \"Arabica Grade 1\",
-    \"quantity\": 50000,
-    \"requestedDate\": \"$(date +%Y-%m-%d)\",
-    \"inspectionType\": \"PRE_SHIPMENT\",
-    \"sampleLocation\": \"Addis Ababa Warehouse\",
-    \"requestedBy\": \"ecta_admin\"
-  }")
-
-if echo "$INSPECTION_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
-    log_pass "Quality inspection requested: $NEW_INSPECTION_ID"
-else
-    log_fail "Quality inspection request failed"
-    log_info "Response: $INSPECTION_RESPONSE"
-fi
-
-# ==================================================================================
-# PHASE 6: LETTER OF CREDIT ISSUANCE
+# PHASE 4: LETTER OF CREDIT ISSUANCE
 # ==================================================================================
 
 log_step "BANKING - Letter of Credit Issuance"
@@ -374,7 +296,9 @@ if echo "$LC_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
     # Check if forex was auto-created
     FOREX_AUTO=$(echo "$LC_RESPONSE" | jq -r '.data.forexAutoCreated // false')
     if [ "$FOREX_AUTO" = "true" ]; then
-        log_info "Forex allocation auto-created by LC issuance"
+        # The auto-created forex ID is needed by Phase 5 (NBE approve + allocate)
+        NEW_FOREX_ID=$(echo "$LC_RESPONSE" | jq -r '.data.forexID // empty')
+        log_info "Forex allocation auto-created by LC issuance: $NEW_FOREX_ID"
     fi
 else
     log_fail "LC issuance failed"
@@ -382,15 +306,23 @@ else
 fi
 
 # ==================================================================================
-# PHASE 7: FOREX ALLOCATION (NBE)
+# PHASE 5: FOREX ALLOCATION (NBE APPROVE + RATE + ALLOCATE)
 # ==================================================================================
 
-log_step "NBE - Forex Allocation (if not auto-created by LC)"
+log_step "NBE - Forex Allocation (NBE approve, rate, allocate — LC must be FOREX_ALLOCATED before shipment creation)"
+
+# Chaincode order (missing-steps Phase 7): forex request -> NBE approve
+# (CONFIRMED) -> set exchange rate -> allocate (amount + rate 57.25 +
+# approvalRef, all three required) -> LC becomes FOREX_ALLOCATED, which is
+# what CreateShipment gates on. Do NOT call /forex/:id/confirm after the
+# NBE approve — it would 400 INVALID_STATUS (nbe.ts:66).
+FOREX_OK=false
 
 # Check if forex was auto-created
-if [ "$FOREX_AUTO" = "true" ]; then
-    log_info "Forex allocation already created by LC issuance - skipping manual request"
+if [ "$FOREX_AUTO" = "true" ] && [ -n "$NEW_FOREX_ID" ]; then
+    log_info "Forex allocation already created by LC issuance: $NEW_FOREX_ID"
     log_pass "Forex auto-created with LC"
+    FOREX_OK=true
 else
     # Login as Bank admin (forex requests need BANKS role)
     TOKEN_FOREX=$(curl -s -X POST ${API_BASE}/auth/login \
@@ -419,10 +351,157 @@ else
 
     if echo "$FOREX_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
         log_pass "Forex allocation requested: $NEW_FOREX_ID"
+        FOREX_OK=true
     else
         log_warn "Forex allocation request failed"
         log_info "Response: $FOREX_RESPONSE"
     fi
+fi
+
+if [ "$FOREX_OK" = "true" ]; then
+    # Login as NBE admin (forex approve + rates need NBE role)
+    TOKEN_NBE=$(curl -s -X POST ${API_BASE}/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"username":"nbe_admin","password":"password123"}' | jq -r '.data.token // empty')
+
+    if [ -z "$TOKEN_NBE" ]; then
+        log_fail "NBE login failed - cannot approve forex"
+    else
+        log_action "NBE approving forex: $NEW_FOREX_ID"
+        APPROVE_RESPONSE=$(curl -s -X POST ${API_BASE}/nbe/forex/$NEW_FOREX_ID/approve \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $TOKEN_NBE" \
+          -d "{
+            \"approvalNotes\": \"Flagship test approval\"
+          }")
+
+        if echo "$APPROVE_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+            log_pass "NBE approved forex: $NEW_FOREX_ID (CONFIRMED)"
+        else
+            log_fail "NBE forex approval failed"
+            log_info "Response: $APPROVE_RESPONSE"
+        fi
+
+        log_action "Setting NBE exchange rate USD (57.0 / 57.5)"
+        RATE_RESPONSE=$(curl -s -X POST ${API_BASE}/forex/rates \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $TOKEN_NBE" \
+          -d "{
+            \"currency\": \"USD\",
+            \"buyingRate\": 57.0,
+            \"sellingRate\": 57.5
+          }")
+
+        if echo "$RATE_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+            log_pass "NBE exchange rate set (USD buying 57.0 / selling 57.5)"
+        else
+            log_fail "Setting NBE exchange rate failed"
+            log_info "Response: $RATE_RESPONSE"
+        fi
+    fi
+
+    log_action "Allocating forex to LC (amount + rate 57.25 + approvalRef)"
+    ALLOCATE_RESPONSE=$(curl -s -X POST ${API_BASE}/forex/$NEW_FOREX_ID/allocate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN_BANK" \
+      -d "{
+        \"lcId\": \"$NEW_LC_NUMBER\",
+        \"amount\": 275000,
+        \"exchangeRate\": 57.25,
+        \"officer\": \"bank_admin\",
+        \"approvalRef\": \"NBE-APPR-$NEW_FOREX_ID\"
+      }")
+
+    if echo "$ALLOCATE_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+        log_pass "Forex allocated: $NEW_FOREX_ID (LC $NEW_LC_NUMBER is now FOREX_ALLOCATED)"
+    else
+        log_fail "Forex allocation failed"
+        log_info "Response: $ALLOCATE_RESPONSE"
+    fi
+else
+    log_fail "No forex record to approve/allocate - shipment creation will fail the LC gate"
+fi
+
+# ==================================================================================
+# PHASE 6: SHIPMENT RECORD CREATION (after forex allocation)
+# ==================================================================================
+
+log_step "SHIPMENT RECORD CREATION - Create Shipment Record"
+
+# Shipment creation requires EXPORTER, ECTA or ECTA_ADMIN (shipments.ts) —
+# SHIPPING cannot create shipments, so the old shipping-admin login here
+# always 403'd. Use the ECTA token logged in above (missing-steps uses its
+# EXPORTER token for the same step).
+# This phase now runs AFTER LC issuance + forex allocation (Phases 4-5):
+# chaincode CreateShipment requires the LC to be FOREX_ALLOCATED.
+
+log_action "Creating shipment record (PascalCase fields with all required fields)"
+NEW_SHIPMENT_ID="SHIP-$(date +%Y%m%d%H%M%S)"
+
+SHIPMENT_RESPONSE=$(curl -s -X POST ${API_BASE}/shipments \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{
+    \"shipmentID\": \"$NEW_SHIPMENT_ID\",
+    \"contractID\": \"$NEW_CONTRACT_ID\",
+    \"exporterID\": \"$NEW_EXPORTER_ID\",
+    \"buyerID\": \"$BUYER_ID\",
+    \"grade\": \"Grade 1\",
+    \"icoNumber\": \"ICO-${TIMESTAMP}\",
+    \"channel\": \"SEA\",
+    \"forexRate\": 57.50,
+    \"valueUSD\": 275000,
+    \"eudrCompliant\": true,
+    \"origin\": \"Djibouti Port, Ethiopia\",
+    \"destination\": \"New York Port, USA\",
+    \"transportMode\": \"SEA\",
+    \"carrier\": \"Maersk Line\",
+    \"vesselName\": \"MV Test Vessel\",
+    \"containerNumber\": \"CONT-$TIMESTAMP\",
+    \"billOfLading\": \"BL-$TIMESTAMP\",
+    \"departureDate\": \"$(date +%Y-%m-%d)\",
+    \"estimatedArrival\": \"$(date -d '+30 days' +%Y-%m-%d)\",
+    \"quantity\": 50000,
+    \"status\": \"PENDING\"
+  }")
+
+if echo "$SHIPMENT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Shipment record created: $NEW_SHIPMENT_ID"
+else
+    log_fail "Shipment creation failed"
+    log_info "Response: $SHIPMENT_RESPONSE"
+fi
+
+# ==================================================================================
+# PHASE 7: QUALITY INSPECTION REQUEST
+# ==================================================================================
+
+log_step "QUALITY INSPECTION - Request Quality Certificate"
+
+log_action "Submitting quality inspection request (PascalCase fields)"
+NEW_INSPECTION_ID="QI-$(date +%Y%m%d%H%M%S)"
+
+INSPECTION_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN_ECTA" \
+  -d "{
+    \"inspectionID\": \"$NEW_INSPECTION_ID\",
+    \"contractID\": \"$NEW_CONTRACT_ID\",
+    \"exporterID\": \"$NEW_EXPORTER_ID\",
+    \"shipmentID\": \"$NEW_SHIPMENT_ID\",
+    \"coffeeType\": \"Arabica Grade 1\",
+    \"quantity\": 50000,
+    \"requestedDate\": \"$(date +%Y-%m-%d)\",
+    \"inspectionType\": \"PRE_SHIPMENT\",
+    \"sampleLocation\": \"Addis Ababa Warehouse\",
+    \"requestedBy\": \"ecta_admin\"
+  }")
+
+if echo "$INSPECTION_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    log_pass "Quality inspection requested: $NEW_INSPECTION_ID"
+else
+    log_fail "Quality inspection request failed"
+    log_info "Response: $INSPECTION_RESPONSE"
 fi
 
 # ==================================================================================
