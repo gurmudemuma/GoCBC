@@ -73,6 +73,7 @@ import eudrRoutes from './routes/eudr';
 import courierRoutes from './routes/courier';
 import statusRoutes from './routes/status';
 import notificationsRoutes from './routes/notifications';
+import searchRoutes from './routes/search'; // Global search (role-scoped)
 import postDeliveryWorkflowRoutes from './routes/postDeliveryWorkflow';
 import blockchainSignaturesRoutes from './routes/blockchain-signatures';
 import statsRoutes from './routes/stats'; // Dual-source statistics (CouchDB + PostgreSQL)
@@ -315,6 +316,7 @@ class CECBSServer {
 
     // V3.0 Notifications & Multi-channel Communication
     apiV1.use('/notifications', authMiddleware, notificationsRoutes); // Notifications, SMS, Webhooks
+    apiV1.use('/search', searchRoutes); // Global search (auth enforced per-route)
 
     // V3.1 Post-Delivery Workflow Management
     apiV1.use('/post-delivery', authMiddleware, postDeliveryWorkflowRoutes); // Payment, Forex, LC, Audit, Closure
