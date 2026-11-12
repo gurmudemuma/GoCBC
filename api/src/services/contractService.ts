@@ -205,9 +205,16 @@ export class ContractService {
         metadata: { exporterID: contract.exporter_id, amount: contract.total_value },
       });
 
-      // 7. 🔥 WORKFLOW TRIGGER: Auto-create LC when contract approved
-      logger.info(`🔥 [ContractService] Contract approved - triggering LC auto-creation for ${approvalData.contractID}`);
-      await this.triggerLCAutoCreation(approvalData.contractID, contract, approvalData.approvedBy, approvalData.approverOrg);
+      // 7. LC creation lives in exactly ONE place: the LC handoff in the
+      // POST /contracts/:contractID/approve route handler (contracts.ts),
+      // which creates a single deterministic `LC-${contractID}` and is
+      // idempotent (it checks QueryAllLCs first). Do NOT auto-create an LC
+      // here as well: an earlier triggerLCAutoCreation created a second,
+      // stray `LC-${Date.now()}` LC on every approval, and CreateShipment
+      // range-scans LCs in key order and fails on the first unallocated
+      // one — the stray — even though the real LC was issued. Keeping this
+      // service free of LC creation is what makes approval create exactly
+      // one LC.
 
       logger.info(`✅ [ContractService] Contract approved: ${approvalData.contractID}`);
       return { success: true, contractID: approvalData.contractID, txId: result.txId };
@@ -275,41 +282,6 @@ export class ContractService {
     } catch (error: any) {
       logger.error(`❌ [ContractService] Reject failed: ${error.message}`);
       throw error;
-    }
-  }
-
-  /**
-   * 🔥 WORKFLOW FIX: Auto-create LC when contract is approved
-   */
-  private async triggerLCAutoCreation(contractID: string, contract: any, userId: string, userOrg: string) {
-    try {
-      const { LCService } = await import('./lcService');
-      const lcService = LCService.getInstance();
-
-      const lcID = `LC-${Date.now()}`;
-      
-      // Calculate expiry date (90 days from now as default)
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + 90);
-      
-      await lcService.requestLC({
-        lcID,
-        contractID,
-        exporterID: contract.exporter_id,
-        bankName: 'Commercial Bank of Ethiopia', // Default bank
-        amount: contract.total_value,
-        currency: contract.currency,
-        expiryDate: expiryDate.toISOString(),
-        userId,
-        userOrg
-      });
-
-      logger.info(`✅ [ContractService] LC auto-created: ${lcID} for contract: ${contractID}`);
-      return { success: true, lcID };
-    } catch (error: any) {
-      logger.error(`❌ [ContractService] LC auto-creation failed: ${error.message}`);
-      // Don't fail contract approval if LC creation fails
-      return { success: false, error: error.message };
     }
   }
 
