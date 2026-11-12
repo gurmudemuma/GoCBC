@@ -133,9 +133,44 @@ echo -e "${BLUE}  Phase 4: Docker System Cleanup${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-echo -e "${YELLOW}▶ Pruning Docker system...${NC}"
-docker system prune -f 2>/dev/null || true
-echo -e "${GREEN}✓ Docker system pruned${NC}"
+# Scoped cleanup only. `docker system prune -f` used to run here, but it
+# removes unused images, networks and build cache for EVERY project on the
+# host — not just CECBS. Everything this fresh start needs is handled in a
+# project-scoped way below:
+#   * project containers/volumes: removed in Phases 1-2 (name filters)
+#   * locally-built project images: removed by compose-project label
+#     (the only `build:` service is coffee-chaincode; pulled base images
+#     such as fabric-peer/couchdb/postgres carry no project label and are
+#     kept — `compose up` re-pulls any that are missing, so nothing stale
+#     is reused)
+#   * anything Phases 1-2 missed: label-scoped container/volume/image prunes
+#   * project network: named `cecbs-network` in the compose file (already
+#     removed by `compose down`; removed explicitly as a safety net)
+# Stale build cache is deliberately left alone: it only speeds up rebuilds
+# and cannot make a rebuild incorrect.
+echo -e "${YELLOW}▶ Pruning Docker resources for this project only...${NC}"
+
+# Compose project name: directory basename, lower-cased (the compose
+# default), unless COMPOSE_PROJECT_NAME is set in the environment.
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
+PROJECT_LABEL="com.docker.compose.project=${PROJECT_NAME}"
+
+# Remove images built for this project (compose labels them at build time).
+docker images -q --filter "label=${PROJECT_LABEL}" 2>/dev/null | xargs -r docker rmi -f 2>/dev/null || true
+# Safety net in case a built image lost its label (e.g. built outside compose):
+# the chaincode image name is read from the compose file, not hardcoded.
+CHAINCODE_IMAGE="$(awk '/^  coffee-chaincode:/{f=1} f && /^[[:space:]]+image:/{print $2; exit}' "$REPO_ROOT/docker-compose-fabric.yml")"
+if [ -n "$CHAINCODE_IMAGE" ]; then
+    docker rmi -f "$CHAINCODE_IMAGE" 2>/dev/null || true
+fi
+
+# Label-scoped prunes: only resources belonging to this compose project.
+docker container prune -f --filter "label=${PROJECT_LABEL}" 2>/dev/null || true
+docker volume prune -f --filter "label=${PROJECT_LABEL}" 2>/dev/null || true
+docker image prune -f --filter "label=${PROJECT_LABEL}" 2>/dev/null || true
+docker network rm cecbs-network 2>/dev/null || true
+
+echo -e "${GREEN}✓ Project Docker resources pruned (other projects untouched)${NC}"
 
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
