@@ -1176,11 +1176,21 @@ EOF
             else
                 write_info "No users found, seeding database..."
                 
-                if [ -f "$SCRIPTS_DIR/seed-users.sql" ]; then
+                # Prefer the JS seeding script as it handles password hashing properly
+                if [ -f "$SCRIPTS_DIR/seed-users.js" ]; then
+                    cd "$PROJECT_ROOT"
+                    node "$SCRIPTS_DIR/seed-users.js" >/dev/null 2>&1
+                    if [ $? -eq 0 ]; then
+                        write_success "Database seeded with test users"
+                        write_info "Default login: admin / admin123"
+                    else
+                        write_warning "Failed to seed users with JS script"
+                    fi
+                elif [ -f "$SCRIPTS_DIR/seed-users.sql" ]; then
                     psql "$DATABASE_URL" -f "$SCRIPTS_DIR/seed-users.sql" >/dev/null 2>&1
-                    write_success "Database seeded with test users"
+                    write_success "Database seeded with test users (SQL)"
                 else
-                    write_warning "seed-users.sql not found at $SCRIPTS_DIR/seed-users.sql"
+                    write_warning "No seed script found at $SCRIPTS_DIR/"
                 fi
             fi
         else
