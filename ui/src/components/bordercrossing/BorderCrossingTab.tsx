@@ -101,7 +101,7 @@ const BorderCrossingTab: React.FC = () => {
     if (statusFilter !== 'ALL') f = f.filter(c => c.status === statusFilter);
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
-      f = f.filter(c => (c.crossingId || '').toLowerCase().includes(s) || c.vehicleNumber.toLowerCase().includes(s) || c.shipmentId.toLowerCase().includes(s));
+      f = f.filter(c => (c.crossingId || '').toLowerCase().includes(s) || (c.vehicleNumber || '').toLowerCase().includes(s) || (c.shipmentId || '').toLowerCase().includes(s));
     }
     setFiltered(f);
   }, [statusFilter, searchTerm, crossings]);

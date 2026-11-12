@@ -215,7 +215,7 @@ const SWIFTMessagesView: React.FC<SWIFTMessagesViewProps> = ({ initialLcStatuses
 
   const filteredLCs = lcStatuses.filter(lc => {
     if (statusFilter !== 'all' && lc.status !== statusFilter) return false;
-    if (searchText && !lc.lcNumber.toLowerCase().includes(searchText.toLowerCase())) return false;
+    if (searchText && !(lc.lcNumber || '').toLowerCase().includes(searchText.toLowerCase())) return false;
     return true;
   });
 

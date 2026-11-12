@@ -489,10 +489,12 @@ const UserManagement: React.FC = () => {
 
   // Enhanced filter logic - search term + role + status
   const filteredUsers = users.filter(user => {
-    // Search term filter
+    // Search term filter (full_name is nullable in the users table, so a
+    // row without one used to throw on the first keystroke and break the
+    // whole filter — guard it; username/email are NOT NULL).
     const matchesSearch = searchTerm === '' || 
       user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (user.full_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       user.email.toLowerCase().includes(searchTerm.toLowerCase());
 
     // Role filter

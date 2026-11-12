@@ -216,8 +216,8 @@ const SystemTraceability: React.FC<SystemTraceabilityProps> = ({
         filtered = filtered.filter(log => log.metadata?.blockchainVerified === true);
       } else {
         filtered = filtered.filter(log =>
-          log.entity_id.toLowerCase().includes(query) ||
-          log.performed_by.toLowerCase().includes(query) ||
+          (log.entity_id || '').toLowerCase().includes(query) ||
+          (log.performed_by || '').toLowerCase().includes(query) ||
           (log.reason && log.reason.toLowerCase().includes(query))
         );
       }
