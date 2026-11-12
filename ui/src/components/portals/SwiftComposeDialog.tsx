@@ -31,7 +31,7 @@ interface Props {
   onConfirm: (f: SwiftForm) => Promise<void> | void;
 }
 
-const SwiftComposeDialog: React.FC<Props> = ({ open, form, onChange, onConfirm }) => {
+const SwiftComposeDialog: React.FC<Props> = ({ open, form, onChange, onClose, onConfirm }) => {
   const [errors, setErrors] = React.useState<Record<string, string>>({});
 
   // LEG3 M-6: the dialog used to accept anything and let the API 422/400

@@ -234,6 +234,194 @@ const NBEPortal: React.FC = () => {
   });
   const [settingPolicy, setSettingPolicy] = useState(false);
 
+  // LEG3 M-5 — Payment Release tab (index 9). POST /payments/:id/release,
+  // PUT /payments/:id/confirm and POST /payments/:id/convert-retention
+  // all existed server-side with ZERO UI callers, so the tail of the
+  // flow (60% release, settlement confirmation, retention conversion)
+  // could only be driven by curl. GET /payments/pending-release is the
+  // list source (VERIFIED payments awaiting release).
+  const [pendingRelease, setPendingRelease] = useState<any[]>([]);
+  const [loadingPendingRelease, setLoadingPendingRelease] = useState(false);
+  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
+  const [convertingRetention, setConvertingRetention] = useState(false);
+  const [convertTarget, setConvertTarget] = useState<any>(null);
+  const [convertForm, setConvertForm] = useState({
+    exchangeRate: '',
+    amountBirr: '',
+    conversionRef: '',
+    conversionDate: new Date().toISOString().split('T')[0],
+  });
+  // LEG3 M-5 — NBE forex repatriation form (tab 4). POST
+  // /nbe/forex/:forexId/repatriation had no UI caller either.
+  const [repatForm, setRepatForm] = useState({
+    forexId: '',
+    repatriationAmount: '',
+    repatriationDate: new Date().toISOString().split('T')[0],
+    bankReference: '',
+    repatriationMethod: 'Wire Transfer',
+  });
+  const [recordingRepat, setRecordingRepat] = useState(false);
+
+  const loadPendingRelease = async () => {
+    setLoadingPendingRelease(true);
+    try {
+      const response = await apiFetch('/payments/pending-release', { method: 'GET' });
+      const result = await response.json();
+      if (result.success) {
+        setPendingRelease(result.data || []);
+      } else {
+        setPendingRelease([]);
+        setApprovalNotification({ open: true, success: false, message: result.error?.message || 'Failed to load payments pending release' });
+      }
+    } catch (err) {
+      console.warn('[NBE] Could not load pending-release payments:', err);
+      setPendingRelease([]);
+    } finally {
+      setLoadingPendingRelease(false);
+    }
+  };
+
+  const handleReleasePayment = async (payment: any) => {
+    const paymentId = payment.paymentId || payment.PaymentID || payment.payment_id;
+    const exporterId = payment.exporterId || payment.ExporterID || payment.exporter_id;
+    const amount = Number(payment.amount ?? payment.Amount ?? payment.amount_usd ?? 0);
+    try {
+      const response = await apiFetch(`/payments/${paymentId}/release`, {
+        method: 'POST',
+        body: JSON.stringify({ exporterID: exporterId, amount }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        const released = result.data?.releaseAmount ?? result.data?.release_amount;
+        setApprovalNotification({ open: true, success: true, message: `Payment ${paymentId} released: ${released ?? amount} USD to exporter ${exporterId} (60% NBE release).` });
+        loadPendingRelease();
+      } else {
+        setApprovalNotification({ open: true, success: false, message: result.error?.message || 'Payment release failed' });
+      }
+    } catch (err: any) {
+      setApprovalNotification({ open: true, success: false, message: err?.message || 'Payment release failed' });
+    }
+  };
+
+  const handleConfirmSettlement = async (payment: any) => {
+    const paymentId = payment.paymentId || payment.PaymentID || payment.payment_id;
+    try {
+      const response = await apiFetch(`/payments/${paymentId}/confirm`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          confirmedBy: (user as any)?.username || 'nbe_admin',
+          confirmationType: 'NBE_APPROVAL',
+          remarks: 'Settlement confirmed by NBE',
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setApprovalNotification({ open: true, success: true, message: `Settlement confirmed for payment ${paymentId}.` });
+        loadPendingRelease();
+      } else {
+        setApprovalNotification({ open: true, success: false, message: result.error?.message || 'Settlement confirmation failed' });
+      }
+    } catch (err: any) {
+      setApprovalNotification({ open: true, success: false, message: err?.message || 'Settlement confirmation failed' });
+    }
+  };
+
+  const openConvertRetention = async (payment: any) => {
+    const amount = Number(payment.amount ?? payment.Amount ?? payment.amount_usd ?? 0);
+    const retentionUsd = Math.round(amount * 0.4 * 100) / 100;
+    const paymentId = payment.paymentId || payment.PaymentID || payment.payment_id;
+    // Live NBE rate first (same reader the repatriation dialog uses);
+    // fall back to the rates table already loaded by loadData.
+    let rate = '';
+    try {
+      const rateRes = await apiFetch(`/forex/rates/${encodeURIComponent(payment.currency || 'USD')}/current`, { method: 'GET' });
+      const rateResult = await rateRes.json();
+      const live = Number(rateResult?.data?.midRate ?? rateResult?.data?.MidRate);
+      if (Number.isFinite(live) && live > 0) rate = String(live);
+    } catch { /* fall through to the table rate */ }
+    if (!rate) {
+      const tableRate = exchangeRates.find((r: any) => String(r.currency).toUpperCase() === String(payment.currency || 'USD').toUpperCase());
+      if (tableRate && Number(tableRate.midRate) > 0) rate = String(tableRate.midRate);
+    }
+    setConvertTarget(payment);
+    setConvertForm({
+      exchangeRate: rate,
+      amountBirr: rate ? String(Math.round(retentionUsd * Number(rate) * 100) / 100) : '',
+      conversionRef: `CONV-${paymentId}-${Date.now()}`,
+      conversionDate: new Date().toISOString().split('T')[0],
+    });
+    setConvertDialogOpen(true);
+  };
+
+  const handleConvertRetention = async () => {
+    if (!convertTarget) return;
+    const paymentId = convertTarget.paymentId || convertTarget.PaymentID || convertTarget.payment_id;
+    const exchangeRate = Number(convertForm.exchangeRate);
+    const amountBirr = Number(convertForm.amountBirr);
+    if (!(exchangeRate > 0) || !(amountBirr > 0) || !convertForm.conversionRef) {
+      setApprovalNotification({ open: true, success: false, message: 'Exchange rate and converted amount must both be greater than 0, and a conversion reference is required.' });
+      return;
+    }
+    setConvertingRetention(true);
+    try {
+      const response = await apiFetch(`/payments/${paymentId}/convert-retention`, {
+        method: 'POST',
+        body: JSON.stringify({
+          exchangeRate,
+          amountBirr,
+          convertedBy: (user as any)?.username || 'nbe_admin',
+          conversionRef: convertForm.conversionRef,
+          conversionDate: convertForm.conversionDate,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setApprovalNotification({ open: true, success: true, message: `Retention converted for ${paymentId}: ${amountBirr} Birr @ ${exchangeRate}.` });
+        setConvertDialogOpen(false);
+        setConvertTarget(null);
+        loadPendingRelease();
+      } else {
+        setApprovalNotification({ open: true, success: false, message: result.error?.message || 'Retention conversion failed' });
+      }
+    } catch (err: any) {
+      setApprovalNotification({ open: true, success: false, message: err?.message || 'Retention conversion failed' });
+    } finally {
+      setConvertingRetention(false);
+    }
+  };
+
+  const handleRecordForexRepatriation = async () => {
+    const amount = Number(repatForm.repatriationAmount);
+    if (!repatForm.forexId || !(amount > 0)) {
+      setApprovalNotification({ open: true, success: false, message: 'Select a forex allocation and enter a repatriation amount greater than 0.' });
+      return;
+    }
+    setRecordingRepat(true);
+    try {
+      const response = await apiFetch(`/nbe/forex/${encodeURIComponent(repatForm.forexId)}/repatriation`, {
+        method: 'POST',
+        body: JSON.stringify({
+          repatriationAmount: amount,
+          repatriationDate: repatForm.repatriationDate,
+          bankReference: repatForm.bankReference || undefined,
+          repatriationMethod: repatForm.repatriationMethod,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setApprovalNotification({ open: true, success: true, message: `Forex repatriation recorded for ${repatForm.forexId}: ${amount} USD.` });
+        setRepatForm({ forexId: '', repatriationAmount: '', repatriationDate: new Date().toISOString().split('T')[0], bankReference: '', repatriationMethod: 'Wire Transfer' });
+        loadData();
+      } else {
+        setApprovalNotification({ open: true, success: false, message: result.error?.message || 'Forex repatriation failed' });
+      }
+    } catch (err: any) {
+      setApprovalNotification({ open: true, success: false, message: err?.message || 'Forex repatriation failed' });
+    } finally {
+      setRecordingRepat(false);
+    }
+  };
+
   // Pagination State
   const [currentPage, setCurrentPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -245,6 +433,9 @@ const NBEPortal: React.FC = () => {
   useEffect(() => {
     if (tabValue === 8) {
       loadAuditStats();
+    }
+    if (tabValue === 9) {
+      loadPendingRelease();
     }
   }, [tabValue]);
 
@@ -897,6 +1088,7 @@ const NBEPortal: React.FC = () => {
       { index: 6, label: 'Analytics', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer'] },
       { index: 7, label: 'User Management', icon: <Person sx={{ fontSize: 20 }} />, roles: ['ADMIN', 'NBE', 'NBE Portal Administrator'] },
       { index: 8, label: 'Audit Trail', icon: <Assessment sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Forex Officer', 'Exchange Rate Officer', 'Settlement Officer', 'Compliance Officer'] },
+      { index: 9, label: 'Payment Release', icon: <AttachMoney sx={{ fontSize: 20 }} />, roles: ['NBE', 'ADMIN', 'NBE Officer', 'Settlement Officer'] },
     ];
     
     if (isSuperAdmin) return allTabs;
@@ -1894,6 +2086,77 @@ const NBEPortal: React.FC = () => {
         <PortalTabPanel value={tabValue} index={4}>
           {/* Forex Repatriation Tab */}
           <RepatriationManagementTab />
+          {/* LEG3 M-5: record a forex repatriation against an allocation.
+              POST /nbe/forex/:forexId/repatriation had no UI caller. */}
+          <Box sx={{ mt: 3 }}>
+            <PortalCard brand="NBE" title="Record Forex Repatriation">
+              <Grid container spacing={2} sx={{ p: 2 }}>
+                <Grid item xs={12} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Forex Allocation</InputLabel>
+                    <Select
+                      value={repatForm.forexId}
+                      label="Forex Allocation"
+                      onChange={(e) => setRepatForm({ ...repatForm, forexId: e.target.value })}
+                    >
+                      {forexAllocations.filter((f) => ['ALLOCATED', 'UTILIZED'].includes(f.status)).map((f) => (
+                        <MenuItem key={f.forexId || (f as any).allocationId} value={f.forexId || (f as any).allocationId}>
+                          {(f.forexId || (f as any).allocationId) + ' — ' + (f as any).lcId + ' (' + f.status + ')'}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={2}>
+                  <PortalField
+                    label="Repatriation Amount (USD) *"
+                    type="number"
+                    value={repatForm.repatriationAmount}
+                    onChange={(e) => setRepatForm({ ...repatForm, repatriationAmount: e.target.value })}
+                    fullWidth
+                    required
+                  />
+                </Grid>
+                <Grid item xs={12} md={2}>
+                  <PortalField
+                    label="Repatriation Date"
+                    type="date"
+                    value={repatForm.repatriationDate}
+                    onChange={(e) => setRepatForm({ ...repatForm, repatriationDate: e.target.value })}
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={2}>
+                  <PortalField
+                    label="Bank Reference"
+                    value={repatForm.bankReference}
+                    onChange={(e) => setRepatForm({ ...repatForm, bankReference: e.target.value })}
+                    fullWidth
+                  />
+                </Grid>
+                <Grid item xs={12} md={2}>
+                  <FormControl fullWidth>
+                    <InputLabel>Method</InputLabel>
+                    <Select
+                      value={repatForm.repatriationMethod}
+                      label="Method"
+                      onChange={(e) => setRepatForm({ ...repatForm, repatriationMethod: e.target.value })}
+                    >
+                      <MenuItem value="Wire Transfer">Wire Transfer</MenuItem>
+                      <MenuItem value="SWIFT">SWIFT</MenuItem>
+                      <MenuItem value="Bank Transfer">Bank Transfer</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12}>
+                  <PrimaryButton brand="NBE" onClick={handleRecordForexRepatriation} disabled={recordingRepat}>
+                    {recordingRepat ? 'Recording…' : 'Record Repatriation'}
+                  </PrimaryButton>
+                </Grid>
+              </Grid>
+            </PortalCard>
+          </Box>
         </PortalTabPanel>
 
         <PortalTabPanel value={tabValue} index={5}>
@@ -1997,6 +2260,47 @@ const NBEPortal: React.FC = () => {
             maxHeight={700}
           />
         </PortalTabPanel>
+
+        <PortalTabPanel value={tabValue} index={9}>
+          {/* LEG3 M-5: Payment Release Tab — the tail of the flow.
+              VERIFIED payments awaiting the NBE 60% release, with
+              Confirm Settlement and Convert Retention alongside. */}
+          <Box sx={{ p: 3 }}>
+            <Typography variant="h6" gutterBottom>Payments Pending Release</Typography>
+            <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+              Verified payments awaiting the NBE 60% release to the exporter. Release settles the payment on-chain when needed and records the 60% release; Confirm Settlement moves a settled payment to CONFIRMED; Convert Retention converts the retained 40% to Birr at the live NBE rate.
+            </Typography>
+            <Box sx={{ height: 520, width: '100%' }}>
+              <PortalDataGrid
+                brand="NBE"
+                rows={pendingRelease}
+                getRowId={(row: any) => row.paymentId || row.PaymentID || row.payment_id}
+                loading={loadingPendingRelease}
+                columns={[
+                  { field: 'paymentId', headerName: 'Payment ID', width: 190, valueGetter: (params: any) => params.row.paymentId || params.row.PaymentID || params.row.payment_id },
+                  { field: 'contractId', headerName: 'Contract', width: 180, valueGetter: (params: any) => params.row.contractId || params.row.ContractID || params.row.contract_id },
+                  { field: 'exporterId', headerName: 'Exporter', width: 150, valueGetter: (params: any) => params.row.exporterId || params.row.ExporterID || params.row.exporter_id },
+                  { field: 'lcId', headerName: 'LC', width: 170, valueGetter: (params: any) => params.row.lcId || params.row.LCID || params.row.lc_id },
+                  { field: 'amount', headerName: 'Amount (USD)', width: 130, type: 'number', valueGetter: (params: any) => Number(params.row.amount ?? params.row.Amount ?? params.row.amount_usd ?? 0) },
+                  { field: 'status', headerName: 'Status', width: 120, valueGetter: (params: any) => params.row.status || params.row.Status },
+                  {
+                    field: 'actions', headerName: 'Actions', width: 420, sortable: false,
+                    renderCell: (params: any) => (
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <PrimaryButton brand="NBE" size="small" onClick={() => handleReleasePayment(params.row)}>Release 60%</PrimaryButton>
+                        <SecondaryButton brand="NBE" size="small" onClick={() => handleConfirmSettlement(params.row)}>Confirm Settlement</SecondaryButton>
+                        <GhostButton brand="NBE" size="small" onClick={() => openConvertRetention(params.row)}>Convert Retention</GhostButton>
+                      </Box>
+                    ),
+                  },
+                ]}
+                initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                pageSizeOptions={[10, 25, 50]}
+                autoHeight
+              />
+            </Box>
+          </Box>
+        </PortalTabPanel>
       </PortalCard>
 
       {/* Approval result notification */}
@@ -2015,6 +2319,85 @@ const NBEPortal: React.FC = () => {
           {approvalNotification.message}
         </Alert>
       </Snackbar>
+      {/* LEG3 M-5: Convert Retention dialog — converts the retained 40%
+          of a VERIFIED+ payment to Birr at the live NBE rate. */}
+      <PortalDialog
+        brand="NBE"
+        open={convertDialogOpen}
+        onClose={() => setConvertDialogOpen(false)}
+        maxWidth="sm"
+        title={<>Convert Retention {convertTarget ? `— ${convertTarget.paymentId || convertTarget.PaymentID}` : ''}</>}
+        actions={<>
+          <GhostButton brand="NBE" onClick={() => setConvertDialogOpen(false)}>Cancel</GhostButton>
+          <PrimaryButton brand="NBE" onClick={handleConvertRetention} disabled={convertingRetention}>
+            {convertingRetention ? 'Converting…' : 'Convert Retention'}
+          </PrimaryButton>
+        </>}
+      >
+        <Box sx={{ pt: 2 }}>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Typography variant="body2" color="textSecondary">
+                Retained amount: 40% of ${Number(convertTarget?.amount ?? convertTarget?.Amount ?? 0).toLocaleString()} USD
+                = ${(Number(convertTarget?.amount ?? convertTarget?.Amount ?? 0) * 0.4).toLocaleString()} USD.
+                The Birr amount defaults to retained USD × live rate; adjust it if the booked rate differs.
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <PortalField
+                label="Exchange Rate (ETB/USD) *"
+                type="number"
+                value={convertForm.exchangeRate}
+                onChange={(e) => {
+                  const rate = e.target.value;
+                  const retentionUsd = Number(convertTarget?.amount ?? convertTarget?.Amount ?? 0) * 0.4;
+                  setConvertForm({
+                    ...convertForm,
+                    exchangeRate: rate,
+                    amountBirr: rate && Number(rate) > 0 ? String(Math.round(retentionUsd * Number(rate) * 100) / 100) : convertForm.amountBirr,
+                  });
+                }}
+                fullWidth
+                required
+                error={convertForm.exchangeRate !== '' && !(Number(convertForm.exchangeRate) > 0)}
+                helperText={convertForm.exchangeRate !== '' && !(Number(convertForm.exchangeRate) > 0) ? 'Rate must be greater than 0.' : 'Live NBE rate, prefilled.'}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <PortalField
+                label="Converted Amount (Birr) *"
+                type="number"
+                value={convertForm.amountBirr}
+                onChange={(e) => setConvertForm({ ...convertForm, amountBirr: e.target.value })}
+                fullWidth
+                required
+                error={convertForm.amountBirr !== '' && !(Number(convertForm.amountBirr) > 0)}
+                helperText={convertForm.amountBirr !== '' && !(Number(convertForm.amountBirr) > 0) ? 'Amount must be greater than 0.' : undefined}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <PortalField
+                label="Conversion Reference *"
+                value={convertForm.conversionRef}
+                onChange={(e) => setConvertForm({ ...convertForm, conversionRef: e.target.value })}
+                fullWidth
+                required
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <PortalField
+                label="Conversion Date"
+                type="date"
+                value={convertForm.conversionDate}
+                onChange={(e) => setConvertForm({ ...convertForm, conversionDate: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+          </Grid>
+        </Box>
+      </PortalDialog>
+
       {/* Contract Approval Dialog */}
       <PortalDialog
         brand="NBE"
