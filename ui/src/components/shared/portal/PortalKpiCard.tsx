@@ -40,18 +40,35 @@ export const PortalKpiCard: React.FC<PortalKpiCardProps> = ({
       onClick={onClick}
       sx={{
         height: 140,
-        borderRadius: 2,
+        borderRadius: 3,
         textAlign: 'center',
         cursor: clickable ? 'pointer' : 'default',
-        border: selected ? `2px solid ${accent}` : '1px solid #e0e0e0',
-        bgcolor: selected ? `${accent}08` : 'white',
-        boxShadow: selected ? `0 4px 12px ${accent}40` : '0 1px 3px rgba(0,0,0,0.05)',
+        border: selected ? `3px solid ${accent}` : '2px solid transparent',
+        bgcolor: selected ? `${accent}12` : 'white',
+        background: selected 
+          ? `linear-gradient(135deg, ${accent}08 0%, ${accent}18 100%)`
+          : 'white',
+        boxShadow: selected 
+          ? `0 8px 24px ${accent}35, 0 4px 12px ${accent}25` 
+          : '0 4px 12px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04)',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        position: 'relative',
+        overflow: 'hidden',
+        '&::before': selected ? {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '4px',
+          background: `linear-gradient(90deg, ${accent} 0%, ${accent}CC 100%)`,
+        } : {},
         '&:hover': clickable
           ? {
-              boxShadow: `0 8px 24px ${accent}40`,
-              transform: 'translateY(-4px)',
+              boxShadow: `0 12px 32px ${accent}40, 0 6px 16px ${accent}30`,
+              transform: 'translateY(-6px) scale(1.02)',
               borderColor: accent,
+              bgcolor: `${accent}05`,
             }
           : {},
       }}
@@ -70,16 +87,21 @@ export const PortalKpiCard: React.FC<PortalKpiCardProps> = ({
       >
         <Box
           sx={{
-            width: 48,
-            height: 48,
+            width: 56,
+            height: 56,
             borderRadius: '50%',
-            bgcolor: `${accent}15`,
+            background: `linear-gradient(135deg, ${accent}25 0%, ${accent}35 100%)`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            mb: 1,
+            mb: 1.5,
             color: accent,
-            '& .MuiSvgIcon-root': { fontSize: 28 },
+            boxShadow: `0 6px 16px ${accent}30, 0 2px 8px ${accent}20`,
+            transition: 'all 0.3s ease',
+            '& .MuiSvgIcon-root': { 
+              fontSize: 32,
+              filter: `drop-shadow(0 2px 4px ${accent}50)`,
+            },
           }}
         >
           {icon}
@@ -87,16 +109,27 @@ export const PortalKpiCard: React.FC<PortalKpiCardProps> = ({
         <Typography
           variant="caption"
           sx={{
-            color: '#666',
+            color: '#555',
             textTransform: 'uppercase',
-            fontWeight: 600,
-            fontSize: '0.7rem',
-            letterSpacing: 0.5,
+            fontWeight: 700,
+            fontSize: '0.75rem',
+            letterSpacing: 1,
+            mb: 0.5,
           }}
         >
           {label}
         </Typography>
-        <Typography variant="h4" sx={{ fontWeight: 700, color: accent, lineHeight: 1, mt: 0.5 }}>
+        <Typography 
+          variant="h3" 
+          sx={{ 
+            fontWeight: 800, 
+            color: accent, 
+            lineHeight: 1, 
+            mt: 0.75,
+            fontSize: '2.5rem',
+            textShadow: `0 2px 8px ${accent}25`,
+          }}
+        >
           {value}
         </Typography>
         {subtitle ? (

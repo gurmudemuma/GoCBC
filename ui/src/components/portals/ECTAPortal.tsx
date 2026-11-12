@@ -214,6 +214,12 @@ const ECTAPortal: React.FC = () => {
   
   // Sub-tab state for KPI filtering
   const [subTabValue, setSubTabValue] = useState(0);
+
+  // Tab change handler
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+    setSubTabValue(0); // Reset sub-tab when main tab changes
+  };
   
   // Inspection filter state (for Quality Control tab). The values are the
   // states this tab actually renders (PENDING → Inspect, INSPECTED →
@@ -1707,270 +1713,109 @@ The exporter can reapply once all requirements are met.`,
     ? allApplications
     : allApplications.filter((a) => a.status === applicationFilterTab);
 
+  // Dynamic KPIs based on active tab
+  const getDynamicKpis = () => {
+    switch (tabValue) {
+      case 0: // Pending Applications
+        return [
+          { icon: <Warning />, label: 'Pending Review', value: allApplications.filter(a => a.status === 'pending').length, color: '#ff9800', onClick: () => { setApplicationFilterTab('pending'); setCurrentPage(0); }, selected: applicationFilterTab === 'pending' },
+          { icon: <CheckCircle />, label: 'Approved', value: allApplications.filter(a => a.status === 'approved').length, color: '#4caf50', onClick: () => { setApplicationFilterTab('approved'); setCurrentPage(0); }, selected: applicationFilterTab === 'approved' },
+          { icon: <Cancel />, label: 'Rejected', value: allApplications.filter(a => a.status === 'rejected').length, color: '#f44336', onClick: () => { setApplicationFilterTab('rejected'); setCurrentPage(0); }, selected: applicationFilterTab === 'rejected' },
+          { icon: <Assignment />, label: 'Total Applications', value: allApplications.length, color: '#2196f3', onClick: () => { setApplicationFilterTab('ALL'); setCurrentPage(0); }, selected: applicationFilterTab === 'ALL' },
+        ];
+      
+      case 1: // Approved Exporters
+        return [
+          { icon: <Coffee />, label: 'Active Exporters', value: approvedApplications.filter(a => a.status === 'approved').length, color: BRAND_COLOR },
+          { icon: <Warning />, label: 'Expiring Soon (30 days)', value: approvedApplications.filter(a => {
+              if (!a.license_expiry_date) return false;
+              const expiryDate = new Date(a.license_expiry_date);
+              const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+              return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
+            }).length, color: '#ff9800' },
+          { icon: <ErrorOutline />, label: 'Expired Licenses', value: approvedApplications.filter(a => {
+              if (!a.license_expiry_date) return false;
+              const expiryDate = new Date(a.license_expiry_date);
+              return expiryDate.getTime() < Date.now();
+            }).length, color: '#f44336' },
+          { icon: <TrendingUp />, label: 'Total Registered', value: allExporters.length, color: '#2196f3' },
+        ];
+      
+      case 2: // Sales Contracts
+        return [
+          { icon: <Description />, label: 'Pending Review', value: allContracts.filter(c => c.status === 'REGISTERED').length, color: '#ff9800' },
+          { icon: <CheckCircle />, label: 'Approved', value: allContracts.filter(c => c.status === 'APPROVED').length, color: '#4caf50' },
+          { icon: <Cancel />, label: 'Rejected', value: allContracts.filter(c => c.status === 'REJECTED').length, color: '#f44336' },
+          { icon: <Assignment />, label: 'Total Contracts', value: allContracts.length, color: '#2196f3' },
+        ];
+      
+      case 3: // Quality Control
+        return [
+          { icon: <HourglassEmpty />, label: 'Pending Inspection', value: allInspectionRecords.filter(i => ['PENDING', 'REQUESTED'].includes(i.status)).length, color: '#ff9800', onClick: () => setInspectionFilterTab('PENDING'), selected: inspectionFilterTab === 'PENDING' },
+          { icon: <Science />, label: 'Inspected', value: allInspectionRecords.filter(i => i.status === 'INSPECTED').length, color: '#2196f3', onClick: () => setInspectionFilterTab('INSPECTED'), selected: inspectionFilterTab === 'INSPECTED' },
+          { icon: <CheckCircle />, label: 'Approved', value: allInspectionRecords.filter(i => i.status === 'APPROVED').length, color: '#4caf50', onClick: () => setInspectionFilterTab('APPROVED'), selected: inspectionFilterTab === 'APPROVED' },
+          { icon: <Assignment />, label: 'Total Inspections', value: allInspectionRecords.length, color: BRAND_COLOR, onClick: () => setInspectionFilterTab('ALL'), selected: inspectionFilterTab === 'ALL' },
+        ];
+      
+      case 4: // License Renewals
+        return [
+          { icon: <Warning />, label: 'Renewal Pending', value: approvedApplications.filter(a => {
+              if (!a.license_expiry_date) return false;
+              const expiryDate = new Date(a.license_expiry_date);
+              const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+              return daysUntilExpiry > 0 && daysUntilExpiry <= 90;
+            }).length, color: '#ff9800' },
+          { icon: <CheckCircle />, label: 'Recently Renewed', value: approvedApplications.filter(a => {
+              if (!a.license_expiry_date) return false;
+              const expiryDate = new Date(a.license_expiry_date);
+              const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+              return daysUntilExpiry > 330; // Renewed in last 35 days
+            }).length, color: '#4caf50' },
+          { icon: <ErrorOutline />, label: 'Expired', value: approvedApplications.filter(a => {
+              if (!a.license_expiry_date) return false;
+              const expiryDate = new Date(a.license_expiry_date);
+              return expiryDate.getTime() < Date.now();
+            }).length, color: '#f44336' },
+        ];
+      
+      case 9: // Post-Delivery Audits
+        return [
+          { icon: <DirectionsBoat />, label: 'Delivered Shipments', value: deliveredShipments.length, color: BRAND_COLOR },
+          { icon: <CheckCircle />, label: 'Audits Completed', value: deliveredShipments.filter(s => s.post_delivery_audit_status === 'COMPLETED').length, color: '#4caf50' },
+          { icon: <HourglassEmpty />, label: 'Audits Pending', value: deliveredShipments.filter(s => !s.post_delivery_audit_status || s.post_delivery_audit_status === 'PENDING').length, color: '#ff9800' },
+        ];
+      
+      default:
+        return [];
+    }
+  };
+
+  const dynamicKpis = getDynamicKpis();
+
   return (
     <PortalShell brand="ECTA" title="ECTA Portal" subtitle={'Ethiopian Coffee & Tea Authority'}>
       {/* Dynamic KPI Cards - Change based on active tab */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        {/* Tab 0: Pending Applications */}
-        {tabValue === 0 && (
-          <>
-            <Grid item xs={12} sm={6} md={3}>
+      {dynamicKpis.length > 0 && (
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          {dynamicKpis.map((kpi, idx) => (
+            <Grid item xs={12} sm={6} md={3} key={idx}>
               <PortalKpiCard
                 brand="ECTA"
-                icon={<Warning />}
-                label="Pending Review"
-                value={allApplications.filter(a => a.status === 'pending').length}
-                color="#ff9800"
-                onClick={() => { setApplicationFilterTab('pending'); setCurrentPage(0); }}
-                selected={applicationFilterTab === 'pending'}
+                icon={kpi.icon}
+                label={kpi.label}
+                value={kpi.value}
+                color={kpi.color}
+                onClick={kpi.onClick}
+                selected={kpi.selected}
               />
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<CheckCircle />}
-                label="Approved"
-                value={allApplications.filter(a => a.status === 'approved').length}
-                color="#4caf50"
-                onClick={() => { setApplicationFilterTab('approved'); setCurrentPage(0); }}
-                selected={applicationFilterTab === 'approved'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Cancel />}
-                label="Rejected"
-                value={allApplications.filter(a => a.status === 'rejected').length}
-                color="#f44336"
-                onClick={() => { setApplicationFilterTab('rejected'); setCurrentPage(0); }}
-                selected={applicationFilterTab === 'rejected'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Assignment />}
-                label="Total Applications"
-                value={allApplications.length}
-                color="#2196f3"
-                onClick={() => { setApplicationFilterTab('ALL'); setCurrentPage(0); }}
-                selected={applicationFilterTab === 'ALL'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Coffee />}
-                label="Active Exporters"
-                value={approvedApplications.filter(a => a.status === 'approved').length}
-                color={BRAND_COLOR}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Warning />}
-                label="Expiring Soon"
-                value={approvedApplications.filter(a => {
-                      if (!a.license_expiry_date) return false;
-                      const expiryDate = new Date(a.license_expiry_date);
-                      const daysUntilExpiry = Math.floor((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-                      return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
-                }).length}
-                color="#ff9800"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<ErrorOutline />}
-                label="Expired Licenses"
-                value={approvedApplications.filter(a => {
-                      if (!a.license_expiry_date) return false;
-                      const expiryDate = new Date(a.license_expiry_date);
-                      return expiryDate.getTime() < Date.now();
-                }).length}
-                color="#f44336"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Science />}
-                label="Lab Certified"
-                value={approvedApplications.filter(a => a.laboratory_facility && a.laboratory_facility.toLowerCase() === 'yes').length}
-                color="#9c27b0"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<HourglassEmpty />}
-                label="Pending Approval"
-                value={allContracts.filter(c => c.contractStatus === 'REGISTERED' || c.status === 'REGISTERED').length}
-                color="#ff9800"
-                onClick={() => setContractStatusFilter('REGISTERED')}
-                selected={contractStatusFilter === 'REGISTERED'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<CheckCircle />}
-                label="Approved"
-                value={allContracts.filter(c => c.contractStatus === 'APPROVED' || c.status === 'APPROVED').length}
-                color="#4caf50"
-                onClick={() => setContractStatusFilter('APPROVED')}
-                selected={contractStatusFilter === 'APPROVED'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Cancel />}
-                label="Rejected"
-                value={allContracts.filter(c => c.contractStatus === 'REJECTED' || c.status === 'REJECTED').length}
-                color="#f44336"
-                onClick={() => setContractStatusFilter('REJECTED')}
-                selected={contractStatusFilter === 'REJECTED'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Pending />}
-                label="Pending"
-                value={allContracts.filter(c => c.contractStatus === 'PENDING' || c.status === 'PENDING').length}
-                color="#ef6c00"
-                onClick={() => setContractStatusFilter('PENDING')}
-                selected={contractStatusFilter === 'PENDING'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Block />}
-                label="Cancelled"
-                value={allContracts.filter(c => c.contractStatus === 'CANCELLED' || c.status === 'CANCELLED').length}
-                color="#616161"
-                onClick={() => setContractStatusFilter('CANCELLED')}
-                selected={contractStatusFilter === 'CANCELLED'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<CheckCircleOutline />}
-                label="Completed"
-                value={allContracts.filter(c => c.contractStatus === 'COMPLETED' || c.status === 'COMPLETED').length}
-                color="#00897b"
-                onClick={() => setContractStatusFilter('COMPLETED')}
-                selected={contractStatusFilter === 'COMPLETED'}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Description />}
-                label="All Contracts"
-                value={allContracts.length}
-                color="#2196f3"
-                onClick={() => setContractStatusFilter('')}
-                selected={contractStatusFilter === ''}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Pending />}
-                label="Pending Inspection"
-                value={allShipments.filter(s => {
-                      const status = (s.status || (s as any).Status || '').toUpperCase();
-                      return status === 'CREATED' &&
-                             !allInspectionRecords.some(i => (i.shipmentID || i.ShipmentID) === s.shipmentId);
-                }).length}
-                color="#ff9800"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Science />}
-                label="In Progress"
-                value={allInspectionRecords.filter(i => {
-                      const status = (i.status || (i as any).Status || '').toUpperCase();
-                      return status === 'INSPECTED';
-                }).length}
-                color="#2196f3"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<CheckCircle />}
-                label="Completed"
-                value={allInspectionRecords.filter(i => {
-                      // COMPLETED is not a QualityInspection status
-                      // (quality.go: PENDING, INSPECTED, APPROVED, REJECTED).
-                      // A completed inspection is one that reached a terminal
-                      // decision: APPROVED or REJECTED. INSPECTED is still
-                      // in progress (see the "In Progress" card above).
-                      const status = (i.status || (i as any).Status || '').toUpperCase();
-                      return status === 'APPROVED' || status === 'REJECTED';
-                }).length}
-                color="#4caf50"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Assessment />}
-                label="Total Inspections"
-                value={allInspectionRecords.length}
-                color="#9c27b0"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<Assessment />}
-                label="Total Activities"
-                value={auditStats.totalActivities}
-                color="#1976d2"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<TrendingUp />}
-                label="Today's Actions"
-                value={auditStats.todaysActions}
-                color="#4caf50"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<CheckCircle />}
-                label="Blockchain Verified"
-                value={auditStats.blockchainVerified}
-                color="#9c27b0"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <PortalKpiCard
-                brand="ECTA"
-                icon={<People />}
-                label="Organizations"
-                value={auditStats.organizationsInvolved}
-                color="#ff9800"
-              />
-            </Grid>
-          </>
-        )}
-      </Grid>
+          ))}
+        </Grid>
+      )}
 
+      {/* Tab Navigation */}
+
+      {/* Tab Content */}
       {/* Main Tabs */}
       <PortalCard brand="ECTA" noPadding>
         <PortalTabBar
