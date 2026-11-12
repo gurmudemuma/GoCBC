@@ -466,6 +466,52 @@ router.post('/:id/approve', authMiddleware, requireRole('ECTA', 'ECTA_ADMIN'), a
 
     logger.info(`[INSPECTION] ✅ Approved: ${id}`);
 
+    // Leg2 #6: a pre-shipment inspection approved here must satisfy the
+    // permit gate — quality.ts issue-permit requires a
+    // quality_inspections row with status='APPROVED', and nothing in
+    // this parallel system ever wrote that table, so an inspection
+    // completed here could never lead to a permit. Mirror the approval
+    // into quality_inspections (best-effort: the chaincode approval
+    // already committed, so a mirror failure must never fail this
+    // response). The inspection is read back from the ledger for its
+    // shipment/contract/exporter linkage.
+    try {
+      const readBack = await fabricService.evaluateTransaction('ReadInspection', id);
+      const insp: any = readBack?.success ? readBack.data : null;
+      const shipmentId = insp?.shipmentId || insp?.ShipmentID || insp?.shipmentID || '';
+      const contractId = insp?.contractId || insp?.ContractID || insp?.contractID || '';
+      const exporterId = insp?.exporterId || insp?.ExporterID || insp?.exporterID || '';
+      if (shipmentId) {
+        // No ON CONFLICT here: idx_quality_inspections_inspection_id
+        // is a PARTIAL unique index (WHERE inspection_id IS NOT NULL),
+        // which ON CONFLICT (inspection_id) cannot target.
+        const existing = await postgresDb.get(
+          'SELECT id FROM quality_inspections WHERE inspection_id = $1',
+          [id]
+        );
+        if (existing) {
+          await postgresDb.run(
+            `UPDATE quality_inspections SET status = 'APPROVED', passed = true,
+               blockchain_tx_id = $2, updated_at = NOW() WHERE inspection_id = $1`,
+            [id, result.transactionId || null]
+          );
+        } else {
+          await postgresDb.run(
+            `INSERT INTO quality_inspections (
+               inspection_id, exporter_id, contract_id, shipment_id,
+               coffee_type, quantity, status, passed, blockchain_tx_id
+             ) VALUES ($1, $2, $3, $4, 'Arabica', $5, 'APPROVED', true, $6)`,
+            [id, exporterId || null, contractId || null, shipmentId, Number(insp?.quantity ?? insp?.Quantity ?? 0) || null, result.transactionId || null]
+          );
+        }
+        logger.info(`[INSPECTION] ✅ Mirrored approval of ${id} into quality_inspections (APPROVED) for shipment ${shipmentId}`);
+      } else {
+        logger.warn(`[INSPECTION] Could not mirror approval of ${id}: ledger read returned no shipment linkage`);
+      }
+    } catch (mirrorErr: any) {
+      logger.warn(`[INSPECTION] Could not mirror approval of ${id} into quality_inspections:`, mirrorErr.message);
+    }
+
     res.json({
       success: true,
       message: 'Inspection approved successfully',

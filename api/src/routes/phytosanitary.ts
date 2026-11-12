@@ -50,6 +50,13 @@ router.post('/request',
     body('plantDescription').optional().isString(),
     body('quantity').optional().isNumeric(),
     body('treatmentApplied').optional().isString(),
+    body('placeOfOrigin').optional().isString(),
+    body('pointOfEntry').optional().isString(),
+    body('packagingType').optional().isString(),
+    body('numberOfPackages').optional().isNumeric(),
+    body('distinguishingMarks').optional().isString(),
+    body('meansOfConveyance').optional().isString(),
+    body('validityPeriod').optional().isString(),
   ],
   validateRequest,
   async (req, res) => {
@@ -61,11 +68,26 @@ router.post('/request',
         plantDescription,
         quantity,
         treatmentApplied,
+        // Leg2 #10: the form collects these seven certificate fields on
+        // every step — the old route read only the six fields above and
+        // dropped the rest. They are real certificate data, so they are
+        // stored on-chain (RequestPhytosanitaryCertificate takes them as
+        // optional trailing args) and mirrored to Postgres (migration
+        // 073). The chaincode struct already carries them (Issue passes
+        // them); Request is what never set them.
+        placeOfOrigin,
+        pointOfEntry,
+        packagingType,
+        numberOfPackages,
+        distinguishingMarks,
+        meansOfConveyance,
+        validityPeriod,
       } = req.body;
 
       logger.info(`[PHYTO] Requesting phytosanitary certificate: ${certificateID}`);
 
-      // Try blockchain first, fall back to PostgreSQL if chaincode function not found
+      // Ledger-first: the chaincode call carries the seven certificate
+      // fields as optional trailing args (6-arg calls still work).
       const result = await fabricService.invokeChaincode('RequestPhytosanitaryCertificate', [
         certificateID,
         shipmentID,
@@ -73,6 +95,13 @@ router.post('/request',
         plantDescription || 'Coffee beans (Coffea arabica)',
         quantity?.toString() || '0',
         treatmentApplied || 'Fumigation',
+        placeOfOrigin || '',
+        pointOfEntry || '',
+        packagingType || '',
+        numberOfPackages != null ? String(numberOfPackages) : '',
+        distinguishingMarks || '',
+        meansOfConveyance || '',
+        validityPeriod || '',
       ]);
 
       if (result.success) {
@@ -80,16 +109,28 @@ router.post('/request',
         try {
           await postgresDb.run(`
             INSERT INTO phytosanitary_certificates (
-              certificate_id, status, issue_date, treatment_type, 
-              inspection_result, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6)
+              certificate_id, shipment_id, exporter_id, status, issue_date,
+              treatment_type, inspection_result,
+              place_of_origin, point_of_entry, packaging_type,
+              number_of_packages, distinguishing_marks, means_of_conveyance,
+              validity_period, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (certificate_id) DO NOTHING
           `, [
             certificateID,
+            shipmentID,
+            exporterID,
             'PENDING',
             new Date().toISOString(),
             treatmentApplied || 'FUMIGATION',
             'PENDING',
+            placeOfOrigin || null,
+            pointOfEntry || null,
+            packagingType || null,
+            numberOfPackages != null ? Number(numberOfPackages) : null,
+            distinguishingMarks || null,
+            meansOfConveyance || null,
+            validityPeriod || null,
             new Date().toISOString()
           ]);
         } catch (pgErr) {
@@ -104,41 +145,20 @@ router.post('/request',
           timestamp: new Date().toISOString(),
         });
       } else if (result.error && result.error.includes('not found in contract')) {
-        // Chaincode function not found - use PostgreSQL fallback
-        logger.warn(`[PHYTO] Chaincode function not found, using PostgreSQL fallback for ${certificateID}`);
-        try {
-          await postgresDb.run(`
-            INSERT INTO phytosanitary_certificates (
-              certificate_id, status, issue_date, treatment_type,
-              inspection_result, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (certificate_id) DO NOTHING
-          `, [
-            certificateID,
-            'PENDING',
-            new Date().toISOString(),
-            treatmentApplied || 'FUMIGATION',
-            'PENDING',
-            new Date().toISOString()
-          ]);
-          logger.info(`✅ Phytosanitary certificate requested (PostgreSQL only): ${certificateID}`);
-          res.status(201).json({
-            success: true,
-            message: 'Phytosanitary certificate requested successfully (PostgreSQL)',
-            data: { certificateID, certificateId: certificateID, status: 'PENDING' },
-            timestamp: new Date().toISOString(),
-          });
-        } catch (pgErr: any) {
-          logger.error(`[PHYTO] PostgreSQL fallback failed:`, pgErr);
-          res.status(500).json({
-            success: false,
-            error: {
-              code: 'REQUEST_FAILED',
-              message: pgErr.message,
-            },
-            timestamp: new Date().toISOString(),
-          });
-        }
+        // Leg2 #12: the chaincode function is not deployed — fail
+        // honestly with 503. The old fallback inserted a PG-only
+        // PENDING row and returned success:true for a certificate that
+        // does not exist on the ledger, which the inspect/issue steps
+        // then could not find on-chain.
+        logger.error(`[PHYTO] RequestPhytosanitaryCertificate is not deployed; refusing PG-only certificate ${certificateID}`);
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'CHAINCODE_UNAVAILABLE',
+            message: `Phytosanitary certificate ${certificateID} could not be requested: RequestPhytosanitaryCertificate is not deployed on the ledger. No certificate was recorded.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
       } else {
         res.status(400).json({
           success: false,
@@ -172,6 +192,11 @@ router.post('/request',
  */
 router.post('/:certificateID/inspect',
   authMiddleware,
+  // Leg2 #11: was a manual `user?.role !== 'ECTA'` check — no
+  // requireRole, no ECTA_ADMIN bypass — so the ECTA admin could request
+  // and revoke but not inspect or issue, and the one-button flow failed
+  // at step 2 for that user.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('certificateID').notEmpty(),
     body('inspectorName').notEmpty().withMessage('Inspector name is required'),
@@ -190,15 +215,6 @@ router.post('/:certificateID/inspect',
         diseaseDetected,
         inspectionNotes,
       } = req.body;
-
-      const user = (req as any).user;
-      if (user?.role !== 'ECTA') {
-        return res.status(403).json({
-          success: false,
-          error: { code: 'FORBIDDEN', message: 'Only ECTA can conduct inspections' },
-          timestamp: new Date().toISOString(),
-        });
-      }
 
       logger.info(`[PHYTO] Inspecting certificate: ${certificateID}`);
 
@@ -236,39 +252,19 @@ router.post('/:certificateID/inspect',
           timestamp: new Date().toISOString(),
         });
       } else if (result.error && result.error.includes('not found in contract')) {
-        // Chaincode function not found - use PostgreSQL fallback
-        logger.warn(`[PHYTO] Chaincode function not found, using PostgreSQL fallback for inspection ${certificateID}`);
-        try {
-          const inspectionResult = (pestsDetected || diseaseDetected) ? 'FAILED' : 'PASSED';
-          await postgresDb.run(`
-            UPDATE phytosanitary_certificates 
-            SET status = 'INSPECTED',
-                inspection_result = $1,
-                certifying_officer = $2,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE certificate_id = $3
-          `, [inspectionResult, inspectorName, certificateID]);
-          
-          logger.info(`✅ Phytosanitary inspection completed (PostgreSQL only): ${certificateID}`);
-          res.json({
-            success: true,
-            message: 'Inspection completed successfully (PostgreSQL)',
-            data: { 
-              certificateID, 
-              certificateId: certificateID, 
-              status: 'INSPECTED',
-              inspectionResult 
-            },
-            timestamp: new Date().toISOString(),
-          });
-        } catch (pgErr: any) {
-          logger.error(`[PHYTO] PostgreSQL fallback failed:`, pgErr);
-          res.status(500).json({
-            success: false,
-            error: { code: 'INSPECTION_FAILED', message: pgErr.message },
-            timestamp: new Date().toISOString(),
-          });
-        }
+        // Leg2 #12: the chaincode function is not deployed — fail
+        // honestly with 503. The old fallback marked the certificate
+        // INSPECTED in Postgres only and returned success, so the issue
+        // step then found no inspected certificate on the ledger.
+        logger.error(`[PHYTO] InspectPhytosanitaryCertificate is not deployed; refusing PG-only inspection ${certificateID}`);
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'CHAINCODE_UNAVAILABLE',
+            message: `Phytosanitary inspection of ${certificateID} could not be recorded: InspectPhytosanitaryCertificate is not deployed on the ledger. No status change was recorded.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
       } else {
         res.status(400).json({
           success: false,
@@ -296,26 +292,26 @@ router.post('/:certificateID/inspect',
  */
 router.post('/:certificateID/issue',
   authMiddleware,
+  // Leg2 #11: was a manual `user?.role !== 'ECTA'` check — see inspect.
+  requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('certificateID').notEmpty(),
     body('certificateNumber').notEmpty().withMessage('Certificate number is required'),
     body('issuingAuthority').notEmpty().withMessage('Issuing authority is required'),
     body('validUntil').notEmpty().withMessage('Validity date is required'),
+    body('placeOfOrigin').optional().isString(),
+    body('pointOfEntry').optional().isString(),
+    body('packagingType').optional().isString(),
+    body('numberOfPackages').optional().isNumeric(),
+    body('distinguishingMarks').optional().isString(),
+    body('meansOfConveyance').optional().isString(),
+    body('validityPeriod').optional().isString(),
   ],
   validateRequest,
   async (req, res) => {
     try {
       const { certificateID } = req.params;
       const { certificateNumber, issuingAuthority, validUntil, additionalDeclarations } = req.body;
-
-      const user = (req as any).user;
-      if (user?.role !== 'ECTA') {
-        return res.status(403).json({
-          success: false,
-          error: { code: 'FORBIDDEN', message: 'Only ECTA can issue certificates' },
-          timestamp: new Date().toISOString(),
-        });
-      }
 
       logger.info(`[PHYTO] Issuing certificate: ${certificateID}`);
 
@@ -330,27 +326,32 @@ router.post('/:certificateID/issue',
         cert = certResult.data;
         useBlockchain = true;
       } else {
-        // Try PostgreSQL fallback
+        // Not on the ledger. Postgres is only consulted to name the
+        // failure precisely — a certificate that exists only in
+        // Postgres (leg2 #12) must NOT be issued PG-only: the old code
+        // built a cert with empty shipment/exporter ids and marked it
+        // ISSUED in Postgres, so the ledger never had it.
         logger.warn(`[PHYTO] Certificate not found on blockchain, checking PostgreSQL for ${certificateID}`);
         try {
           const pgCert = await postgresDb.get(
             `SELECT * FROM phytosanitary_certificates WHERE certificate_id = $1`,
             [certificateID]
           );
-          
+
           if (pgCert && pgCert.status === 'INSPECTED') {
-            cert = {
-              certificateID: pgCert.certificate_id,
-              shipmentId: '',
-              exporterId: '',
-              status: pgCert.status,
-              inspectionResult: pgCert.inspection_result
-            };
+            return res.status(400).json({
+              success: false,
+              error: {
+                code: 'ISSUANCE_FAILED',
+                message: `Certificate ${certificateID} exists in Postgres only (status INSPECTED) and was never requested/inspected on the ledger; it cannot be issued. Request and inspect it on-chain first.`
+              },
+              timestamp: new Date().toISOString()
+            });
           } else if (!pgCert) {
             return res.status(400).json({
               success: false,
-              error: { 
-                code: 'ISSUANCE_FAILED', 
+              error: {
+                code: 'ISSUANCE_FAILED',
                 message: `Certificate ${certificateID} must be requested and inspected before it can be issued: phytosanitary certificate ${certificateID} does not exist`
               },
               timestamp: new Date().toISOString()
@@ -358,8 +359,8 @@ router.post('/:certificateID/issue',
           } else {
             return res.status(400).json({
               success: false,
-              error: { 
-                code: 'ISSUANCE_FAILED', 
+              error: {
+                code: 'ISSUANCE_FAILED',
                 message: `Certificate ${certificateID} must be inspected before issuance, current status: ${pgCert.status}`
               },
               timestamp: new Date().toISOString()
@@ -386,7 +387,12 @@ router.post('/:certificateID/issue',
       }
 
       if (useBlockchain) {
-        // Try blockchain issuance
+        // Try blockchain issuance. The seven certificate fields come
+        // from the request body when the form sends them (leg2 #10 —
+        // the form sends them on every step) and fall back to what the
+        // ledger stored at request time; they are never empty strings
+        // by default — the old code passed cert.placeOfOrigin || '' etc.
+        // because Request never stored them.
         const result = await fabricService.invokeChaincode('IssuePhytosanitaryCertificate', [
           certificateID,
           String(cert.shipmentId || cert.shipmentID || ''),
@@ -394,13 +400,13 @@ router.post('/:certificateID/issue',
           String(cert.inspectorName || ''),
           String(cert.botanicalName || cert.plantDescription || ''),
           String(cert.treatmentApplied || ''),
-          String(cert.placeOfOrigin || ''),
-          String(cert.pointOfEntry || ''),
+          String(req.body.placeOfOrigin || cert.placeOfOrigin || ''),
+          String(req.body.pointOfEntry || cert.pointOfEntry || ''),
           String(cert.quantity ?? ''),
-          String(cert.packagingType || ''),
-          String(cert.numberOfPackages ?? ''),
-          String(cert.distinguishMarks || ''),
-          String(cert.meansOfConveyance || ''),
+          String(req.body.packagingType || cert.packagingType || ''),
+          String(req.body.numberOfPackages ?? cert.numberOfPackages ?? ''),
+          String(req.body.distinguishingMarks || cert.distinguishMarks || cert.distinguishingMarks || ''),
+          String(req.body.meansOfConveyance || cert.meansOfConveyance || ''),
           issuingAuthority,
         ]);
 
@@ -408,10 +414,9 @@ router.post('/:certificateID/issue',
           logger.info(`✅ Phytosanitary certificate issued: ${certificateNumber}`);
           const issuedResult = await fabricService.queryChaincode('ReadPhytosanitaryCertificate', [certificateID]);
           const issued: any = issuedResult.success ? issuedResult.data : null;
-          // Mirror into Postgres: the PG-only fallback branch below updates
-          // the row to ISSUED, but this chain-success branch never did, so
-          // the mirror stayed INSPECTED. Best-effort, ledger-first: the
-          // issuance already committed on-chain.
+          // Mirror into Postgres: best-effort, ledger-first — the
+          // issuance already committed on-chain. (Leg2 #12 removed the
+          // PG-only issuance branch that used to be the only writer.)
           try {
             await postgresDb.run(`
               UPDATE phytosanitary_certificates
@@ -452,40 +457,19 @@ router.post('/:certificateID/issue',
       }
       
       if (!useBlockchain) {
-        // PostgreSQL-only issuance
-        logger.warn(`[PHYTO] Using PostgreSQL fallback for issuance ${certificateID}`);
-        try {
-          await postgresDb.run(`
-            UPDATE phytosanitary_certificates 
-            SET status = 'ISSUED',
-                issue_date = $1,
-                certifying_officer = $2,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE certificate_id = $3
-          `, [new Date().toISOString(), issuingAuthority, certificateID]);
-          
-          logger.info(`✅ Phytosanitary certificate issued (PostgreSQL only): ${certificateID}`);
-          res.json({
-            success: true,
-            message: 'Phytosanitary certificate issued successfully (PostgreSQL)',
-            data: {
-              certificateId: certificateID,
-              certificateNumber: certificateNumber,
-              validUntil: validUntil,
-              status: 'ISSUED',
-              issuingAuthority,
-              additionalDeclarations: additionalDeclarations || null,
-            },
-            timestamp: new Date().toISOString(),
-          });
-        } catch (pgErr: any) {
-          logger.error(`[PHYTO] PostgreSQL issuance failed:`, pgErr);
-          res.status(500).json({
-            success: false,
-            error: { code: 'ISSUANCE_FAILED', message: pgErr.message },
-            timestamp: new Date().toISOString(),
-          });
-        }
+        // Leg2 #12: IssuePhytosanitaryCertificate is not deployed — fail
+        // honestly with 503 and write nothing. The old code marked the
+        // certificate ISSUED in Postgres only and returned success for a
+        // certificate the ledger still holds as INSPECTED.
+        logger.error(`[PHYTO] IssuePhytosanitaryCertificate is not deployed; refusing PG-only issuance ${certificateID}`);
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'CHAINCODE_UNAVAILABLE',
+            message: `Phytosanitary certificate ${certificateID} could not be issued: IssuePhytosanitaryCertificate is not deployed on the ledger. No status change was recorded.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
       }
     } catch (error: any) {
       logger.error('[PHYTO] Error issuing certificate:', error);

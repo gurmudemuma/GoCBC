@@ -45,6 +45,58 @@ async function mirrorPermitCascadePG(contractId: string, shipmentId?: string): P
 }
 
 
+// Resolve the commercial terms of a permit from the contract — never
+// invent them. The old handlers defaulted amount 85000, destination
+// 'Germany', approver 'Bank Officer' (leg2 audit #1/#2): a permit could
+// be issued for a shipment with no contract at all, and the permit.go
+// cascade then found no shipment to move to PERMIT_ISSUED. A contractID
+// is required, the contract must exist, and amount/currency/destination
+// come from it (the request body may override a field the caller knows);
+// an amount that cannot be resolved to a positive number is a 400, not
+// a fabricated permit. Mirrors the ECTA issue-permit resolution in
+// quality.ts.
+async function resolvePermitCommercials(contractId: string, body: any): Promise<{
+  error?: string;
+  amount?: number;
+  currency?: string;
+  destination?: string;
+  exporterId?: string;
+}> {
+  if (!contractId) {
+    return { error: 'contractID is required to issue an export permit: the permit amount, currency and destination are taken from the approved contract' };
+  }
+  const contract = await dbService.get(
+    'SELECT exporter_id, total_value, currency, buyer_country FROM contracts WHERE contract_id = $1',
+    [contractId]
+  );
+  if (!contract) {
+    return { error: `Contract ${contractId} not found: cannot issue an export permit without its commercial terms` };
+  }
+  const amount = body.amount != null ? Number(body.amount) : Number(contract.total_value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { error: `Cannot issue export permit: no positive permit amount could be resolved from contract ${contractId} or the request body` };
+  }
+  const destination = body.destination || contract.buyer_country || '';
+  if (!destination) {
+    return { error: `Cannot issue export permit: no destination could be resolved from contract ${contractId} or the request body` };
+  }
+  return {
+    amount,
+    currency: body.currency || contract.currency || 'USD',
+    destination,
+    exporterId: body.exporterID || body.exporterId || contract.exporter_id || '',
+  };
+}
+
+function permitValidationError(res: any, message: string) {
+  return res.status(400).json({
+    success: false,
+    error: { code: 'VALIDATION_ERROR', message },
+    timestamp: new Date().toISOString()
+  });
+}
+
+
 // POST /api/v1/permits/export — Issue export permit (alias)
 router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req, res) => {
   try {
@@ -62,16 +114,22 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
     const permitId = permitID || req.body.permitId || `PERMIT-${Date.now()}`;
     const permitNumber = `EP${Date.now()}`;
     const contractId = req.body.contractID || req.body.contractId || '';
-    const exporterId = exporterID || req.body.exporterId || '';
     const lcId = req.body.lcID || req.body.lcId || '';
     const paymentMethod = req.body.paymentMethod || 'LC';
-    const amount = req.body.amount || 85000;
-    const currency = req.body.currency || 'USD';
+    // Commercial terms come from the contract (resolvePermitCommercials):
+    // no 85000 / 'Germany' defaults — see the helper.
+    const resolved = await resolvePermitCommercials(contractId, req.body);
+    if (resolved.error) {
+      return permitValidationError(res, resolved.error);
+    }
+    const amount = resolved.amount as number;
+    const currency = resolved.currency as string;
+    const destination = resolved.destination as string;
+    const exporterId = exporterID || req.body.exporterId || resolved.exporterId || '';
     const description = `Export Permit for shipment ${shipmentID}`;
-    const destination = req.body.destination || 'Germany';
     const commercialInvoice = certificateID || 'CI-' + permitId;
-    const bankBranch = 'CBE Main Branch';
-    const approvedBy = 'Bank Officer';
+    const bankBranch = req.body.bankBranch || 'CBE Main Branch';
+    const approvedBy = (req as any).user?.username || 'Bank Officer';
 
     if (!permitId || !shipmentID) {
       return res.status(400).json({
@@ -163,16 +221,22 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
     const permitId = permitID || req.body.permitId || `PERMIT-${Date.now()}`;
     const permitNumber = `EP${Date.now()}`;
     const contractId = req.body.contractID || req.body.contractId || '';
-    const exporterId = exporterID || req.body.exporterId || '';
     const lcId = req.body.lcID || req.body.lcId || '';
     const paymentMethod = req.body.paymentMethod || 'LC';
-    const amount = req.body.amount || 85000;
-    const currency = req.body.currency || 'USD';
+    // Commercial terms come from the contract (resolvePermitCommercials):
+    // no 85000 / 'Germany' defaults — see the helper.
+    const resolved = await resolvePermitCommercials(contractId, req.body);
+    if (resolved.error) {
+      return permitValidationError(res, resolved.error);
+    }
+    const amount = resolved.amount as number;
+    const currency = resolved.currency as string;
+    const destination = resolved.destination as string;
+    const exporterId = exporterID || req.body.exporterId || resolved.exporterId || '';
     const description = `Export Permit for shipment ${shipmentID}`;
-    const destination = req.body.destination || 'Germany';
     const commercialInvoice = certificateID || 'CI-' + permitId;
-    const bankBranch = 'CBE Main Branch';
-    const approvedBy = 'Bank Officer';
+    const bankBranch = req.body.bankBranch || 'CBE Main Branch';
+    const approvedBy = (req as any).user?.username || 'Bank Officer';
 
     if (!permitId || !shipmentID) {
       return res.status(400).json({

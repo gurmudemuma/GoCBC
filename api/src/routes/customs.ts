@@ -5,6 +5,7 @@ import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
 import { CustomsService } from '../services/customsService';
 import { ShipmentService } from '../services/shipmentService';
+import { ExchangeRateService } from '../services/exchangeRateService';
 import { logger } from '../utils/logger';
 import notificationService from '../services/notificationService';
 
@@ -70,6 +71,49 @@ router.post('/',
         });
       }
 
+      // Leg2 #9/#18: no invented commercial terms. The old defaults
+      // (value 85000, destination 'Germany', HS '0901.21', quantity
+      // 10000) fabricated a declaration whenever the caller omitted a
+      // field. Value/quantity/destination resolve from the contract;
+      // a positive value and a destination that cannot be resolved are
+      // a 400. One HS code everywhere: '090111' (unroasted green
+      // coffee — the actual export product; '0901.21' is roasted).
+      let resolvedValue = value != null ? Number(value) : NaN;
+      let resolvedQuantity = quantity != null ? Number(quantity) : NaN;
+      let resolvedDestination = destination || '';
+      if ((!Number.isFinite(resolvedValue) || resolvedValue <= 0 || !Number.isFinite(resolvedQuantity) || resolvedQuantity <= 0 || !resolvedDestination) && contractId) {
+        const contract = await postgresDb.get(
+          'SELECT total_value, quantity, buyer_country FROM contracts WHERE contract_id = $1',
+          [contractId]
+        );
+        if (contract) {
+          if (!Number.isFinite(resolvedValue) || resolvedValue <= 0) resolvedValue = Number(contract.total_value);
+          if (!Number.isFinite(resolvedQuantity) || resolvedQuantity <= 0) resolvedQuantity = Number(contract.quantity);
+          if (!resolvedDestination) resolvedDestination = contract.buyer_country || '';
+        }
+      }
+      if (!Number.isFinite(resolvedValue) || resolvedValue <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'A positive customs value is required: supply value or a contractID whose contract carries total_value' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!Number.isFinite(resolvedQuantity) || resolvedQuantity <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'A positive quantity is required: supply quantity or a contractID whose contract carries quantity' },
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!resolvedDestination) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'A destination is required: supply destination or a contractID whose contract carries buyer_country' },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Ledger-first (remaining-fixes #3): the old code PUT a
       // `customs:<id>` doc straight into ONE peer's CouchDB, which the
       // chaincode never reads — SubmitCustomsDeclaration keys
@@ -95,11 +139,11 @@ router.post('/',
             shipmentId,
             exporterId,
             declarationType,
-            hsCode || '0901.21',
-            String(quantity ?? 10000),
-            String(value ?? 85000),
+            hsCode || '090111',
+            String(resolvedQuantity),
+            String(resolvedValue),
             currency || 'USD',
-            destination || 'Germany',
+            resolvedDestination,
             portOfExit,
             String(eudrCompliant)
           ]
@@ -137,8 +181,8 @@ router.post('/',
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (declaration_id) DO NOTHING`,
         [declarationNumber, declarationNumber, shipmentId, contractId, exporterId,
-         hsCode || '0901.21', quantity || 10000, value || 85000, currency || 'USD',
-         destination || 'Germany', new Date().toISOString().split('T')[0], 'SUBMITTED',
+         hsCode || '090111', resolvedQuantity, resolvedValue, currency || 'USD',
+         resolvedDestination, new Date().toISOString().split('T')[0], 'SUBMITTED',
          blockchain_tx_id]
       );
 
@@ -801,6 +845,31 @@ router.post('/declaration/submit',
       );
       const isResubmission = !!supersededDeclaration;
 
+      // Leg2 #9: the customs value comes from the contract — never from
+      // an invented per-kg price (the portals used to fall back to
+      // quantity × $9.25). When the caller omits value, resolve it from
+      // the contract's total_value; a value that cannot be resolved to
+      // a positive number is a 400.
+      let resolvedSubmitValue = value != null ? Number(value) : NaN;
+      const submitContractId = contractIdUpper || contractIdLower || '';
+      if ((!Number.isFinite(resolvedSubmitValue) || resolvedSubmitValue <= 0) && submitContractId) {
+        const submitContract = await postgresDb.get(
+          'SELECT total_value FROM contracts WHERE contract_id = $1',
+          [submitContractId]
+        );
+        if (submitContract) resolvedSubmitValue = Number(submitContract.total_value);
+      }
+      if (!Number.isFinite(resolvedSubmitValue) || resolvedSubmitValue <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'A positive customs value is required: supply value or a contractID whose contract carries total_value'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Chaincode sync is ledger-first, not best-effort: the Postgres
       // SUBMITTED row must only exist for a declaration the ledger
       // accepted. A failed chain call returns 503 and inserts nothing —
@@ -823,7 +892,7 @@ router.post('/declaration/submit',
             declarationType || 'STANDARD',
             hsCode || '090111',
             String(quantity || 0),
-            String(value || 0),
+            String(resolvedSubmitValue),
             currency || 'USD',
             destination || 'Unknown',
             portOfExit || 'Djibouti Port',
@@ -871,7 +940,7 @@ router.post('/declaration/submit',
           declarationType || 'STANDARD',
           hsCode || '090111',
           quantity || 0,
-          value || 0,
+          resolvedSubmitValue,
           currency || 'USD',
           destination || 'Unknown',
           portOfExit || 'Djibouti Port',
@@ -1505,7 +1574,34 @@ router.post('/declaration/:declarationId/calculate-duty',
           timestamp: new Date().toISOString()
         });
       }
-      const rate = exchangeRate || 125.50; // Default ETB/USD rate
+      // The exchange rate is the LIVE NBE mid-rate from the ledger
+      // (ExchangeRateService.getCurrentRate — the same reader the NBE
+      // release uses), NOT a hardcoded constant (leg2 audit #20: the
+      // old `exchangeRate || 125.50` meant duty/VAT were always computed
+      // at 125.50 ETB/USD because the UI never sends a rate). A caller
+      // may still supply an explicit rate; when none is supplied and no
+      // live rate exists, fail honestly with 503 instead of falling back
+      // to a fabricated rate.
+      let rate: number;
+      let rateSource: string;
+      if (exchangeRate != null && Number.isFinite(Number(exchangeRate)) && Number(exchangeRate) > 0) {
+        rate = Number(exchangeRate);
+        rateSource = 'caller-supplied';
+      } else {
+        try {
+          rate = await ExchangeRateService.getInstance().getCurrentRate('USD');
+          rateSource = 'ledger-live';
+        } catch (rateError: any) {
+          return res.status(503).json({
+            success: false,
+            error: {
+              code: 'NO_LIVE_RATE',
+              message: `Cannot calculate duty: no live NBE exchange rate is available (${rateError?.message || 'no active rate recorded'}) and no exchangeRate was supplied. No hardcoded rate is used.`
+            },
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
       const valueInETB = valueInUSD * rate;
 
       const dutyAmount = valueInETB * effectiveDutyRate;
@@ -1566,6 +1662,7 @@ router.post('/declaration/:declarationId/calculate-duty',
           customsValueUSD: valueInUSD,
           customsValueETB: valueInETB,
           exchangeRate: rate,
+          exchangeRateSource: rateSource,
           hsCode: declHsCode,
           rates: {
             dutyRate: effectiveDutyRate,
@@ -2077,8 +2174,10 @@ router.post('/declaration/:declarationId/complete-inspection',
 router.post('/declaration/:declarationId/reject',
   authMiddleware,
   // Previously auth-only: any authenticated user could reject a customs
-  // declaration. Only customs officers may do that.
-  requireRole('CUSTOMS'),
+  // declaration. Only customs officers may do that. (Leg2 #14: the
+  // CUSTOMS_ADMIN role was missing here while clear and review list
+  // both CUSTOMS, CUSTOMS_ADMIN.)
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
   [
     param('declarationId').notEmpty(),
     body('rejectionReason').trim().notEmpty(),
@@ -2268,6 +2367,51 @@ router.post('/declaration/:declarationId/clear',
           error: {
             code: 'DECLARATION_CANCELLED',
             message: `Declaration ${declarationId} was cancelled and cannot be cleared.`
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Leg2 #15: the duty the officer submits must be the duty the
+      // API calculated — the clear form prefills exportDuty from
+      // calculate-duty but the field is editable, and the old code took
+      // `exportDuty || 0` straight into the ledger, so a cleared
+      // declaration could carry a 0 or hand-edited duty. When a
+      // calculation exists for this declaration, the submitted duty must
+      // match its basic_duty_amount (the value the form prefills); a
+      // mismatch or a zero is a 400. When no calculation exists, a
+      // positive duty is still required — clearing with no duty at all
+      // is a 400, not a 0-duty clear.
+      // NOTE: VAT is NOT passed to the ledger — ClearCustomsDeclaration
+      // (customs.go) takes only 4 args (declarationID, clearedBy,
+      // clearanceNumber, dutiesAmountStr) and has no VAT parameter; VAT
+      // is stored in Postgres only (customsService.clearDeclaration
+      // `taxes`). That is a chaincode-signature limit, not a dropped
+      // value: the PG row carries it.
+      const submittedDuty = Number(exportDuty);
+      const latestCalc = await postgresDb.get(
+        `SELECT basic_duty_amount, total_payable FROM duty_calculations
+          WHERE declaration_id = $1 ORDER BY calculation_id DESC LIMIT 1`,
+        [declaration.declaration_id]
+      );
+      if (latestCalc) {
+        const calculatedDuty = Number(latestCalc.basic_duty_amount);
+        if (!Number.isFinite(submittedDuty) || submittedDuty <= 0 || Math.abs(submittedDuty - calculatedDuty) > 0.01) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'DUTY_MISMATCH',
+              message: `Submitted export duty ${exportDuty} does not match the calculated duty ETB ${calculatedDuty} for declaration ${declarationId}. Re-run the duty calculation instead of editing the duty.`
+            },
+            timestamp: new Date().toISOString()
+          });
+        }
+      } else if (!Number.isFinite(submittedDuty) || submittedDuty <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'DUTY_REQUIRED',
+            message: `A positive export duty is required to clear declaration ${declarationId}. Calculate the duty first.`
           },
           timestamp: new Date().toISOString()
         });

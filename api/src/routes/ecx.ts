@@ -80,10 +80,15 @@ router.get('/warehouse', authMiddleware, async (req: Request, res: Response) => 
 // GET /api/v1/ecx/market — market prices
 router.get('/market', authMiddleware, async (req: Request, res: Response) => {
   try {
-    // Return comprehensive market prices for Ethiopian coffee grades
-    res.json({ 
-      success: true, 
+    // Leg2 #20: these are STATIC reference prices, not a live market
+    // feed — there is no live ECX feed wired in. They used to be
+    // served as market data with a fresh timestamp, which presented a
+    // hardcoded table as the market. Label them clearly instead.
+    res.json({
+      success: true,
       data: {
+        source: 'STATIC_REFERENCE',
+        note: 'Static reference prices for Ethiopian coffee grades. There is no live ECX market feed connected; do not treat these as current market prices.',
         prices: [
           { grade: 'Grade 1', pricePerKg: 8.50, currency: 'USD', description: 'Specialty grade, 0-3 defects', date: new Date().toISOString() },
           { grade: 'Grade 2', pricePerKg: 7.80, currency: 'USD', description: 'Premium grade, 4-12 defects', date: new Date().toISOString() },

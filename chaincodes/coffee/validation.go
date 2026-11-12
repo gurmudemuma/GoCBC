@@ -296,10 +296,12 @@ func ValidateExchangeRate(rate float64) error {
 	return nil
 }
 
-// ValidateMoistureContent validates coffee moisture content (8-13%)
+// ValidateMoistureContent validates coffee moisture content (8-12%):
+// one export rule everywhere (leg2 audit #19) — ECX grading rejects a
+// lot above 12%, so quality inspection must not accept 12–13% either.
 func ValidateMoistureContent(moisture float64) error {
-	if moisture < 8.0 || moisture > 13.0 {
-		return fmt.Errorf("moisture content must be between 8%% and 13%%, got: %.2f%%", moisture)
+	if moisture < 8.0 || moisture > 12.0 {
+		return fmt.Errorf("moisture content must be between 8%% and 12%%, got: %.2f%%", moisture)
 	}
 	return nil
 }

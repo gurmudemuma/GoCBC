@@ -225,9 +225,27 @@ func (c *CoffeeContract) IssuePhytosanitaryCertificate(ctx contractapi.Transacti
 // certificate in place (see its bridge branch).
 // Called by POST /phytosanitary/request with
 // (certificateID, shipmentID, exporterID, plantDescription, quantity,
-// treatmentApplied).
+// treatmentApplied, placeOfOrigin, pointOfEntry, packagingType,
+// numberOfPackages, distinguishingMarks, meansOfConveyance,
+// validityPeriod) — leg2 #10: the seven trailing fields are the
+// certificate data the form collects; pass "" for any that is unknown.
+// The struct already carries them and Issue already passes them;
+// Request is what never set them.
 func (c *CoffeeContract) RequestPhytosanitaryCertificate(ctx contractapi.TransactionContextInterface,
-	certificateID, shipmentID, exporterID, plantDescription, quantityStr, treatmentApplied string) error {
+	certificateID, shipmentID, exporterID, plantDescription, quantityStr, treatmentApplied,
+	placeOfOrigin, pointOfEntry, packagingType, numberOfPackagesStr, distinguishingMarks,
+	meansOfConveyance, validityPeriod string) error {
+
+	// The trailing certificate fields are optional: an empty
+	// numberOfPackages parses to 0, the rest stay "".
+	numberOfPackages := 0
+	if numberOfPackagesStr != "" {
+		n, err := strconv.Atoi(numberOfPackagesStr)
+		if err != nil {
+			return fmt.Errorf("RequestPhytosanitaryCertificate: invalid numberOfPackages: %w", err)
+		}
+		numberOfPackages = n
+	}
 
 	if err := ValidateID(certificateID, "certificateID"); err != nil {
 		return fmt.Errorf("RequestPhytosanitaryCertificate: %w", err)
@@ -280,7 +298,14 @@ func (c *CoffeeContract) RequestPhytosanitaryCertificate(ctx contractapi.Transac
 		BotanicalName:    plantDescription,
 		CommonName:       "Coffee",
 		TreatmentApplied: treatmentApplied,
+		PlaceOfOrigin:    placeOfOrigin,
+		PointOfEntry:     pointOfEntry,
 		Quantity:         quantity,
+		PackagingType:    packagingType,
+		NumberOfPackages: numberOfPackages,
+		DistinguishMarks: distinguishingMarks,
+		MeansOfConveyance: meansOfConveyance,
+		ValidUntil:       validityPeriod,
 		Status:           "PENDING",
 		CreatedAt:        txTime,
 		UpdatedAt:        txTime,
