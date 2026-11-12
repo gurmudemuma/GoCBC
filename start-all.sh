@@ -1176,21 +1176,48 @@ EOF
             else
                 write_info "No users found, seeding database..."
                 
-                # Prefer the JS seeding script as it handles password hashing properly
+                # Prefer the JS seeding script as it handles password hashing properly.
+                # NOTE: seed-users.js needs the native `bcrypt` binding
+                # (api/node_modules/bcrypt). If that binding is missing or was
+                # never built for the installed Node version, the JS seed fails
+                # at require time — that is NOT fatal: fall back to
+                # seed-users.sql, which carries pre-computed bcrypt hashes.
+                # Both scripts only refresh password_hash on conflict for the
+                # portal admins; neither fixes a wrong role on an existing row
+                # (e.g. a legacy BANK row stays BANK until fixed by hand).
+                SEEDED=false
                 if [ -f "$SCRIPTS_DIR/seed-users.js" ]; then
                     cd "$PROJECT_ROOT"
-                    node "$SCRIPTS_DIR/seed-users.js" >/dev/null 2>&1
-                    if [ $? -eq 0 ]; then
+                    SEED_LOG="$(mktemp /tmp/seed-users-js.XXXXXX.log)"
+                    if node "$SCRIPTS_DIR/seed-users.js" >"$SEED_LOG" 2>&1; then
                         write_success "Database seeded with test users"
                         write_info "Default login: admin / admin123"
+                        SEEDED=true
+                        rm -f "$SEED_LOG"
                     else
-                        write_warning "Failed to seed users with JS script"
+                        write_warning "JS seed failed — falling back to SQL seed"
+                        write_info "JS seed output (last 20 lines; full log kept at $SEED_LOG):"
+                        tail -n 20 "$SEED_LOG"
                     fi
-                elif [ -f "$SCRIPTS_DIR/seed-users.sql" ]; then
-                    psql "$DATABASE_URL" -f "$SCRIPTS_DIR/seed-users.sql" >/dev/null 2>&1
-                    write_success "Database seeded with test users (SQL)"
-                else
-                    write_warning "No seed script found at $SCRIPTS_DIR/"
+                fi
+                if [ "$SEEDED" = false ]; then
+                    if [ -f "$SCRIPTS_DIR/seed-users.sql" ]; then
+                        SQL_LOG="$(mktemp /tmp/seed-users-sql.XXXXXX.log)"
+                        if psql "$DATABASE_URL" -f "$SCRIPTS_DIR/seed-users.sql" >"$SQL_LOG" 2>&1; then
+                            write_success "Database seeded with test users (SQL)"
+                            write_info "Default login: admin / admin123"
+                            rm -f "$SQL_LOG"
+                        else
+                            write_error "Database seeding failed: the SQL seed failed too"
+                            write_info "SQL seed output (last 20 lines; full log kept at $SQL_LOG):"
+                            tail -n 20 "$SQL_LOG"
+                            write_info "No test users were created — fix the seed scripts and re-run"
+                            return 1
+                        fi
+                    else
+                        write_error "Database seeding failed: no seed script found at $SCRIPTS_DIR/"
+                        return 1
+                    fi
                 fi
             fi
         else
