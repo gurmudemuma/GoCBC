@@ -460,6 +460,17 @@ const ExporterPortal: React.FC = () => {
     specialInstructions: '',
   });
   const [selectedContract, setSelectedContract] = useState<ExportContract | null>(null);
+  // LEG 1 (F5a): exporter forex request form. There was no exporter
+  // forex form at all — the portal only GET-listed allocations, and
+  // both creation routes 403'd EXPORTER.
+  const [forexRequestDialogOpen, setForexRequestDialogOpen] = useState(false);
+  const [isRequestingForex, setIsRequestingForex] = useState(false);
+  const [forexRequestForm, setForexRequestForm] = useState({
+    contractId: '',
+    lcId: '',
+    amount: '',
+    currency: 'USD',
+  });
   const [isCreatingContract, setIsCreatingContract] = useState(false);
   const [isCreatingShipment, setIsCreatingShipment] = useState(false);
   const [shipmentJustCreated, setShipmentJustCreated] = useState(false); // Flag to hide workflow alert during reload
@@ -468,6 +479,10 @@ const ExporterPortal: React.FC = () => {
   const [contractDocuments, setContractDocuments] = useState<any[]>([]);
   const [customsDocuments, setCustomsDocuments] = useState<any[]>([]);
   const [draftContractId, setDraftContractId] = useState('');
+  // LEG 1 (F3): the buyerID captured when edit mode opened, so an edit
+  // never re-derives (and changes) the buyer identity from the company
+  // name field.
+  const [editingBuyerId, setEditingBuyerId] = useState('');
   const [isEditMode, setIsEditMode] = useState(false); // Track if editing existing contract
   
   const [newContract, setNewContract] = useState({
@@ -1303,6 +1318,43 @@ const ExporterPortal: React.FC = () => {
     setContractDetailDialogOpen(false);
     setCreateContractDialogOpen(true);
   };
+
+  // LEG 1 (F4): resubmit a REJECTED contract in place, keeping its ID.
+  // The route used to be ECTA-only, so the only exporter path was
+  // "register a corrected copy" (supersedesContractID) — the button for
+  // that is still next to this one for cases that need a new contract.
+  const handleResubmitContract = async (contract: ExportContract) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+      const response = await apiFetch(`/contracts/${contract.contractId}/resubmit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          resubmissionNote: `Resubmitted by exporter after ECTA feedback: ${contract.rejectionReason || 'see ECTA feedback'}`,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess(
+          'Contract Resubmitted',
+          `Contract ${contract.contractId} is back with ECTA for re-evaluation (status REGISTERED).`,
+          'You will be notified once ECTA reviews it. The contract keeps its original ID.'
+        );
+        loadExporterData();
+      } else {
+        showError('Resubmit Failed', result.error?.message || 'Failed to resubmit contract');
+      }
+    } catch (error: any) {
+      showError('Network Error', 'Failed to resubmit contract', error.message || 'Please check if the API server is running and try again');
+    }
+  };
   
   const handleContractDialogClose = () => {
     setContractDialogOpen(false);
@@ -1484,7 +1536,11 @@ const ExporterPortal: React.FC = () => {
       
       const contractData = isUpdate ? {
         // Only send fields that can be updated
-        buyerID: newContract.buyerCompany.replace(/\s+/g, '_').toUpperCase(),
+        // LEG 1 (F3): buyerID is the buyer's immutable key — it must
+        // NOT be re-derived from the (possibly edited) company name,
+        // or a renamed buyer becomes a different buyer. Use the ID
+        // captured when edit mode opened.
+        buyerID: editingBuyerId || newContract.buyerCompany.replace(/\s+/g, '_').toUpperCase(),
         buyerName: newContract.buyerName,
         buyerCountry: newContract.buyerCountry,
         buyerBank: newContract.buyerBank,
@@ -1518,6 +1574,18 @@ const ExporterPortal: React.FC = () => {
         currency: newContract.currency,
         paymentMethod: newContract.paymentMethod,
         eudrRequired: newContract.eudrRequired,
+        // LEG 1 (F3): the create payload used to drop the nine
+        // trade/contact fields the form collects (the update branch
+        // sent them). They are now stored on the ledger + PG.
+        buyerEmail: newContract.buyerEmail,
+        buyerPhone: newContract.buyerPhone,
+        organicCertified: newContract.organicCertified,
+        fairTradeCertified: newContract.fairTradeCertified,
+        portOfLoading: newContract.portOfLoading,
+        portOfDestination: newContract.portOfDestination,
+        deliveryDate: newContract.deliveryDate,
+        incoterm: newContract.incoterm,
+        specialInstructions: newContract.specialInstructions,
         documents: uploadedDocuments,
         ...(correctingRejectedContractId ? { supersedesContractID: correctingRejectedContractId } : {}),
       };
@@ -1585,6 +1653,7 @@ const ExporterPortal: React.FC = () => {
         });
         setContractDocuments([]); // Clear uploaded documents
         setDraftContractId('');
+        setEditingBuyerId('');
         setIsEditMode(false); // Reset edit mode
         setCorrectingRejectedContractId(null);
         // Reload contracts
@@ -2212,7 +2281,9 @@ const ExporterPortal: React.FC = () => {
         lcID: lcId,
         contractID: selectedContractForLC.contractId,
         exporterID: profile.exporterId,
-        bankName: lcRequestForm.advisingBank || profile.bankName || 'Commercial Bank of Ethiopia',
+        // LEG 1 (F6a): send the two banks under their real names.
+        // The old payload also sent bankName = advising bank, and the
+        // API stored bankName as issuing_bank — the wrong bank.
         issuingBank: selectedContractForLC.buyerBank || 'Buyer Bank', // Buyer's bank
         advisingBank: lcRequestForm.advisingBank || profile.bankName || 'Commercial Bank of Ethiopia', // Exporter's bank
         beneficiary: lcRequestForm.beneficiaryName || profile.companyName,
@@ -2298,6 +2369,58 @@ const ExporterPortal: React.FC = () => {
     }
   };
   
+  // LEG 1 (F5a): file a forex allocation request for one of the
+  // exporter's own contracts. The API route accepts EXPORTER callers
+  // and signs the ledger call as ECTA; the forexId is generated here.
+  const handleRequestForex = async () => {
+    if (!profile || !forexRequestForm.contractId) {
+      showError('Error', 'Select a contract for the forex request', 'Please try again');
+      return;
+    }
+    const selectedContract = contracts.find((c) => c.contractId === forexRequestForm.contractId);
+    setIsRequestingForex(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        showError('Authentication Required', 'You are not authenticated', 'Please login again');
+        return;
+      }
+      const forexId = `FOREX_${forexRequestForm.contractId}_${Date.now()}`;
+      const response = await apiFetch('/forex/request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          forexId,
+          contractId: forexRequestForm.contractId,
+          exporterId: profile.exporterId,
+          lcId: forexRequestForm.lcId || undefined,
+          amount: Number(forexRequestForm.amount) || Number(selectedContract?.totalValue) || 0,
+          currency: forexRequestForm.currency || selectedContract?.currency || 'USD',
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showSuccess(
+          'Forex Request Submitted',
+          `Forex request ${forexId} has been submitted for contract ${forexRequestForm.contractId}.`,
+          'NBE will review and confirm it; the bank then allocates the forex. Track it in the "Forex Allocations" list below.'
+        );
+        setForexRequestDialogOpen(false);
+        setForexRequestForm({ contractId: '', lcId: '', amount: '', currency: 'USD' });
+        setTimeout(() => { loadExporterData(); }, 2000);
+      } else {
+        showError('Forex Request Failed', result.error?.message || 'Failed to submit forex request', result.error?.code ? `Error Code: ${result.error.code}` : undefined);
+      }
+    } catch (error: any) {
+      showError('Network Error', 'Failed to submit forex request', `Error: ${error.message}`);
+    } finally {
+      setIsRequestingForex(false);
+    }
+  };
+
   // A contract is approved iff its status is APPROVED (TEST-STATUS-MATRIX
   // §1). NBE_APPROVED and ACTIVE are not contract statuses — no layer
   // produces them — so every former NBE_APPROVED/ACTIVE arm collapses here.
@@ -2689,6 +2812,7 @@ const ExporterPortal: React.FC = () => {
                       specialInstructions: params.row.specialInstructions || params.row.special_instructions || '',
                     });
                     setDraftContractId(params.row.contractId);
+                    setEditingBuyerId(params.row.buyerId || '');
                     setIsEditMode(true); // Mark as edit mode
                     
                     console.log('✅ Form populated with contract data');
@@ -2698,6 +2822,20 @@ const ExporterPortal: React.FC = () => {
                   }}
                 >
                   <Edit />
+                </IconButton>
+              </Tooltip>
+            )}
+            {/* LEG 1 (F4): resubmit a REJECTED contract in place, keeping
+                its ID. The "correct" flow (register a replacement copy)
+                is offered from the contract detail dialog. */}
+            {params.row.status === 'REJECTED' && (
+              <Tooltip title="Resubmit for Review (keeps this contract ID)">
+                <IconButton
+                  size="small"
+                  color="primary"
+                  onClick={() => handleResubmitContract(params.row)}
+                >
+                  <Refresh />
                 </IconButton>
               </Tooltip>
             )}
@@ -3395,6 +3533,7 @@ const ExporterPortal: React.FC = () => {
               onClick={() => {
                 setCorrectingRejectedContractId(null);
                 setDraftContractId(''); // Empty string for new contract - ID will be generated on submit
+                setEditingBuyerId('');
                 setIsEditMode(false); // Not editing, creating new
                 setContractDocuments([]);
                 // Pre-fill exporter's advising bank from their registered profile bank
@@ -3593,6 +3732,9 @@ const ExporterPortal: React.FC = () => {
                     {correctingRejectedContractId ? (
                       <>
                         <strong>Correction:</strong> The rejected contract remains in the audit history. Submitting this form registers a replacement and records which rejection it corrects. Minimum FOB price: $5.00/kg
+                        <Box sx={{ mt: 1 }}>
+                          Tip: if you only need ECTA to re-review the same contract (same ID), use the <strong>Resubmit</strong> button on the rejected row instead of registering a replacement.
+                        </Box>
                         {selectedContractForDetail?.rejectionReason && (
                           <Box sx={{ mt: 1 }}>
                             <strong>ECTA feedback:</strong> {selectedContractForDetail.rejectionReason}
@@ -4462,6 +4604,27 @@ const ExporterPortal: React.FC = () => {
           {/* Forex Allocations */}
           <Grid item xs={12}>
             <PortalCard brand='EXPORTER' title="Forex Allocations">
+              {/* LEG 1 (F5a): exporters can now file their own forex
+                  request — previously the portal only listed allocations
+                  and the API 403'd exporters. */}
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+                <PrimaryButton brand='EXPORTER'
+                  startIcon={<AttachMoney />}
+                  disabled={contracts.length === 0}
+                  onClick={() => {
+                    const firstContract = contracts.find((c) => isContractApproved(c)) || contracts[0];
+                    setForexRequestForm({
+                      contractId: firstContract?.contractId || '',
+                      lcId: '',
+                      amount: firstContract?.totalValue ? String(firstContract.totalValue) : '',
+                      currency: firstContract?.currency || 'USD',
+                    });
+                    setForexRequestDialogOpen(true);
+                  }}
+                >
+                  Request Forex
+                </PrimaryButton>
+              </Box>
                 <PortalDataGrid brand='EXPORTER'
                   rows={forexStatuses}
                   columns={[
@@ -5364,6 +5527,109 @@ const ExporterPortal: React.FC = () => {
           </Alert>
         )}
       </PortalDialog>
+
+    {/* Forex Request Dialog — LEG 1 (F5a). Exporters file their own
+        forex allocation request here; the bank/NBE flow continues from
+        the REQUESTED state. */}
+    <PortalDialog brand='EXPORTER'
+      open={forexRequestDialogOpen}
+      onClose={() => setForexRequestDialogOpen(false)}
+      maxWidth="md"
+      icon={<AttachMoney />}
+      title="Request Forex Allocation"
+      subtitle="File a foreign-exchange allocation request for one of your contracts"
+      actions={<>
+        <GhostButton brand='EXPORTER' onClick={() => setForexRequestDialogOpen(false)}>
+          Cancel
+        </GhostButton>
+        <PrimaryButton brand='EXPORTER'
+          onClick={handleRequestForex}
+          disabled={isRequestingForex || !forexRequestForm.contractId || !forexRequestForm.amount}
+        >
+          {isRequestingForex ? 'Submitting...' : 'Submit Forex Request'}
+        </PrimaryButton>
+      </>}
+    >
+      <Grid container spacing={3}>
+        <Grid item xs={12}>
+          <Alert severity="info">
+            <Typography variant="body2">
+              <strong>Forex Request Process:</strong> NBE reviews the request, confirms it, and the bank allocates the foreign exchange under the active NBE retention policy. Linking an issued LC is optional here — the bank links it at allocation time if you leave it blank.
+            </Typography>
+          </Alert>
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <PortalField
+            fullWidth
+            select
+            label="Contract"
+            value={forexRequestForm.contractId}
+            onChange={(e) => {
+              const c = contracts.find((x) => x.contractId === e.target.value);
+              setForexRequestForm({
+                ...forexRequestForm,
+                contractId: e.target.value,
+                amount: c?.totalValue ? String(c.totalValue) : forexRequestForm.amount,
+                currency: c?.currency || forexRequestForm.currency,
+              });
+            }}
+            required
+            helperText="The sales contract this forex is for"
+          >
+            {contracts.map((c) => (
+              <MenuItem key={c.contractId} value={c.contractId}>
+                {c.contractId} — {c.buyerName || c.buyerId} (${Number(c.totalValue || 0).toLocaleString()} {c.currency})
+              </MenuItem>
+            ))}
+          </PortalField>
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <PortalField
+            fullWidth
+            select
+            label="Letter of Credit (optional)"
+            value={forexRequestForm.lcId}
+            onChange={(e) => setForexRequestForm({ ...forexRequestForm, lcId: e.target.value })}
+            helperText="Link an issued LC now, or leave blank"
+          >
+            <MenuItem value="">None yet</MenuItem>
+            {lcStatuses.map((lc) => (
+              <MenuItem key={lc.lcId} value={lc.lcId}>
+                {lc.lcId} ({lc.status})
+              </MenuItem>
+            ))}
+          </PortalField>
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <PortalField
+            fullWidth
+            label="Amount"
+            type="number"
+            value={forexRequestForm.amount}
+            onChange={(e) => setForexRequestForm({ ...forexRequestForm, amount: e.target.value })}
+            required
+            InputProps={{
+              startAdornment: <Typography sx={{ mr: 1 }}>$</Typography>,
+            }}
+            helperText="Defaults to the contract total value"
+          />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <PortalField
+            fullWidth
+            select
+            label="Currency"
+            value={forexRequestForm.currency}
+            onChange={(e) => setForexRequestForm({ ...forexRequestForm, currency: e.target.value })}
+            required
+          >
+            <MenuItem value="USD">USD</MenuItem>
+            <MenuItem value="EUR">EUR</MenuItem>
+            <MenuItem value="GBP">GBP</MenuItem>
+          </PortalField>
+        </Grid>
+      </Grid>
+    </PortalDialog>
 
     {/* Contract Detail Dialog */}
     <PortalDialog brand='EXPORTER' open={contractDialogOpen} onClose={handleContractDialogClose} maxWidth="md"

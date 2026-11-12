@@ -16,6 +16,7 @@ import {
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import api from '@/utils/api';
+import { API_BASE_URL } from '@/config/api.config';
 import BankSelect from '@/components/common/BankSelect';
 import BankBranchSelect from '@/components/common/BankBranchSelect';
 
@@ -230,6 +231,12 @@ const RegisterExporterPage = () => {
   const [mode, setMode] = useState<'form' | 'review' | 'success'>('form');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // LEG 1 (F2): what the server actually returned for the submission —
+  // the real applicationId + login username + email-delivery outcome.
+  // The old success screen invented `APP-${Date.now()}` and discarded
+  // all three, so applicants could not track or log in.
+  const [submittedApp, setSubmittedApp] = useState<{ applicationId: string; username: string; emailSent: boolean } | null>(null);
+  const [uploadFailures, setUploadFailures] = useState<string[]>([]);
   const [mounted, setMounted] = React.useState(false);
   const [docsTouched, setDocsTouched] = useState(false); // turns upload buttons red after first failed attempt
   React.useEffect(() => { setMounted(true); }, []);
@@ -308,15 +315,39 @@ const RegisterExporterPage = () => {
       });
       if (!res.data.success) throw new Error(res.data.error?.message || 'Submission failed');
       const appId = res.data.data.applicationId;
+      // LEG 1 (F2): keep the real applicationId + credentials the
+      // server returned — the success screen shows these, not an
+      // invented APP-Date.now() id.
+      setSubmittedApp({
+        applicationId: appId,
+        username: res.data.data.credentials?.username || '',
+        emailSent: res.data.data.emailDelivery === 'sent',
+      });
+      // Uploads used a hardcoded http://localhost:3001 (bypassing the
+      // configured API base — broken off-localhost) and Promise.all
+      // never checked status, so failed uploads were silently ignored.
+      // Upload via API_BASE_URL and report every failure on the success
+      // screen instead of pretending the documents arrived.
+      const failures: string[] = [];
       await Promise.all(
         (Object.entries(docFiles) as [DocKey, File | null][]).filter(([, f]) => !!f).map(async ([key, f]) => {
-          const fd = new FormData();
-          fd.append('file', f!); fd.append('fileName', f!.name);
-          fd.append('documentType', key.toUpperCase()); fd.append('encrypt', 'true');
-          fd.append('entityType', 'EXPORTER_APPLICATION'); fd.append('entityId', appId);
-          await fetch('http://localhost:3001/api/v1/documents/upload-registration', { method: 'POST', body: fd });
+          try {
+            const fd = new FormData();
+            fd.append('file', f!); fd.append('fileName', f!.name);
+            fd.append('documentType', key.toUpperCase()); fd.append('encrypt', 'true');
+            fd.append('entityType', 'EXPORTER_APPLICATION'); fd.append('entityId', appId);
+            const up = await fetch(`${API_BASE_URL}/documents/upload-registration`, { method: 'POST', body: fd });
+            if (!up.ok) {
+              let detail = '';
+              try { detail = (await up.json())?.error?.message || ''; } catch { /* ignore */ }
+              failures.push(`${f!.name} (upload failed: HTTP ${up.status}${detail ? ` — ${detail}` : ''})`);
+            }
+          } catch (e: any) {
+            failures.push(`${f!.name} (upload failed: ${e?.message || 'network error'})`);
+          }
         })
       );
+      setUploadFailures(failures);
       setMode('success');
     } catch (err: any) {
       setError(err.response?.data?.error?.message || err.message || 'Submission failed. Please try again.');
@@ -346,7 +377,28 @@ const RegisterExporterPage = () => {
                 <Typography variant="body1" sx={{ color: '#616161', mb: 3, maxWidth: 480, mx: 'auto' }}>
                   Your application has been sent to ECTA for review. You'll receive an email with next steps.
                 </Typography>
-                <Chip label={`Application ID: APP-${Date.now().toString().slice(-8)}`} sx={{ mb: 4, fontWeight: 600, bgcolor: alpha(C.purple, 0.1), color: C.purple, fontSize: '0.875rem', px: 2, py: 2.5 }} />
+                {/* LEG 1 (F2): the REAL application ID + login username
+                    from the server response — never an invented id. */}
+                <Chip label={`Application ID: ${submittedApp?.applicationId || '—'}`} sx={{ mb: 2, fontWeight: 600, bgcolor: alpha(C.purple, 0.1), color: C.purple, fontSize: '0.875rem', px: 2, py: 2.5 }} />
+                {submittedApp?.username && (
+                  <Typography variant="body2" sx={{ color: '#616161', mb: 2 }}>
+                    Your login username is <strong>{submittedApp.username}</strong>. Use it with the temporary password to track your application status.
+                  </Typography>
+                )}
+                {submittedApp && !submittedApp.emailSent && (
+                  <Alert severity="warning" sx={{ mb: 2, textAlign: 'left' }}>
+                    <strong>We could not email your login credentials.</strong> Contact ECTA with your application ID ({submittedApp.applicationId}) to receive or reset them — do not lose this ID.
+                  </Alert>
+                )}
+                {uploadFailures.length > 0 && (
+                  <Alert severity="error" sx={{ mb: 2, textAlign: 'left' }}>
+                    <strong>{uploadFailures.length} document upload{uploadFailures.length > 1 ? 's' : ''} failed — your application was still submitted, but ECTA does not have these files:</strong>
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                      {uploadFailures.map((f) => <li key={f}>{f}</li>)}
+                    </ul>
+                    Please re-upload them from the application status page or contact ECTA.
+                  </Alert>
+                )}
                 <Divider sx={{ my: 3 }} />
                 <Grid container spacing={2} sx={{ mb: 4 }}>
                   {[

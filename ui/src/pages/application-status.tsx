@@ -88,12 +88,23 @@ const ApplicationStatusPage: React.FC = () => {
     try {
       setLoading(true);
       setError('');
-      
+
       // Get application by email
       const response = await api.get(`/exporters/exporter-applications/check/${user?.email}`);
-      
+
       if (response.data.success) {
-        setApplication(response.data.data);
+        let app = response.data.data;
+        // LEG 1 (F1): the public check endpoint returns only 10 status
+        // columns — no phone, so the status page rendered it blank.
+        // Load the full record (authenticated; the applicant's own
+        // application) and fall back to the check payload if it fails.
+        try {
+          const full = await api.get(`/exporters/applications/${app.application_id}`);
+          if (full.data?.success) app = full.data.data;
+        } catch (fullErr) {
+          console.warn('Full application load failed, using status-check data:', fullErr);
+        }
+        setApplication(app);
       } else {
         setError('Application not found');
       }

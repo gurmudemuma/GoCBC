@@ -52,7 +52,11 @@ const ResubmitApplicationPage: React.FC = () => {
     businessLicenseNumber: '',
     registrationDate: '',
     capitalRequirement: '',
-    professionalTaster: true,
+    // LEG 1 (F1): the professional taster is a NAME string (the DB
+    // column is VARCHAR). The old boolean default `true` was posted on
+    // every resubmit and the API wrote 'false'/'true' into the name
+    // column. There is now a text input for it below.
+    professionalTaster: '',
     tasterCertificate: '',
     laboratoryFacility: '',
     contactPerson: '',
@@ -81,20 +85,36 @@ const ResubmitApplicationPage: React.FC = () => {
   const loadApplicationData = async () => {
     try {
       setLoading(true);
+      // LEG 1 (F1): the public check endpoint deliberately returns
+      // only 10 status columns (no TIN, phone, bank details — it is
+      // unauthenticated), so prefilling from it left every field blank.
+      // Use it only to resolve the application_id, then load the FULL
+      // record from the authenticated endpoint (the applicant's own
+      // token; the route 403s applicants asking for someone else's).
       const response = await api.get(`/exporters/exporter-applications/check/${user?.email}`);
-      
+
       if (response.data.success) {
-        const app = response.data.data;
+        const check = response.data.data;
+        let app = check;
+        try {
+          const full = await api.get(`/exporters/applications/${check.application_id}`);
+          if (full.data?.success) app = full.data.data;
+        } catch (fullErr) {
+          // Fall back to the check payload — the form still loads, but
+          // the fields the check omits stay blank instead of failing
+          // the whole page.
+          console.warn('Full application load failed, using status-check data:', fullErr);
+        }
         setApplication(app);
-        
+
         // Pre-fill form with ALL existing data
         setFormData({
           companyName: app.company_name || '',
           tinNumber: app.tin_number || '',
           businessLicenseNumber: app.business_license_number || '',
-          registrationDate: app.registration_date || '',
-          capitalRequirement: app.capital_requirement || '',
-          professionalTaster: app.professional_taster === 1 || app.professional_taster === true,
+          registrationDate: app.registration_date ? String(app.registration_date).slice(0, 10) : '',
+          capitalRequirement: app.capital_requirement != null ? String(app.capital_requirement) : '',
+          professionalTaster: typeof app.professional_taster === 'string' ? app.professional_taster : '',
           tasterCertificate: app.taster_certificate || '',
           laboratoryFacility: app.laboratory_facility || '',
           contactPerson: app.contact_person || '',
@@ -105,7 +125,9 @@ const ResubmitApplicationPage: React.FC = () => {
           region: app.region || '',
           bankName: app.bank_name || '',
           bankAccountNumber: app.bank_account_number || '',
-          bankBranchName: app.bank_branch_name || '',
+          // LEG 1 (F7): the DB column is bank_branch; bank_branch_name
+          // is only a legacy alias some rows carry.
+          bankBranchName: app.bank_branch || app.bank_branch_name || '',
           bankBranchCode: app.bank_branch_code || '',
           comments: app.comments || '',
         });
@@ -455,7 +477,7 @@ const ResubmitApplicationPage: React.FC = () => {
                                     backgroundColor: '#fffbea',
                                   }
                                 }}
-                                helperText="✏️ Editable - minimum 5,000,000 ETB required"
+                                helperText="✏️ Editable - minimum depends on exporter type (individual 10M / private 15M / company 20M ETB)"
                               />
                             </Grid>
                           </Grid>
@@ -470,6 +492,29 @@ const ResubmitApplicationPage: React.FC = () => {
                           Professional Requirements
                         </Typography>
                         <Stack spacing={2}>
+                          {/* LEG 1 (F1): the taster NAME. The form had
+                              no input for it, so it always posted the
+                              boolean default and the API overwrote the
+                              stored name with 'true'/'false'. */}
+                          <TextField
+                            fullWidth
+                            label="Professional Taster (Full Name)"
+                            value={formData.professionalTaster}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                professionalTaster: e.target.value,
+                              })
+                            }
+                            required
+                            sx={{
+                              '& .MuiOutlinedInput-root': {
+                                backgroundColor: '#fffbea',
+                              }
+                            }}
+                            helperText="✏️ Editable - full name of the professional coffee taster"
+                          />
+
                           <TextField
                             fullWidth
                             label="Professional Taster Certificate"
