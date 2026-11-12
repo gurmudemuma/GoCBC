@@ -511,6 +511,30 @@ if [ -z "$CREATED_CONTRACT_ID" ]; then
 else
     call POST "/contracts/$CONTRACT_ID/approve" "$ECTA_TOKEN" ""
     check_success_or_blocked "Approve contract (ECTA)"
+    # Contract approval auto-creates exactly ONE LC (cc3ff649: the route
+    # handler's LC handoff, contracts.ts:1369, `LC-<contractID>`, idempotent
+    # via its QueryAllLCs check). The approval response carries it as
+    # top-level `.lcHandoff.lcId` (NOT under .data). Capture it here so the
+    # LC steps below use the real on-chain LC instead of requesting a
+    # second one (which 409s DUPLICATE_LC). Only trust it when the handoff
+    # actually created/found one — status 'failed'/'not_required' means no
+    # LC exists, so LC_ID stays empty and the LC steps BLOCK honestly.
+    LC_HANDOFF_STATUS=$(echo "$RESP_BODY" | jq -r '.lcHandoff.status // empty')
+    if [ "$LC_HANDOFF_STATUS" = "created" ] || [ "$LC_HANDOFF_STATUS" = "already_exists" ]; then
+        LC_ID=$(echo "$RESP_BODY" | jq -r '.lcHandoff.lcId // empty')
+        if [ -n "$LC_ID" ]; then
+            log_info "Contract approval auto-created LC: $LC_ID (lcHandoff.status=$LC_HANDOFF_STATUS)"
+        fi
+    elif [ "$(echo "$RESP_BODY" | jq -r '.success // empty')" = "true" ] && [ -z "$LC_HANDOFF_STATUS" ]; then
+        # Approval response carried no lcHandoff at all (unexpected at this
+        # HEAD) — fall back to the deterministic ID the handoff itself uses
+        # (contracts.ts:1369 `LC-${contractID}`); the read-back in Phase 7
+        # proves whether it really exists before approve/issue touch it.
+        LC_ID="LC-$CONTRACT_ID"
+        log_info "Approval response carried no lcHandoff; using deterministic LC ID $LC_ID (verified by read-back in Phase 7)"
+    elif [ "$(echo "$RESP_BODY" | jq -r '.success // empty')" = "true" ]; then
+        log_info "Contract approved but lcHandoff.status=$LC_HANDOFF_STATUS — no auto LC to use; LC steps will BLOCK"
+    fi
 fi
 
 ################################################################################
@@ -806,30 +830,23 @@ fi
 ################################################################################
 log_section "PHASE 7: LC + FOREX — NBE APPROVE, ALLOCATE, RETENTION"
 
-log_test "Request Letter of Credit (POST /banking/lc/request, banking.ts:85)"
-LC_ID="LC-$TS"
-LC_DATA="{
-    \"lcID\": \"$LC_ID\",
-    \"contractID\": \"$CONTRACT_ID\",
-    \"exporterID\": \"$EXPORTER_ID\",
-    \"bankName\": \"Commercial Bank of Ethiopia\",
-    \"amount\": 225000,
-    \"currency\": \"USD\",
-    \"expiryDate\": \"2027-12-31T23:59:59Z\"
-}"
-if [ -z "$EXPORTER_TOKEN" ]; then
-    log_blocked "Request LC — no EXPORTER token"
+# There is NO LC request step any more: contract approval already created
+# the single LC for this contract (captured from `.lcHandoff.lcId` in the
+# approval response above), and POST /banking/lc/request for the same
+# contract 409s DUPLICATE_LC (banking.ts:143-155). Requesting a second LC
+# was the 2026-11-12 failure: approve/issue then ran against the
+# script-created ID that never existed on the ledger, allocate could not
+# link it, and the shipment gate failed — 29 steps BLOCKED. So instead of
+# requesting an LC, read the auto-created one back and use it for
+# approve/issue below.
+log_test "Use auto-created LC from contract approval (GET /banking/lc/:id, banking.ts:1676)"
+if [ -z "$LC_ID" ]; then
+    log_blocked "Use auto-created LC — no LC ID from contract approval (approval failed/blocked or lcHandoff failed)"
+elif [ -z "$BANKS_TOKEN" ]; then
+    log_blocked "Use auto-created LC — no BANKS token"
 else
-    call POST "/banking/lc/request" "$EXPORTER_TOKEN" "$LC_DATA"
-    CREATED_LC_ID=$(echo "$RESP_BODY" | jq -r '.data.lcId // .data.lcID // empty')
-    if [ -n "$CREATED_LC_ID" ]; then
-        log_pass "LC requested: $LC_ID"
-    elif is_fabric_error; then
-        log_blocked "Request LC — Fabric/ledger unavailable (HTTP $RESP_CODE)"
-    else
-        log_fail "Failed to request LC (HTTP $RESP_CODE)"
-        log_info "Response: $RESP_BODY"
-    fi
+    call GET "/banking/lc/$LC_ID" "$BANKS_TOKEN"
+    check_success_or_blocked "Use auto-created LC from contract approval ($LC_ID)" ".data.lcId"
 fi
 
 log_test "Approve LC (POST /banking/lc/:id/approve)"
@@ -839,6 +856,13 @@ check_success_or_blocked "Approve LC"
 log_test "Issue LC (POST /banking/lc/:id/issue)"
 # banking.ts:926 requires `terms` in the issue body — an empty body 400s
 # with VALIDATION_ERROR "LC terms are required", not a Fabric error.
+# NOTE: this issue route also auto-creates a forex request
+# `FOREX_<lcID>_REQUEST` on the ledger (banking.ts, /lc/:lcID/issue), but
+# it returns no forexID, so this script does NOT use it — the manual
+# forex request below stays the forex under test. That is safe: chaincode
+# RequestForex has no per-contract duplicate check (forex.go:108, only
+# the forex ID must be unique), and AllocateForex links whichever
+# CONFIRMED forex it is given to the ISSUED LC.
 call POST "/banking/lc/$LC_ID/issue" "$BANKS_TOKEN" "{ \"terms\": \"IRREVOCABLE_AT_SIGHT\" }"
 check_success_or_blocked "Issue LC"
 
