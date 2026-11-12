@@ -108,22 +108,23 @@ rm -f "coffee_${VERSION}.tar.gz"
 
 # Build the CCAAS package directory: label must match this run's version.
 rm -rf pkg-temp code-temp
-mkdir -p pkg-temp/code
+mkdir -p pkg-temp
 cat > pkg-temp/metadata.json <<EOF
 {
   "type": "ccaas",
   "label": "coffee_${VERSION}"
 }
 EOF
-cp connection.json pkg-temp/code/connection.json
 
-# For CCAAS, manually create the tar.gz package
-# Structure: metadata.json at root, connection.json inside code/
-cd pkg-temp
-tar czf "../coffee_${VERSION}.tar.gz" metadata.json code/
-cd ..
+# For CCAAS, create code.tar.gz containing connection.json
+mkdir -p code-temp
+cp connection.json code-temp/
+tar -czf pkg-temp/code.tar.gz -C code-temp connection.json
 
-# Clean up the temporary package directory
+# Create the final package with metadata.json and code.tar.gz
+tar -czf "coffee_${VERSION}.tar.gz" -C pkg-temp metadata.json code.tar.gz
+
+# Clean up the temporary package directories
 rm -rf pkg-temp code-temp
 
 if [ ! -f "$CHAINCODE_PACKAGE" ]; then
