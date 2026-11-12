@@ -3,7 +3,7 @@
 
 import express, { Request, Response } from 'express';
 import { FabricService } from '../services/fabricService';
-import { ContractService } from '../services/contractService';
+import { ContractService, classifyChaincodeError } from '../services/contractService';
 import { logger } from '../utils/logger';
 import notificationService from '../services/notificationService';
 import { validateRequest } from '../middleware/validation';
@@ -93,6 +93,9 @@ router.patch('/:contractId',
     body('deliveryDate').optional().isString(),
     body('incoterm').optional().isString(),
     body('specialInstructions').optional().isString(),
+    // LEG 1 (F3): buyer contact fields (PG columns via migration 073).
+    body('buyerEmail').optional().isEmail().withMessage('Buyer email must be a valid email address'),
+    body('buyerPhone').optional().isString(),
     body('documents').optional().isArray(),
   ],
   validateRequest,
@@ -155,6 +158,8 @@ router.patch('/:contractId',
         currency: req.body.currency || existingContract.currency,
         paymentMethod: req.body.paymentMethod || existingContract.payment_method,
         eudrRequired: req.body.eudrRequired !== undefined ? Boolean(req.body.eudrRequired) : existingContract.eudr_required,
+        buyerEmail: req.body.buyerEmail !== undefined ? req.body.buyerEmail : existingContract.buyer_email,
+        buyerPhone: req.body.buyerPhone !== undefined ? req.body.buyerPhone : existingContract.buyer_phone,
         organicCertified: req.body.organicCertified !== undefined ? Boolean(req.body.organicCertified) : existingContract.organic_certified,
         fairTradeCertified: req.body.fairTradeCertified !== undefined ? Boolean(req.body.fairTradeCertified) : existingContract.fair_trade_certified,
         portOfLoading: req.body.portOfLoading || existingContract.port_of_loading,
@@ -198,6 +203,69 @@ router.patch('/:contractId',
         }
       }
       
+      // LEG 1 (F3): ledger-first write-through. PATCH used to write PG
+      // only, so every amended field diverged from the ledger (proven
+      // live: PATCH 200, PG updated, ledger unchanged). The chaincode
+      // UpdateSalesContract amends REGISTERED/APPROVED contracts; the PG
+      // mirror below runs only after the ledger accepts. A ledger
+      // refusal is an honest 400/503 with no PG write. A contract with
+      // no ledger record (legacy PG-only row) still updates PG-only,
+      // but the response says so (ledgerWarning) instead of claiming a
+      // ledger write that never happened.
+      let ledgerWarning: string | undefined;
+      const ledgerUpdatable = [
+        'buyerID', 'buyerName', 'buyerCountry', 'buyerBank', 'exporterBank',
+        'coffeeType', 'quantity', 'pricePerKg', 'currency', 'paymentMethod',
+        'eudrRequired', 'buyerEmail', 'buyerPhone', 'organicCertified',
+        'fairTradeCertified', 'portOfLoading', 'portOfDestination',
+        'deliveryDate', 'incoterm', 'specialInstructions',
+      ];
+      const ledgerChanges: Record<string, unknown> = {};
+      for (const key of ledgerUpdatable) {
+        if (req.body[key] !== undefined) ledgerChanges[key] = req.body[key];
+      }
+      // The chaincode update struct takes JSON numbers/booleans; coerce
+      // the stringly-typed form values the route accepts.
+      if (ledgerChanges.quantity !== undefined) ledgerChanges.quantity = parseFloat(String(ledgerChanges.quantity));
+      if (ledgerChanges.pricePerKg !== undefined) ledgerChanges.pricePerKg = parseFloat(String(ledgerChanges.pricePerKg));
+      for (const flag of ['eudrRequired', 'organicCertified', 'fairTradeCertified']) {
+        if (ledgerChanges[flag] !== undefined) ledgerChanges[flag] = ledgerChanges[flag] === true || ledgerChanges[flag] === 'true';
+      }
+      if (Object.keys(ledgerChanges).length > 0) {
+        const ledgerContract = await fabricService.getSalesContract(contractId);
+        if (ledgerContract.success && ledgerContract.data) {
+          const merged: any = { ...ledgerContract.data, ...ledgerChanges };
+          const ledgerResult = await fabricService.invokeChaincode(
+            'UpdateSalesContract',
+            [contractId, JSON.stringify(merged)]
+          );
+          if (!ledgerResult.success) {
+            const classified = classifyChaincodeError(ledgerResult.error || '');
+            const status = classified?.status || 400;
+            return res.status(status).json({
+              success: false,
+              error: {
+                code: classified?.code || 'LEDGER_UPDATE_FAILED',
+                message: ledgerResult.error || 'Failed to update contract on the ledger; no database change was made',
+              },
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } else if (/does not exist|not found/i.test(ledgerContract.error || '')) {
+          ledgerWarning = 'Contract not found on the ledger; updated in the database only';
+          logger.warn(`[CONTRACT PATCH] ${ledgerWarning}: ${contractId}`);
+        } else {
+          return res.status(503).json({
+            success: false,
+            error: {
+              code: 'FABRIC_UNAVAILABLE',
+              message: `Could not verify the contract on the ledger (${ledgerContract.error || 'blockchain unavailable'}); no database change was made`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
       // Update contract in database
       const totalValue = updatedData.quantity * updatedData.pricePerKg;
       
@@ -224,6 +292,8 @@ router.patch('/:contractId',
       // Optional fields that may not exist in older schemas
       const optionalFields = [
         { db: 'buyer_name', data: updatedData.buyerName },
+        { db: 'buyer_email', data: updatedData.buyerEmail },
+        { db: 'buyer_phone', data: updatedData.buyerPhone },
         { db: 'organic_certified', data: updatedData.organicCertified },
         { db: 'fair_trade_certified', data: updatedData.fairTradeCertified },
         { db: 'port_of_loading', data: updatedData.portOfLoading },
@@ -305,7 +375,8 @@ router.patch('/:contractId',
         data: {
           contractId: contractId,
           updatedFields: Object.keys(req.body).filter(key => req.body[key] !== undefined),
-          totalValue: totalValue
+          totalValue: totalValue,
+          ...(ledgerWarning ? { ledgerWarning } : {}),
         },
         timestamp: new Date().toISOString(),
       });
@@ -345,6 +416,18 @@ router.post('/',
     body('paymentMethod').optional().isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE']).withMessage('Payment method must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
     body('supersedesContractID').optional().isString().withMessage('Superseded contract ID must be a string'),
     body('eudrRequired').isBoolean().withMessage('EUDR required must be a boolean'),
+    // LEG 1 (F3): trade/contact fields the exporter form collects. They
+    // were accepted by the UI but never declared here, so creation
+    // silently dropped them.
+    body('buyerEmail').optional().isEmail().withMessage('Buyer email must be a valid email address'),
+    body('buyerPhone').optional().isString().withMessage('Buyer phone must be a string'),
+    body('organicCertified').optional().isBoolean().withMessage('Organic certified must be a boolean'),
+    body('fairTradeCertified').optional().isBoolean().withMessage('Fair trade certified must be a boolean'),
+    body('portOfLoading').optional().isString().withMessage('Port of loading must be a string'),
+    body('portOfDestination').optional().isString().withMessage('Port of destination must be a string'),
+    body('deliveryDate').optional().isISO8601().withMessage('Delivery date must be a valid ISO date'),
+    body('incoterm').optional().isString().withMessage('Incoterm must be a string'),
+    body('specialInstructions').optional().isString().withMessage('Special instructions must be a string'),
     body('documents').optional().isArray(),
   ],
   validateRequest,
@@ -365,6 +448,16 @@ router.post('/',
         eudrRequired,
         documents,
         supersedesContractID,
+        // LEG 1 (F3)
+        buyerEmail,
+        buyerPhone,
+        organicCertified,
+        fairTradeCertified,
+        portOfLoading,
+        portOfDestination,
+        deliveryDate,
+        incoterm,
+        specialInstructions,
       } = req.body;
 
       // ✅ FIX: Authorization check - handle both field names (exporterId and exporter_id)
@@ -516,6 +609,16 @@ router.post('/',
           currency,
           paymentMethod: paymentMethod || 'LC',
           eudrRequired,
+          // LEG 1 (F3): persist the collected trade/contact fields.
+          buyerEmail: buyerEmail || '',
+          buyerPhone: buyerPhone || '',
+          organicCertified: organicCertified === true || organicCertified === 'true',
+          fairTradeCertified: fairTradeCertified === true || fairTradeCertified === 'true',
+          portOfLoading: portOfLoading || '',
+          portOfDestination: portOfDestination || '',
+          deliveryDate: deliveryDate || '',
+          incoterm: incoterm || '',
+          specialInstructions: specialInstructions || '',
           documents: documentIDs,
           supersedesContractID: supersedesContractID || null,
           userId: user.username,
@@ -1414,6 +1517,11 @@ router.post('/:contractID/approve',
               const advisingBank = String(approvedContract.exporterBank || approvedContract.ExporterBank || 'Commercial Bank of Ethiopia');
               const expiryDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+              // LEG 1 (F6a): pass the beneficiary + terms through to the
+              // ledger (chaincode falls back to the exporter company name
+              // when beneficiary is empty) and mirror the advising bank
+              // in PG — the old insert stored issuing_bank only, so
+              // advising_bank/beneficiary read empty for handoff LCs.
               const requestResult = await fabricService.requestLC(
                 generatedLcId,
                 contractID,
@@ -1422,22 +1530,36 @@ router.post('/:contractID/approve',
                 amount.toFixed(2),
                 currency,
                 expiryDate,
-                'ECTAMSP'
+                'ECTAMSP',
+                '',
+                ''
               );
               if (!requestResult.success) {
                 throw new Error(requestResult.error || 'The ledger rejected the generated LC request.');
               }
 
+              let handoffBeneficiary: string | null = null;
+              try {
+                const { DatabaseService: BeneficiaryDb } = await import('../services/databaseService');
+                const exporterRow = await BeneficiaryDb.getInstance().get(
+                  `SELECT company_name FROM exporter_applications WHERE exporter_id = $1
+                   UNION ALL SELECT company_name FROM exporters WHERE exporter_id = $1 LIMIT 1`,
+                  [exporterId]
+                );
+                handoffBeneficiary = exporterRow?.company_name || null;
+              } catch {
+                handoffBeneficiary = null;
+              }
               try {
                 const { DatabaseService: HandoffDatabaseService } = await import('../services/databaseService');
                 const handoffDb = HandoffDatabaseService.getInstance();
                 await handoffDb.run(
                   `INSERT INTO letters_of_credit (
-                    lc_id, lc_number, contract_id, exporter_id, issuing_bank, amount, currency,
+                    lc_id, lc_number, contract_id, exporter_id, issuing_bank, advising_bank, beneficiary, amount, currency,
                     status, expiry_date, request_date, created_at, updated_at
-                  ) VALUES ($1, $1, $2, $3, $4, $5, $6, 'REQUESTED', $7, NOW(), NOW(), NOW())
+                  ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, 'REQUESTED', $9, NOW(), NOW(), NOW())
                   ON CONFLICT (lc_id) DO NOTHING`,
-                  [generatedLcId, contractID, exporterId, issuingBank, amount, currency, expiryDate]
+                  [generatedLcId, contractID, exporterId, issuingBank, advisingBank, handoffBeneficiary, amount, currency, expiryDate]
                 );
               } catch (syncError) {
                 logger.warn(`[LC HANDOFF] PostgreSQL sync failed for ${generatedLcId}; blockchain request is committed:`, syncError);
@@ -1873,12 +1995,15 @@ router.post('/:contractID/reject',
  * POST /api/v1/contracts/:contractId/resubmit
  * Resubmit a REJECTED contract for re-evaluation (F-1). The chaincode
  * ResubmitRejectedContract (main.go:1185) takes (contractID,
- * resubmissionNote) and moves REJECTED → REGISTERED; it accepts an
- * ECTAMSP/AdminMSP signer (the owning exporter may also resubmit
- * on-chain, but this route is ECTA-only, mirroring approve/reject).
- * Ledger-first with the signing MSP pinned (cb12f0b4 precedent), then
- * PG mirrors to REGISTERED. Mounted at /api/v1/contracts (server.ts),
- * so the full path is POST /api/v1/contracts/:contractId/resubmit.
+ * resubmissionNote) and moves REJECTED → REGISTERED. The owning
+ * exporter may resubmit their own contract (LEG 1, F4) — the chaincode
+ * exporter branch cannot match an X.509 DN to an EXP-… id, so the API
+ * signs exporter resubmits as ECTAMSP (ECTA as intermediary, the LC
+ * precedent) and records the real resubmitter in the audit row.
+ * ECTA may resubmit any contract. Ledger-first with the signing MSP
+ * pinned (cb12f0b4 precedent), then PG mirrors to REGISTERED. Mounted
+ * at /api/v1/contracts (server.ts), so the full path is
+ * POST /api/v1/contracts/:contractId/resubmit.
  */
 router.post('/:contractId/resubmit',
   authMiddleware,
@@ -1898,14 +2023,34 @@ router.post('/:contractId/resubmit',
       const userOrg = String(user?.org || '').toUpperCase();
       const userRole = String(user?.role || '').toUpperCase();
 
-      // Only ECTA can resubmit via this route (mirrors approve/reject).
-      if (userOrg !== 'ECTAMSP' && userRole !== 'ECTA') {
+      // LEG 1 (F4): the owning exporter may resubmit their own rejected
+      // contract. The route was ECTA-only, so a rejected exporter had no
+      // in-place correction path — only "register a brand-new contract
+      // with supersedesContractID", which breaks ID continuity. Ownership
+      // is checked against the PG row (the ledger read below confirms
+      // the REJECTED state). ECTA keeps its existing access.
+      const callerExporterId = String(user?.exporterId || user?.exporter_id || '');
+      const callerUsername = String(user?.username || '');
+      const pgContract = await (async () => {
+        const { DatabaseService } = await import('../services/databaseService');
+        return DatabaseService.getInstance().get(
+          'SELECT exporter_id FROM contracts WHERE contract_id = $1',
+          [contractId]
+        );
+      })();
+      const contractExporterId = String(pgContract?.exporter_id || '');
+      const isOwnerExporter = userRole === 'EXPORTER' &&
+        contractExporterId !== '' &&
+        (callerExporterId.toLowerCase() === contractExporterId.toLowerCase() ||
+         callerUsername.toLowerCase() === contractExporterId.toLowerCase());
+      const isEcta = userOrg === 'ECTAMSP' || userRole === 'ECTA' || userRole === 'ECTA_ADMIN';
+      if (!isOwnerExporter && !isEcta) {
         logger.warn(`Unauthorized contract resubmission attempt by ${user?.org || 'UNKNOWN'}: ${contractId}`);
         return res.status(403).json({
           success: false,
           error: {
             code: 'FORBIDDEN',
-            message: 'Only ECTA users can resubmit sales contracts',
+            message: 'Only the owning exporter or ECTA users can resubmit sales contracts',
           },
           timestamp: new Date().toISOString(),
         });
@@ -1938,13 +2083,18 @@ router.post('/:contractId/resubmit',
         });
       }
 
-      // Ledger-first, signing MSP pinned to the caller's org
-      // (ResubmitRejectedContract accepts ECTAMSP/AdminMSP; the shared
-      // gateway otherwise signs as whatever org connected last).
+      // Ledger-first, signing MSP pinned. ResubmitRejectedContract
+      // accepts ECTAMSP/AdminMSP, or an ExporterMSP signer whose X.509
+      // ID equals the contract's ExporterID — which never matches in
+      // practice (the ID is a certificate DN, not EXP-…). So an owning
+      // exporter resubmits through ECTA as intermediary (the same
+      // precedent as LC requests, which exporters also file via ECTA);
+      // the audit row below records the real resubmitter.
+      const signingMsp = isOwnerExporter ? 'ECTAMSP' : (user?.org || 'ECTAMSP');
       const result = await fabricService.invokeChaincode(
         'ResubmitRejectedContract',
         [contractId, resubmissionNote],
-        user?.org || 'ECTAMSP'
+        signingMsp
       );
 
       if (!result.success) {
@@ -2001,7 +2151,7 @@ router.post('/:contractId/resubmit',
         logger.error('Failed to create audit log for contract resubmission:', auditError);
       }
 
-      logger.info(`[${user?.org}] ✅ Sales contract resubmitted by ECTA: ${contractId}`);
+      logger.info(`[${user?.org}] ✅ Sales contract resubmitted by ${user?.username} (${isOwnerExporter ? 'owning exporter' : 'ECTA'}): ${contractId}`);
       // In-app notification (persisted feed + live WS broadcast).
       await notificationService.emitWorkflowEvent({
         type: 'contract_resubmitted',
@@ -2009,6 +2159,7 @@ router.post('/:contractId/resubmit',
         message: `Contract ${contractId} was resubmitted for re-evaluation after rejection.`,
         entityType: 'contract', entityId: contractId, severity: 'info',
         roles: ['ECTA'],
+        exporterId: contractExporterId || undefined,
         actionUrl: '/portals/exporter?tab=contracts',
         actionUrls: { ECTA: '/portals/ecta?tab=contracts' },
       });

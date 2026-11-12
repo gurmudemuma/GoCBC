@@ -20,6 +20,29 @@ const postgresDb = DatabaseService.getInstance();
 const emailService = EmailService.getInstance();
 const auditService = AuditService.getInstance();
 
+// LEG 1 (F2): capital minimums by exporter type. These were UI-only
+// (register-exporter.tsx MIN_CAPITAL_BY_EXPORTER_TYPE) while the API
+// accepted any non-empty value — a 100 ETB "individual" application was
+// created live on 2026-11-12. The server now enforces the same table;
+// keep the two in sync.
+export const MIN_CAPITAL_BY_EXPORTER_TYPE: Record<string, number> = {
+  private: 15_000_000,
+  company: 20_000_000,
+  individual: 10_000_000,
+};
+
+/** Returns an error message when the capital is below the type minimum. */
+export function capitalMinimumError(exporterType: string | undefined | null, capital: unknown): string | null {
+  const type = String(exporterType || 'company').toLowerCase();
+  const minimum = MIN_CAPITAL_BY_EXPORTER_TYPE[type];
+  if (minimum === undefined) return null;
+  const amount = Number(capital);
+  if (!Number.isFinite(amount) || amount < minimum) {
+    return `Minimum capital requirement for ${type} exporters is ${minimum.toLocaleString()} ETB`;
+  }
+  return null;
+}
+
 // ============================================================================
 // APPLICATIONS ROUTES (must come BEFORE /:exporterID to avoid route conflicts)
 // ============================================================================
@@ -75,6 +98,19 @@ router.get('/applications/:applicationId',
         return res.status(404).json({
           success: false,
           error: { code: 'NOT_FOUND', message: 'Exporter application not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // LEG 1 (F1): this endpoint returns the FULL application row
+      // (TIN, bank details, documents). An APPLICANT may only read their
+      // own application; staff roles are unchanged.
+      const caller = (req as any).user;
+      if (String(caller?.role || '').toUpperCase() === 'APPLICANT' &&
+          String(caller?.applicationId || '') !== String(application.application_id)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'Applicants can only view their own application' },
           timestamp: new Date().toISOString(),
         });
       }
@@ -166,6 +202,19 @@ router.post('/exporter-applications',
         return;
       }
       
+      // LEG 1 (F2): enforce the capital minimum server-side. The UI
+      // shows the same table, but the API previously accepted any
+      // non-empty value (a 100 ETB application was created live).
+      const capitalError = capitalMinimumError(applicationData.exporterType, applicationData.capitalRequirement);
+      if (capitalError) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'CAPITAL_BELOW_MINIMUM', message: capitalError },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
       // Step 1: Insert application
       // Generate unique application ID
       const applicationIdValue = `APP-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
@@ -299,6 +348,38 @@ router.post('/exporter-applications',
   }
 );
 
+// GET /exporter-applications/approval-ids - Next server-generated approval IDs (ECTA only)
+// LEG 1 (F7): the approve dialog used to invent exporterId / licence
+// numbers in the browser. The server mints them from sequences
+// (migration 074) so they are unique; the dialog previews them here
+// and the approve route generates the final values when omitted.
+// nextval() consumes a number per preview — gaps are expected and
+// harmless; the approve route's 409 pre-check is the real guarantee.
+router.get('/exporter-applications/approval-ids',
+  authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
+  async (req, res) => {
+    try {
+      const exporterSeq = await postgresDb.get(`SELECT nextval('exporter_id_seq') AS n`);
+      const licenceSeq = await postgresDb.get(`SELECT nextval('ecta_license_seq') AS n`);
+      const expiryDate = new Date();
+      expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+      res.json({
+        success: true,
+        data: {
+          exporterId: `EXP${String(exporterSeq.n).padStart(7, '0')}`,
+          ectaLicenseNumber: `ECTA-LIC-${new Date().getFullYear()}-${String(licenceSeq.n).padStart(6, '0')}`,
+          licenseExpiryDate: expiryDate.toISOString().split('T')[0],
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Error generating approval IDs:', error);
+      res.status(500).json({ success: false, error: { code: 'APPROVAL_IDS_FAILED', message: error.message }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
 // POST /exporter-applications/:applicationId/approve - Approve application (ECTA admin)
 // This endpoint now:
 // 1. Registers exporter on blockchain
@@ -313,29 +394,72 @@ router.post('/exporter-applications/:applicationId/approve',
   requireRole('ECTA', 'ECTA_ADMIN'),
   [
     param('applicationId').notEmpty(),
-    body('exporterId').notEmpty(),
-    body('ectaLicenseNumber').matches(/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/)
+    // LEG 1 (F7): the IDs are now server-generated when omitted (the
+    // browser used to invent EXP + 7 random digits and a licence number
+    // with only 900 possibilities a year, with no uniqueness check).
+    // An officer may still supply explicit IDs; they are checked for
+    // collisions below and rejected with 409.
+    body('exporterId').optional().notEmpty(),
+    body('ectaLicenseNumber').optional().matches(/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/)
       .withMessage('ECTA license number must contain only letters, numbers, hyphens, or underscores'),
     body('licenseExpiryDate').isISO8601(),
     body('bankName').optional(),
     body('bankAccountNumber').optional(),
+    // LEG 1 (F7): the UI sends bankBranch; accept bankBranchName too —
+    // the two names were used interchangeably across the form, the
+    // approve dialog and this route.
     body('bankBranch').optional(),
+    body('bankBranchName').optional(),
     body('bankBranchCode').optional(),
   ],
   validateRequest,
   async (req, res) => {
     try {
       const { applicationId } = req.params;
-      const { exporterId, ectaLicenseNumber, licenseExpiryDate, bankName, bankAccountNumber, bankBranch, bankBranchCode } = req.body;
-      
+      // F7: bankBranch is canonical; bankBranchName is an accepted alias.
+      const { licenseExpiryDate, bankName, bankAccountNumber, bankBranchCode } = req.body;
+      const bankBranch = req.body.bankBranch || req.body.bankBranchName;
+      let { exporterId, ectaLicenseNumber } = req.body;
+
       // ✅ FIX: Use application_id (APP-XXXXX) not id (numeric)
       const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE application_id = $1', [applicationId]);
-      
+
       // Only a pending application can be approved. Previously an
       // already-approved application could be approved again, which
       // re-registered the exporter on-chain and regenerated a licence.
       if (!application || application.status !== 'pending') {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found or not pending approval' }, timestamp: new Date().toISOString() });
+        return;
+      }
+
+      // LEG 1 (F7): generate the IDs server-side from sequences when
+      // the caller omits them, then check every supplied/generated ID
+      // for collisions BEFORE any chaincode call or side effect. The
+      // unique indexes from migration 074 are the backstop.
+      if (!exporterId) {
+        const seq = await postgresDb.get(`SELECT nextval('exporter_id_seq') AS n`);
+        exporterId = `EXP${String(seq.n).padStart(7, '0')}`;
+      }
+      if (!ectaLicenseNumber) {
+        const seq = await postgresDb.get(`SELECT nextval('ecta_license_seq') AS n`);
+        ectaLicenseNumber = `ECTA-LIC-${new Date().getFullYear()}-${String(seq.n).padStart(6, '0')}`;
+      }
+      const exporterIdTaken = await postgresDb.get(
+        `SELECT 1 FROM exporter_applications WHERE exporter_id = $1
+         UNION ALL SELECT 1 FROM exporters WHERE exporter_id = $1 LIMIT 1`,
+        [exporterId]
+      );
+      if (exporterIdTaken) {
+        res.status(409).json({ success: false, error: { code: 'DUPLICATE_EXPORTER_ID', message: `Exporter ID ${exporterId} is already in use` }, timestamp: new Date().toISOString() });
+        return;
+      }
+      const licenceTaken = await postgresDb.get(
+        `SELECT 1 FROM exporter_applications
+         WHERE license_number = $1 OR ecta_license_number = $1 LIMIT 1`,
+        [ectaLicenseNumber]
+      );
+      if (licenceTaken) {
+        res.status(409).json({ success: false, error: { code: 'DUPLICATE_LICENSE_NUMBER', message: `ECTA license number ${ectaLicenseNumber} is already in use` }, timestamp: new Date().toISOString() });
         return;
       }
 
@@ -363,7 +487,20 @@ router.post('/exporter-applications/:applicationId/approve',
       if (!result.success) {
         const alreadyExists = result.error && result.error.includes('already exists');
         if (alreadyExists) {
-          logger.warn(`⚠️ Exporter ${exporterId} already exists on blockchain — proceeding with approval`);
+          // LEG 1 (F7): an exporter that is already on the ledger must
+          // NOT proceed to licence generation and account conversion —
+          // that minted a second licence for an existing exporter. Fail
+          // honestly so ECTA can see the existing registration instead.
+          logger.warn(`⛔ Exporter ${exporterId} already exists on blockchain — refusing duplicate approval`);
+          res.status(409).json({
+            success: false,
+            error: {
+              code: 'EXPORTER_ALREADY_REGISTERED',
+              message: `Exporter ${exporterId} is already registered on the blockchain`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
         } else {
           logger.error(`❌ Blockchain registration failed for ${exporterId}:`, result.error);
           res.status(400).json({ 
@@ -748,7 +885,12 @@ router.post('/exporter-applications/:applicationId/resubmit',
     body('registrationDate').optional().isISO8601().withMessage('Registration date must be a valid ISO date'),
     body('exporterType').optional().isIn(['private','company','individual']).withMessage('Exporter type must be private, company, or individual'),
     body('capitalRequirement').optional().isNumeric().withMessage('Capital requirement must be a number'),
-    body('professionalTaster').optional().isBoolean().withMessage('Professional taster must be a boolean'),
+    // LEG 1 (F1): professionalTaster is a NAME string (VARCHAR(100) in
+    // the DB; the registration form collects a taster's name), not a
+    // boolean. The old isBoolean validator forced the resubmit page —
+    // which has no taster input — to post `false`, and the API wrote
+    // the string 'false' into the text column, destroying the name.
+    body('professionalTaster').optional().isString().withMessage('Professional taster must be a name'),
     body('tasterCertificate').optional().isString().withMessage('Taster certificate must be a string'),
     body('laboratoryFacility').optional().isString().withMessage('Laboratory facility must be a string'),
     body('laboratoryCertificateNumber').optional().isString().withMessage('Laboratory certificate number must be a string'),
@@ -771,25 +913,49 @@ router.post('/exporter-applications/:applicationId/resubmit',
     try {
       const { applicationId } = req.params;
       const updateData = req.body;
-      
-      // Verify the application exists and is rejected
-      const application = await postgresDb.get('SELECT * FROM exporter_applications WHERE id = $1 AND status = $2', [applicationId, 'rejected']);
-      
+
+      // LEG 1 (F1): the UI posts the APP-… application_id, but this
+      // handler queried the numeric PK `id` — Postgres raised 22P02
+      // (invalid input syntax for type integer) and every resubmit
+      // failed with HTTP 500. Look up by application_id (or numeric id
+      // for backward compatibility) like every other application route.
+      const application = await postgresDb.get(
+        `SELECT * FROM exporter_applications
+         WHERE (application_id = $1 OR CAST(id AS TEXT) = $1) AND status = $2`,
+        [applicationId, 'rejected']
+      );
+
       if (!application) {
-        res.status(404).json({ 
-          success: false, 
-          error: { code: 'NOT_FOUND', message: 'Application not found or not in rejected status' }, 
-          timestamp: new Date().toISOString() 
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Application not found or not in rejected status' },
+          timestamp: new Date().toISOString()
         });
         return;
       }
-      
+
       // Verify email matches
       if (application.email !== updateData.email) {
-        res.status(403).json({ 
-          success: false, 
-          error: { code: 'UNAUTHORIZED', message: 'Email does not match application' }, 
-          timestamp: new Date().toISOString() 
+        res.status(403).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Email does not match application' },
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      // LEG 1 (F2): the capital minimum applies to corrections too —
+      // a resubmit must not sneak in a below-minimum capital.
+      const effectiveType = updateData.exporterType || application.exporter_type;
+      const effectiveCapital = updateData.capitalRequirement !== undefined
+        ? updateData.capitalRequirement
+        : application.capital_requirement;
+      const resubmitCapitalError = capitalMinimumError(effectiveType, effectiveCapital);
+      if (resubmitCapitalError) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'CAPITAL_BELOW_MINIMUM', message: resubmitCapitalError },
+          timestamp: new Date().toISOString()
         });
         return;
       }
@@ -819,9 +985,14 @@ router.post('/exporter-applications/:applicationId/resubmit',
         fieldsToUpdate.push(`capital_requirement = $${paramIndex++}`);
         values.push(parseFloat(updateData.capitalRequirement));
       }
-      if (updateData.professionalTaster !== undefined) {
+      // LEG 1 (F1): only a string taster NAME updates the column. A
+      // boolean (posted by older clients whose form had no taster
+      // input) is ignored so the stored name survives the resubmit.
+      if (typeof updateData.professionalTaster === 'string' && updateData.professionalTaster.trim() !== '') {
         fieldsToUpdate.push(`professional_taster = $${paramIndex++}`);
-        values.push(updateData.professionalTaster);
+        values.push(updateData.professionalTaster.trim());
+      } else if (updateData.professionalTaster !== undefined) {
+        logger.warn(`Ignoring non-string professionalTaster on resubmit of ${application.application_id} to preserve the stored taster name`);
       }
       if (updateData.tasterCertificate) {
         fieldsToUpdate.push(`taster_certificate = $${paramIndex++}`);
@@ -891,13 +1062,14 @@ router.post('/exporter-applications/:applicationId/resubmit',
       fieldsToUpdate.push(`submitted_at = $${paramIndex++}`);
       values.push('pending', null, null, new Date().toISOString());
       
-      // Add application ID at the end for WHERE clause
-      values.push(applicationId);
-      
+      // Add application ID at the end for WHERE clause — the canonical
+      // application_id, never the numeric PK (see lookup above).
+      values.push(application.application_id);
+
       const updateQuery = `
         UPDATE exporter_applications 
         SET ${fieldsToUpdate.join(', ')}
-        WHERE id = $${paramIndex}
+        WHERE application_id = $${paramIndex}
       `;
       
       await postgresDb.run(updateQuery, values);

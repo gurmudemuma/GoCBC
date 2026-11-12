@@ -93,6 +93,18 @@ export class ContractService {
     currency: string;
     paymentMethod: string;
     eudrRequired: boolean;
+    // LEG 1 (F3): trade/contact fields the exporter form collects. They
+    // used to be dropped here (no chaincode args, no PG columns for the
+    // contact pair); they are now stored on the ledger and in PG.
+    buyerEmail?: string;
+    buyerPhone?: string;
+    organicCertified?: boolean;
+    fairTradeCertified?: boolean;
+    portOfLoading?: string;
+    portOfDestination?: string;
+    deliveryDate?: string;
+    incoterm?: string;
+    specialInstructions?: string;
     documents?: string[];
     supersedesContractID?: string | null;
     userId: string;
@@ -118,6 +130,17 @@ export class ContractService {
         contractData.exporterBank || '',   // 12
         contractData.paymentMethod,        // 13 - CORRECT POSITION!
         (contractData.documents || []).join(','), // 14
+        // LEG 1 (F3): trade/contact fields, args 15-23 of
+        // RegisterSalesContractWithPaymentMethod (chaincode seq 8+).
+        contractData.buyerEmail || '',                    // 15
+        contractData.buyerPhone || '',                    // 16
+        String(Boolean(contractData.organicCertified)),    // 17
+        String(Boolean(contractData.fairTradeCertified)),  // 18
+        contractData.portOfLoading || '',                  // 19
+        contractData.portOfDestination || '',              // 20
+        contractData.deliveryDate || '',                   // 21
+        contractData.incoterm || '',                      // 22
+        contractData.specialInstructions || '',            // 23
       ];
       
       logger.info(`🔍 DEBUG: Chaincode parameters for ${contractData.contractID}:`, {
@@ -142,13 +165,16 @@ export class ContractService {
       const totalValue = contractData.quantity * contractData.pricePerKg;
       await this.dbService.run(
         `INSERT INTO contracts (
-          contract_id, exporter_id, buyer_id, buyer_name, buyer_country, 
+          contract_id, exporter_id, buyer_id, buyer_name, buyer_country,
           buyer_bank, exporter_bank,
-          coffee_type, quantity, price_per_kg, currency, 
-          total_value, payment_method, eudr_required, 
+          coffee_type, quantity, price_per_kg, currency,
+          total_value, payment_method, eudr_required,
+          buyer_email, buyer_phone, organic_certified, fair_trade_certified,
+          port_of_loading, port_of_destination, delivery_date, incoterm,
+          special_instructions,
           supersedes_contract_id,
           status, blockchain_synced, blockchain_tx_id, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW())`,
         [
           contractData.contractID,
           contractData.exporterID,
@@ -164,6 +190,15 @@ export class ContractService {
           totalValue,
           contractData.paymentMethod,
           contractData.eudrRequired,
+          contractData.buyerEmail || null,
+          contractData.buyerPhone || null,
+          Boolean(contractData.organicCertified),
+          Boolean(contractData.fairTradeCertified),
+          contractData.portOfLoading || null,
+          contractData.portOfDestination || null,
+          contractData.deliveryDate || null,
+          contractData.incoterm || null,
+          contractData.specialInstructions || null,
           contractData.supersedesContractID || null,
           'REGISTERED',
           true,
