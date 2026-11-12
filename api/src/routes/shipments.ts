@@ -462,7 +462,7 @@ router.post('/',
             valueUSD: finalValueUSD,
           },
           documentsLinked: documentIDs.length,
-          qualityInspectionCreated: true,
+          qualityInspectionCreated: false, // no inspection is auto-created; explicit POST /quality/inspections runs RequestInspection on-chain
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });
