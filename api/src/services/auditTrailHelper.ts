@@ -65,19 +65,32 @@ export interface AuditTrailEntry {
 }
 
 /**
- * Helper to ensure value is a valid JSON object
+ * Helper to ensure value is a valid JSON object/array (or SQL NULL).
+ *
+ * Migration 065's validate_audit_trail_jsonb() trigger rejects anything
+ * that is not NULL or a JSON object/array. Two cases used to slip
+ * through and lose the row:
+ *  - absent values returned JSON.stringify(null) === 'null', a JSON null
+ *    scalar (jsonb_typeof 'null'), not SQL NULL — now returns null;
+ *  - strings that parse to a JSON scalar ('"REQUESTED"', '123', 'true')
+ *    were re-stringified as the same scalar — now wrapped as { value }.
  */
-function ensureJsonObject(value: any, fieldName: string): string {
+function ensureJsonObject(value: any, fieldName: string): string | null {
   if (value === null || value === undefined) {
-    return JSON.stringify(null);
+    return null;
   }
 
   // If it's already a string, try to parse it to validate
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      logger.warn(`[AUDIT_TRAIL_HELPER] ${fieldName} was passed as string. Validating JSON.`);
-      return JSON.stringify(parsed);
+      if (parsed !== null && typeof parsed === 'object') {
+        return JSON.stringify(parsed);
+      }
+      // JSON scalar ("REQUESTED", 123, true, null) — wrap it; a bare
+      // scalar is rejected by the audit_trail trigger.
+      logger.warn(`[AUDIT_TRAIL_HELPER] ${fieldName} was a JSON scalar. Wrapping in JSON object.`);
+      return JSON.stringify({ value: parsed });
     } catch (e) {
       // Plain string - wrap it in an object
       logger.warn(`[AUDIT_TRAIL_HELPER] ${fieldName} was plain string "${value}". Wrapping in JSON object.`);

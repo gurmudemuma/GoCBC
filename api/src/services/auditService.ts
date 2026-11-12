@@ -36,6 +36,97 @@ interface ComplianceMetadata {
   complianceNote: string;
 }
 
+/**
+ * Normalise a status value for the audit_trail JSONB columns.
+ *
+ * Migration 065 (065_add_audit_trail_jsonb_constraints.sql) added the
+ * `validate_audit_trail_jsonb()` trigger + CHECK constraints requiring
+ * old_value / new_value / metadata to be NULL or a JSON object/array.
+ * Every caller passes plain status strings ('REQUESTED', 'ALLOCATED',
+ * 'N/A', ...), and the old code did `JSON.stringify(entry.oldValue)`,
+ * which produces a JSON *string scalar* ('"REQUESTED"') — jsonb_typeof
+ * 'string' — so the trigger raised 'new_value must be a JSON object or
+ * array, not a plain string' and log() swallowed the error, silently
+ * losing the row. Wrap status strings as {"status": "<value>"} — the
+ * format migration 065 itself prescribes and the UI (AuditTrailTable
+ * formatAuditValue) already expects. Absent values become SQL NULL.
+ * Values that already parse as a JSON object/array are kept as-is.
+ */
+function toAuditJsonbValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed !== null && typeof parsed === 'object') {
+        return JSON.stringify(parsed);
+      }
+      return JSON.stringify({ status: parsed });
+    } catch {
+      return JSON.stringify({ status: value });
+    }
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return JSON.stringify({ status: value });
+}
+
+/**
+ * Normalise caller-supplied metadata to a plain object safe to spread
+ * into the enhanced metadata. A string is parsed when it holds JSON,
+ * otherwise wrapped as { value } — spreading a raw string or array
+ * would produce character/index keys instead of real metadata.
+ */
+function toAuditJsonbMetadata(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return { value: parsed };
+    } catch {
+      return { value };
+    }
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
+/**
+ * Render a stored audit_trail JSONB value back to the plain status
+ * string the ledger holds, for the cache-vs-ledger comparison in
+ * verifyAgainstBlockchain(). node-postgres returns JSONB columns as
+ * parsed JS values, so a stored {"status": "ALLOCATED"} arrives as an
+ * object — String() on it would give '[object Object]' and every
+ * comparison would falsely report a cache/ledger mismatch.
+ */
+function auditJsonbToString(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.status === 'string') {
+      return record.status;
+    }
+    if (record.value !== undefined) {
+      return String(record.value);
+    }
+  }
+  return JSON.stringify(value);
+}
+
 export class AuditService {
   private static instance: AuditService;
   private db: DatabaseService;
@@ -133,7 +224,7 @@ export class AuditService {
       // STEP 2: Cache in PostgreSQL (backup + fast queries)
       // Add blockchain metadata to the entry
       const enhancedMetadata = {
-        ...(entry.metadata || {}),
+        ...toAuditJsonbMetadata(entry.metadata),
         source: ledgerTransaction ? 'HYPERLEDGER_FABRIC' : 'POSTGRESQL',
         blockchainVerified,
         blockchainTxId: blockchainTxId || null,
@@ -161,8 +252,8 @@ export class AuditService {
           entry.performedBy,
           entry.organization,
           entry.performedByOrg,
-          entry.oldValue ? JSON.stringify(entry.oldValue) : null,
-          entry.newValue ? JSON.stringify(entry.newValue) : null,
+          entry.oldValue ? toAuditJsonbValue(entry.oldValue) : null,
+          entry.newValue ? toAuditJsonbValue(entry.newValue) : null,
           entry.reason || '',
           JSON.stringify(enhancedMetadata),
           entry.ipAddress || 'unknown'
@@ -905,8 +996,8 @@ export class AuditService {
           { field: 'entity type', cached: String(log.entity_type || '').toUpperCase(), ledger: String(matchingLog.entityType || matchingLog.EntityType || '').toUpperCase() },
           { field: 'entity ID', cached: String(log.entity_id || ''), ledger: String(matchingLog.entityId || matchingLog.EntityID || '') },
           { field: 'action', cached: String(log.action || '').toUpperCase(), ledger: String(matchingLog.actionType || matchingLog.ActionType || '').toUpperCase() },
-          { field: 'status before', cached: String(log.old_value || ''), ledger: String(matchingLog.statusBefore || matchingLog.StatusBefore || '') },
-          { field: 'status after', cached: String(log.new_value || ''), ledger: String(matchingLog.statusAfter || matchingLog.StatusAfter || '') },
+          { field: 'status before', cached: auditJsonbToString(log.old_value), ledger: String(matchingLog.statusBefore || matchingLog.StatusBefore || '') },
+          { field: 'status after', cached: auditJsonbToString(log.new_value), ledger: String(matchingLog.statusAfter || matchingLog.StatusAfter || '') },
           { field: 'reason', cached: String(log.reason || ''), ledger: String(matchingLog.reason || matchingLog.Reason || '') },
         ].map((comparison) => ({ ...comparison, matches: comparison.cached === comparison.ledger }));
         const cacheMatchesLedger = cacheComparisons.every((comparison) => comparison.matches);
