@@ -160,21 +160,28 @@ export class ForexService {
         );
       }
 
-      // Best-effort on-chain allocation (step 8). AllocateForex
-      // (forex.go:435) takes (forexID, lcID, amount, exchangeRate,
-      // retentionRate, officer, approvalRef, expiryDate). This was never
-      // called — allocation only wrote CouchDB + PG — so the ledger never
-      // saw the allocation. NOT chain-authoritative: the CouchDB/PG writes
-      // below still run when the chain call fails, so dev-mode allocation
-      // keeps working without peers (mirrors the RejectForex best-effort
-      // sync in banking.ts). NOTE: the chain call only succeeds on a live
-      // peer if retentionRate matches the active NBE COFFEE policy and
+      // LEDGER FIRST (quality-fix pattern, commit 9a0673e9): AllocateForex
+      // (forex.go:442) takes (forexID, lcID, amount, exchangeRate,
+      // retentionRate, officer, approvalRef, expiryDate) and is the ONLY
+      // writer of the allocation — the Postgres mirror below is written
+      // only after the on-chain call succeeds. The old best-effort code
+      // wrote CouchDB + Postgres and returned success:true with txId null
+      // when the chain call failed, so Postgres said ALLOCATED while the
+      // ledger still said CONFIRMED with allocatedAmount 0 (a phantom).
+      // A failed ledger write here is a failed allocation: a coded error
+      // is thrown (the forex.ts routes surface it as 503
+      // FOREX_ALLOCATE_FAILED) and nothing is written to CouchDB or
+      // Postgres.
+      //
+      // The caller's org is passed as the signing MSP, like requestForex
+      // does: AllocateForex only accepts NBEMSP or a bank MSP, so without
+      // it the call falls back to the gateway default (ECTAMSP) and the
+      // chaincode rejects it as unauthorized. The chain call only succeeds
+      // if retentionRate matches the active NBE COFFEE policy and
       // approvalRef/officer are non-empty (chaincode validates both).
-      let blockchainSynced = false;
-      let blockchainWarning: string | undefined;
-      let blockchainTxId: string | null = null;
+      let chainResult;
       try {
-        const chainResult = await this.fabricService.invokeChaincode('AllocateForex', [
+        chainResult = await this.fabricService.invokeChaincode('AllocateForex', [
           forexId,
           lcId,
           String(allocationData.amount),
@@ -183,100 +190,34 @@ export class ForexService {
           allocationData.officer,
           allocationData.approvalRef,
           allocationData.expiryDate || '',
-        ]);
-        if (chainResult.success) {
-          blockchainSynced = true;
-          blockchainTxId = chainResult.txId || null;
-          logger.info(`✅ [ForexService] Forex ${forexId} allocated on-chain, tx ${blockchainTxId}`);
-        } else {
-          blockchainWarning = `Chaincode AllocateForex did not allocate ${forexId}: ${chainResult.error || 'unknown error'}`;
-          logger.warn(`[ForexService] ${blockchainWarning}`);
-        }
-      } catch (chainError: any) {
-        blockchainWarning = `Could not allocate ${forexId} on the ledger (no Fabric here?): ${chainError.message}`;
-        logger.warn(`[ForexService] ${blockchainWarning}`);
+        ], allocationData.userOrg);
+      } catch (invokeErr: any) {
+        const error: any = new Error(`Failed to allocate forex ${forexId} on the ledger: ${invokeErr?.message || invokeErr}`);
+        error.code = 'FOREX_ALLOCATE_FAILED';
+        logger.error(`[ForexService] ${error.message}`);
+        throw error;
       }
+      if (!chainResult.success) {
+        const error: any = new Error(chainResult.error || 'Failed to allocate forex on blockchain');
+        error.code = 'FOREX_ALLOCATE_FAILED';
+        logger.error(`[ForexService] AllocateForex failed for ${forexId}: ${error.message}`);
+        throw error;
+      }
+      const blockchainTxId: string | null = chainResult.txId || null;
+      logger.info(`✅ [ForexService] Forex ${forexId} allocated on-chain, tx ${blockchainTxId}`);
 
-      // ⚠️ PRAGMATIC FIX: Write directly to CouchDB for immediate availability
-      // Blockchain consensus causes 10-30s state propagation delays across 6 peers
-      logger.info(`[ForexService] Writing forex allocation directly to CouchDB: ${forexId}`);
-      
-      const couchDbUrl = new URL(process.env.COUCHDB_URL || 'http://127.0.0.1:5984');
-      if (!couchDbUrl.username) {
-        couchDbUrl.username = process.env.COUCHDB_USERNAME || 'admin';
-      }
-      if (!couchDbUrl.password) {
-        couchDbUrl.password = process.env.COUCHDB_PASSWORD || 'adminpw';
-      }
-      const CouchDB = require('nano')(couchDbUrl.toString());
-      const db = CouchDB.use('coffeechannel_coffee');
-      
-      // Update LC status to FOREX_ALLOCATED
-      const lcDocKey = `LC_${lcId}`;
-      let lcDoc;
-      try {
-        lcDoc = await db.get(lcDocKey);
-        lcDoc.Status = 'FOREX_ALLOCATED';
-        lcDoc.UpdatedAt = new Date().toISOString();
-        await db.insert(lcDoc); // insert handles the _rev automatically
-      } catch (lcUpdateErr: any) {
-        // If document doesn't exist or there's a conflict, log but continue
-        // The LC might already be FOREX_ALLOCATED or not yet in CouchDB
-        logger.warn(`⚠️ Could not update LC ${lcId} in CouchDB: ${lcUpdateErr.message}`);
-      }
-      
-      logger.info(`✅ [ForexService] LC ${lcId} status update attempted in CouchDB`);
-      
-      // Create forex allocation record in CouchDB
-      const forexDocId = `FOREX_${forexId}`;
+      // No direct CouchDB write here: the ledger write above is the
+      // allocation. The old code PUT the LC (FOREX_ALLOCATED) and a FOREX
+      // doc straight into one peer's CouchDB and returned success with
+      // txId null even when the chain call had failed — a phantom the
+      // other five peers never saw. CouchDB now only reflects the
+      // committed block, via the orderer.
+
+      // Postgres mirror — written ONLY after the on-chain allocation
+      // above succeeded. Amounts match the chaincode's retention split.
       const allocatedAmount = allocationData.amount;
       const retentionAmount = allocatedAmount * (allocationData.retentionRate / 100);
       const releaseAmount = allocatedAmount - retentionAmount;
-      
-      const forexDoc = {
-        _id: forexDocId,
-        ForexID: forexId,
-        LCID: lcId,
-        ContractID: contractId,
-        RequestedAmount: allocatedAmount,
-        AllocatedAmount: allocatedAmount,
-        Currency: forex?.currency || 'USD',
-        ExchangeRate: allocationData.exchangeRate,
-        RetentionRate: allocationData.retentionRate,
-        RetentionAmountUSD: retentionAmount,
-        ReleaseAmountUSD: releaseAmount,
-        Status: 'ALLOCATED',
-        RequestedBy: forex?.requested_by || allocationData.userId,
-        NBEOfficer: allocationData.officer,
-        NBEApprovalRef: allocationData.approvalRef,
-        RequestedAt: forex?.requested_at || new Date().toISOString(),
-        AllocatedAt: new Date().toISOString(),
-        ExpiryDate: allocationData.expiryDate || null
-      };
-      
-      try {
-        await db.insert(forexDoc);
-        logger.info(`✅ [ForexService] Forex ${forexId} written to CouchDB`);
-      } catch (forexInsertErr: any) {
-        // If document already exists, try to update it
-        if (forexInsertErr.statusCode === 409) {
-          logger.warn(`⚠️ Forex ${forexId} already exists in CouchDB, updating...`);
-          try {
-            const existingForex = await db.get(forexDocId);
-            const updatedForex = { ...existingForex, ...forexDoc };
-            await db.insert(updatedForex);
-            logger.info(`✅ [ForexService] Forex ${forexId} updated in CouchDB`);
-          } catch (updateErr: any) {
-            logger.error(`❌ Failed to update forex ${forexId}: ${updateErr.message}`);
-            throw new Error(`Failed to write forex to CouchDB: ${updateErr.message}`);
-          }
-        } else {
-          logger.error(`❌ Failed to insert forex ${forexId}: ${forexInsertErr.message}`);
-          throw new Error(`Failed to write forex to CouchDB: ${forexInsertErr.message}`);
-        }
-      }
-      
-      const result = { success: true, txId: null }; // CouchDB direct write, no blockchain txId
 
       // currentStatus is the PG value, or the chaincode value when the row
       // only exists on the ledger (forex is undefined in that case).
@@ -287,8 +228,8 @@ export class ForexService {
       const validatedStatus = currentStatus === 'APPROVED' ? 'CONFIRMED' : currentStatus;
       await statusManager.updateEntityStatus('FOREX', forexId, validatedStatus, 'ALLOCATED');
 
-      // Update LC status to FOREX_ALLOCATED in PostgreSQL
-      // Note: CouchDB already updated, this is just for PostgreSQL sync
+      // Update LC status to FOREX_ALLOCATED in PostgreSQL, mirroring the
+      // on-chain LC status AllocateForex just set on the ledger.
       try {
         await this.dbService.run(
           `UPDATE letters_of_credit 
@@ -319,13 +260,10 @@ export class ForexService {
           allocationData.officer,
           allocationData.approvalRef,
           allocationData.expiryDate,
-          blockchainTxId || result.txId,
+          blockchainTxId,
           forexId,
         ]
       );
-
-      //✅ CouchDB direct write - no need to verify blockchain state propagation
-      // The LC status is immediately available since we wrote directly to CouchDB
 
       await this.auditService.log({
         entityType: 'FOREX',
@@ -334,7 +272,7 @@ export class ForexService {
         performedBy: allocationData.userId,
         organization: allocationData.userOrg,
         performedByOrg: allocationData.userOrg,
-        oldValue: forex.status,
+        oldValue: forex?.status || currentStatus,
         newValue: 'ALLOCATED',
         reason: 'Forex allocated',
         metadata: {
@@ -346,8 +284,8 @@ export class ForexService {
         },
       });
 
-      logger.info(`✅ [ForexService] Forex allocated: ${forexId} (Retention: ${retentionAmount} ${forex.currency})`);
-      return { success: true, forexId: forexId, txId: blockchainTxId || result.txId, retentionAmount, releaseAmount, blockchainSynced, blockchainWarning };
+      logger.info(`✅ [ForexService] Forex allocated: ${forexId} (Retention: ${retentionAmount} ${forex?.currency || 'USD'})`);
+      return { success: true, forexId: forexId, txId: blockchainTxId, retentionAmount, releaseAmount, blockchainSynced: true };
     } catch (error: any) {
       logger.error(`❌ [ForexService] Allocation failed: ${error.message}`);
       throw error;

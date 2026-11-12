@@ -839,24 +839,40 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
         timestamp: new Date().toISOString()
       });
     } else {
-      res.status(400).json({ 
-        success: false, 
-        error: { 
-          code: 'ALLOCATE_FAILED', 
-          message: 'Failed to allocate forex'
-        }, 
-        timestamp: new Date().toISOString() 
+      // Defensive: allocateForex now throws a coded error on chain failure
+      // instead of returning success:false, so this should not be reached.
+      // Kept honest anyway — never report a failed allocation as 400/200.
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'FOREX_ALLOCATE_FAILED',
+          message: 'Failed to allocate forex on the ledger; no allocation was recorded'
+        },
+        timestamp: new Date().toISOString()
       });
     }
   } catch (error: any) {
     logger.error('[FOREX] Error allocating forex:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: { 
-        code: 'INTERNAL_ERROR', 
-        message: error.message 
-      }, 
-      timestamp: new Date().toISOString() 
+    // Ledger-first failure (forexService.allocateForex): the chain call
+    // failed, so NO allocation was recorded on-chain, in CouchDB, or in
+    // Postgres — report 503, never a 200 with a phantom ALLOCATED row.
+    if (error?.code === 'FOREX_ALLOCATE_FAILED') {
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: 'FOREX_ALLOCATE_FAILED',
+          message: error.message
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
     });
   }
 });
@@ -912,24 +928,40 @@ router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_AD
         timestamp: new Date().toISOString()
       });
     } else {
-      res.status(400).json({ 
-        success: false, 
-        error: { 
-          code: 'ALLOCATE_FAILED', 
-          message: 'Failed to allocate forex'
-        }, 
-        timestamp: new Date().toISOString() 
+      // Defensive: allocateForex now throws a coded error on chain failure
+      // instead of returning success:false, so this should not be reached.
+      // Kept honest anyway — never report a failed allocation as 400/200.
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'FOREX_ALLOCATE_FAILED',
+          message: 'Failed to allocate forex on the ledger; no allocation was recorded'
+        },
+        timestamp: new Date().toISOString()
       });
     }
   } catch (error: any) {
     logger.error('[FOREX] Error allocating forex:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: { 
-        code: 'INTERNAL_ERROR', 
-        message: error.message 
-      }, 
-      timestamp: new Date().toISOString() 
+    // Ledger-first failure (forexService.allocateForex): the chain call
+    // failed, so NO allocation was recorded on-chain, in CouchDB, or in
+    // Postgres — report 503, never a 200 with a phantom ALLOCATED row.
+    if (error?.code === 'FOREX_ALLOCATE_FAILED') {
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: 'FOREX_ALLOCATE_FAILED',
+          message: error.message
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message
+      },
+      timestamp: new Date().toISOString()
     });
   }
 });
