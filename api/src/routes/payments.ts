@@ -2153,7 +2153,7 @@ router.put('/:paymentID/tracking-status',
       // Update tracking status
       await db.run(
         `UPDATE payments 
-         SET payment_tracking_status = $1, updated_at = CURRENT_TIMESTAMP 
+         SET payment_tracking_status = $1 
          WHERE payment_id = $2`,
         [trackingStatus, paymentID]
       );

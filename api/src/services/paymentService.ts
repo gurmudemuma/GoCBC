@@ -243,8 +243,7 @@ export class PaymentService {
       await this.dbService.run(
         `UPDATE payments 
          SET retention_status = $1, exchange_rate = $2, amount_birr = $3, 
-             converted_by = $4, conversion_ref = $5, conversion_date = $6,
-             updated_at = CURRENT_TIMESTAMP
+             converted_by = $4, conversion_ref = $5, conversion_date = $6
          WHERE payment_id = $7`,
         [
           'RETENTION_CONVERTED',
@@ -417,7 +416,7 @@ export class PaymentService {
       // settlement CHECK once the machines split (§17 #8).
       await this.dbService.run(
         `UPDATE payments 
-         SET status = $1, retention_status = $2, updated_at = CURRENT_TIMESTAMP
+         SET status = $1, retention_status = $2
          WHERE payment_id = $3`,
         [
           'SETTLED',
