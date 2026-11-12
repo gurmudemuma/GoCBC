@@ -110,6 +110,10 @@ router.post('/export', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId, shipmentID);
+      // Auto-create the customs declaration when the inspection already
+      // passed (literal order inspect → permit → customs). Best-effort:
+      // the helper never throws and never duplicates.
+      await shipmentService.maybeTriggerCustomsDeclarationAfterPermit(shipmentID, (req as any).user?.username || approvedBy);
       logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
       res.status(201).json({ 
         success: true, 
@@ -207,6 +211,10 @@ router.post('/', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async (req,
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId, shipmentID);
+      // Auto-create the customs declaration when the inspection already
+      // passed (literal order inspect → permit → customs). Best-effort:
+      // the helper never throws and never duplicates.
+      await shipmentService.maybeTriggerCustomsDeclarationAfterPermit(shipmentID, (req as any).user?.username || approvedBy);
       logger.info(`✅ [PERMITS] Export permit issued: ${permitId}`);
       res.status(201).json({ 
         success: true, 
@@ -278,6 +286,21 @@ router.post('/issue', authMiddleware, requireRole('BANKS', 'BANK_ADMIN'), async 
     if (result.success) {
       await mirrorPermitPG(permitId, contractId, approvedBy);
       await mirrorPermitCascadePG(contractId);
+      // Auto-create the customs declaration for every shipment under
+      // this contract whose inspection already passed (literal order
+      // inspect → permit → customs; no single shipmentID on this route).
+      // Best-effort: the helper never throws and never duplicates.
+      try {
+        const shipments = await dbService.all(
+          'SELECT shipment_id FROM shipments WHERE contract_id = $1',
+          [contractId]
+        );
+        for (const s of shipments || []) {
+          await shipmentService.maybeTriggerCustomsDeclarationAfterPermit(s.shipment_id, (req as any).user?.username || approvedBy);
+        }
+      } catch (triggerErr) {
+        logger.warn('[PERMITS] Permit-issuance customs trigger failed (best-effort):', triggerErr);
+      }
       // In-app notification (persisted feed + live WS broadcast).
       await notificationService.emitWorkflowEvent({
         type: 'permit_issued',

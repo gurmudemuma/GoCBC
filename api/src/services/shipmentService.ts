@@ -151,6 +151,27 @@ export class ShipmentService {
     try {
       logger.info(`[ShipmentService] 🔥 Triggering customs declaration for shipment: ${shipmentID}`);
 
+      // IDEMPOTENCY (phase-3 seq-7 fix): the trigger now fires from two
+      // places — quality approval (alternate order: permit already issued)
+      // and permit issuance (literal order: inspection already approved).
+      // At most one of them can succeed per shipment, but a second permit
+      // for the same contract would re-fire; never create a second live
+      // declaration for a shipment that already has one. Only SUBMITTED /
+      // CLEARED count as live: a REJECTED declaration may legitimately be
+      // replaced (F-7 resubmit), and a stray non-live row must not block
+      // the real declaration. (PG SUBMITTED implies ledger success —
+      // submitDeclaration inserts PG only after the chain call commits.)
+      const existing = await this.dbService.get(
+        `SELECT declaration_id FROM customs_declarations
+          WHERE shipment_id = $1 AND status IN ('SUBMITTED', 'CLEARED')
+          ORDER BY created_at DESC LIMIT 1`,
+        [shipmentID]
+      );
+      if (existing?.declaration_id) {
+        logger.info(`[ShipmentService] Customs declaration already exists for shipment ${shipmentID}: ${existing.declaration_id} — skipping duplicate trigger`);
+        return { success: true, declarationID: existing.declaration_id, alreadyExists: true };
+      }
+
       // Get shipment details
       const shipment = await this.dbService.get(
         'SELECT * FROM shipments WHERE shipment_id = $1',
@@ -208,6 +229,43 @@ export class ShipmentService {
     } catch (error: any) {
       logger.error(`❌ [ShipmentService] Customs declaration trigger failed: ${error.message}`);
       // Don't fail quality approval if customs declaration fails
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * 🔥 WORKFLOW TRIGGER (phase-3 seq-7 fix): Auto-create the customs
+   * declaration when a permit is issued AFTER inspection approval — the
+   * literal order (inspect → permit → customs). The quality-approval
+   * trigger (quality.ts) fires too early in that order: no permit exists
+   * yet, so SubmitCustomsDeclaration fails its PERMIT_ISSUED gate on all
+   * 6 peers and is never retried. Permit issuance is the first moment
+   * both preconditions hold (inspection APPROVED + permit ISSUED). In the
+   * alternate order (permit → inspection) there is no APPROVED inspection
+   * yet, so this skips and the quality-approval trigger fires later
+   * instead. Never throws; never creates a duplicate
+   * (triggerCustomsDeclaration is idempotent per shipment).
+   */
+  async maybeTriggerCustomsDeclarationAfterPermit(shipmentID: string, userId: string) {
+    try {
+      if (!shipmentID) return { success: false, skipped: 'NO_SHIPMENT' };
+      const inspection = await this.dbService.get(
+        `SELECT inspection_id FROM quality_inspections
+          WHERE shipment_id = $1 AND status = 'APPROVED'
+          ORDER BY created_at DESC LIMIT 1`,
+        [shipmentID]
+      );
+      if (!inspection?.inspection_id) {
+        logger.info(`[ShipmentService] No APPROVED inspection for shipment ${shipmentID} yet — customs auto-declaration deferred to quality approval`);
+        return { success: false, skipped: 'NO_APPROVED_INSPECTION' };
+      }
+      const result = await this.triggerCustomsDeclaration(shipmentID, inspection.inspection_id, userId);
+      if (result.success && !result.alreadyExists) {
+        logger.info(`✅ [ShipmentService] Customs declaration auto-created on permit issuance: ${result.declarationID} for shipment ${shipmentID}`);
+      }
+      return result;
+    } catch (error: any) {
+      logger.error(`[ShipmentService] Permit-issuance customs trigger failed (best-effort, permit stands): ${error.message}`);
       return { success: false, error: error.message };
     }
   }

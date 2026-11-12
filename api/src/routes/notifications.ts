@@ -118,6 +118,22 @@ const notificationVisibility = (user: any, firstParam = 1): { clause: string; va
   const numericUserId = Number(user?.userId ?? user?.sub);
   const viewerId = Number.isFinite(numericUserId) ? numericUserId : -1;
   const p = firstParam;
+  // CROSS-EXPORTER LEAK FIX (V3, 2026-11-12): the old predicate matched
+  // any row whose role equalled the viewer's role, so every
+  // role='EXPORTER' row was visible to EVERY exporter. The emit side
+  // (notificationService.createInAppNotification) deliberately never
+  // writes a bare EXPORTER role broadcast — EXPORTER rows are always
+  // exporter-scoped (role=EXPORTER + exporter_id) — so no intended
+  // broadcast is lost by dropping the role arm for EXPORTER viewers:
+  // they see only rows addressed to them directly or to their own
+  // exporter. Other roles keep the role arm (their broadcasts carry no
+  // exporter_id and are addressed to the whole role).
+  if (baseRole === 'EXPORTER') {
+    return {
+      clause: `(user_id = $${p} OR exporter_id = $${p + 1})`,
+      values: [viewerId, user?.exporterId || user?.username || ''],
+    };
+  }
   return {
     clause: `(user_id = $${p} OR exporter_id = $${p + 1} OR role = $${p + 2})`,
     values: [viewerId, user?.exporterId || user?.username || '', baseRole],

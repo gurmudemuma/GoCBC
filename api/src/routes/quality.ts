@@ -1400,11 +1400,13 @@ router.post('/inspections/:inspectionID/issue-permit',
       // stale — and it is BanksMSP-only on-chain (permit.go:64-66), so
       // pin BanksMSP per invoke (cb12f0b4 precedent, as in permits.ts).
       // A chain failure fails honestly with 503 and writes nothing to
-      // Postgres. NOTE: no customs declaration is auto-created here;
-      // the "customs declaration workflow has been automatically
-      // initiated" message lives in the UI
-      // (ui/src/components/portals/ECTAPortal.tsx:1490), not in this
-      // route — autoCreateCustomsDeclaration is accepted but ignored.
+      // Postgres. The customs declaration IS auto-created after success
+      // below (maybeTriggerCustomsDeclarationAfterPermit): the inspection
+      // is already APPROVED here, so permit issuance is the first moment
+      // both preconditions hold — the quality-approval trigger fires too
+      // early in this literal order and is never retried.
+      // autoCreateCustomsDeclaration is accepted but the trigger does not
+      // depend on it.
       await fabricService.connectAsOrg('BanksMSP');
       const chainResult = await fabricService.invokeChaincode(
         'IssueCBEExportPermit',
@@ -1475,6 +1477,15 @@ router.post('/inspections/:inspectionID/issue-permit',
       } else if (inspection.shipment_id) {
         await shipmentService.mirrorShipmentStatus(inspection.shipment_id, 'PERMIT_ISSUED', ['CREATED', 'INSPECTION_COMPLETE']);
       }
+
+      // Auto-create the customs declaration now that the permit exists:
+      // the inspection is already APPROVED here, so this is the first
+      // moment both preconditions hold (literal order inspect → permit
+      // → customs). Best-effort, never duplicates.
+      await shipmentService.maybeTriggerCustomsDeclarationAfterPermit(
+        inspection.shipment_id,
+        issuedBy || 'ECTA Export Permit Office'
+      );
 
       logger.info(`Export permit issued: ${permitNumber} for inspection ${inspectionID}, shipment ${inspection.shipment_id}, TX: ${blockchain_tx_id}`);
       // In-app notification (persisted feed + live WS broadcast).
