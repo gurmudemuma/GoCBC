@@ -559,7 +559,12 @@ router.post('/messages/mt752',
  */
 router.post('/messages/:messageID/approve',
   authMiddleware,
-  requireRole('BANKS', 'BANK_ADMIN'),
+  // LEG3 M-1: the NBE_APPROVED -> APPROVED step is the completion of the
+  // NBE approval flow (chaincode ApproveSWIFTMessage accepts DRAFT or
+  // NBE_APPROVED and performs no MSP check — the API role is the gate),
+  // so the NBE user who did the nbe-approve must be able to do it. The
+  // NBE portal's approve button 403'd for its own user until now.
+  requireRole('BANKS', 'BANK_ADMIN', 'NBE', 'NBE_ADMIN'),
   [param('messageID').notEmpty()],
   validateRequest,
   async (req: Request, res: Response) => {

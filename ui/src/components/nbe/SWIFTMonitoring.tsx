@@ -277,11 +277,9 @@ const SWIFTMonitoring: React.FC<SWIFTMonitoringProps> = ({
     }
   };
 
-  // NBE_APPROVED -> APPROVED (chaincode ApproveSWIFTMessage). NOTE: the API
-  // route POST /swift/messages/:id/approve currently requireRole()s
-  // BANKS/BANK_ADMIN only (swift.ts), so an NBE-role user gets a 403 until
-  // that role list is widened — an API change, not a UI one. The failure is
-  // surfaced honestly here instead of hidden.
+  // NBE_APPROVED -> APPROVED (chaincode ApproveSWIFTMessage). LEG3 M-1:
+  // the API route now allows NBE/NBE_ADMIN as well as BANKS, so the NBE
+  // user who did the nbe-approve can complete the approval here.
   const handleApproveMessage = async (messageId: string) => {
     try {
       await axios.post(
