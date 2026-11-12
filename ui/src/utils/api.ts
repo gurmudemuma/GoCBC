@@ -92,6 +92,10 @@ class CECBSApi {
     return this.client.put(url, data, config);
   }
 
+  async patch(url: string, data?: any, config?: any): Promise<AxiosResponse> {
+    return this.client.patch(url, data, config);
+  }
+
   async delete(url: string, config?: any): Promise<AxiosResponse> {
     return this.client.delete(url, config);
   }
