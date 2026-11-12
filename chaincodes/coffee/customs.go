@@ -264,28 +264,41 @@ func (c *CoffeeContract) SubmitCustomsDeclaration(ctx contractapi.TransactionCon
 	// the old code read the bare ID, which never matches a stored
 	// shipment, so this guard silently never fired. Fall back to the bare
 	// key for legacy rows stored without the prefix.
-	if shipmentID != "" {
-		shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
-		if err == nil && shipmentJSON == nil {
-			shipmentJSON, err = ctx.GetStub().GetState(shipmentID)
-		}
-		if err == nil && shipmentJSON != nil {
-			var shipment CoffeeShipment
-			if json.Unmarshal(shipmentJSON, &shipment) == nil {
-				// Check shipment status - must have PERMIT_ISSUED from ECTA.
-				// F-7: CUSTOMS_REJECTED is also admissible — a shipment
-				// whose declaration was rejected is resubmitted with a
-				// NEW declaration ID (DECL_<id> is unique per
-				// declaration, so the duplicate check below still
-				// blocks reusing the rejected ID). The cascade below
-				// moves the shipment CUSTOMS_REJECTED -> CUSTOMS_DECLARED;
-				// UpdateShipmentStatus has no from-state guard (main.go),
-				// so the move is permitted.
-				if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" && shipment.Status != "CUSTOMS_REJECTED" {
-					return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED, CUSTOMS_DECLARED, or CUSTOMS_REJECTED for a resubmission after rejection)", shipmentID, shipment.Status)
-				}
-			}
-		}
+	// FAIL-CLOSED (2026-11-12, shipment-existence fix): the old guard
+	// only ran when the shipment WAS found — a shipmentID that exists
+	// nowhere skipped the whole block and the declaration was stored
+	// on-chain and in PG (proven live: SHIP-FAKE-BUG2 → CD-BUG2-FAKE1).
+	// A missing shipment is now a refusal, not a silent pass. The API
+	// checks first (404 SHIPMENT_NOT_FOUND), so this error only
+	// surfaces for direct Fabric callers or a race — defense in depth.
+	if shipmentID == "" {
+		return fmt.Errorf("shipmentID is required to submit a customs declaration")
+	}
+	shipmentJSON, err := ctx.GetStub().GetState("SHIPMENT_" + shipmentID)
+	if err == nil && shipmentJSON == nil {
+		shipmentJSON, err = ctx.GetStub().GetState(shipmentID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read shipment %s: %v", shipmentID, err)
+	}
+	if shipmentJSON == nil {
+		return fmt.Errorf("shipment %s not found: cannot submit a customs declaration for a shipment that does not exist", shipmentID)
+	}
+	var shipment CoffeeShipment
+	if err := json.Unmarshal(shipmentJSON, &shipment); err != nil {
+		return fmt.Errorf("failed to parse shipment %s: %v", shipmentID, err)
+	}
+	// Check shipment status - must have PERMIT_ISSUED from ECTA.
+	// F-7: CUSTOMS_REJECTED is also admissible — a shipment
+	// whose declaration was rejected is resubmitted with a
+	// NEW declaration ID (DECL_<id> is unique per
+	// declaration, so the duplicate check below still
+	// blocks reusing the rejected ID). The cascade below
+	// moves the shipment CUSTOMS_REJECTED -> CUSTOMS_DECLARED;
+	// UpdateShipmentStatus has no from-state guard (main.go),
+	// so the move is permitted.
+	if shipment.Status != "PERMIT_ISSUED" && shipment.Status != "CUSTOMS_DECLARED" && shipment.Status != "CUSTOMS_REJECTED" {
+		return fmt.Errorf("customs declaration cannot be submitted: shipment %s status is %s. ECTA export permit must be issued first (status must be PERMIT_ISSUED, CUSTOMS_DECLARED, or CUSTOMS_REJECTED for a resubmission after rejection)", shipmentID, shipment.Status)
 	}
 
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
