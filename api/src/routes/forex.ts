@@ -23,7 +23,10 @@ const signatureService = BlockchainSignatureService.getInstance();
 // ==================== FOREX ALLOCATION ROUTES ====================
 
 // POST /api/v1/forex — Create forex request (wrapper for /request endpoint)
-router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER']), async (req, res) => {
+// LEG 1 (F5a): exporters may file their own forex request. Exporters
+// are not Fabric members, so the API signs their request as ECTAMSP
+// (the LC-request precedent); the caller must own the exporterId.
+router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER', 'EXPORTER']), async (req, res) => {
   try {
     const { forexID, contractID, exporterID, lcNumber, amount, currency, status } = req.body;
     
@@ -72,7 +75,24 @@ router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFIC
     const finalCurrency = currency || autoMappedData.currency || 'USD';
 
     const user = (req as any).user;
-    
+
+    // LEG 1 (F5a): an exporter files only for their own exporterId.
+    if (String(user?.role || '').toUpperCase() === 'EXPORTER') {
+      const callerId = String(user?.exporterId || user?.exporter_id || user?.username || '');
+      if (!callerId || callerId.toLowerCase() !== String(finalExporterId).toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'Exporters can request forex only for their own exporter account' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+    // Exporters are not Fabric members: RequestForex accepts only
+    // ECTAMSP / bank MSPs, so the API signs exporter requests as ECTA.
+    const signingOrg = String(user?.role || '').toUpperCase() === 'EXPORTER'
+      ? 'ECTAMSP'
+      : (user?.org || 'BanksMSP');
+
     // Use ForexService which handles both blockchain AND PostgreSQL
     const result = await forexService.requestForex({
       forexId,
@@ -82,7 +102,7 @@ router.post('/', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFIC
       amount: parseFloat(finalAmount.toString()),
       currency: finalCurrency,
       userId: user?.username || user?.sub || '',
-      userOrg: user?.org || 'BanksMSP'
+      userOrg: signingOrg
     });
     
     if (result.success) {
@@ -556,12 +576,20 @@ router.post('/rates', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE OFFI
 // POST /api/v1/forex/request — create forex request
 // NOTE: LC ID removed from parameters to prevent SDK-level state queries
 // LC will be linked during NBE allocation phase
-router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER']), async (req, res) => {
+router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BANK OFFICER', 'FOREX OFFICER', 'EXPORTER']), async (req, res) => {
   try {
-    const { forexId, contractId, exporterId, amount, currency } = req.body;
+    // LEG 1 (F5b): accept the LC id the bank form sends. It used to be
+    // destructured away here, and the PG mirror below had no lc_id
+    // column, so GET /forex normalised lcId from an empty value and a
+    // later allocate built from the row sent lcId:'' → 400.
+    const { forexId, contractId, exporterId, amount, currency, lcId, lcNumber } = req.body;
+    const requestLcId = lcId || lcNumber || '';
     if (!forexId || !contractId) {
       return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'forexId and contractId are required' } });
     }
+
+    const requestUser = (req as any).user;
+    const isExporterRequester = String(requestUser?.role || '').toUpperCase() === 'EXPORTER';
 
     // AUTO-MAPPING: Fetch contract data to auto-populate forex fields
     let autoMappedData: any = {};
@@ -588,6 +616,21 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
     const finalAmount = amount || autoMappedData.calculatedAmount || '0';
     const finalCurrency = currency || autoMappedData.currency || 'USD';
 
+    // LEG 1 (F5a): an exporter files only for their own exporterId.
+    if (isExporterRequester) {
+      const callerId = String(requestUser?.exporterId || requestUser?.exporter_id || requestUser?.username || '');
+      if (!callerId || callerId.toLowerCase() !== String(finalExporterId).toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'Exporters can request forex only for their own exporter account' },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    // Exporters are not Fabric members: RequestForex accepts only
+    // ECTAMSP / bank MSPs, so the API signs exporter requests as ECTA.
+    const requestSigningOrg = isExporterRequester ? 'ECTAMSP' : 'BanksMSP';
+
     // Retry logic for peer synchronization issues
     let result;
     let lastError;
@@ -596,10 +639,10 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         // RequestForex now takes 5 parameters (lcId removed)
-        await fabricService.connectAsOrg('BanksMSP');
+        await fabricService.connectAsOrg(requestSigningOrg);
         result = await fabricService.invokeChaincode('RequestForex', [
           forexId, contractId, finalExporterId, finalAmount.toString(), finalCurrency,
-        ], 'BanksMSP');
+        ], requestSigningOrg);
         
         if (result.success) {
           logger.info(`✅ Forex request created: ${forexId} with auto-mapped data (attempt ${attempt})`);
@@ -641,12 +684,13 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
             const db = DatabaseService.getInstance();
             await db.run(
               `INSERT INTO forex_allocations (
-                allocation_id, forex_id, contract_id, exporter_id, requested_amount, currency, status,
+                allocation_id, forex_id, contract_id, lc_id, exporter_id, requested_amount, currency, status,
                 blockchain_tx_id, blockchain_timestamp, last_blockchain_sync, request_date, updated_at
-              ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW(), NOW())
+              ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW(), NOW())
               ON CONFLICT (forex_id) DO UPDATE SET
                 allocation_id = EXCLUDED.allocation_id,
                 contract_id = EXCLUDED.contract_id,
+                lc_id = EXCLUDED.lc_id,
                 exporter_id = EXCLUDED.exporter_id,
                 requested_amount = EXCLUDED.requested_amount,
                 currency = EXCLUDED.currency,
@@ -655,16 +699,16 @@ router.post('/request', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BAN
                 blockchain_timestamp = NOW(),
                 last_blockchain_sync = NOW(),
                 updated_at = NOW()`,
-              [forexId, contractId, finalExporterId, finalAmount, finalCurrency, 'REQUESTED', result.txId]
+              [forexId, contractId, requestLcId || null, finalExporterId, finalAmount, finalCurrency, 'REQUESTED', result.txId]
             );
             logger.info(`✅ Stored blockchain metadata for forex ${forexId}: txId=${result.txId}`);
           } catch (dbError) {
             logger.error(`Failed to store blockchain metadata for ${forexId}:`, dbError);
           }
           
-          return res.status(201).json({ 
-            success: true, 
-            data: { forexId },
+          return res.status(201).json({
+            success: true,
+            data: { forexId, lcId: requestLcId || null },
             autoMapped: {
               exporterId: finalExporterId,
               amount: finalAmount,
@@ -770,18 +814,28 @@ router.post('/:forexId/confirm', authMiddleware, requireRole(['NBE', 'NBE_ADMIN'
 
     if (result.success) {
       logger.info(`[FOREX] ✅ Forex request confirmed: ${forexId}`);
-      
-      // Store confirmation in PostgreSQL
+
+      // Store confirmation in PostgreSQL.
+      // LEG 1 (F5c): match by allocation_id OR forex_id. LC-issue
+      // auto-created rows carry allocation_id = ${forexId}-ALLOC
+      // (banking.ts), so the old allocation_id-only mirror updated 0
+      // rows for 39 live rows while the ledger was CONFIRMED. The
+      // caller is told whether the mirror actually updated a row.
+      let mirrorUpdated = false;
       try {
-        await postgresDb.run(
-          `UPDATE forex_allocations 
-           SET status = 'CONFIRMED', 
+        const mirror = await postgresDb.run(
+          `UPDATE forex_allocations
+           SET status = 'CONFIRMED',
                updated_at = CURRENT_TIMESTAMP,
                confirmed_by = $1,
                confirmed_at = CURRENT_TIMESTAMP
-           WHERE allocation_id = $2`,
+           WHERE allocation_id = $2 OR forex_id = $2`,
           [confirmedBy || 'NBE Officer', forexId]
         );
+        mirrorUpdated = (mirror?.rowCount ?? 0) > 0;
+        if (!mirrorUpdated) {
+          logger.error(`[FOREX] Confirm mirror updated 0 rows for ${forexId} — no forex_allocations row matches allocation_id or forex_id`);
+        }
       } catch (pgErr) {
         logger.warn('[FOREX] Could not update PostgreSQL, but blockchain succeeded:', pgErr);
       }
@@ -793,6 +847,7 @@ router.post('/:forexId/confirm', authMiddleware, requireRole(['NBE', 'NBE_ADMIN'
           status: 'CONFIRMED',
           confirmedBy: confirmedBy || 'NBE Officer',
           confirmedAt: new Date().toISOString(),
+          postgresMirrorUpdated: mirrorUpdated,
           message: 'Forex request confirmed. Allocate button is now active.'
         },
         timestamp: new Date().toISOString()

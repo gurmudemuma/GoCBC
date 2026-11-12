@@ -304,13 +304,19 @@ export class LCService {
    * auto-request failed. Callers must use this return value — never
    * generate a fresh `FOREX-${Date.now()}` to report, because that ID
    * would differ from the one created here and point at nothing.
+   *
+   * LEG 1 (F6b): the forex ID is deterministic — `FOREX_${lcID}_REQUEST`,
+   * the same scheme the POST /banking/lc/:lcID/issue route uses. The
+   * old `FOREX-${Date.now()}` here meant the two issue routes minted
+   * different ID shapes for the same logical auto-request, and a retry
+   * after a partial failure could not find the first request.
    */
   private async triggerForexAutoRequest(lcID: string, lc: any): Promise<string | null> {
     try {
       const { ForexService } = await import('./forexService');
       const forexService = ForexService.getInstance();
 
-      const forexId = `FOREX-${Date.now()}`;
+      const forexId = `FOREX_${lcID}_REQUEST`;
 
       const created = await forexService.requestForex({
         forexId,

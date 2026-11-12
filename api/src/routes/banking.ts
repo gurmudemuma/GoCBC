@@ -96,6 +96,22 @@ router.post('/lc/request',
     body('amount').notEmpty().withMessage('Amount is required'),
     body('currency').notEmpty().withMessage('Currency is required'),
     body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+    // LEG 1 (F6a): the remaining 10 fields of the exporter's 17-field
+    // LC form. They were never declared here, so the API validated and
+    // stored only 7 of them — and stored bankName (the ADVISING bank)
+    // as issuing_bank. bankName is kept as a fallback for the advising
+    // bank only; issuingBank is the buyer's bank.
+    body('issuingBank').optional().isString(),
+    body('advisingBank').optional().isString(),
+    body('beneficiary').optional().isString(),
+    body('terms').optional().isString(),
+    body('transportMode').optional().isString(),
+    body('portOfLoading').optional().isString(),
+    body('portOfDischarge').optional().isString(),
+    body('latestShipmentDate').optional().isISO8601().withMessage('Latest shipment date must be a valid ISO date'),
+    body('partialShipment').optional().isBoolean(),
+    body('transhipment').optional().isBoolean(),
+    body('paymentTerms').optional().isString(),
   ],
   validateRequest,
   async (req, res) => {
@@ -108,6 +124,17 @@ router.post('/lc/request',
         amount,
         currency,
         expiryDate,
+        issuingBank,
+        advisingBank,
+        beneficiary,
+        terms,
+        transportMode,
+        portOfLoading,
+        portOfDischarge,
+        latestShipmentDate,
+        partialShipment,
+        transhipment,
+        paymentTerms,
       } = req.body;
       const requester = (req as any).user;
       if (String(requester?.role || '').toUpperCase() === 'EXPORTER' &&
@@ -127,6 +154,13 @@ router.post('/lc/request',
           const contract = contractResult.data;
           autoMappedData.exporterID = contract.ExporterID || contract.exporterID || exporterID;
           autoMappedData.currency = contract.Currency || contract.currency || 'USD';
+          // LEG 1 (F6a): the ledger auto-maps the banks from the
+          // contract (buyer's bank issues, exporter's bank advises).
+          // Mirror the same mapping here so the PG row stores the
+          // correct issuing bank instead of bankName (the advising
+          // bank the form puts in bankName).
+          autoMappedData.issuingBank = contract.BuyerBank || contract.buyerBank || '';
+          autoMappedData.advisingBank = contract.ExporterBank || contract.exporterBank || '';
           
           // Calculate LC amount from contract value if not provided
           const pricePerKg = parseFloat(contract.PricePerKg || contract.pricePerKg || '0');
@@ -170,6 +204,31 @@ router.post('/lc/request',
       const finalExporterID = exporterID || autoMappedData.exporterID || '';
       const finalAmount = amount || autoMappedData.calculatedAmount || '0';
       const finalCurrency = currency || autoMappedData.currency || 'USD';
+      // LEG 1 (F6a): issuing bank = the buyer's bank (explicit, else
+      // the contract's buyer bank). NEVER bankName: the form puts the
+      // ADVISING bank there, and the old code stored it as
+      // issuing_bank. Advising bank = explicit, else the contract's
+      // exporter bank, else bankName as a last resort.
+      const finalIssuingBank = issuingBank || autoMappedData.issuingBank || '';
+      const finalAdvisingBank = advisingBank || autoMappedData.advisingBank || bankName || '';
+      // Beneficiary is the exporter company. When the form omits it,
+      // resolve the company name from PG; the chaincode also falls back
+      // to the ledger exporter record, so the two never disagree by
+      // more than a stale lookup.
+      let finalBeneficiary = beneficiary || '';
+      if (!finalBeneficiary) {
+        try {
+          const exporterRow = await dbService.get(
+            `SELECT company_name FROM exporter_applications WHERE exporter_id = $1
+             UNION ALL SELECT company_name FROM exporters WHERE exporter_id = $1 LIMIT 1`,
+            [finalExporterID]
+          );
+          finalBeneficiary = exporterRow?.company_name || finalExporterID;
+        } catch {
+          finalBeneficiary = finalExporterID;
+        }
+      }
+      const finalTerms = terms || paymentTerms || '';
 
       // 🔐 CRITICAL: Connect as ECTAMSP (exporters use ECTA as intermediary)
       // Exporters are NOT blockchain consortium members - they use the system through ECTA
@@ -183,7 +242,10 @@ router.post('/lc/request',
         bankName,
         finalAmount,
         finalCurrency,
-        expiryDate
+        expiryDate,
+        undefined,
+        finalBeneficiary,
+        finalTerms
       );
 
       if (result.success) {
@@ -216,24 +278,44 @@ router.post('/lc/request',
         }
         
         // ✅ Sync to PostgreSQL for fast queries
+        // LEG 1 (F6a): store the resolved banks (issuing = buyer's
+        // bank, advising = exporter's bank) and the remaining form
+        // fields. The old insert stored bankName as issuing_bank and
+        // dropped beneficiary/terms/shipping details entirely.
         try {
           await dbService.run(
             `INSERT INTO letters_of_credit (
-              lc_id, lc_number, contract_id, exporter_id, issuing_bank, amount, currency,
+              lc_id, lc_number, contract_id, exporter_id, issuing_bank, advising_bank,
+              beneficiary, amount, currency, terms,
+              latest_shipment_date, port_of_loading, port_of_discharge, payment_terms,
+              partial_shipment, transhipment,
               status, expiry_date, request_date, created_at, updated_at
-            ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'REQUESTED', $16, $17, NOW(), NOW())
             ON CONFLICT (lc_id) DO UPDATE SET
               contract_id = EXCLUDED.contract_id,
               exporter_id = EXCLUDED.exporter_id,
               issuing_bank = EXCLUDED.issuing_bank,
+              advising_bank = EXCLUDED.advising_bank,
+              beneficiary = EXCLUDED.beneficiary,
               amount = EXCLUDED.amount,
               currency = EXCLUDED.currency,
+              terms = EXCLUDED.terms,
+              latest_shipment_date = EXCLUDED.latest_shipment_date,
+              port_of_loading = EXCLUDED.port_of_loading,
+              port_of_discharge = EXCLUDED.port_of_discharge,
+              payment_terms = EXCLUDED.payment_terms,
+              partial_shipment = EXCLUDED.partial_shipment,
+              transhipment = EXCLUDED.transhipment,
               status = EXCLUDED.status,
               expiry_date = EXCLUDED.expiry_date,
               request_date = EXCLUDED.request_date,
               updated_at = NOW()`,
-            [lcID, contractID, finalExporterID, bankName, finalAmount, finalCurrency, 
-             'REQUESTED', expiryDate, new Date().toISOString()]
+            [lcID, contractID, finalExporterID, finalIssuingBank, finalAdvisingBank,
+             finalBeneficiary, finalAmount, finalCurrency, finalTerms || null,
+             latestShipmentDate || null, portOfLoading || null, portOfDischarge || null,
+             paymentTerms || null, partialShipment === true || partialShipment === 'true',
+             transhipment === true || transhipment === 'true',
+             expiryDate, new Date().toISOString()]
           );
           logger.info(`✅ LC ${lcID} synced to PostgreSQL`);
         } catch (syncErr) {
@@ -247,6 +329,9 @@ router.post('/lc/request',
             lcID: lcID,
             contractID: contractID,
             exporterID: finalExporterID,
+            issuingBank: finalIssuingBank,
+            advisingBank: finalAdvisingBank,
+            beneficiary: finalBeneficiary,
             status: 'REQUESTED',
             ...result.data,
           },
@@ -899,7 +984,7 @@ router.post('/lc/issue',
         logger.warn(`⚠️ Forex auto-request error for LC ${_lcId}:`, forexErr);
         // Non-fatal — LC issuance already succeeded
       }
-      
+
       // In-app notification (persisted feed + live WS broadcast).
       await notificationService.emitWorkflowEvent({
         type: 'lc_issued',
@@ -910,6 +995,30 @@ router.post('/lc/issue',
         actionUrl: '/portals/exporter?tab=contracts',
         actionUrls: { BANKS: '/portals/banks?tab=contracts' },
       });
+
+      // LEG 1 (F6b): fail honestly when the auto-forex request did not
+      // happen. The old code returned 201 success:true with
+      // forexAutoCreated:false and a 'LC issued successfully' message,
+      // so the bank never knew the forex leg was missing. The LC IS
+      // issued (status + tx id are returned), but the caller must retry
+      // the forex leg (POST /forex/request or /lc/:id/allocate-forex)
+      // instead of assuming it exists.
+      if (!result.forexAutoCreated) {
+        return res.status(502).json({
+          success: false,
+          error: {
+            code: 'FOREX_AUTO_CREATE_FAILED',
+            message: `LC ${_lcId} was issued, but the automatic forex request could not be created. Request forex manually for this LC.`,
+          },
+          data: {
+            lcID: _lcId,
+            status: 'ISSUED',
+            blockchainTxId: result.blockchainTxId,
+            forexAutoCreated: false,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
       res.status(201).json({
         success: true,
         data: {
@@ -975,7 +1084,15 @@ router.post('/lc/:lcID/issue',
       if (result.success) {
         logger.info(`[${user?.org}] ✅ LC issued successfully: ${lcID}`);
 
-        // Auto-create a forex allocation request after LC issuance
+        // Auto-create a forex allocation request after LC issuance.
+        // LEG 1 (F6b): the outcome is tracked and reported honestly.
+        // The old code only logged a warning when the forex leg failed
+        // (missing LC data, or getLC failing) while the LC still
+        // returned success:true — the bank never knew forex was
+        // missing. A failure now returns 502 with the issued LC's
+        // status + tx id, so the caller retries the forex leg.
+        let forexAutoCreated = false;
+        let forexError = '';
         // Use LC data from request body (no need to read from blockchain with schema issues)
         try {
           // If LC data provided in request, use it; otherwise try reading from blockchain
@@ -983,7 +1100,7 @@ router.post('/lc/:lcID/issue',
           let lcExporterID = exporterID;
           let lcAmount = amount;
           let lcCurrency = currency || 'USD';
-          
+
           // If data not provided, try reading from blockchain
           if (!lcContractID || !lcExporterID || !lcAmount) {
             logger.info(`[LC ISSUE] LC data not in request, attempting to read from blockchain...`);
@@ -996,16 +1113,17 @@ router.post('/lc/:lcID/issue',
               lcCurrency = lcCurrency || lc.currency || lc.Currency || 'USD';
             } else {
               logger.warn(`⚠️ Could not read LC ${lcID}: ${lcData.error}`);
+              forexError = `Could not read LC ${lcID} from the ledger: ${lcData.error || 'unknown error'}`;
             }
           }
-          
+
           // Only create forex if we have required data
           if (lcContractID && lcExporterID && lcAmount) {
             // Use LC ID in forex ID for easy matching: FOREX_LC-CONTRACT123-456_REQUEST
             const forexId = `FOREX_${lcID}_REQUEST`;
-            
+
             logger.info(`[LC ISSUE] Creating forex request ${forexId} with: contract=${lcContractID}, exporter=${lcExporterID}, amount=${lcAmount}, currency=${lcCurrency}`);
-            
+
             // RequestForex takes 5 parameters: forexID, contractID, exporterID, amount, currency
             // NOTE: LC ID is NOT part of RequestForex parameters (linked during allocation)
             const forexResult = await fabricService.invokeChaincode('RequestForex', [
@@ -1015,19 +1133,20 @@ router.post('/lc/:lcID/issue',
               lcAmount.toString(),
               lcCurrency,
             ], 'BanksMSP');
-            
+
             if (forexResult.success) {
               logger.info(`✅ Forex request auto-created on blockchain: ${forexId} for LC ${lcID}`);
-              
+              forexAutoCreated = true;
+
               // Sync forex request to PostgreSQL
               try {
                 // Generate a unique allocation_id
                 const allocationId = `${forexId}-ALLOC`;
-                
+
                 await dbService.run(
                   `INSERT INTO forex_allocations (
-                    allocation_id, forex_id, lc_id, contract_id, exporter_id, 
-                    amount_usd, currency, status, 
+                    allocation_id, forex_id, lc_id, contract_id, exporter_id,
+                    amount_usd, currency, status,
                     created_at, updated_at
                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
                   ON CONFLICT (forex_id) DO NOTHING`,
@@ -1047,14 +1166,16 @@ router.post('/lc/:lcID/issue',
                 logger.warn(`⚠️ Failed to sync forex request to PostgreSQL:`, syncErr);
               }
             } else {
-              logger.warn(`⚠️ Forex auto-request failed for LC ${lcID}: ${forexResult.error}`);
+              forexError = forexResult.error || 'Forex auto-request was rejected by the ledger';
+              logger.warn(`⚠️ Forex auto-request failed for LC ${lcID}: ${forexError}`);
             }
           } else {
-            logger.warn(`⚠️ Cannot create forex request - missing LC data (contract=${lcContractID}, exporter=${lcExporterID}, amount=${lcAmount})`);
+            forexError = `Cannot create forex request - missing LC data (contract=${lcContractID}, exporter=${lcExporterID}, amount=${lcAmount})`;
+            logger.warn(`⚠️ ${forexError}`);
           }
-        } catch (forexErr) {
+        } catch (forexErr: any) {
+          forexError = forexErr?.message || 'Forex auto-request threw an unexpected error';
           logger.warn(`⚠️ Forex auto-request error for LC ${lcID}:`, forexErr);
-          // Non-fatal — LC issuance already succeeded
         }
         
         // ✅ Sync LC issuance to PostgreSQL
@@ -1086,9 +1207,26 @@ router.post('/lc/:lcID/issue',
           actionUrl: '/portals/exporter?tab=contracts',
           actionUrls: { BANKS: '/portals/banks?tab=contracts' },
         });
+        // LEG 1 (F6b): honest forex outcome — see the block above.
+        if (!forexAutoCreated) {
+          return res.status(502).json({
+            success: false,
+            error: {
+              code: 'FOREX_AUTO_CREATE_FAILED',
+              message: `LC ${lcID} was issued, but the automatic forex request could not be created (${forexError}). Request forex manually for this LC.`,
+            },
+            data: {
+              lcID,
+              status: 'ISSUED',
+              txId: result.txId,
+              forexAutoCreated: false,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
         res.json({
           success: true,
-          data: result.data,
+          data: { ...result.data, forexAutoCreated: true },
           txId: result.txId,
           timestamp: new Date().toISOString(),
         });
