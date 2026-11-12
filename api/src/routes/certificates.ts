@@ -128,7 +128,7 @@ router.get('/origin', authMiddleware, async (req: Request, res: Response) => {
       coffeeType: cert.coffee_type,
       certifyingAuthority: cert.certifying_authority || 'ECTA',
       certifyingOfficer: cert.certifying_officer || 'ECTA Officer',
-      hsCode: cert.hs_code || '0901.21',
+      hsCode: cert.hs_code || '090111', // One HS code everywhere (leg2 #9/#18): 090111 green coffee
       createdAt: cert.created_at
     }));
 

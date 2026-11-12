@@ -44,6 +44,10 @@ const BorderCrossingTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [initiateDialogOpen, setInitiateDialogOpen] = useState(false);
+  // Leg2 #17: the shipment whose cleared declaration prefills the
+  // initiation dialog (shipment / contract / exporter / declaration /
+  // exit permit are loaded from it, not free-texted).
+  const [prefillShipmentId, setPrefillShipmentId] = useState('');
   const [inspectionDialogOpen, setInspectionDialogOpen] = useState(false);
   const [clearanceDialogOpen, setClearanceDialogOpen] = useState(false);
   const [selected, setSelected] = useState<BorderCrossing | null>(null);
@@ -197,6 +201,9 @@ const BorderCrossingTab: React.FC = () => {
               <Button fullWidth variant="outlined" startIcon={<Refresh />} onClick={fetchCrossings} sx={{ borderColor: CUSTOMS_COLORS.navy, color: CUSTOMS_COLORS.navy }}>Refresh</Button>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
+              <TextField fullWidth size="small" label="Shipment ID (prefills crossing)" value={prefillShipmentId} onChange={(e) => setPrefillShipmentId(e.target.value)} placeholder="SHIP-… — loads cleared declaration" />
+            </Grid>
+            <Grid item xs={12} sm={6} md={2}>
               <Button fullWidth variant="contained" onClick={() => setInitiateDialogOpen(true)} sx={{ bgcolor: CUSTOMS_COLORS.navy }}>+ New Crossing</Button>
             </Grid>
           </Grid>
@@ -215,7 +222,7 @@ const BorderCrossingTab: React.FC = () => {
         />
       </Paper>
 
-      <BorderCrossingInitiationDialog open={initiateDialogOpen} onClose={() => setInitiateDialogOpen(false)} onSuccess={fetchCrossings} />
+      <BorderCrossingInitiationDialog open={initiateDialogOpen} onClose={() => setInitiateDialogOpen(false)} onSuccess={fetchCrossings} prefill={prefillShipmentId.trim() ? { shipmentId: prefillShipmentId.trim() } : undefined} />
       {selected && <PhysicalInspectionDialog open={inspectionDialogOpen} onClose={() => { setInspectionDialogOpen(false); setSelected(null); }} crossing={selected} onSuccess={fetchCrossings} />}
       {selected && <ClearanceDecisionDialog open={clearanceDialogOpen} onClose={() => { setClearanceDialogOpen(false); setSelected(null); }} crossing={selected} onSuccess={fetchCrossings} />}
     </Box>

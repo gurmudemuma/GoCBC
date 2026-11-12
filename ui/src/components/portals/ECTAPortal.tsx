@@ -75,7 +75,6 @@ import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
 import PostDeliveryWorkflowPanel from '../shared/PostDeliveryWorkflowPanel';
 
 import { useForm, Controller } from 'react-hook-form';
-import { InspectionManagement } from './InspectionManagement';
 import { QualityInspectionWorkflow } from './QualityInspectionWorkflow';
 import { PhytosanitaryCertificates } from './PhytosanitaryCertificates';
 
@@ -1498,8 +1497,9 @@ The exporter can reapply once all requirements are met.`,
       showError('Validation Failed', 'Sample size must be greater than 0');
       return;
     }
-    if (!(moisture >= 8 && moisture <= 13)) {
-      showError('Validation Failed', 'Moisture content must be between 8% and 13% (chaincode ValidateMoistureContent)');
+    // Leg2 #19: one moisture rule everywhere — 8–12% for export.
+    if (!(moisture >= 8 && moisture <= 12)) {
+      showError('Validation Failed', 'Moisture content must be between 8% and 12% (chaincode ValidateMoistureContent)');
       return;
     }
     if (!(defects >= 0 && defects <= 100)) {
@@ -3814,7 +3814,7 @@ The exporter can reapply once all requirements are met.`,
                 inputProps={{ min: 1 }} />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <PortalField fullWidth required type="number" label="Moisture Content % (8–13)"
+              <PortalField fullWidth required type="number" label="Moisture Content % (8–12)"
                 value={inspectForm.moistureContent || ''}
                 onChange={(e) => setInspectForm({ ...inspectForm, moistureContent: Number(e.target.value) })}
                 inputProps={{ min: 8, max: 13, step: 0.1 }} />

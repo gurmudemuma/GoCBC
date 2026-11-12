@@ -538,13 +538,6 @@ const ExporterPortal: React.FC = () => {
     return `ET-${exporterSegment}-${contractSegment}`;
   };
 
-  const generateECXLotNumber = (contractId: string) => {
-    const year = new Date().getFullYear();
-    const contractSegment = contractId.replace(/\W/g, '').slice(-5).padStart(5, '0').toUpperCase();
-    const randomSegment = Math.floor(Math.random() * 90000 + 10000);
-    return `ECX-${year}-${contractSegment}-${randomSegment}`;
-  };
-
   const applyContractToShipment = (contract: ExportContract | undefined, forexRate?: number) => {
     if (!contract) return;
     setNewShipment(prev => ({
@@ -554,7 +547,10 @@ const ExporterPortal: React.FC = () => {
       origin: prev.origin || contract.origin || contract.buyerCountry || '',
       destination: contract.buyerCountry,
       icoNumber: prev.icoNumber || generateICOReference(contract.contractId, profile?.exporterId),
-      ecxLotNumber: prev.ecxLotNumber || generateECXLotNumber(contract.contractId),
+      // Leg2 #16: never auto-fill an ECX lot number — a generated
+      // ECX-… number names a lot that does not exist, and the API now
+      // rejects it (LOT_NOT_FOUND). The exporter must enter a real lot
+      // (graded and assigned to this contract).
     }));
     setSelectedShipmentForexRate(Number(forexRate) || 0);
   };
@@ -1656,9 +1652,13 @@ const ExporterPortal: React.FC = () => {
       const pricePerKg = parseFloat(((selectedContract as any).pricePerKg || (selectedContract as any).PricePerKg || '0').toString());
       const valueUSD = quantity * pricePerKg;
       const icoNumber = newShipment.icoNumber || generateICOReference(newShipment.contractId, profile.exporterId);
-      const ecxLotNumber = shipmentFieldValidation.ecxLotRequired
-        ? (newShipment.ecxLotNumber || generateECXLotNumber(newShipment.contractId))
-        : newShipment.ecxLotNumber;
+      // Leg2 #16: the lot number is never auto-generated here — the old
+      // code computed a generated number and then (correctly) refused to
+      // submit without a real one, so the generate call was dead code
+      // that could only confuse. A shipment may only reference a real
+      // ECX lot, and the API validates it (exists, graded, assigned to
+      // this contract) before creating the shipment.
+      const ecxLotNumber = newShipment.ecxLotNumber;
 
       if (shipmentFieldValidation.ecxLotRequired && !newShipment.ecxLotNumber) {
         showWarning('Missing ECX Lot Number', 'Please enter the ECX lot number for ECX channel shipments', 'ECX Lot Number is required when channel is ECX');
@@ -1822,8 +1822,26 @@ const ExporterPortal: React.FC = () => {
       }
 
       const selectedContract = contracts.find(c => c.contractId === selectedShipmentForCustoms.contractId);
-      const declarationId = `CD-${selectedShipmentForCustoms.shipmentId}`;
-      
+      // Leg2 #2: a resubmission of a REJECTED declaration gets a FRESH
+      // ID — the ledger refuses a reused DECL_ key and the API 400s
+      // DECLARATION_ID_REUSED, so reusing CD-<shipmentId> can never
+      // succeed.
+      const priorDeclaration = declarationsByShipment.get(selectedShipmentForCustoms.shipmentId);
+      const isResubmission = String((priorDeclaration as any)?.status || '').toUpperCase() === 'REJECTED';
+      const declarationId = isResubmission
+        ? `CD-${selectedShipmentForCustoms.shipmentId}-R${Date.now()}`
+        : `CD-${selectedShipmentForCustoms.shipmentId}`;
+
+      // Leg2 #9: the customs value is the form value or the contract's
+      // total value — never quantity × an invented $9.25/kg.
+      const resolvedCustomsValue = customsForm.customsValue
+        || (selectedContract as any)?.total_value
+        || (selectedContract as any)?.totalValue;
+      if (!resolvedCustomsValue || Number(resolvedCustomsValue) <= 0) {
+        showError('Customs Value Required', 'Enter the customs value or select a shipment whose contract carries a total value — no value is invented.');
+        return;
+      }
+
       const declarationData = {
         declarationID: declarationId,
         shipmentID: selectedShipmentForCustoms.shipmentId,
@@ -1831,7 +1849,7 @@ const ExporterPortal: React.FC = () => {
         declarationType: customsForm.eudrCompliant ? 'EUDR_ENHANCED' : 'STANDARD',
         hsCode: customsForm.hsCode,
         quantity: selectedShipmentForCustoms.quantity,
-        value: customsForm.customsValue || (selectedShipmentForCustoms.quantity * 9.25),
+        value: Number(resolvedCustomsValue),
         currency: selectedContract?.currency || 'USD',
         destination: selectedContract?.buyerCountry || 'Unknown',
         portOfExit: customsForm.portOfExit,
@@ -2958,7 +2976,18 @@ const ExporterPortal: React.FC = () => {
                     setCustomsForm({
                       hsCode: '090111',
                       portOfExit: 'Djibouti Port',
-                      customsValue: ((shipment.quantity || 0) * (selectedContract?.pricePerKg || 9.25)).toFixed(2),
+                      // Leg2 #9: the customs value is the contract's total
+                      // value, else quantity × the contract's pricePerKg
+                      // (real contract data). The old `|| 9.25` invented
+                      // a price when the contract had none — leave it
+                      // blank instead; submit requires a value.
+                      customsValue: (() => {
+                        const total = (selectedContract as any)?.total_value ?? (selectedContract as any)?.totalValue;
+                        if (total != null && Number(total) > 0) return String(total);
+                        const ppk = Number((selectedContract as any)?.pricePerKg);
+                        if (Number.isFinite(ppk) && ppk > 0) return ((shipment.quantity || 0) * ppk).toFixed(2);
+                        return '';
+                      })(),
                       additionalNotes: '',
                       eudrCompliant: true,
                     });
@@ -4932,7 +4961,17 @@ const ExporterPortal: React.FC = () => {
                                 setCustomsForm({
                                   hsCode: '090111',
                                   portOfExit: 'Djibouti Port',
-                                  customsValue: ((params.row.quantity || 0) * (params.row.contract?.pricePerKg || 9.25)).toFixed(2),
+                                  // Leg2 #9: contract total value, else
+                                  // quantity × contract pricePerKg; never
+                                  // an invented $9.25/kg (blank when the
+                                  // contract carries no price).
+                                  customsValue: (() => {
+                                    const total = (params.row.contract as any)?.total_value ?? (params.row.contract as any)?.totalValue;
+                                    if (total != null && Number(total) > 0) return String(total);
+                                    const ppk = Number((params.row.contract as any)?.pricePerKg);
+                                    if (Number.isFinite(ppk) && ppk > 0) return ((params.row.quantity || 0) * ppk).toFixed(2);
+                                    return '';
+                                  })(),
                                   additionalNotes: '',
                                   eudrCompliant: true,
                                 });
@@ -6016,7 +6055,7 @@ This contract is registered with ECTA and approved by NBE.
                       <PortalField
                         fullWidth
                         label="Price per Kg"
-                        value={`$${contract?.pricePerKg || '9.25'}/kg (${contract?.currency || 'USD'})`}
+                        value={contract?.pricePerKg ? `$${contract.pricePerKg}/kg (${contract?.currency || 'USD'})` : '—'}
                         disabled
                         size="small"
                       />
@@ -6883,9 +6922,8 @@ This contract is registered with ECTA and approved by NBE.
                     channel: selectedChannel,
                     bondReference: selectedChannel === 'Direct Export' ? newShipment.bondReference : '',
                     unionApprovalReference: selectedChannel === 'Union' ? newShipment.unionApprovalReference : '',
-                    ecxLotNumber: selectedChannel === 'ECX'
-                      ? (newShipment.ecxLotNumber || generateECXLotNumber(newShipment.contractId))
-                      : newShipment.ecxLotNumber,
+                    // Leg2 #16: no auto-generated lot number on ECX
+                    // channel select (see applyContractToShipment).
                   });
                 }}
               >

@@ -141,16 +141,31 @@ const InspectionRequestsTab: React.FC = () => {
   // packagingCondition, overallResult, inspectionNotes. This is the
   // pre-shipment entity — NOT POST /quality/inspections/:id/perform, which
   // 404s because the id is not in quality_inspections.
-  const [conductForm, setConductForm] = useState({
+  // Leg2 #6: cuppingScore and overallResult start BLANK — the old form
+  // prefilled a passing outcome (cuppingScore 80, overallResult PASS),
+  // so an inspector could record a pass without entering anything.
+  // Submit requires both to be entered explicitly.
+  const [conductForm, setConductForm] = useState<{
+    inspectedQuantity: number;
+    actualGrade: string;
+    cuppingScore: number | '';
+    defectsCount: number;
+    moistureContent: number;
+    beanSize: string;
+    bagsInspected: number;
+    packagingCondition: string;
+    overallResult: '' | 'PASS' | 'CONDITIONAL_PASS' | 'FAIL';
+    inspectionNotes: string;
+  }>({
     inspectedQuantity: 0,
     actualGrade: 'Grade 1',
-    cuppingScore: 80,
+    cuppingScore: '',
     defectsCount: 0,
     moistureContent: 11,
     beanSize: '',
     bagsInspected: 0,
     packagingCondition: 'GOOD',
-    overallResult: 'PASS',
+    overallResult: '',
     inspectionNotes: '',
   });
   const [conductSubmitting, setConductSubmitting] = useState(false);
@@ -312,13 +327,13 @@ const InspectionRequestsTab: React.FC = () => {
     setConductForm({
       inspectedQuantity: inspection.quantity || 0,
       actualGrade: 'Grade 1',
-      cuppingScore: 80,
+      cuppingScore: '',
       defectsCount: 0,
       moistureContent: 11,
       beanSize: '',
       bagsInspected: 0,
       packagingCondition: 'GOOD',
-      overallResult: 'PASS',
+      overallResult: '',
       inspectionNotes: '',
     });
     setConductDialogOpen(true);
@@ -338,8 +353,15 @@ const InspectionRequestsTab: React.FC = () => {
       showError('Validation Error', 'Inspected quantity must be greater than 0');
       return;
     }
-    if (!(moisture >= 8 && moisture <= 13)) {
-      showError('Validation Error', 'Moisture content must be between 8% and 13%');
+    // Leg2 #19: one moisture rule everywhere — 8–12% for export.
+    if (!(moisture >= 8 && moisture <= 12)) {
+      showError('Validation Error', 'Moisture content must be between 8% and 12%');
+      return;
+    }
+    // Leg2 #6: a cupping score must be entered — the form no longer
+    // prefills 80, and a blank score must not record as 0 or pass.
+    if (conductForm.cuppingScore === '' || conductForm.cuppingScore == null) {
+      showError('Validation Error', 'Cupping score is required — enter the measured score (0–100)');
       return;
     }
     if (!(cupping >= 0 && cupping <= 100)) {
@@ -827,7 +849,7 @@ const InspectionRequestsTab: React.FC = () => {
               <Grid item xs={12} sm={6}>
                 <TextField fullWidth required type="number" label="Cupping Score (0–100)"
                   value={conductForm.cuppingScore}
-                  onChange={(e) => setConductForm({ ...conductForm, cuppingScore: Number(e.target.value) })}
+                  onChange={(e) => setConductForm({ ...conductForm, cuppingScore: e.target.value === '' ? '' : Number(e.target.value) })}
                   inputProps={{ min: 0, max: 100, step: 0.1 }} />
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -837,7 +859,7 @@ const InspectionRequestsTab: React.FC = () => {
                   inputProps={{ min: 0, max: 100 }} />
               </Grid>
               <Grid item xs={12} sm={6}>
-                <TextField fullWidth required type="number" label="Moisture Content % (8–13)"
+                <TextField fullWidth required type="number" label="Moisture Content % (8–12)"
                   value={conductForm.moistureContent}
                   onChange={(e) => setConductForm({ ...conductForm, moistureContent: Number(e.target.value) })}
                   inputProps={{ min: 8, max: 13, step: 0.1 }} />
@@ -863,7 +885,7 @@ const InspectionRequestsTab: React.FC = () => {
               </Grid>
               <Grid item xs={12} sm={6}>
                 <TextField fullWidth select required label="Overall Result" value={conductForm.overallResult}
-                  onChange={(e) => setConductForm({ ...conductForm, overallResult: e.target.value })}>
+                  onChange={(e) => setConductForm({ ...conductForm, overallResult: e.target.value as 'PASS' | 'CONDITIONAL_PASS' | 'FAIL' })}>
                   <MenuItem value="PASS">PASS</MenuItem>
                   <MenuItem value="CONDITIONAL_PASS">CONDITIONAL_PASS</MenuItem>
                   <MenuItem value="FAIL">FAIL</MenuItem>

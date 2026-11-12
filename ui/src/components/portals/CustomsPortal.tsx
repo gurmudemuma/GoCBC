@@ -301,6 +301,13 @@ const CustomsPortal: React.FC = () => {
     additionalNotes: '',
   });
   const [isLoadingShipmentData, setIsLoadingShipmentData] = useState(false);
+  // Leg2 #2: the number of the REJECTED declaration this form is
+  // resubmitting (if any). A resubmission gets a FRESH declaration ID —
+  // the ledger keys declarations DECL_<id> and refuses a reused key,
+  // and the API 400s DECLARATION_ID_REUSED — so reusing CD-<shipmentId>
+  // can never succeed. Set during autofill when a REJECTED declaration
+  // is found for the shipment.
+  const [resubmittingDeclarationId, setResubmittingDeclarationId] = useState<string | null>(null);
 
   // Auto-map shipment data when Shipment ID is entered
   const handleShipmentIdChange = async (shipmentId: string, skipValidation: boolean = false) => {
@@ -578,6 +585,7 @@ ${solution}`);
         console.log('[CUSTOMS] 📄 Fetching contract data...');
         let destination = '';
         let currency = 'USD';
+        let contractValue: any = '';
         const contractId = shipmentData.contractId;
         
         if (contractId && contractId.trim() !== '') {
@@ -602,7 +610,12 @@ ${solution}`);
               
               // Extract currency with all possible field variations
               currency = contract.currency || contract.Currency || contract.paymentCurrency || contract.PaymentCurrency || 'USD';
-              
+
+              // Extract the contract value (leg2 #9): the customs value
+              // is the contract's total value — never quantity × an
+              // invented $9.25/kg.
+              contractValue = contract.totalValue ?? contract.total_value ?? contract.amount ?? contract.Amount ?? '';
+
               console.log('[CUSTOMS] ✅ Contract data extracted:');
               console.log('  - Destination:', destination);
               console.log('  - Currency:', currency);
@@ -635,12 +648,16 @@ ${solution}`);
               // A REJECTED declaration is terminal and must not block
               // re-submission: the detail view says "Corrections required
               // before resubmission", and the API DECLARATION_EXISTS guard
-              // is being relaxed in parallel to allow re-submit for
-              // REJECTED rows. Fall through so the form auto-fills and the
-              // corrected declaration can be submitted (same CD-<shipmentId>
-              // id is reused).
+              // admits a re-submit when every prior declaration is
+              // REJECTED/CANCELLED. But the resubmission MUST use a fresh
+              // declaration ID (leg2 #2): the ledger keys declarations
+              // DECL_<id> and refuses a reused key, and the API 400s
+              // DECLARATION_ID_REUSED — reusing the same CD-<shipmentId>
+              // id can never succeed. Remember the rejected declaration
+              // so the submit step generates CD-<shipmentId>-R<ts>.
               if (declStatus === 'REJECTED') {
-                console.log('[CUSTOMS] ⚠️ Previous declaration was REJECTED:', declId, '— allowing re-submission with corrections.');
+                console.log('[CUSTOMS] ⚠️ Previous declaration was REJECTED:', declId, '— allowing re-submission with corrections under a new declaration ID.');
+                setResubmittingDeclarationId(declId);
               } else {
                 console.log('[CUSTOMS] ⚠️ Declaration already exists:', declId, 'Status:', declStatus);
                 alert(`⚠️ Declaration Already Exists\n\nDeclaration ID: ${declId}\nStatus: ${declStatus}\n\nThis shipment already has a customs declaration.\n\nYou can view or modify the existing declaration instead of creating a new one.`);
@@ -658,13 +675,16 @@ ${solution}`);
         // Calculate or extract customs value
         console.log('[CUSTOMS] 💰 Step 5: Calculating customs value...');
         let customsValue = shipmentData.valueUSD;
-        
+
         if (!customsValue || customsValue === '' || parseFloat(customsValue) === 0) {
-          // Fallback: calculate from quantity if available
-          const qty = parseFloat(shipmentData.quantity || '0');
-          if (qty > 0) {
-            customsValue = (qty * 9.25).toString(); // Average price per kg
-            console.log('[CUSTOMS] ⚠️ Value not found, calculated from quantity:', customsValue);
+          // Fallback: the contract's total value (leg2 #9). The old
+          // fallback invented quantity × $9.25/kg. When neither the
+          // shipment nor the contract carries a value, leave it blank —
+          // the STEP 7 validation below requires it instead of
+          // fabricating one.
+          if (contractValue !== '' && Number(contractValue) > 0) {
+            customsValue = String(contractValue);
+            console.log('[CUSTOMS] ✅ Value from contract total_value:', customsValue);
           }
         }
         
@@ -674,7 +694,7 @@ ${solution}`);
           shipmentId,
           exporterId: shipmentData.exporterId,
           quantity: shipmentData.quantity.toString(),
-          value: customsValue.toString(),
+          value: (customsValue ?? '').toString(),
           currency: currency,
           destination: destination,
           eudrCompliant: Boolean(shipmentData.eudrCompliant),
@@ -741,7 +761,8 @@ ${solution}`);
 
   // API-computed duty for the declaration in the clearance dialog.
   // POST /customs/declaration/:id/calculate-duty returns the tariff-table
-  // rates (10% duty / 15% VAT defaults, 125.50 ETB/USD) and the amounts;
+  // rates (10% duty / 15% VAT defaults) at the live NBE ledger rate
+  // (leg2 #20 — no 125.50 fallback any more) and the amounts;
   // nothing here is computed client-side any more (see autoMapClearanceData).
   const [dutyCalc, setDutyCalc] = useState<{
     dutyAmount: number; vatAmount: number; exciseAmount: number; totalDuty: number;
@@ -921,7 +942,8 @@ ${solution}`);
 
   // Duty + VAT for the clearance dialog, from the API — never computed here.
   // POST /customs/declaration/:id/calculate-duty reads the tariff table
-  // (10% duty / 15% VAT defaults, 125.50 ETB/USD) and stores the result in
+  // (10% duty / 15% VAT defaults) at the live NBE ledger rate (leg2 #20)
+  // and stores the result in
   // duty_calculations + customs_declarations.duty_amount. The old code
   // invented the numbers client-side (56.5 ETB/USD, 0.5% processing fee +
   // fixed 500 ETB doc fee, 0% duty/VAT "by assumption") and displayed them
@@ -1745,7 +1767,13 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
     }
 
     try {
-      const declarationId = `CD-${newDeclarationForm.shipmentId}`;
+      // Leg2 #2: a resubmission (a REJECTED declaration was found for
+      // this shipment during autofill) gets a FRESH declaration ID.
+      // Reusing CD-<shipmentId> is refused by the ledger (DECL_ key
+      // already exists) and by the API (DECLARATION_ID_REUSED).
+      const declarationId = resubmittingDeclarationId
+        ? `CD-${newDeclarationForm.shipmentId}-R${Date.now()}`
+        : `CD-${newDeclarationForm.shipmentId}`;
       
       console.log('[CUSTOMS] Submitting declaration with complete data:', {
         declarationId,
@@ -1783,6 +1811,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
       if (result.success) {
         // Close the dialog immediately
         setNewDeclarationDialogOpen(false);
+        setResubmittingDeclarationId(null);
         
         // Show professional success message
         setSnackbar({
@@ -3230,7 +3259,7 @@ ${rejectionForm.officerNotes ? '\n[INTERNAL NOTES - NOT VISIBLE TO EXPORTER]:\n'
               </Paper>
 
               {/* Duty & VAT — computed by the API (POST .../calculate-duty,
-                  tariff table: 10% duty / 15% VAT defaults, 125.50 ETB/USD),
+                  tariff table: 10% duty / 15% VAT defaults, live NBE rate),
                   never client-side. The old panel showed invented
                   "Processing Fee (0.5%) + Documentation Fee (500 ETB)" figures
                   from a hardcoded 56.5 ETB/USD rate. */}

@@ -282,8 +282,10 @@ const ECXPortal: React.FC = () => {
         ecxLotNumber, ...intakeForm,
         quantity: parseFloat(intakeForm.quantity),
         bags: parseInt(intakeForm.bags) || Math.ceil(parseFloat(intakeForm.quantity) / 60),
-        status: 'WAREHOUSED',
-        warehouseReceiptDate: new Date().toISOString(),
+        // Leg2 #13: the old payload also sent status + warehouseReceiptDate,
+        // which POST /ecx/lots never reads — dropped instead of silently
+        // discarded. Status is set server-side (WAREHOUSED) and the
+        // receipt date is NOW().
       };
       const res = await api.post('/ecx/lots', payload);
       if (res.data?.success) {
@@ -317,13 +319,21 @@ const ECXPortal: React.FC = () => {
       return;
     }
     const moisture = parseFloat(gradeForm.moistureContent);
+    // Leg2 #13: defectCount needs the same client-side guard as
+    // qualityScore — parseInt('') is NaN, which JSON turns into null
+    // and the API 400s. Require a value instead of sending null.
+    const defects = parseInt(gradeForm.defectCount);
+    if (gradeForm.defectCount === '' || !Number.isFinite(defects)) {
+      showError('Defect Count Required', 'Enter the defect count (0–100) before recording the grade.');
+      return;
+    }
     // No client-side moisture block: recording >12% is a rejection, not
     // an input error — the API lets GradeECXLot set REJECTED and the
     // response carries status REJECTED with the reason.
     try {
       const res = await api.post(`/ecx/lots/${selectedLot.lotId}/grade`, {
         grade: gradeForm.grade, qualityScore: score,
-        moistureContent: moisture, defectCount: parseInt(gradeForm.defectCount),
+        moistureContent: moisture, defectCount: defects,
         gradingOfficer: gradeForm.gradingOfficer, remarks: gradeForm.remarks,
         gradingDate: new Date().toISOString(),
       });

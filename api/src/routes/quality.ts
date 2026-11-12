@@ -736,7 +736,7 @@ ${remarks || 'No additional remarks'}
       // database/key (fabricchannel_cecbschannel, `inspection:<id>`)
       // and swallowed failures, then wrote INSPECTED to Postgres
       // regardless — the phantom the approve step then inherited.
-      // Moisture 8–13% is enforced by the chaincode itself
+      // Moisture 8–12% is enforced by the chaincode itself
       // (ValidateMoistureContent, validation.go:300); this route does
       // NOT pre-block any moisture value — an out-of-range value
       // fails here, honestly, with 503. Sparse callers (the
@@ -2037,7 +2037,7 @@ router.post('/inspections/:inspectionID/lab-results',
       // already says INSPECTED, the results were already recorded
       // on-chain (via perform or an earlier lab-results call), so the
       // ledger write is skipped and only the Postgres mirror is
-      // refreshed. Moisture 8–13% is enforced by the chaincode
+      // refreshed. Moisture 8–12% is enforced by the chaincode
       // itself; this route does not pre-block any moisture value.
       let labTxId: string | null = null;
       if (inspection.status !== 'INSPECTED') {

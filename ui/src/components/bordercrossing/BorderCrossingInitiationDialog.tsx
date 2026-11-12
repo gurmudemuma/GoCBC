@@ -1,5 +1,5 @@
 // Border Crossing Initiation Dialog
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Grid, Typography, TextField, Divider, IconButton, CircularProgress, MenuItem } from '@mui/material';
 import { Close, LocalShipping, Send } from '@mui/icons-material';
 import { apiFetch, getAuthHeaders } from '@/config/api.config';
@@ -8,7 +8,17 @@ import { getPortalBrand } from '@/components/shared/portal';
 
 const CUSTOMS_COLORS = { navy: getPortalBrand('CUSTOMS').primary };
 
-interface BorderCrossingInitiationDialogProps { open: boolean; onClose: () => void; onSuccess: () => void; }
+interface BorderCrossingInitiationDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  // Leg2 #17: prefill the dialog from a cleared declaration / shipment
+  // instead of free-texting every id. The caller passes the shipment
+  // (or declaration) id; the dialog loads the shipment, contract,
+  // exporter, cleared declaration number and exit-permit (clearance)
+  // number and fills the form. Fields stay editable.
+  prefill?: { shipmentId?: string; declarationId?: string };
+}
 
 // Payload is exactly the set POST /bordercrossing/initiate reads
 // (api/src/routes/bordercrossing.ts): crossingId, shipmentId, contractId,
@@ -20,9 +30,10 @@ interface BorderCrossingInitiationDialogProps { open: boolean; onClose: () => vo
 // chaincode does not even set DriverLicense), and left every other field
 // `undefined`, so the chaincode failed ValidateID on the empty crossing id
 // and parseFloat/parseInt on the string "undefined" for weight/bags.
-const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogProps> = ({ open, onClose, onSuccess }) => {
+const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogProps> = ({ open, onClose, onSuccess, prefill }) => {
   const { showSuccess, showError } = useNotification();
   const [submitting, setSubmitting] = useState(false);
+  const [prefilling, setPrefilling] = useState(false);
   const [form, setForm] = useState({
     crossingId: `BC${Date.now()}`,
     shipmentId: '',
@@ -43,6 +54,59 @@ const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogPro
     numberOfBags: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Leg2 #17: prefill from the cleared declaration / shipment. The
+  // declaration list has no shipment filter, so the CLEARED declaration
+  // for the shipment is picked client-side; the exit permit number is
+  // its clearance number.
+  useEffect(() => {
+    if (!open || !prefill?.shipmentId) return;
+    let cancelled = false;
+    const load = async () => {
+      setPrefilling(true);
+      try {
+        const [shipRes, declRes] = await Promise.all([
+          apiFetch(`/shipments/${prefill.shipmentId}`, { headers: getAuthHeaders() }),
+          apiFetch('/customs/declarations', { headers: getAuthHeaders() }),
+        ]);
+        const shipJson = await shipRes.json().catch(() => ({}));
+        const declJson = await declRes.json().catch(() => ({}));
+        const shipment = shipJson?.data || shipJson || {};
+        const shipmentId = shipment.shipmentId || shipment.shipmentID || shipment.ShipmentID || prefill.shipmentId;
+        const declarations: any[] = Array.isArray(declJson?.data) ? declJson.data : [];
+        const cleared = declarations.find((d: any) =>
+          (d.shipmentId || d.shipmentID || d.ShipmentID || d.shipment_id) === shipmentId &&
+          String(d.status || d.Status || '').toUpperCase() === 'CLEARED'
+        ) || declarations.find((d: any) =>
+          (d.shipmentId || d.shipmentID || d.ShipmentID || d.shipment_id) === shipmentId
+        );
+        if (cancelled) return;
+        if (!shipJson?.success && !shipment.shipmentId && !shipment.shipmentID) {
+          showError('Shipment Not Found', `No shipment ${prefill.shipmentId} — fill the form in manually.`);
+          return;
+        }
+        const quantity = Number(shipment.quantity || shipment.Quantity || 0);
+        setForm((prev) => ({
+          ...prev,
+          shipmentId,
+          contractId: shipment.contractId || shipment.contractID || shipment.ContractID || prev.contractId,
+          exporterId: shipment.exporterId || shipment.exporterID || shipment.ExporterID || prev.exporterId,
+          finalDestination: shipment.destination || shipment.Destination || shipment.finalDestination || prev.finalDestination,
+          customsDeclaration: cleared?.declarationNumber || cleared?.declaration_number || cleared?.declarationId || prefill.declarationId || prev.customsDeclaration,
+          exitPermitNumber: cleared?.clearanceNumber || cleared?.clearance_number || prev.exitPermitNumber,
+          cargoWeight: quantity > 0 ? String(quantity) : prev.cargoWeight,
+          numberOfBags: quantity > 0 ? String(Math.ceil(quantity / 60)) : prev.numberOfBags,
+        }));
+      } catch (err) {
+        if (!cancelled) showError('Prefill Failed', 'Could not load the shipment / declaration — fill the form in manually.');
+      } finally {
+        if (!cancelled) setPrefilling(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prefill?.shipmentId, prefill?.declarationId]);
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -102,6 +166,12 @@ const BorderCrossingInitiationDialog: React.FC<BorderCrossingInitiationDialogPro
         <IconButton onClick={onClose} size="small"><Close /></IconButton>
       </DialogTitle>
       <Divider />
+      {prefilling && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 3, pt: 2 }}>
+          <CircularProgress size={16} />
+          <Typography variant="body2" color="text.secondary">Loading shipment and cleared declaration…</Typography>
+        </Box>
+      )}
       <DialogContent>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6}><TextField fullWidth label="Crossing ID *" value={form.crossingId} onChange={(e) => setForm({...form, crossingId: e.target.value})} error={!!errors.crossingId} helperText={errors.crossingId || 'Ledger key for this crossing'} /></Grid>
