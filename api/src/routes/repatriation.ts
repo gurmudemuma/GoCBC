@@ -195,6 +195,16 @@ router.get('/overdue/all', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_A
   }
 });
 
+// Map an InitiateRepatriation chain failure to its client-error HTTP
+// status (F-8). A duplicate initiate — the payment already has a
+// repatriation record (composite-key + legacy uniqueness checks,
+// repatriation.go) — is a client-side state conflict (409), not a server
+// error; anything else stays 500.
+function initiateFailureStatus(error: string): number | null {
+  if (error.includes('already has a repatriation record')) return 409;
+  return null;
+}
+
 // POST /api/v1/repatriation/initiate — Initiate new repatriation
 router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADMIN', 'BANK OFFICER']), async (req, res) => {
   try {
@@ -235,9 +245,10 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
 
     if (!result.success) {
       logger.error(`[REPATRIATION] ❌ Failed to initiate: ${result.error}`);
-      return res.status(500).json({ 
-        success: false, 
-        error: result.error 
+      const status = initiateFailureStatus(result.error || '');
+      return res.status(status ?? 500).json({
+        success: false,
+        error: result.error
       });
     }
 
@@ -251,9 +262,10 @@ router.post('/initiate', authMiddleware, requireRole(['BANKS', 'BANK', 'BANK_ADM
     });
   } catch (error: any) {
     logger.error('[REPATRIATION] ❌ Error initiating:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    const status = initiateFailureStatus(error?.message || '');
+    res.status(status ?? 500).json({
+      success: false,
+      error: error.message
     });
   }
 });
