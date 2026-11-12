@@ -138,12 +138,25 @@ cd "$REPO_ROOT"
 
 # Install on ECTA peer first
 echo -e "${YELLOW}Installing chaincode v${VERSION} on ECTA peer...${NC}"
-docker cp "$CHAINCODE_PACKAGE" peer0.ecta.cecbs.et:/tmp/coffee_${VERSION}.tar.gz
+if ! docker cp "$CHAINCODE_PACKAGE" peer0.ecta.cecbs.et:/tmp/coffee_${VERSION}.tar.gz; then
+    echo -e "${RED}✗ Failed to copy package to ECTA peer — is peer0.ecta.cecbs.et running? (docker ps)${NC}"
+    exit 1
+fi
 
-docker exec \
+# Install result is checked honestly: the old version piped the output
+# through grep with `|| true` and printed ✓ unconditionally, so a failed
+# install sailed through all six peers and only died later at the
+# package-ID step with no clue why. Capture the output and fail here.
+INSTALL_OUT=$(docker exec \
     -e CORE_PEER_LOCALMSPID=ECTAMSP \
     -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
-    peer0.ecta.cecbs.et peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1 | grep -E "Installed remotely|already successfully installed|package ID" || true
+    peer0.ecta.cecbs.et peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1)
+INSTALL_RC=$?
+if [ $INSTALL_RC -ne 0 ] || ! echo "$INSTALL_OUT" | grep -qE "Installed remotely|already successfully installed"; then
+    echo -e "${RED}✗ Install on ECTA failed (exit ${INSTALL_RC})${NC}"
+    echo "$INSTALL_OUT"
+    exit 1
+fi
 
 echo -e "${GREEN}✓ Installed on ECTA${NC}"
 
@@ -157,13 +170,22 @@ for peer_info in "peer0.ecx.cecbs.et:ECXMSP:ecx.cecbs.et:ECX" \
     IFS=':' read -r peer_name msp_id org_domain org_name <<< "$peer_info"
     
     echo -e "${YELLOW}Installing on $org_name...${NC}"
-    docker cp "$CHAINCODE_PACKAGE" "$peer_name":/tmp/coffee_${VERSION}.tar.gz 2>/dev/null
-    
-    docker exec \
+    if ! docker cp "$CHAINCODE_PACKAGE" "$peer_name":/tmp/coffee_${VERSION}.tar.gz; then
+        echo -e "${RED}✗ Failed to copy package to $org_name peer ($peer_name) — is the container running? (docker ps)${NC}"
+        exit 1
+    fi
+
+    INSTALL_OUT=$(docker exec \
         -e CORE_PEER_LOCALMSPID="$msp_id" \
         -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@$org_domain/msp" \
-        "$peer_name" peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1 | grep -E "Installed remotely|already successfully installed" || true
-    
+        "$peer_name" peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1)
+    INSTALL_RC=$?
+    if [ $INSTALL_RC -ne 0 ] || ! echo "$INSTALL_OUT" | grep -qE "Installed remotely|already successfully installed"; then
+        echo -e "${RED}✗ Install on $org_name failed (exit ${INSTALL_RC})${NC}"
+        echo "$INSTALL_OUT"
+        exit 1
+    fi
+
     echo -e "${GREEN}✓ Installed on $org_name${NC}"
 done
 
@@ -171,14 +193,18 @@ echo ""
 
 # Get package ID
 echo -e "${YELLOW}Retrieving package ID...${NC}"
-PACKAGE_ID=$(docker exec \
+# Get package ID — stderr is kept (not /dev/null) so a failing
+# queryinstalled shows its real error instead of an empty result.
+QUERY_OUT=$(docker exec \
     -e CORE_PEER_LOCALMSPID=ECTAMSP \
     -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
-    peer0.ecta.cecbs.et peer lifecycle chaincode queryinstalled 2>/dev/null \
-    | grep "coffee_${VERSION}" | awk '{print $3}' | sed 's/,//' | head -1)
+    peer0.ecta.cecbs.et peer lifecycle chaincode queryinstalled 2>&1)
+PACKAGE_ID=$(echo "$QUERY_OUT" | grep "coffee_${VERSION}" | awk '{print $3}' | sed 's/,//' | head -1)
 
 if [ -z "$PACKAGE_ID" ]; then
     echo -e "${RED}✗ Failed to get package ID${NC}"
+    echo -e "${RED}  queryinstalled output:${NC}"
+    echo "$QUERY_OUT"
     exit 1
 fi
 
