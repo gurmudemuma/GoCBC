@@ -114,15 +114,22 @@ class CECBSServer {
 
   private setupMiddleware(): void {
     // Keep each request's Fabric MSP selection isolated from concurrent portal requests.
-    // DISABLED - This middleware causes connection issues
-    // this.app.use((req, res, next) => {
-    //   try {
-    //     this.fabricService.runWithRequestContext(next);
-    //   } catch (error) {
-    //     logger.error('Fabric context error:', error);
-    //     next();
-    //   }
-    // });
+    // SAFE to enable now: the Fabric service keeps one pooled Gateway per
+    // signing identity instead of a single shared gateway, so entering a
+    // per-request context no longer triggers a disconnect + reconnect on
+    // every cross-org invoke, and one org's failed connect cannot tear
+    // down connectivity for the others. Do NOT disable this again without
+    // fixing the pool: without it, auth.ts identity selection is a silent
+    // no-op and every invoke signs as whatever MSP the last request left
+    // behind (proven live: an EXPORTER user's transaction signed as BanksMSP).
+    this.app.use((_req, _res, next) => {
+      try {
+        this.fabricService.runWithRequestContext(next);
+      } catch (error) {
+        logger.error('Fabric context error:', error);
+        next();
+      }
+    });
 
     // Security middleware
     this.app.use(helmet({

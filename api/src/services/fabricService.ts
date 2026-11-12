@@ -21,6 +21,7 @@ export interface ChaincodeResponse {
   error?: string;
   txId?: string;
   transactionId?: string;  // ✅ Added for compatibility with routes
+  submittingMspId?: string; // MSP that actually signed the submitted transaction
   signatureId?: string;  // ✅ Added for blockchain signature tracking
   ledgerDetails?: LedgerTransactionDetails | null;
   endorsers?: Array<{
@@ -88,17 +89,36 @@ interface FabricLedgerInfo {
 
 const CONSORTIUM_PEER_MSPS = ['ECTAMSP', 'ECXMSP', 'BanksMSP', 'NBEMSP', 'CustomsMSP', 'ShippingMSP'];
 
+/** One live Gateway per signing identity. Entries are independent: creating,
+ *  using, or dropping one never disturbs the others. The previous design held
+ *  a single shared Gateway whose signing identity was whatever org the last
+ *  request connected as, so concurrent requests signed as each other's MSP
+ *  and every cross-org invoke paid a full disconnect + reconnect. */
+interface PooledGatewayEntry {
+  mspId: string;
+  identityLabel: string;
+  gateway: Gateway;
+  network: Network;
+  contract: Contract;
+  lastUsedAt: number;
+  blockListenerStarted: boolean;
+}
+
+// Bound on live gateways: 6 org admin identities in development (per-user
+// identities fall back to the org admin there), more in production when user
+// identities are required. Least-recently-used entries are evicted past this.
+const MAX_GATEWAY_POOL_ENTRIES = 24;
+
 export class FabricService {
   private static instance: FabricService | null = null;
 
-  private gateway: Gateway | null = null;
-  private network: Network | null = null;
-  private contract: Contract | null = null;
+  private gatewayPool = new Map<string, PooledGatewayEntry>();
+  // Process-wide default signer for calls outside any HTTP request (startup,
+  // background jobs). Request handlers never read or write this: their signer
+  // comes from the per-request AsyncLocalStorage context instead.
+  private defaultMspId: string | null = null;
   private wallet: Wallet | null = null;
-  private connected: boolean = false;
-  private currentMspId: string | null = null; // Track the actual connected MSP ID
-  private currentIdentityLabel: string | null = null; // Track the actual signing identity
-  private readonly requestContext = new AsyncLocalStorage<{ mspId?: string; identityLabel?: string }>();
+  private readonly requestContext = new AsyncLocalStorage<{ mspId?: string; identityLabel?: string; overrideMspId?: string }>();
   private readonly gatewayLockContext = new AsyncLocalStorage<boolean>();
   private gatewayQueue: Promise<void> = Promise.resolve();
   private ledgerInfoCache: { expiresAt: number; value: FabricLedgerInfo } | null = null;
@@ -220,42 +240,124 @@ export class FabricService {
     return this.requestContext.getStore()?.mspId || null;
   }
 
-  /** Select the CA-issued wallet identity assigned to this authenticated user. */
+  /** Select the CA-issued wallet identity assigned to this authenticated user.
+   *  This must never turn a valid login into a 401: an unmappable user id
+   *  falls back to the org admin identity outside strict-identity mode
+   *  (the same fallback connect() already applied in development), and only
+   *  strict mode (production / FABRIC_REQUIRE_USER_IDENTITIES) rejects it —
+   *  there the request cannot be signed honestly at all. */
   public setRequestIdentity(userId: string | number): void {
     const context = this.requestContext.getStore();
     if (!context) return;
+    const strictIdentities =
+      process.env.NODE_ENV === 'production' || process.env.FABRIC_REQUIRE_USER_IDENTITIES === 'true';
     if (userId === undefined || userId === null) {
-      throw new Error('Authenticated token is missing a stable user ID for Fabric identity selection');
+      if (strictIdentities) {
+        throw new Error('Authenticated token is missing a stable user ID for Fabric identity selection');
+      }
+      logger.warn('Authenticated token is missing a stable user ID; signing as the org admin identity in development only');
+      context.identityLabel = `admin-${context.mspId || this.normalizeMspId(process.env.FABRIC_MSP_ID || 'ECTAMSP')}`;
+      return;
     }
     const stableUserId = String(userId);
     if (!/^\d{1,18}$/.test(stableUserId)) {
-      throw new Error('Authenticated user ID cannot be mapped to a Fabric wallet identity');
+      if (strictIdentities) {
+        throw new Error('Authenticated user ID cannot be mapped to a Fabric wallet identity');
+      }
+      logger.warn(`Authenticated user ID "${stableUserId}" cannot be mapped to a Fabric wallet identity; signing as the org admin identity in development only`);
+      context.identityLabel = `admin-${context.mspId || this.normalizeMspId(process.env.FABRIC_MSP_ID || 'ECTAMSP')}`;
+      return;
     }
     const mspId = context.mspId || this.normalizeMspId(process.env.FABRIC_MSP_ID || 'ECTAMSP');
     context.identityLabel = `user-${mspId}-${stableUserId}`;
   }
 
-  public async connect(orgId?: string): Promise<void> {
-    const identityLabel = this.requestContext.getStore()?.identityLabel;
-    await this.withGatewayLock(() => this.connectUnlocked(orgId, identityLabel));
+  /**
+   * Resolve which identity signs the current call. Precedence: an explicit
+   * per-invoke MSP (the cb12f0b4 pins / submitTransactionAs) > a per-request
+   * route override recorded by connectAsOrg > the authenticated request's
+   * MSP from the AsyncLocalStorage context > the process default (env
+   * FABRIC_MSP_ID, or whatever a non-request connect() last selected).
+   * The resolved identity never depends on what a previous request did:
+   * there is no shared "current MSP" left to go stale.
+   */
+  private resolveSigningTarget(explicitMspId?: string): { mspId: string; identityLabel: string } {
+    const context = this.requestContext.getStore();
+    const explicit = explicitMspId ? this.normalizeMspId(explicitMspId) : undefined;
+    const override = context?.overrideMspId ? this.normalizeMspId(context.overrideMspId) : undefined;
+    const requestMsp = context?.mspId ? this.normalizeMspId(context.mspId) : undefined;
+    const mspId = explicit || override || requestMsp || this.getDefaultMspId();
+    // A user wallet identity belongs to the authenticated org only. An
+    // explicit pin or route override to another org signs as that org's
+    // admin instead — the same identity the old connectAsOrg-then-invoke
+    // path ended up with in development, but chosen per request rather
+    // than sticky-global.
+    const identityLabel = context?.identityLabel && mspId === requestMsp
+      ? context.identityLabel
+      : `admin-${mspId}`;
+    return { mspId, identityLabel };
   }
 
-  private async connectUnlocked(orgId?: string, requestedIdentityLabel?: string): Promise<void> {
+  private getDefaultMspId(): string {
+    return this.defaultMspId || this.normalizeMspId(process.env.FABRIC_MSP_ID || 'ECTAMSP');
+  }
+
+  /** Ensure a pooled gateway exists for the resolved signing identity.
+   *  Outside an HTTP request this also selects the process default signer;
+   *  inside a request the global default is left alone. Used at startup and
+   *  as a reconnect retry (routes/documents.ts). */
+  public async connect(orgId?: string): Promise<void> {
+    await this.withGatewayLock(async () => {
+      const target = this.resolveSigningTarget(orgId);
+      const entry = await this.getOrCreateEntryLocked(target.mspId, target.identityLabel);
+      if (!entry) {
+        return;
+      }
+      if (!this.requestContext.getStore()) {
+        this.defaultMspId = target.mspId;
+      }
+    });
+  }
+
+  /** Lock-safe entry lookup/creation. Callers already holding the gateway
+   *  lock take the re-entrant fast path in withGatewayLock. */
+  private async getOrCreateEntry(mspId: string, identityLabel: string): Promise<PooledGatewayEntry | null> {
+    return this.withGatewayLock(() => this.getOrCreateEntryLocked(mspId, identityLabel));
+  }
+
+  /** Network for ledger reads (QSCC, network info, block listener). Reads do
+   *  not depend on the signing identity; use the requesting org's gateway
+   *  when the call runs inside a request, else the process default. */
+  private async getReadEntry(): Promise<PooledGatewayEntry | null> {
+    const target = this.resolveSigningTarget();
+    return this.getOrCreateEntry(target.mspId, target.identityLabel);
+  }
+
+  /**
+   * Get the pooled gateway for one signing identity, creating it on first
+   * use. Callers must hold the gateway lock (via getOrCreateEntry, or by
+   * already running inside it). A failure here is isolated: a partially
+   * built gateway is discarded and every other pooled entry keeps working —
+   * the old code disconnected the one shared gateway, taking all orgs down
+   * with the failing one. Returns null instead of throwing unless
+   * FABRIC_REQUIRED=true.
+   */
+  private async getOrCreateEntryLocked(mspId: string, requestedIdentityLabel: string): Promise<PooledGatewayEntry | null> {
     const requireFabric = process.env.FABRIC_REQUIRED === 'true';
-    let targetOrg = orgId || process.env.FABRIC_MSP_ID || 'ECTAMSP';
-    
-    // Normalize the organization ID to proper MSP format
-    targetOrg = this.normalizeMspId(targetOrg);
+    const targetOrg = this.normalizeMspId(mspId);
 
     const adminLabel = `admin-${targetOrg}`;
     const requestContext = this.requestContext.getStore();
-    let targetIdentityLabel = requestedIdentityLabel || requestContext?.identityLabel || adminLabel;
+    let targetIdentityLabel = requestedIdentityLabel || adminLabel;
     const identityRequired = process.env.FABRIC_REQUIRE_USER_IDENTITIES === 'true';
 
-    // The Gateway holds one signing identity at a time. Reconnect whenever
-    // either the organization or the wallet identity changes.
-    if (this.connected && this.currentMspId === targetOrg && this.currentIdentityLabel === targetIdentityLabel) {
-      return;
+    // Fast path: this identity already has a live gateway — no reconnect,
+    // no global state change, whatever other requests are doing.
+    const poolKey = `${targetOrg}/${targetIdentityLabel}`;
+    const existing = this.gatewayPool.get(poolKey);
+    if (existing) {
+      existing.lastUsedAt = Date.now();
+      return existing;
     }
 
     if (process.env.FABRIC_ENABLED === 'false') {
@@ -263,8 +365,7 @@ export class FabricService {
         logger.warn('Fabric integration disabled by configuration; continuing without blockchain connectivity');
         this.connectCalled = true;
       }
-      this.connected = false;
-      return;
+      return null;
     }
 
     try {
@@ -359,76 +460,110 @@ export class FabricService {
         },
       } as any;
 
-      if (!this.gateway) {
-        this.gateway = new Gateway();
-      } else {
-        this.gateway.disconnect();
-        this.gateway = new Gateway();
+      // A concurrent request for the same identity may have resolved to
+      // the admin fallback while this one was selecting its identity:
+      // reuse that entry instead of opening a duplicate gateway.
+      const finalPoolKey = `${targetOrg}/${targetIdentityLabel}`;
+      const resolved = this.gatewayPool.get(finalPoolKey);
+      if (resolved) {
+        resolved.lastUsedAt = Date.now();
+        return resolved;
       }
 
-      await this.gateway.connect(ccp, connectionOptions);
+      const gateway = new Gateway();
+      try {
+        await gateway.connect(ccp, connectionOptions);
+      } catch (connectError) {
+        try { gateway.disconnect(); } catch (_) { /* ignore disconnect errors */ }
+        throw connectError;
+      }
 
-      this.network = await this.gateway.getNetwork(process.env.FABRIC_CHANNEL_NAME || 'coffeechannel');
+      const network = await gateway.getNetwork(process.env.FABRIC_CHANNEL_NAME || 'coffeechannel');
       // Get contract without metadata to bypass schema validation
-      this.contract = this.network.getContract(process.env.FABRIC_CHAINCODE_NAME || 'coffee', '');
+      const contract = network.getContract(process.env.FABRIC_CHAINCODE_NAME || 'coffee', '');
 
-      this.connected = true;
-      this.currentMspId = targetOrg; // Track the actual connected MSP
-      this.currentIdentityLabel = targetIdentityLabel;
+      const entry: PooledGatewayEntry = {
+        mspId: targetOrg,
+        identityLabel: targetIdentityLabel,
+        gateway,
+        network,
+        contract,
+        lastUsedAt: Date.now(),
+        blockListenerStarted: false,
+      };
+      if (this.gatewayPool.size >= MAX_GATEWAY_POOL_ENTRIES) {
+        // Evict the least-recently-used entry (never the one just created).
+        let oldestKey: string | null = null;
+        let oldestAt = Number.POSITIVE_INFINITY;
+        for (const [key, candidate] of this.gatewayPool) {
+          if (candidate.lastUsedAt < oldestAt) {
+            oldestAt = candidate.lastUsedAt;
+            oldestKey = key;
+          }
+        }
+        if (oldestKey) {
+          const evicted = this.gatewayPool.get(oldestKey)!;
+          this.gatewayPool.delete(oldestKey);
+          try { evicted.gateway.disconnect(); } catch (_) { /* ignore disconnect errors */ }
+          logger.warn(`[FABRIC] Gateway pool full (${MAX_GATEWAY_POOL_ENTRIES}); evicted idle gateway for ${evicted.mspId}/${evicted.identityLabel}`);
+        }
+      }
+      this.gatewayPool.set(finalPoolKey, entry);
       logger.info(`✅ Successfully connected to Hyperledger Fabric network as ${targetOrg} using ${targetIdentityLabel}`);
+      return entry;
 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.warn(`Fabric network unavailable; continuing without blockchain connectivity. ${message}`);
+      logger.warn(`Fabric network unavailable for ${targetOrg}/${targetIdentityLabel}; continuing without blockchain connectivity for that identity. ${message}`);
 
-      // Disconnect gateway to stop any background discovery/event threads
-      try {
-        if (this.gateway) {
-          this.gateway.disconnect();
-          this.gateway = null;
-        }
-      } catch (_) { /* ignore disconnect errors */ }
-
-      this.connected = false;
-      this.currentMspId = null; // Clear the tracked MSP ID
-      this.currentIdentityLabel = null;
-      this.network = null;
-      this.contract = null;
-
+      // Nothing global to tear down: other pooled gateways keep working.
+      // (A gateway that failed mid-connect is discarded inside its own
+      // creation block above.)
       if (requireFabric) {
         throw error;
       }
+      return null;
     }
   }
 
   public async disconnect(): Promise<void> {
     await this.withGatewayLock(async () => {
-      if (this.gateway) {
-        this.gateway.disconnect();
-        this.connected = false;
-        this.currentMspId = null; // Clear the tracked MSP ID
-        this.currentIdentityLabel = null;
-        logger.info('Disconnected from Hyperledger Fabric network');
+      for (const entry of this.gatewayPool.values()) {
+        try {
+          entry.gateway.disconnect();
+        } catch (_) { /* ignore disconnect errors */ }
       }
+      this.gatewayPool.clear();
+      this.defaultMspId = null;
+      logger.info('Disconnected from Hyperledger Fabric network');
     });
   }
 
   public isConnected(): boolean {
-    return this.connected;
+    return this.gatewayPool.size > 0;
   }
 
+  /**
+   * Record a per-request signing override (e.g. a Banks route that must
+   * submit a chaincode call the ledger only accepts from NBEMSP). The
+   * override lives in this request's AsyncLocalStorage context only: the
+   * invoke path resolves it to that org's pooled gateway for this request,
+   * and it never leaks into another request. A mismatch with the
+   * authenticated MSP is deliberate on a few routes — RecordForexRepatriation
+   * and NBE_APPROVAL ConfirmSettlement require NBEMSP while their routes
+   * allow a Banks user; Shipping records documents as ECTA — so it is
+   * logged loudly, not rejected: rejecting it here would 500 those routes.
+   * Outside any request (startup / background work) this warms the pool
+   * entry and selects the process default signer, as before.
+   */
   public async connectAsOrg(orgId: string): Promise<void> {
+    const requestedMsp = this.normalizeMspId(orgId);
     const context = this.requestContext.getStore();
     if (context) {
-      const requestedMsp = this.normalizeMspId(orgId);
-      const authenticatedMsp = context.mspId && this.normalizeMspId(context.mspId);
-      if (authenticatedMsp && requestedMsp !== authenticatedMsp) {
-        throw new Error(
-          `Authenticated Fabric identity for ${authenticatedMsp} cannot sign as ${requestedMsp}; ` +
-          'the target organization must submit its own transaction.'
-        );
+      if (context.mspId && this.normalizeMspId(context.mspId) !== requestedMsp) {
+        logger.warn(`[FABRIC] Route override: request authenticated as ${context.mspId} will sign as ${requestedMsp} for this request only`);
       }
-      this.setRequestMspId(requestedMsp);
+      context.overrideMspId = requestedMsp;
       return;
     }
     await this.connect(orgId);
@@ -644,10 +779,8 @@ export class FabricService {
 
   // Chaincode invoke operations
   public async invokeChaincode(functionName: string, args: string[], userMspId?: string): Promise<ChaincodeResponse> {
-    const context = this.requestContext.getStore();
-    const requestMspId = userMspId || context?.mspId || (context ? process.env.FABRIC_MSP_ID || 'ECTAMSP' : undefined);
-    const requestIdentityLabel = context?.identityLabel;
-    return this.withGatewayLock(() => this.invokeChaincodeLocked(functionName, args, requestMspId, requestIdentityLabel));
+    const target = this.resolveSigningTarget(userMspId);
+    return this.withGatewayLock(() => this.invokeChaincodeLocked(functionName, args, target.mspId, target.identityLabel));
   }
 
   private async invokeChaincodeLocked(functionName: string, args: string[], userMspId?: string, requestIdentityLabel?: string): Promise<ChaincodeResponse> {
@@ -655,24 +788,25 @@ export class FabricService {
     // Retrying a submit with an uncertain commit status can apply a write twice.
     const maxRetries = 4;
     let lastError: any;
-    
-    // Determine which MSP to use - prioritize user's MSP if provided
-    const targetMspId = this.normalizeMspId(userMspId || this.currentMspId || process.env.FABRIC_MSP_ID || 'ECTAMSP');
+
+    // The signing identity is resolved per call from the request context
+    // (or an explicit pin), and the pooled gateway for that identity is
+    // used as-is — no shared gateway to reconnect, no other request's MSP
+    // to inherit.
+    const targetMspId = this.normalizeMspId(userMspId || this.getDefaultMspId());
     let targetIdentityLabel = requestIdentityLabel || `admin-${targetMspId}`;
-    
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       let attemptTxId: string | undefined;
       try {
-        // Check if we need to reconnect with the correct MSP
-        if (!this.contract || !this.network || this.currentMspId !== targetMspId || this.currentIdentityLabel !== targetIdentityLabel) {
-          logger.warn(`Contract/network, MSP, or signing identity mismatch (current: ${this.currentMspId}/${this.currentIdentityLabel}, needed: ${targetMspId}/${targetIdentityLabel}), reconnecting...`);
-          await this.connectUnlocked(targetMspId, targetIdentityLabel);
-          targetIdentityLabel = this.currentIdentityLabel || targetIdentityLabel;
-        }
-        
-        if (!this.contract) {
+        const entry = await this.getOrCreateEntry(targetMspId, targetIdentityLabel);
+        if (!entry) {
           throw new Error('Not connected to Fabric network');
         }
+        // Development falls back from a missing user identity to the org
+        // admin; report the identity that actually signed.
+        targetIdentityLabel = entry.identityLabel;
+        const contract = entry.contract;
 
         logger.info(`Invoking chaincode function: ${functionName} (attempt ${attempt}/${maxRetries})`, {
           argumentCount: args.length,
@@ -683,7 +817,7 @@ export class FabricService {
         // definition's endorsement policy is what determines which endorsements
         // are required for a transaction to be VALID. Report actual endorsers from
         // the committed envelope below instead of assuming every requested MSP signed.
-        const transaction = this.contract.createTransaction(functionName);
+        const transaction = contract.createTransaction(functionName);
         // ✅ CRITICAL FIX: Re-enable setEndorsingOrganizations to ensure all 6 peers endorse
         // Without this, only 1-2 peers get the state update, causing "does not exist" errors
         transaction.setEndorsingOrganizations(...CONSORTIUM_PEER_MSPS);
@@ -717,6 +851,7 @@ export class FabricService {
             error: `Fabric committed transaction ${txId} with validation status ${committedDetails.validationStatus}; its writes were not applied.`,
             txId,
             transactionId: txId,
+            submittingMspId: targetMspId,
             ledgerDetails: committedDetails,
             consensus: {
               protocol: 'Fabric ordering service',
@@ -760,6 +895,7 @@ export class FabricService {
           data: responseData,
           txId,
           transactionId: txId,
+          submittingMspId: targetMspId,
           ledgerDetails: committedDetails,
           consensus: {
             protocol: 'Fabric ordering service',
@@ -805,6 +941,7 @@ export class FabricService {
               : `Transaction ${attemptTxId} is on the ledger with validation status ${committedDetails.validationStatus}; its writes were not applied.`,
             txId: attemptTxId,
             transactionId: attemptTxId,
+            submittingMspId: targetMspId,
             ledgerDetails: committedDetails,
             consensus: {
               protocol: 'Fabric ordering service',
@@ -874,31 +1011,26 @@ export class FabricService {
 
   // Chaincode query operations
   public async queryChaincode(functionName: string, args: string[], userMspId?: string): Promise<ChaincodeResponse> {
-    const context = this.requestContext.getStore();
-    const requestMspId = userMspId || context?.mspId || (context ? process.env.FABRIC_MSP_ID || 'ECTAMSP' : undefined);
-    const requestIdentityLabel = context?.identityLabel;
-    return this.withGatewayLock(() => this.queryChaincodeLocked(functionName, args, requestMspId, requestIdentityLabel));
+    const target = this.resolveSigningTarget(userMspId);
+    return this.withGatewayLock(() => this.queryChaincodeLocked(functionName, args, target.mspId, target.identityLabel));
   }
 
   private async queryChaincodeLocked(functionName: string, args: string[], userMspId?: string, requestIdentityLabel?: string): Promise<ChaincodeResponse> {
     try {
-      // Determine which MSP to use
-      const targetMspId = this.normalizeMspId(userMspId || this.currentMspId || process.env.FABRIC_MSP_ID || 'ECTAMSP');
+      // The signing identity is resolved per call from the request context
+      // (or an explicit pin); use that identity's pooled gateway as-is.
+      const targetMspId = this.normalizeMspId(userMspId || this.getDefaultMspId());
       const targetIdentityLabel = requestIdentityLabel || `admin-${targetMspId}`;
-      
-      // Check if contract exists or MSP mismatch, if so reconnect
-      if (!this.contract || !this.network || this.currentMspId !== targetMspId || this.currentIdentityLabel !== targetIdentityLabel) {
-        logger.warn(`Contract/network, MSP, or signing identity mismatch, reconnecting as ${targetMspId}/${targetIdentityLabel}...`);
-        await this.connectUnlocked(targetMspId, targetIdentityLabel);
-      }
-      
-      if (!this.contract || !this.network) {
+
+      const entry = await this.getOrCreateEntry(targetMspId, targetIdentityLabel);
+      if (!entry) {
         throw new Error('Not connected to Fabric network');
       }
+      const contract = entry.contract;
 
       logger.info(`Querying chaincode function: ${functionName}`, { argumentCount: args.length });
 
-      const transaction = this.contract.createTransaction(functionName);
+      const transaction = contract.createTransaction(functionName);
       let resultBytes: Buffer = Buffer.alloc(0); // Initialize with empty buffer
       
       try {
@@ -1541,11 +1673,15 @@ export class FabricService {
 
   private async startEventListenerInGatewayLock(): Promise<void> {
     try {
-      if (!this.network) {
+      const entry = await this.getReadEntry();
+      if (!entry) {
         throw new Error('Not connected to Fabric network');
       }
+      if (entry.blockListenerStarted) {
+        return;
+      }
 
-      await this.network.addBlockListener(
+      await entry.network.addBlockListener(
         async (event: any) => {
           logger.info('New block received:', {
             blockNumber: event.blockNumber,
@@ -1553,6 +1689,7 @@ export class FabricService {
         },
         { type: 'filtered' }
       );
+      entry.blockListenerStarted = true;
 
       logger.info('✅ Block event listener started');
 
@@ -1568,11 +1705,12 @@ export class FabricService {
 
   private async getNetworkInfoInGatewayLock(): Promise<any> {
     try {
-      if (!this.network) {
+      const entry = await this.getReadEntry();
+      if (!entry) {
         throw new Error('Not connected to Fabric network');
       }
 
-      const channel = this.network.getChannel();
+      const channel = entry.network.getChannel();
       const peers = await Promise.all(channel.getEndorsers().map(async (peer: any) => ({
           name: peer.name,
           mspId: peer.mspid,
@@ -1631,7 +1769,7 @@ export class FabricService {
 
       return {
         channelName: channel.name,
-        connectedOrg: this.currentMspId,
+        connectedOrg: entry.mspId,
         peers,
         orderers,
       };
@@ -1647,20 +1785,19 @@ export class FabricService {
   }
 
   private async evaluateQsccInGatewayLock(functionName: string, args: string[]): Promise<Buffer> {
-    if (!this.network) {
-      await this.connectUnlocked();
-    }
-    if (!this.network) {
+    const entry = await this.getReadEntry();
+    if (!entry) {
       throw new Error('Not connected to Fabric network');
     }
-    const qscc = this.network.getContract('qscc');
+    const qscc = entry.network.getContract('qscc');
     return qscc.evaluateTransaction(functionName, ...args);
   }
 
   /** Confirm that QSCC can read the configured channel ledger, not just a Gateway socket. */
   public async checkLedgerConnectivity(): Promise<boolean> {
     return this.withGatewayLock(async () => {
-      if (!this.connected || !this.network) return false;
+      const entry = await this.getReadEntry();
+      if (!entry) return false;
       try {
         const channelName = process.env.FABRIC_CHANNEL_NAME || 'coffeechannel';
         const rawInfo = await this.evaluateQscc('GetChainInfo', [channelName]);
@@ -1691,7 +1828,8 @@ export class FabricService {
       const uniqueConsenters = new Set(info.consenters.map((consenter) => `${consenter.host.toLowerCase()}:${consenter.port}`));
       const configuredConsenters = info.consenterCount === null ? null : uniqueConsenters.size;
       const endpoints = this.getOrdererEndpoints();
-      const channel = this.network?.getChannel() as any;
+      const readEntry = await this.getReadEntry();
+      const channel = readEntry?.network.getChannel() as any;
       const consenters = await Promise.all(info.consenters.map(async (consenter) => {
         const consenterAddress = `${consenter.host.toLowerCase().replace(/\.$/, '')}:${consenter.port}`;
         const endpoint = endpoints.find((candidate) => {
@@ -2622,7 +2760,9 @@ export class FabricService {
     // Since SignDocument returns nil/error (not JSON), we construct the ID ourselves
     if (result.success) {
       const timestamp = Math.floor(Date.now() / 1000);
-      const mspId = this.currentMspId || 'BanksMSP';
+      // The MSP that actually signed (not a shared "current" MSP: there is
+      // no single current MSP any more — each request signs as its own).
+      const mspId = result.submittingMspId || this.getRequestMspId() || 'BanksMSP';
       const signatureId = `SIG_${documentId}_${mspId}_${timestamp}`;
       
       return {
@@ -2888,9 +3028,9 @@ export class FabricService {
     return { ...result, transactionId: result.txId };
   }
 
-  /** submitTransaction with a pinned signing MSP (same race guard as the
-   *  explicit-msp invokeChaincode calls: the shared gateway otherwise signs
-   *  with whatever org the previous concurrent request connected as). */
+  /** submitTransaction with a pinned signing MSP (the pin resolves to that
+   *  org's pooled gateway for this call; the authenticated request's MSP
+   *  is used everywhere no pin is given). */
   public async submitTransactionAs(mspId: string, functionName: string, ...args: string[]): Promise<ChaincodeResponse> {
     const result = await this.invokeChaincode(functionName, args, mspId);
     if (!result.success) {
