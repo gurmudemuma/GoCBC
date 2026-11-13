@@ -3608,6 +3608,95 @@ function getRiskProfile(paymentMethod: string): string {
 }
 
 /**
+ * N1 (E2E fix round): record the trace of an ExamineLCDocuments chain
+ * call — PG status mirror (UTILIZED when compliant), a
+ * blockchain_signatures row and an audit_trail row — mirroring the F11
+ * forex-confirm fix in nbe.ts. Best-effort throughout: the ledger write
+ * already landed, so a failed PG write must not turn the call into a
+ * 500. Used by the examine-documents endpoint itself and by the
+ * release handler's auto-examination step.
+ */
+async function recordLCExaminationTrace(opts: {
+  lcID: string;
+  txId?: string | null;
+  compliant: boolean;
+  oldStatus?: string | null;
+  signerOrg?: string;
+  signerUsername?: string;
+  submittingMspId?: string;
+  ip?: string;
+}): Promise<void> {
+  const { lcID, txId, compliant, oldStatus, signerOrg, signerUsername, submittingMspId, ip } = opts;
+  const newStatus = compliant ? 'UTILIZED' : (oldStatus || null);
+  try {
+    if (compliant) {
+      await dbService.run(
+        `UPDATE letters_of_credit
+         SET status = 'UTILIZED', updated_at = NOW()
+         WHERE lc_id = $1`,
+        [lcID]
+      );
+      logger.info(`✅ PostgreSQL updated: LC ${lcID} status set to UTILIZED`);
+    }
+  } catch (dbError) {
+    logger.warn(`⚠️  Failed to mirror LC examination to PostgreSQL for ${lcID}:`, dbError);
+  }
+  try {
+    const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+    await dbService.run(
+      `INSERT INTO blockchain_signatures (
+        signature_id, blockchain_tx_id, entity_type, entity_id,
+        chaincode_function, signer_org, signer_username,
+        blockchain_timestamp, action_type, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+      ON CONFLICT (signature_id) DO NOTHING`,
+      [
+        signatureId,
+        txId || null,
+        'LC',
+        lcID,
+        'ExamineLCDocuments',
+        submittingMspId || signerOrg || 'BanksMSP',
+        signerUsername || 'Bank Officer',
+        'DOCUMENT_EXAMINATION'
+      ]
+    );
+  } catch (sigErr: any) {
+    logger.warn(`⚠️ Failed to store LC-examination signature for ${lcID}: ${sigErr?.message}`);
+  }
+  try {
+    await dbService.run(
+      `INSERT INTO audit_trail (
+        entity_type, entity_id, action, performed_by, performed_by_org,
+        old_value, new_value, reason, metadata, ip_address
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        'LC',
+        lcID,
+        'EXAMINE_DOCUMENTS',
+        signerUsername || 'Bank Officer',
+        signerOrg || 'BanksMSP',
+        oldStatus ? JSON.stringify({ status: oldStatus }) : null,
+        newStatus ? JSON.stringify({ status: newStatus }) : null,
+        compliant
+          ? 'LC documents examined: compliant with LC terms'
+          : 'LC documents examined: discrepancies found',
+        JSON.stringify({
+          lcID,
+          compliant,
+          transactionId: txId || null,
+          action: 'LC Document Examination',
+          timestamp: new Date().toISOString()
+        }),
+        ip || 'unknown'
+      ]
+    );
+  } catch (auditErr: any) {
+    logger.warn(`⚠️ Failed to store LC-examination audit row for ${lcID}: ${auditErr?.message}`);
+  }
+}
+
+/**
  * POST /api/v1/banking/lc/:lcID/examine-documents
  * Bank examines shipping documents against LC terms (UCP 600 Article 14)
  * Workflow: After shipment, bank verifies documents comply with LC requirements
@@ -3632,6 +3721,18 @@ router.post('/lc/:lcID/examine-documents',
         discrepancies: discrepancies || 'none',
       });
 
+      // N1: capture the pre-examination status for the audit row
+      // (best-effort — a failed read leaves oldStatus null, not a 500).
+      let oldStatus: string | null = null;
+      try {
+        const lcBefore = await fabricService.queryChaincode('ReadLC', [lcID]);
+        if (lcBefore.success && lcBefore.data) {
+          oldStatus = lcBefore.data.Status || lcBefore.data.status || null;
+        }
+      } catch {
+        oldStatus = null;
+      }
+
       const result = await fabricService.invokeChaincode('ExamineLCDocuments', [
         lcID,
         compliant.toString(),
@@ -3642,30 +3743,26 @@ router.post('/lc/:lcID/examine-documents',
 
       if (result.success) {
         logger.info(`✅ LC documents examined: ${lcID}, compliant: ${compliant}`);
-        
-        // ✅ BLOCKCHAIN-FIRST: Update PostgreSQL after successful blockchain update
-        try {
-          const { DatabaseService } = await import('../services/databaseService');
-          const db = DatabaseService.getInstance();
-          
-          if (compliant) {
-            // Update LC status to UTILIZED if documents are compliant
-            await db.run(
-              `UPDATE letters_of_credit 
-               SET status = 'UTILIZED', updated_at = NOW() 
-               WHERE lc_id = $1`,
-              [lcID]
-            );
-            logger.info(`✅ PostgreSQL updated: LC ${lcID} status set to UTILIZED`);
-          }
-        } catch (dbError) {
-          logger.warn(`⚠️  Failed to update PostgreSQL for LC ${lcID}:`, dbError);
-          // Don't fail the request since blockchain update succeeded
-        }
-        
+
+        // N1: the old handler returned data:null, no txId, and wrote no
+        // blockchain_signatures / audit_trail row — the examination left
+        // no trace. Mirror the F11 forex-confirm fix: PG status mirror
+        // plus signature + audit rows (best-effort, never a 500).
+        await recordLCExaminationTrace({
+          lcID,
+          txId: result.txId,
+          compliant,
+          oldStatus,
+          signerOrg: user?.org,
+          signerUsername: user?.username,
+          submittingMspId: result.submittingMspId,
+          ip: req.ip,
+        });
+
         res.json({
           success: true,
           data: result.data,
+          txId: result.txId,
           message: compliant ? 'Documents comply with LC terms' : 'Discrepancies found in documents',
           timestamp: new Date().toISOString(),
         });
@@ -3735,6 +3832,10 @@ router.post('/lc/:lcID/release-payment',
       // the LC's contract has no shipments yet, there is nothing to
       // verify and the release proceeds (previous behaviour for
       // shipment-less LCs).
+      // N1: lcStatus is read once here and reused by the
+      // auto-examination step below, so the release handler does not
+      // need a second ReadLC.
+      let lcStatus: string | null = null;
       try {
         const { DatabaseService } = await import('../services/databaseService');
 
@@ -3742,6 +3843,7 @@ router.post('/lc/:lcID/release-payment',
         const lcResult = await fabricService.queryChaincode('ReadLC', [lcID]);
         if (lcResult.success && lcResult.data) {
           const lc = lcResult.data;
+          lcStatus = lc.Status || lc.status || null;
           const contractID = lc.ContractID || lc.contractID || lc.contractId;
 
           const db = DatabaseService.getInstance();
@@ -3806,6 +3908,58 @@ router.post('/lc/:lcID/release-payment',
         // Continue with payment release - document check is best-effort
       }
 
+      // N1: run the document examination as part of the release
+      // itself. ReleaseLCPayment requires the LC to be UTILIZED and
+      // only ExamineLCDocuments sets UTILIZED, but nothing in the
+      // API/portal chain ever ran examine — so the first release
+      // attempt always 400'd PAYMENT_RELEASE_FAILED and only recovered
+      // via a manual examine-documents call. The documents were
+      // already verified by the M-4 gate above, so a compliant
+      // examination here is the same verdict, not a weaker one.
+      // The chaincode gate is NOT touched: an LC in any other state
+      // (REQUESTED, APPROVED, PAYMENT_RELEASED, ...) skips this step
+      // and ReleaseLCPayment still fails honestly, and a failed
+      // examination aborts the release instead of proceeding.
+      // ExamineLCDocuments itself only accepts ISSUED / FOREX_ALLOCATED,
+      // so it is only invoked for exactly those states.
+      let autoExamined = false;
+      let examinationTxId: string | null = null;
+      if (lcStatus === 'ISSUED' || lcStatus === 'FOREX_ALLOCATED') {
+        logger.info(`LC ${lcID} is ${lcStatus}: running document examination as part of release`);
+        const examResult = await fabricService.invokeChaincode('ExamineLCDocuments', [
+          lcID,
+          'true',
+          '',
+          new Date().toISOString(),
+          user?.org || 'BANK',
+        ]);
+        if (!examResult.success) {
+          logger.warn(`Payment release ${lcID} blocked: auto-examination failed: ${examResult.error}`);
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'DOCUMENT_EXAMINATION_FAILED',
+              message: examResult.error || 'Document examination failed; payment cannot be released',
+              hint: 'Bank must examine the shipping documents (POST /banking/lc/:lcID/examine-documents) before payment release'
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        autoExamined = true;
+        examinationTxId = examResult.txId || null;
+        await recordLCExaminationTrace({
+          lcID,
+          txId: examResult.txId,
+          compliant: true,
+          oldStatus: lcStatus,
+          signerOrg: user?.org,
+          signerUsername: user?.username,
+          submittingMspId: examResult.submittingMspId,
+          ip: req.ip,
+        });
+        logger.info(`✅ LC ${lcID} auto-examined as part of release (tx ${examinationTxId})`);
+      }
+
       const result = await fabricService.invokeChaincode('ReleaseLCPayment', [
         lcID,
         amount.toString(),
@@ -3816,10 +3970,33 @@ router.post('/lc/:lcID/release-payment',
 
       if (result.success) {
         logger.info(`✅ Payment released for LC ${lcID}: ${currency} ${amount}`);
+        // N3: mirror the release into PG. The old handler wrote to the
+        // ledger only, so PG letters_of_credit stayed UTILIZED while
+        // the ledger said PAYMENT_RELEASED. The chain write already
+        // landed, so a PG failure must not turn this into a 500 (a
+        // retry would fail — only UTILIZED LCs can release); log it
+        // loudly and flag it in the response, like the F5
+        // confirm-settlement fix.
+        let pgMirrorFailed = false;
+        try {
+          await dbService.run(
+            `UPDATE letters_of_credit
+             SET status = 'PAYMENT_RELEASED', updated_at = NOW()
+             WHERE lc_id = $1`,
+            [lcID]
+          );
+          logger.info(`✅ PostgreSQL updated: LC ${lcID} status set to PAYMENT_RELEASED`);
+        } catch (pgErr) {
+          pgMirrorFailed = true;
+          logger.error(`Payment release landed on-chain but the PG mirror failed for LC ${lcID}:`, pgErr);
+        }
         res.json({
           success: true,
           data: result.data,
+          txId: result.txId,
           message: 'Payment released successfully via SWIFT',
+          ...(autoExamined ? { autoExamined: true, examinationTxId } : {}),
+          ...(pgMirrorFailed ? { pgMirrorFailed: true } : {}),
           timestamp: new Date().toISOString(),
         });
       } else {
