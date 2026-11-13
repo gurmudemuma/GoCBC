@@ -62,6 +62,9 @@ export class LCService {
       // terms, issuingBank, advisingBank. This service has no explicit
       // banks to pass, so empty strings keep the contract-derived
       // fallback on-chain.
+      // SEQ 11 (E2E leg 1, F14): RequestLC now takes 15 args — the
+      // four shipping/payment fields are appended. Empty strings keep
+      // them unset on-chain for callers that have none to pass.
       const result = await this.fabricService.invokeChaincode('RequestLC', [
         lcData.lcID,
         lcData.contractID,
@@ -70,6 +73,10 @@ export class LCService {
         lcData.amount.toString(), // amount as string
         lcData.currency,          // currency after amount
         lcData.expiryDate,
+        '',
+        '',
+        '',
+        '',
         '',
         '',
         '',

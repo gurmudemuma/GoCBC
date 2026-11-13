@@ -120,6 +120,43 @@ class ApplicantCredentialsService {
   }
 
   /**
+   * Reset temporary credentials for an applicant (ECTA only, via the
+   * reset-credentials route). E2E leg 1 (F8): with SMTP unconfigured
+   * the emailed password never arrives, so an applicant who missed the
+   * one-time display at submission could never log in. A reset mints a
+   * fresh random password, replaces the stored hash (the old password
+   * stops working immediately) and returns the new password once, to
+   * the ECTA officer who relays it to the applicant. Both login paths
+   * (applicant login by temp username, regular login by exporterId)
+   * are updated, since approval renames the users row.
+   */
+  async resetCredentials(applicationId: string): Promise<{ username: string; exporterUsername: string | null; password: string; status: string }> {
+    const app = await db.get(
+      `SELECT id, temp_username, exporter_id, status FROM exporter_applications WHERE application_id = $1 OR CAST(id AS TEXT) = $1`,
+      [applicationId]
+    );
+    if (!app) {
+      throw new Error('Application not found');
+    }
+    const password = this.generateSecurePassword();
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db.run(
+      `UPDATE exporter_applications SET temp_password = $1, temp_credentials_sent = false WHERE id = $2`,
+      [hashedPassword, app.id]
+    );
+    await db.run(
+      `UPDATE users SET password_hash = $1 WHERE username = $2 OR username = $3`,
+      [hashedPassword, app.temp_username, app.exporter_id || '']
+    );
+    return {
+      username: app.temp_username,
+      exporterUsername: app.exporter_id || null,
+      password,
+      status: app.status,
+    };
+  }
+
+  /**
    * Convert temporary account to full exporter account upon approval
    * Updates username from temporary format (applicant_xxx) to standard format (exporterId)
    */

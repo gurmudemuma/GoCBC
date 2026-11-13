@@ -151,8 +151,11 @@ router.post('/exporter-applications',
     body('city').notEmpty().withMessage('City is required'),
     body('region').optional().isString().withMessage('Region must be a string'),
     body('bankName').optional().isString().withMessage('Bank name must be a string'),
+    // E2E leg 1 (F16): bank account number is required — applications
+    // were created without one, leaving ECTA to approve exporters with
+    // no account for settlement. The form marks it required too.
     body('bankAccountNumber')
-      .optional({ values: 'falsy' })
+      .notEmpty().withMessage('Bank account number is required').bail()
       .isString().withMessage('Bank account number must be a string')
       .matches(/^\d{1,13}$/).withMessage('Bank account number must contain no more than 13 digits'),
     body('bankBranchName').optional().isString().withMessage('Bank branch name must be a string'),
@@ -328,10 +331,20 @@ router.post('/exporter-applications',
           submittedAt,
           credentials: {
             username: credentials.username,
+            // E2E leg 1 (F8): the temp password is shown ONCE here, to
+            // the applicant who just submitted the application. It is
+            // never stored or returned again — only its bcrypt hash is
+            // kept. Email is the delivery channel when SMTP works; when
+            // it does not, this one-time display is the only way the
+            // applicant can ever log in. ECTA can reset it (see
+            // POST /exporter-applications/:applicationId/reset-credentials)
+            // if the applicant loses it.
+            tempPassword: credentials.password,
+            tempPasswordOneTime: true,
             emailSent,
             message: emailSent
               ? 'Login credentials were sent by email. You can track your application status.'
-              : 'Email delivery failed. Contact ECTA to receive or reset your login credentials.'
+              : 'Email delivery failed — save the temporary password shown here now; it will not be shown again. ECTA can reset it if you lose it.'
           },
           emailDelivery: emailSent ? 'sent' : 'failed'
         },
@@ -596,6 +609,55 @@ router.post('/exporter-applications/:applicationId/approve',
       );
       
       logger.info(`✅ Application approved: ${applicationId} -> ${exporterId}`);
+
+      // E2E leg 1 (F12): mirror the approved exporter into the
+      // `exporters` table. No code path ever inserted into it — the
+      // table held only the migration-052 seed row while approved
+      // exporters existed on the ledger, in exporter_applications and
+      // in users, so any PG read of exporters missed them. Idempotent
+      // (ON CONFLICT) and reported in the response instead of failing
+      // silently.
+      const labCertified = String(application.laboratory_facility || '').toLowerCase() === 'yes';
+      let exporterMirrorSynced = false;
+      try {
+        await postgresDb.run(
+          `INSERT INTO exporters (
+            exporter_id, company_name, ecta_license_number, license_status,
+            capital_requirement, laboratory_certified, professional_taster,
+            taster_certificate, license_expiry_date, bank_name, bank_branch,
+            bank_branch_code, contact_person, email, phone, address
+          ) VALUES ($1, $2, $3, 'ACTIVE', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          ON CONFLICT (exporter_id) DO UPDATE SET
+            company_name = EXCLUDED.company_name,
+            ecta_license_number = EXCLUDED.ecta_license_number,
+            license_status = 'ACTIVE',
+            capital_requirement = EXCLUDED.capital_requirement,
+            laboratory_certified = EXCLUDED.laboratory_certified,
+            professional_taster = EXCLUDED.professional_taster,
+            taster_certificate = EXCLUDED.taster_certificate,
+            license_expiry_date = EXCLUDED.license_expiry_date,
+            bank_name = EXCLUDED.bank_name,
+            bank_branch = EXCLUDED.bank_branch,
+            bank_branch_code = EXCLUDED.bank_branch_code,
+            contact_person = EXCLUDED.contact_person,
+            email = EXCLUDED.email,
+            phone = EXCLUDED.phone,
+            address = EXCLUDED.address,
+            updated_at = CURRENT_TIMESTAMP`,
+          [exporterId, application.company_name, ectaLicenseNumber,
+           application.capital_requirement, labCertified,
+           application.professional_taster, application.taster_certificate,
+           expiryDate, bankName || application.bank_name || null,
+           bankBranch || application.bank_branch || null,
+           bankBranchCode || application.bank_branch_code || null,
+           application.contact_person, application.email, application.phone,
+           application.address]
+        );
+        exporterMirrorSynced = true;
+        logger.info(`✅ Exporter ${exporterId} mirrored into exporters table`);
+      } catch (mirrorErr: any) {
+        logger.error(`⚠️ Failed to mirror exporter ${exporterId} into exporters table:`, mirrorErr?.message || mirrorErr);
+      }
       
       // Log audit trail
       await auditService.log({
@@ -678,6 +740,7 @@ router.post('/exporter-applications/:applicationId/approve',
             downloadUrl: `/api/v1/exporters/licenses/${ectaLicenseNumber}/download`
           },
           emailDelivery: approvalEmailSent ? 'sent' : 'failed',
+          exporterMirrorSynced,
           message: approvalEmailSent
             ? 'Application approved. License generated and email sent to exporter.'
             : 'Application approved and license generated. Email delivery failed; notify the exporter through another approved channel.'
@@ -687,6 +750,70 @@ router.post('/exporter-applications/:applicationId/approve',
     } catch (error: any) {
       logger.error('Error approving application:', error);
       res.status(500).json({ success: false, error: { code: 'APPROVAL_FAILED', message: error.message }, timestamp: new Date().toISOString() });
+    }
+  }
+);
+
+// POST /exporter-applications/:applicationId/reset-credentials - Reset applicant temp credentials (ECTA admin)
+// E2E leg 1 (F8): the temp password is only ever delivered by email,
+// and SMTP is unconfigured — so an applicant who never saw the
+// one-time password on the submission screen could never log in. An
+// ECTA officer can now generate a fresh random password and hand it to
+// the applicant through an approved channel. The new password is
+// returned ONLY to the authenticated ECTA officer in this response; it
+// is never stored in plaintext (bcrypt hash only) and the old password
+// stops working immediately.
+router.post('/exporter-applications/:applicationId/reset-credentials',
+  authMiddleware,
+  requireRole('ECTA', 'ECTA_ADMIN'),
+  [
+    param('applicationId').notEmpty().withMessage('Application ID is required'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const { applicationId } = req.params;
+      const applicantCredentialsService = require('../services/applicantCredentialsService').default;
+      const reset = await applicantCredentialsService.resetCredentials(applicationId);
+      // Audit the reset (best-effort — must not fail the reset).
+      try {
+        await auditService.log({
+          entityType: 'EXPORTER_APPLICATION',
+          entityId: applicationId,
+          action: 'RESET_CREDENTIALS',
+          performedBy: (req as any).user?.username || 'ecta_officer',
+          organization: (req as any).user?.org || 'ECTAMSP',
+          performedByOrg: (req as any).user?.org || 'ECTAMSP',
+          oldValue: '',
+          newValue: '',
+          reason: `Temporary credentials reset by ECTA for application ${applicationId}`,
+          metadata: { applicationId, username: reset.username },
+          ipAddress: req.ip || 'unknown',
+        });
+      } catch (auditErr: any) {
+        logger.warn(`[ECTA] Credential-reset audit log failed for ${applicationId}: ${auditErr?.message}`);
+      }
+      res.json({
+        success: true,
+        data: {
+          applicationId,
+          status: reset.status,
+          credentials: {
+            username: reset.username,
+            exporterUsername: reset.exporterUsername,
+            tempPassword: reset.password,
+            tempPasswordOneTime: true,
+          },
+          message: 'Temporary credentials reset. Give the new password to the applicant through an approved channel — it will not be shown again.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      if (error?.message === 'Application not found') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found' }, timestamp: new Date().toISOString() });
+      }
+      logger.error('Error resetting applicant credentials:', error);
+      res.status(500).json({ success: false, error: { code: 'RESET_CREDENTIALS_FAILED', message: error.message }, timestamp: new Date().toISOString() });
     }
   }
 );

@@ -445,6 +445,11 @@ const ExporterPortal: React.FC = () => {
     swiftInstructions: '',
   });
   const [lcRequestForm, setLcRequestForm] = useState({
+    // E2E leg 1 (F16): issuingBank is required and EDITABLE —
+    // pre-filled from the contract's buyer bank when the dialog opens
+    // (see the two open sites below). The old payload took the bank
+    // straight from the contract with no field at all.
+    issuingBank: '',        // Buyer's bank (issuing bank)
     advisingBank: '',        // Exporter's bank (advising bank)
     beneficiaryName: '',     // Exporter company name
     expiryDays: '90',        // Default 90 days from today
@@ -497,7 +502,10 @@ const ExporterPortal: React.FC = () => {
     quantity: '',
     pricePerKg: '',
     currency: 'USD',
-    paymentMethod: 'LC',     // Default to Letter of Credit
+    // E2E leg 1 (F16): NO pre-selected default — the buyer must choose
+    // explicitly. The old 'LC' default let contracts be created as LC
+    // contracts nobody chose; the API now 400s a missing paymentMethod.
+    paymentMethod: '',
     incoterm: 'FOB',
     portOfLoading: 'Djibouti',
     portOfDestination: '',
@@ -1508,6 +1516,14 @@ const ExporterPortal: React.FC = () => {
         return;
       }
 
+      // E2E leg 1 (F16): payment method is required — the API 400s a
+      // missing one, so stop here with a clear message instead of
+      // letting the server reject the whole submission.
+      if (!newContract.paymentMethod) {
+        showWarning('Payment Method Required', 'Please select a payment method', 'Choose how the buyer will pay (LC, CAD, TT Advance, TT Post, or Advance)');
+        return;
+      }
+
       const token = localStorage.getItem('authToken');
       if (!token) {
         showError('Authentication Required', 'You are not authenticated', 'Please login again to continue');
@@ -1637,7 +1653,7 @@ const ExporterPortal: React.FC = () => {
           quantity: '',
           pricePerKg: '',
           currency: 'USD',
-          paymentMethod: 'LC',
+          paymentMethod: '',
           incoterm: 'FOB',
           portOfLoading: 'Djibouti',
           portOfDestination: '',
@@ -2323,7 +2339,10 @@ const ExporterPortal: React.FC = () => {
         // LEG 1 (F6a): send the two banks under their real names.
         // The old payload also sent bankName = advising bank, and the
         // API stored bankName as issuing_bank — the wrong bank.
-        issuingBank: selectedContractForLC.buyerBank || 'Buyer Bank', // Buyer's bank
+        // E2E leg 1 (F16): issuingBank comes from the dialog field
+        // (pre-filled from the contract, editable) — no silent
+        // fallback; the API 400s a missing one.
+        issuingBank: lcRequestForm.issuingBank,
         advisingBank: lcRequestForm.advisingBank || profile.bankName || 'Commercial Bank of Ethiopia', // Exporter's bank
         beneficiary: lcRequestForm.beneficiaryName || profile.companyName,
         amount: lcRequestForm.amount || selectedContractForLC.totalValue.toString(),
@@ -2370,6 +2389,7 @@ const ExporterPortal: React.FC = () => {
         setLcRequestDialogOpen(false);
         setSelectedContractForLC(null);
         setLcRequestForm({
+          issuingBank: '',
           advisingBank: '',
           beneficiaryName: '',
           expiryDays: '90',
@@ -2785,6 +2805,7 @@ const ExporterPortal: React.FC = () => {
                     setSelectedContractForLC(contract);
                     setLcRequestForm({
                       ...lcRequestForm,
+                      issuingBank: contract.buyerBank || '',
                       advisingBank: profile?.bankName || '',
                       beneficiaryName: profile?.companyName || '',
                       amount: contract.totalValue.toString(),
@@ -4013,6 +4034,9 @@ const ExporterPortal: React.FC = () => {
                     label="Payment Method"
                     onChange={(e) => setNewContract({...newContract, paymentMethod: e.target.value})}
                   >
+                    <MenuItem value="">
+                      <Typography variant="body2" color="text.secondary">Select a payment method</Typography>
+                    </MenuItem>
                     <MenuItem value="LC">
                       <Box>
                         <Typography variant="body1" fontWeight="bold">LC - Letter of Credit</Typography>
@@ -4055,6 +4079,7 @@ const ExporterPortal: React.FC = () => {
                     </MenuItem>
                   </Select>
                   <FormHelperText>
+                    {!newContract.paymentMethod && 'Payment method is required — choose how the buyer will pay'}
                     {newContract.paymentMethod === 'LC' && '✓ Recommended: Bank guarantee ensures payment security'}
                     {newContract.paymentMethod === 'CAD' && '⚠️ Medium risk: Documents released only after payment'}
                     {newContract.paymentMethod === 'TT_ADVANCE' && '✓ Low risk: Advance payment reduces exporter risk'}
@@ -4478,6 +4503,7 @@ const ExporterPortal: React.FC = () => {
                                           // Directly open LC request dialog with pre-filled data
                                           setSelectedContractForLC(contract);
                                           setLcRequestForm({
+                                            issuingBank: contract.buyerBank || '',
                                             advisingBank: contract.exporterBank || profile?.bankName || 'Commercial Bank of Ethiopia',
                                             beneficiaryName: profile?.companyName || 'Your Company',
                                             expiryDays: '90',
@@ -5352,7 +5378,7 @@ const ExporterPortal: React.FC = () => {
         </GhostButton>
         <PrimaryButton brand='EXPORTER'
           onClick={handleRequestLC}
-          disabled={isRequestingLC || !lcRequestForm.advisingBank || !lcRequestForm.beneficiaryName}
+          disabled={isRequestingLC || !lcRequestForm.issuingBank?.trim() || !lcRequestForm.advisingBank || !lcRequestForm.beneficiaryName}
         >
           {isRequestingLC ? 'Submitting...' : 'Submit LC Request'}
         </PrimaryButton>
@@ -5407,6 +5433,17 @@ const ExporterPortal: React.FC = () => {
                 LC Details
               </Typography>
               <Divider sx={{ mb: 2 }} />
+            </Grid>
+
+            <Grid item xs={12} sm={6}>
+              <PortalField
+                fullWidth
+                label="Issuing Bank (Buyer's Bank)"
+                value={lcRequestForm.issuingBank}
+                onChange={(e) => setLcRequestForm({ ...lcRequestForm, issuingBank: e.target.value })}
+                required
+                helperText="Buyer's bank that will open the LC — pre-filled from the contract, editable"
+              />
             </Grid>
 
             <Grid item xs={12} sm={6}>
@@ -5931,6 +5968,7 @@ This contract is registered with ECTA and approved by NBE.
                     if (selectedContractForDetail) {
                       setSelectedContractForLC(selectedContractForDetail);
                       setLcRequestForm({
+                        issuingBank: selectedContractForDetail.buyerBank || '',
                         advisingBank: profile?.bankName || '',
                         beneficiaryName: profile?.companyName || '',
                         expiryDays: '90',

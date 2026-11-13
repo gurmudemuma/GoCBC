@@ -368,7 +368,17 @@ router.patch('/:contractId',
       }
       
       logger.info(`✅ Contract ${contractId} updated successfully by ${user.username} (${user.role})`);
-      
+
+      // E2E leg 1 (F13): invalidate the contract cache on PATCH — the
+      // GET handler serves a 5-min cached copy, so an edit that leaves
+      // the cache in place reads back stale fields.
+      try {
+        const { CacheInvalidation } = await import('../services/blockchainCacheService');
+        CacheInvalidation.contract(contractId, String(existingContract.exporter_id || '') || undefined);
+      } catch (cacheErr: any) {
+        logger.warn(`[CONTRACTS] Cache invalidation failed for ${contractId}: ${cacheErr?.message}`);
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Contract updated successfully',
@@ -413,7 +423,11 @@ router.post('/',
       return true;
     }).withMessage('Price per kg must be a number'),
     body('currency').notEmpty().withMessage('Currency is required'),
-    body('paymentMethod').optional().isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE']).withMessage('Payment method must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
+    // E2E leg 1 (F16): paymentMethod is required — it used to default
+    // silently to LC, so a contract created without a payment choice
+    // was recorded as an LC contract the buyer never agreed to. The
+    // form now forces an explicit choice (no pre-selected default).
+    body('paymentMethod').notEmpty().withMessage('Payment method is required').bail().isIn(['LC', 'CAD', 'TT_ADVANCE', 'TT_POST', 'ADVANCE']).withMessage('Payment method must be LC, CAD, TT_ADVANCE, TT_POST, or ADVANCE'),
     body('supersedesContractID').optional().isString().withMessage('Superseded contract ID must be a string'),
     body('eudrRequired').isBoolean().withMessage('EUDR required must be a boolean'),
     // LEG 1 (F3): trade/contact fields the exporter form collects. They
@@ -1483,6 +1497,19 @@ router.post('/:contractID/approve',
       if (result.success) {
         // Update status with cascading effects
         await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'APPROVED');
+
+        // E2E leg 1 (F13): the 5-min contract cache is only invalidated
+        // on create — an approved contract kept reading REGISTERED
+        // until the cache expired. Invalidate on every status-changing
+        // write (approve, reject, resubmit, cancel, PATCH) so the next
+        // GET re-reads the ledger.
+        try {
+          const { CacheInvalidation } = await import('../services/blockchainCacheService');
+          const approvedExporterId = String(contractData.data?.exporterId || contractData.data?.ExporterID || '');
+          CacheInvalidation.contract(contractID, approvedExporterId || undefined);
+        } catch (cacheErr: any) {
+          logger.warn(`[CONTRACTS] Cache invalidation failed for ${contractID}: ${cacheErr?.message}`);
+        }
         
         logger.info(`✅ Contract ${contractID} approved successfully`);
         
@@ -1526,6 +1553,12 @@ router.post('/:contractID/approve',
               // explicitly, so the ledger records them instead of
               // re-deriving them (identical values either way, but the
               // explicit path is now the one the form route uses too).
+              // SEQ 11 (E2E leg 1, F14): the handoff LC carries the
+              // contract's own shipping/payment fields to the ledger —
+              // latest shipment date from the delivery date, discharge
+              // port from the destination port, payment terms from the
+              // contract's payment method — instead of leaving them
+              // PG-only (the manual request path sends the form values).
               const requestResult = await fabricService.requestLC(
                 generatedLcId,
                 contractID,
@@ -1538,7 +1571,11 @@ router.post('/:contractID/approve',
                 '',
                 '',
                 issuingBank,
-                advisingBank
+                advisingBank,
+                String(approvedContract.deliveryDate || approvedContract.DeliveryDate || '').slice(0, 10),
+                String(approvedContract.portOfLoading || approvedContract.PortOfLoading || ''),
+                String(approvedContract.portOfDestination || approvedContract.PortOfDestination || ''),
+                String(approvedContract.paymentMethod || approvedContract.PaymentMethod || '')
               );
               if (!requestResult.success) {
                 throw new Error(requestResult.error || 'The ledger rejected the generated LC request.');
@@ -1562,10 +1599,15 @@ router.post('/:contractID/approve',
                 await handoffDb.run(
                   `INSERT INTO letters_of_credit (
                     lc_id, lc_number, contract_id, exporter_id, issuing_bank, advising_bank, beneficiary, amount, currency,
+                    latest_shipment_date, port_of_loading, port_of_discharge, payment_terms,
                     status, expiry_date, request_date, created_at, updated_at
-                  ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, 'REQUESTED', $9, NOW(), NOW(), NOW())
+                  ) VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $10, $11, $12, $13, 'REQUESTED', $9, NOW(), NOW(), NOW())
                   ON CONFLICT (lc_id) DO NOTHING`,
-                  [generatedLcId, contractID, exporterId, issuingBank, advisingBank, handoffBeneficiary, amount, currency, expiryDate]
+                  [generatedLcId, contractID, exporterId, issuingBank, advisingBank, handoffBeneficiary, amount, currency, expiryDate,
+                   String(approvedContract.deliveryDate || approvedContract.DeliveryDate || '').slice(0, 10) || null,
+                   String(approvedContract.portOfLoading || approvedContract.PortOfLoading || '') || null,
+                   String(approvedContract.portOfDestination || approvedContract.PortOfDestination || '') || null,
+                   String(approvedContract.paymentMethod || approvedContract.PaymentMethod || '') || null]
                 );
               } catch (syncError) {
                 logger.warn(`[LC HANDOFF] PostgreSQL sync failed for ${generatedLcId}; blockchain request is committed:`, syncError);
@@ -1912,6 +1954,16 @@ router.post('/:contractID/reject',
       if (result.success) {
         // Update status with cascading effects
         await statusManager.updateEntityStatus('CONTRACT', contractID, currentStatus, 'REJECTED');
+
+        // E2E leg 1 (F13): invalidate the contract cache on reject —
+        // see the approve handler above.
+        try {
+          const { CacheInvalidation } = await import('../services/blockchainCacheService');
+          const rejectedExporterId = String(contractData.data?.exporterId || contractData.data?.ExporterID || '');
+          CacheInvalidation.contract(contractID, rejectedExporterId || undefined);
+        } catch (cacheErr: any) {
+          logger.warn(`[CONTRACTS] Cache invalidation failed for ${contractID}: ${cacheErr?.message}`);
+        }
         
         logger.info(`✅ Contract ${contractID} rejected successfully`);
         
@@ -2125,6 +2177,15 @@ router.post('/:contractId/resubmit',
         [contractId]
       );
 
+      // E2E leg 1 (F13): invalidate the contract cache on resubmit —
+      // see the approve handler above.
+      try {
+        const { CacheInvalidation } = await import('../services/blockchainCacheService');
+        CacheInvalidation.contract(contractId, contractExporterId || undefined);
+      } catch (cacheErr: any) {
+        logger.warn(`[CONTRACTS] Cache invalidation failed for ${contractId}: ${cacheErr?.message}`);
+      }
+
       // Audit trail (best-effort — must not fail the resubmission).
       try {
         await db.run(
@@ -2309,6 +2370,15 @@ router.post('/:contractId/cancel', authMiddleware, async (req: Request, res: Res
           updated_at = CURRENT_TIMESTAMP
       WHERE contract_id = $1
     `, [contractId]);
+
+    // E2E leg 1 (F13): invalidate the contract cache on cancel — see
+    // the approve handler above.
+    try {
+      const { CacheInvalidation } = await import('../services/blockchainCacheService');
+      CacheInvalidation.contract(contractId);
+    } catch (cacheErr: any) {
+      logger.warn(`[CONTRACTS] Cache invalidation failed for ${contractId}: ${cacheErr?.message}`);
+    }
     
     logger.info(`[CONTRACTS] ✅ Contract cancelled: ${contractId} (blockchainSynced: ${blockchainSynced})`);
     
