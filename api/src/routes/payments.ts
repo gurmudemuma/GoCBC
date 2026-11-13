@@ -2247,7 +2247,15 @@ router.post('/:paymentID/release',
           releaseAmount: result.releaseAmount,
           retentionAmount: result.retentionAmount,
           releaseDate: releaseDate || new Date().toISOString(),
+          // N7: the chain txId(s) that prove the release — the
+          // retention-release tx (txId) plus the settle tx on the
+          // settleable path (settleTxId, null when already settled).
+          txId: (result as any).txId || null,
+          blockchainTxId: (result as any).blockchainTxId || (result as any).txId || null,
+          settleTxId: (result as any).settleTxId || null,
+          retentionReleaseTxId: (result as any).retentionReleaseTxId || (result as any).txId || null,
         },
+        txId: (result as any).txId || null,
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
