@@ -106,6 +106,12 @@ export const PhytosanitaryCertificates: React.FC = () => {
     try {
       setLoading(true);
 
+      // F15a (leg2): the botanical name is the plant description the
+      // API and chaincode require — reject an empty value here instead
+      // of sending a request the API now 400s.
+      if (!formData.botanicalName?.trim()) {
+        throw new Error('Botanical name (plant description) is required');
+      }
       // Chaincode RequestPhytosanitaryCertificate requires quantity > 0 —
       // the route default '0' fails, so reject an empty quantity here.
       if (!(formData.quantity > 0)) {
@@ -432,10 +438,11 @@ export const PhytosanitaryCertificates: React.FC = () => {
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField
-                label="Botanical Name"
+                label="Botanical Name *"
                 value={formData.botanicalName}
                 onChange={(e) => setFormData({ ...formData, botanicalName: e.target.value })}
                 fullWidth
+                required
               />
             </Grid>
             <Grid item xs={12}>

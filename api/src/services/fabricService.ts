@@ -2478,7 +2478,12 @@ export class FabricService {
     numberOfPackages: string,
     distinguishMarks: string,
     meansOfConveyance: string,
-    issuedBy: string
+    issuedBy: string,
+    // F15b (leg2): supplied certificate number, honoured by the seq-11
+    // chaincode; empty means the chaincode generates PHYTO-ET-... .
+    // The seq-10 chaincode ignores the extra arg, so old callers keep
+    // working until the deploy.
+    certificateNumber: string = ''
   ): Promise<ChaincodeResponse> {
     return this.invokeChaincode('IssuePhytosanitaryCertificate', [
       certificateID,
@@ -2495,6 +2500,7 @@ export class FabricService {
       distinguishMarks,
       meansOfConveyance,
       issuedBy,
+      certificateNumber,
     ]);
   }
 

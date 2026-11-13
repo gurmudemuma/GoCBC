@@ -125,7 +125,8 @@ export const StatusTransitions = {
     // ConfirmDelivery IN_TRANSIT→DELIVERED (second path to DELIVERED),
     // PickupShipment CUSTOMS_CLEARED|PERMIT_ISSUED→IN_TRANSIT (bypass).
     // FREIGHT_BOOKED is set by the book-freight route; LOADED by
-    // RecordShippingDetails / RecordBillOfLading (both unguarded).
+    // RecordShippingDetails / RecordBillOfLading (gated F3 leg2:
+    // CUSTOMS_CLEARED, FREIGHT_BOOKED or LOADED only).
     // CUSTOMS_DECLARED is set by SubmitCustomsDeclaration, which
     // requires PERMIT_ISSUED (customs.go); the clear cascade
     // (ClearDeclaration / ClearCustomsDeclaration) sets CUSTOMS_CLEARED
@@ -160,7 +161,7 @@ export const StatusTransitions = {
     // exactly; the chaincode now accepts FREIGHT_BOOKED too, and
     // FREIGHT_BOOKED lists LAND_TRANSPORT above, so the booking no
     // longer strands the shipment.
-    CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT', 'FREIGHT_BOOKED'],
+    CUSTOMS_CLEARED: ['LAND_TRANSPORT', 'IN_TRANSIT', 'FREIGHT_BOOKED', 'LOADED'],
     LAND_TRANSPORT: ['PORT_ARRIVED'],
     PORT_ARRIVED: ['CONTAINER_STUFFED'],
     CONTAINER_STUFFED: ['VESSEL_LOADED'],
@@ -304,17 +305,22 @@ export const StatusTransitions = {
     WAIVED: [],
   },
 
-  // Border Crossing Status Flow (intended order from chaincode
-  // bordercrossing.go comments — the chaincode functions themselves carry
-  // no from-state guards, so this table is the documented intent, not an
-  // on-chain enforcement)
+  // Border Crossing Status Flow (matches chaincode bordercrossing.go
+  // guards — the functions carry from-state guards, so this table is
+  // the enforced intent, not just documentation. Leg2 F6: an
+  // INSPECTED crossing clears to CLEARED_EXIT (exit clearance,
+  // departure-eligible), not terminal CLEARED — inspection happens
+  // at the border post while the cargo is still in Ethiopia, so the
+  // prescribed order is initiate -> inspect -> clear (CLEARED_EXIT)
+  // -> departure -> crossing -> arrival. CROSSED / ARRIVED clear to
+  // terminal CLEARED (destination clearance).)
   BORDER: {
     PENDING: ['CLEARED_EXIT', 'IN_TRANSIT', 'DETAINED', 'INSPECTED'],
     CLEARED_EXIT: ['IN_TRANSIT'],
     IN_TRANSIT: ['CROSSED'],
     CROSSED: ['ARRIVED', 'CLEARED'],
     ARRIVED: ['CLEARED'],
-    INSPECTED: ['CLEARED', 'DETAINED'],
+    INSPECTED: ['CLEARED_EXIT', 'DETAINED'],
     INSPECTION_FAILED: ['DETAINED', 'INSPECTED'],
     CLEARED: [],
     DETAINED: [],

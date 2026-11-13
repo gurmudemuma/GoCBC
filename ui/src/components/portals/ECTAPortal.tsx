@@ -1574,6 +1574,11 @@ The exporter can reapply once all requirements are met.`,
   };
 
   // STAGE 4: Issue Export Permit (APPROVED → PERMIT_ISSUED)
+  // F10 (leg2): this is a CBE (bank) export permit — the ledger signer
+  // is always BanksMSP (IssueCBEExportPermit is BanksMSP-only,
+  // permit.go:64-66), however the request arrives. ECTA submits the
+  // request; the success message says so, and the API response
+  // carries issuedBy { signerMsp: 'BanksMSP', submittedBy, ... }.
   const handleIssueExportPermit = async (inspection: any) => {
     try {
       const inspectionId = inspection.inspection_id || inspection.inspectionID || inspection.InspectionID;
@@ -1592,7 +1597,7 @@ The exporter can reapply once all requirements are met.`,
         const issuedPermitNo = response.data?.data?.permitNumber || response.data?.data?.exportPermitNo || exportPermitNo;
         showSuccess(
           'Export Permit Issued',
-          `Export Permit ${issuedPermitNo} issued for ${shipmentId}`,
+          `Export Permit ${issuedPermitNo} issued by the Commercial Bank of Ethiopia (BanksMSP) for ${shipmentId} — submitted by ECTA`,
           'The customs declaration is a separate next step — no customs declaration was created automatically.'
         );
         loadData();

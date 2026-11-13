@@ -273,7 +273,10 @@ func (c *CoffeeContract) RecordDeparture(ctx contractapi.TransactionContextInter
 
 	// GUARD (status-transition audit §17 #3): PENDING or CLEARED_EXIT ->
 	// IN_TRANSIT. Exit clearance is optional, so a PENDING crossing may
-	// depart directly.
+	// depart directly. CLEARED_EXIT also covers the inspect -> clear
+	// path: ClearBorderCrossing sends an INSPECTED crossing to
+	// CLEARED_EXIT (leg2 F6), so the prescribed order
+	// initiate -> inspect -> clear -> departure runs.
 	if crossing.Status != "PENDING" && crossing.Status != "CLEARED_EXIT" {
 		return fmt.Errorf("RecordDeparture: crossing must be PENDING or CLEARED_EXIT to depart, current status: %s", crossing.Status)
 	}
@@ -493,7 +496,11 @@ func (c *CoffeeContract) ReportDelay(ctx contractapi.TransactionContextInterface
 }
 
 // ClearBorderCrossing - Clear shipment for border crossing (customs approval)
-// Called by customs officials to clear shipment at border
+// Called by customs officials to clear shipment at border. The outcome
+// depends on the phase: from INSPECTED the cargo is still in Ethiopia,
+// so this is the EXIT clearance (CLEARED_EXIT, departure-eligible);
+// from CROSSED or ARRIVED it is the final destination clearance
+// (CLEARED, terminal). See the F6 note on the guard below.
 func (c *CoffeeContract) ClearBorderCrossing(ctx contractapi.TransactionContextInterface,
 	crossingID, clearanceOfficer, certificateNumber, clearanceDate string) error {
 	ledgerNow, err := ledgerTransactionTime(ctx)
@@ -518,8 +525,18 @@ func (c *CoffeeContract) ClearBorderCrossing(ctx contractapi.TransactionContextI
 		return fmt.Errorf("ClearBorderCrossing: failed to unmarshal: %w", err)
 	}
 
-	// GUARD (status-transition audit §17 #3): CROSSED, ARRIVED or
-	// INSPECTED -> CLEARED.
+	// GUARD (status-transition audit §17 #3, amended leg2 F6):
+	// CROSSED, ARRIVED or INSPECTED -> cleared. The prescribed border
+	// order is initiate -> inspect -> clear -> departure -> crossing
+	// -> arrival: inspection happens at the border post while the
+	// cargo is still in Ethiopia, so clearing an INSPECTED crossing
+	// must leave it able to depart. The old code sent INSPECTED ->
+	// CLEARED, and CLEARED has no outgoing transition (RecordDeparture
+	// only accepts PENDING/CLEARED_EXIT), so inspect -> clear stranded
+	// the crossing with departure/crossing/arrival all 500. The
+	// from-state split below fixes it: INSPECTED clears to
+	// CLEARED_EXIT (departure-eligible), CROSSED/ARRIVED clear to
+	// terminal CLEARED.
 	if crossing.Status != "CROSSED" && crossing.Status != "ARRIVED" && crossing.Status != "INSPECTED" {
 		return fmt.Errorf("ClearBorderCrossing: crossing must be CROSSED, ARRIVED, or INSPECTED to clear, current status: %s", crossing.Status)
 	}
@@ -534,8 +551,23 @@ func (c *CoffeeContract) ClearBorderCrossing(ctx contractapi.TransactionContextI
 		return fmt.Errorf("ClearBorderCrossing: failed to get MSP ID: %w", err)
 	}
 
-	// Update clearance details
-	crossing.Status = "CLEARED"
+	// Update clearance details. From INSPECTED this is the exit
+	// clearance (cargo cleared to leave Ethiopia): the officer and
+	// reference are also recorded as the Ethiopian exit clearance,
+	// which is what they are in this phase. From CROSSED / ARRIVED
+	// it is the final destination clearance (terminal CLEARED).
+	if crossing.Status == "INSPECTED" {
+		crossing.Status = "CLEARED_EXIT"
+		crossing.EthiopianCustomsOfficer = clearanceOfficer
+		crossing.EthiopianClearanceRef = certificateNumber
+		if clearanceDate != "" {
+			crossing.EthiopianClearanceDate = clearanceDate
+		} else {
+			crossing.EthiopianClearanceDate = ledgerNow.Format("2006-01-02T15:04:05Z07:00")
+		}
+	} else {
+		crossing.Status = "CLEARED"
+	}
 	crossing.BorderCustomsOfficer = clearanceOfficer
 	crossing.BorderClearanceRef = certificateNumber
 	crossing.BorderClearanceDate = clearanceDate

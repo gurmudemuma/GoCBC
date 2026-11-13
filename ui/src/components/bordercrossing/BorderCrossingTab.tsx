@@ -80,10 +80,13 @@ const BorderCrossingTab: React.FC = () => {
     }
   };
 
-  // Advance a crossing one step along the chaincode flow (matrix §14):
-  // CLEARED_EXIT -> departure (IN_TRANSIT), IN_TRANSIT -> crossing (CROSSED),
-  // CROSSED -> arrival (ARRIVED, terminal). The API routes mirror the
-  // chaincode guards, so a wrong-state call is rejected server-side.
+  // Advance a crossing one step along the chaincode flow (matrix §14,
+  // leg2 F6): initiate -> inspect -> clear -> departure -> crossing ->
+  // arrival. Clear from INSPECTED lands CLEARED_EXIT (exit clearance),
+  // which departs to IN_TRANSIT; IN_TRANSIT -> crossing (CROSSED),
+  // CROSSED -> arrival (ARRIVED); clear from CROSSED / ARRIVED lands
+  // terminal CLEARED (destination clearance). The API routes mirror
+  // the chaincode guards, so a wrong-state call is rejected server-side.
   const handleAdvance = async (crossing: BorderCrossing, endpoint: string, body: Record<string, string>) => {
     try {
       const response = await apiFetch(`/bordercrossing/${crossing.crossingId}/${endpoint}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(body) });

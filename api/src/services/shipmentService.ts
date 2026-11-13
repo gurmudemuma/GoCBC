@@ -459,6 +459,45 @@ export class ShipmentService {
   }
 
   /**
+   * States from which a bill of lading / shipping document may be
+   * recorded (F3, leg2). Mirrors the chaincode gate in
+   * RecordBillOfLading / RecordShippingDetails / RecordAirwayBill
+   * (main.go): the cargo must be cleared for loading
+   * (CUSTOMS_CLEARED), booked for loading (FREIGHT_BOOKED), or
+   * already loaded (LOADED, re-issue/correction). Every other state
+   * refuses. assertBillOfLadingAllowed verifies the shipment exists
+   * (PG + ledger) and is in one of these states, so the B/L routes
+   * can refuse honestly with 404/400 before invoking the chaincode.
+   */
+  static readonly BILL_OF_LADING_STATES = ['CUSTOMS_CLEARED', 'FREIGHT_BOOKED', 'LOADED'];
+
+  async assertBillOfLadingAllowed(shipmentId: string): Promise<
+    | { ok: true; pg: any; ledger: any; status: string }
+    | { ok: false; code: 'SHIPMENT_NOT_FOUND' | 'SHIPMENT_VERIFY_UNAVAILABLE' | 'INVALID_SHIPMENT_STATUS'; message: string }
+  > {
+    const exists = await this.assertShipmentExists(shipmentId);
+    if (!exists.ok) {
+      if (exists.unavailable) {
+        return { ok: false, code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: exists.message };
+      }
+      return { ok: false, code: 'SHIPMENT_NOT_FOUND', message: exists.message };
+    }
+    // PG and the ledger can disagree briefly (the PG mirror follows
+    // the chain write); the ledger is the truth for a loading
+    // decision, PG is the fallback when the ledger read has no
+    // status (legacy docs).
+    const status = String((exists.ledger as any)?.status || (exists.pg as any)?.status || '');
+    if (!ShipmentService.BILL_OF_LADING_STATES.includes(status)) {
+      return {
+        ok: false,
+        code: 'INVALID_SHIPMENT_STATUS',
+        message: `Cannot record a bill of lading: shipment ${shipmentId} is ${status || 'in an unknown state'}; the shipment must be CUSTOMS_CLEARED, FREIGHT_BOOKED or LOADED`,
+      };
+    }
+    return { ok: true, pg: exists.pg, ledger: exists.ledger, status };
+  }
+
+  /**
    * Get shipments by contract
    */
   async getShipmentsByContract(contractID: string) {

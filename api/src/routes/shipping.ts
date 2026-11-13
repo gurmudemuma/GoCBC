@@ -6,12 +6,14 @@ import { body, param, validationResult } from 'express-validator';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { DatabaseService } from '../services/databaseService';
 import { FabricService } from '../services/fabricService';
+import { ShipmentService } from '../services/shipmentService';
 import { logger } from '../utils/logger';
 import { statusManager } from '../utils/statusManager';
 
 const router = Router();
 const dbService = DatabaseService.getInstance();
 const fabricService = FabricService.getInstance();
+const shipmentService = ShipmentService.getInstance();
 
 // Validation middleware
 const validateRequest = (req: Request, res: Response, next: any) => {
@@ -953,11 +955,14 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
       // A bill of lading must reference a real booking: bookings live in
       // PostgreSQL (shipping_bookings) — there is no booking object on the
       // ledger (booking-create only mirrors the linked shipment's status
-      // on-chain), and the B/L itself is stored in PG (bills_of_lading).
-      // So PG is the source of truth here, matching the amend/cancel
-      // routes' existence check. Unknown booking -> 404, never issue.
+      // on-chain). The B/L itself is recorded on the LEDGER first
+      // (F3, leg2 — RecordBillOfLading, signed by ShippingMSP) and
+      // mirrored to PG (bills_of_lading) only after the chain write
+      // commits; the old code inserted the PG row only, so the ledger
+      // shipment's billOfLadingNo stayed "" and there was no signature.
+      // Unknown booking -> 404, never issue.
       const booking = await dbService.get(
-        'SELECT booking_id FROM shipping_bookings WHERE booking_id = $1',
+        'SELECT booking_id, shipment_id, vessel_name, origin, destination FROM shipping_bookings WHERE booking_id = $1',
         [bookingId]
       );
       if (!booking) {
@@ -967,10 +972,70 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
           timestamp: new Date().toISOString()
         });
       }
+      const shipmentId = (booking as any).shipment_id as string;
+
+      // F3 (leg2): the linked shipment must be in a loadable state —
+      // 404 when it does not exist, 400 when its state does not allow
+      // loading. Nothing is written on a refusal.
+      const blGate = await shipmentService.assertBillOfLadingAllowed(shipmentId);
+      if (!blGate.ok) {
+        const status = blGate.code === 'SHIPMENT_NOT_FOUND' ? 404
+          : blGate.code === 'SHIPMENT_VERIFY_UNAVAILABLE' ? 503 : 400;
+        return res.status(status).json({
+          success: false,
+          error: { code: blGate.code, message: blGate.message },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Ledger-first: RecordBillOfLading sets billOfLadingNo and LOADED
+      // on-chain under the endorsement policy. Vessel / ports come from
+      // the request body when supplied and fall back to the booking row
+      // (the old code hand-typed them in the body and never checked
+      // them against the booking — a mismatch was not caught); the
+      // estimated arrival falls back to the on-board / issue date.
+      // The resolved values are used for the chain call AND the PG
+      // mirror below, so an omitted vessel/port can never leave a
+      // committed chain write with a failed PG insert behind it.
+      // A failed chain call returns 503 and writes no PG row.
+      const effVessel = vesselName || (booking as any).vessel_name || '';
+      const effPortOfLoading = portOfLoading || (booking as any).origin || '';
+      const effPortOfDischarge = portOfDischarge || (booking as any).destination || '';
+      const effArrival = onBoardDate || issueDate || new Date().toISOString();
+      let chainTxId: string | null = null;
+      try {
+        await fabricService.connectAsOrg('ShippingMSP');
+        const chainResult = await fabricService.invokeChaincode('RecordBillOfLading', [
+          shipmentId,
+          blNumber,
+          effVessel,
+          effPortOfLoading,
+          effPortOfDischarge,
+          effArrival,
+          '',
+        ]);
+        if (!chainResult?.success) {
+          throw new Error(chainResult?.error || 'Chaincode call did not succeed');
+        }
+        chainTxId = chainResult.txId || null;
+      } catch (chainErr: any) {
+        const message = chainErr?.message || 'Chaincode call failed';
+        logger.error(`❌ [SHIPPING] Failed to record B/L ${blNumber} on the ledger for shipment ${shipmentId}: ${message}`);
+        return res.status(503).json({
+          success: false,
+          error: {
+            code: 'BILL_OF_LADING_FAILED',
+            message: `Bill of Lading ${blNumber} could not be recorded on the ledger: ${message}. No B/L was issued.`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       const blId = `BL-${Date.now()}`;
 
-      // Store in database
+      // Store in database — only after the ledger write committed.
+      // Mirror the shipment to LOADED in PG (the chaincode already set
+      // it on-chain); the mirror never fails the issuance.
       await dbService.run(`
         INSERT INTO bills_of_lading (
           bl_id, bl_number, bl_type, booking_id, shipper, consignee,
@@ -988,9 +1053,9 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
         shipper,
         consignee,
         notifyParty || '',
-        portOfLoading,
-        portOfDischarge,
-        vesselName,
+        effPortOfLoading,
+        effPortOfDischarge,
+        effVessel,
         voyageNumber || '',
         Array.isArray(containerNumbers) ? containerNumbers.join(',') : containerNumbers || '',
         Array.isArray(sealNumbers) ? sealNumbers.join(',') : sealNumbers || '',
@@ -1007,7 +1072,16 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
         'ISSUED'
       ]);
 
-      logger.info(`✅ [SHIPPING] Bill of Lading issued: ${blId} (${blType})`);
+      logger.info(`✅ [SHIPPING] Bill of Lading issued: ${blId} (${blType}), ledger tx ${chainTxId}`);
+
+      try {
+        await dbService.run(
+          `UPDATE shipments SET status = 'LOADED', updated_at = NOW() WHERE shipment_id = $1`,
+          [shipmentId]
+        );
+      } catch (mirrorErr: any) {
+        logger.warn(`[SHIPPING] Could not mirror shipment ${shipmentId} to LOADED in Postgres:`, mirrorErr);
+      }
 
       res.status(201).json({
         success: true,
@@ -1016,12 +1090,15 @@ router.post('/bookings/:bookingId/bill-of-lading/issue',
           blNumber,
           blType,
           bookingId,
+          shipmentId,
           shipper,
           consignee,
           status: 'ISSUED',
+          shipmentStatus: 'LOADED',
           issueDate: issueDate || new Date().toISOString(),
           numberOfOriginals: numberOfOriginals || 3
         },
+        txId: chainTxId,
         message: `${blType} Bill of Lading issued successfully`,
         timestamp: new Date().toISOString()
       });

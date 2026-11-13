@@ -47,7 +47,11 @@ router.post('/request',
     body('certificateID').notEmpty().withMessage('Certificate ID is required'),
     body('shipmentID').notEmpty().withMessage('Shipment ID is required'),
     body('exporterID').notEmpty().withMessage('Exporter ID is required'),
-    body('plantDescription').optional().isString(),
+    // F15a (leg2): plantDescription is REQUIRED — the old .optional()
+    // plus the 'Coffee beans (Coffea arabica)' default below let a
+    // missing description return 201 with an invented value. The
+    // chaincode requires it too (seq 11).
+    body('plantDescription').notEmpty().withMessage('Plant description is required'),
     body('quantity').optional().isNumeric(),
     body('treatmentApplied').optional().isString(),
     body('placeOfOrigin').optional().isString(),
@@ -92,7 +96,9 @@ router.post('/request',
         certificateID,
         shipmentID,
         exporterID,
-        plantDescription || 'Coffee beans (Coffea arabica)',
+        // F15a: no default — plantDescription is validated required
+        // above, so a missing value never reaches the chaincode.
+        plantDescription,
         quantity?.toString() || '0',
         treatmentApplied || 'Fumigation',
         placeOfOrigin || '',
@@ -408,6 +414,12 @@ router.post('/:certificateID/issue',
           String(req.body.distinguishingMarks || cert.distinguishMarks || cert.distinguishingMarks || ''),
           String(req.body.meansOfConveyance || cert.meansOfConveyance || ''),
           issuingAuthority,
+          // F15b (leg2): pass the supplied certificate number through
+          // as the 15th arg — the chaincode honours it (seq 11) and
+          // generates PHYTO-ET-... only when it is empty. Extra args
+          // are ignored by the seq-10 chaincode, so this call still
+          // works before the seq-11 deploy (with a generated number).
+          String(certificateNumber || ''),
         ]);
 
         if (result.success) {
