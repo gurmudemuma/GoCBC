@@ -431,6 +431,46 @@ router.post('/:id/verify', authMiddleware, requireRole(['NBE', 'NBE_ADMIN', 'NBE
 
     logger.info(`[REPATRIATION] ✅ Verified: ${id}`);
 
+    // N4: mirror the verification into Postgres, matching the ledger.
+    // The old handler wrote to the chain only, so the PG row stayed
+    // PENDING with NULL verification fields while the ledger was
+    // COMPLIED. Ledger-first and best-effort: the chain write already
+    // committed; a mirror failure is logged, never failed. The state
+    // is read back from the ledger (COMPLIED or NON_COMPLIANT) rather
+    // than assumed, so the mirror matches what the chain holds.
+    try {
+      const ledgerRecord = await fabricService.evaluateTransaction('ReadRepatriation', id);
+      if (ledgerRecord.success && ledgerRecord.data) {
+        const d: any = ledgerRecord.data;
+        const mirrored = await postgresDb.run(
+          `UPDATE export_proceeds_repatriation
+           SET status = $1, verified_by = $2, verified_by_msp = $3,
+               verification_date = $4, verification_ref = $5,
+               verification_notes = $6, compliance_date = $7,
+               is_overdue = $8, updated_at = CURRENT_TIMESTAMP
+           WHERE repatriation_id = $9`,
+          [
+            d.status || d.Status || null,
+            d.verifiedBy || d.VerifiedBy || null,
+            d.verifiedByMsp || d.VerifiedByMSP || null,
+            d.verificationDate || d.VerificationDate || null,
+            d.verificationRef || d.VerificationRef || null,
+            d.verificationNotes || d.VerificationNotes || null,
+            d.complianceDate || d.ComplianceDate || null,
+            d.isOverdue ?? d.IsOverdue ?? false,
+            id,
+          ]
+        );
+        if (!mirrored || mirrored.rowCount === 0) {
+          logger.warn(`[REPATRIATION] Verify mirror: no PG row for ${id} — ledger is ${d.status || d.Status} but Postgres has nothing to update`);
+        }
+      } else {
+        logger.warn(`[REPATRIATION] Could not read back ${id} from the ledger to mirror verification:`, ledgerRecord.error);
+      }
+    } catch (mirrorErr) {
+      logger.warn(`[REPATRIATION] Could not mirror verification of ${id} to Postgres:`, mirrorErr);
+    }
+
     res.json({
       success: true,
       message: 'Repatriation verified successfully',

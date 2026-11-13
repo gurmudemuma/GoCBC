@@ -15,30 +15,6 @@ import { logger } from '../utils/logger';
  */
 const NBE_RETENTION_RATE = 40; // 40% mandatory retention
 
-/**
- * LEG3 F4 (transitional): true only when a Fabric invoke failed because
- * the called chaincode function does not exist on the deployed chaincode
- * — i.e. chaincode seq 11 (RecordRetentionRelease) is not deployed yet.
- * Matches the shapes fabric-network surfaces for an unknown function
- * (contract-api "function not found" / endorsement "no function" /
- * "unknown function"). Anything else (state rejection, endorsement
- * failure, timeout) is a real failure and must NOT degrade silently.
- * Remove together with the fallback in releasePayment once seq 11 is live.
- */
-function isChaincodeFunctionNotDeployed(message: unknown): boolean {
-  if (typeof message !== 'string' || !message) return false;
-  const m = message.toLowerCase();
-  return (
-    m.includes('function') &&
-    (m.includes('not found') ||
-      m.includes('does not exist') ||
-      m.includes('unknown function') ||
-      m.includes('no function') ||
-      m.includes('could not find function') ||
-      m.includes('is not a valid function'))
-  );
-}
-
 export class PaymentService {
   private static instance: PaymentService;
   private fabricService: FabricService;
@@ -433,17 +409,16 @@ export class PaymentService {
         // LEG3 F4: the old code skipped the chain call entirely for an
         // already-settled payment, so the 60% release left no ledger
         // record at all. RecordRetentionRelease (chaincode payment.go,
-        // needs seq 11) writes the release onto the payment WITHOUT
+        // seq 11, live — verified: committed sequence 11, all 6 MSPs
+        // approved) writes the release onto the payment WITHOUT
         // changing Status — same no-status-change precedent as
         // ConvertRetention. The release is an NBE action, so it is
         // signed as NBEMSP (the settleable path above stays BanksMSP
-        // for SettlePayment).
-        // TRANSITIONAL: until chaincode seq 11 is deployed, the invoke
-        // fails because the function does not exist yet. That specific
-        // failure degrades to the old PG-only release with a loud
-        // warning so NBE releases keep working in the merge window; a
-        // real chaincode rejection (wrong state, already released) still
-        // fails honestly. Remove the fallback once seq 11 is live.
+        // for SettlePayment). The transitional PG-only fallback that
+        // degraded a missing-function failure is REMOVED (N5): seq 11
+        // is live and both release paths were re-probed writing
+        // on-chain, so a RecordRetentionRelease failure is now a real
+        // failure and fails honestly, like SettlePayment above.
         await this.fabricService.connectAsOrg('NBEMSP');
         const releaseResult = await this.fabricService.invokeChaincode('RecordRetentionRelease', [
           releaseData.paymentID,
@@ -452,14 +427,11 @@ export class PaymentService {
           releaseData.releaseRef,
           releaseData.releaseDate,
         ]);
-        if (releaseResult.success) {
-          blockchainTxId = (releaseResult as any).txId || (releaseResult as any).transactionId || null;
-          logger.info(`[PaymentService] Payment ${releaseData.paymentID} 60% release recorded on-chain (TX: ${blockchainTxId})`);
-        } else if (isChaincodeFunctionNotDeployed((releaseResult as any).error)) {
-          logger.warn(`[PaymentService] RecordRetentionRelease not deployed yet (chaincode seq 11 pending); releasing payment ${releaseData.paymentID} in Postgres only: ${(releaseResult as any).error}`);
-        } else {
+        if (!releaseResult.success) {
           throw new Error((releaseResult as any).error || 'Fabric rejected transaction RecordRetentionRelease');
         }
+        blockchainTxId = (releaseResult as any).txId || (releaseResult as any).transactionId || null;
+        logger.info(`[PaymentService] Payment ${releaseData.paymentID} 60% release recorded on-chain (TX: ${blockchainTxId})`);
       }
 
       // Update database — SettlePayment settles the payment on-chain, so
