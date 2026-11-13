@@ -1211,11 +1211,28 @@ router.put('/:paymentID/confirm',
 
       if (result.success) {
         logger.info(`✅ [PAYMENT] Payment confirmed successfully: ${paymentID}`);
+        // LEG3 F5: mirror the confirmation into PG. The old handler
+        // wrote to the ledger only, so PG payments.status stayed
+        // SETTLED while the ledger said CONFIRMED. The chain write
+        // already landed, so a PG failure must not turn this into a
+        // 500 (a retry would fail — only SETTLED payments can be
+        // confirmed); log it loudly and flag it in the response.
+        let pgMirrorFailed = false;
+        try {
+          await postgresDb.run(
+            `UPDATE payments SET status = 'CONFIRMED' WHERE payment_id = $1`,
+            [paymentID]
+          );
+        } catch (pgErr) {
+          pgMirrorFailed = true;
+          logger.error(`[PAYMENT] Confirm landed on-chain but the PG mirror failed for ${paymentID}:`, pgErr);
+        }
         res.json({
           success: true,
           message: 'Payment settlement confirmed',
           data: result.data,
           txId: result.txId,
+          ...(pgMirrorFailed ? { pgMirrorFailed: true } : {}),
           timestamp: new Date().toISOString(),
         });
       } else {
@@ -1570,11 +1587,28 @@ router.get('/pending-release', authMiddleware, async (req: Request, res: Respons
 
     let payments = result.data || [];
     
-    // Filter for pending release status: VERIFIED is the only state in
-    // the implemented chaincode payment machine that is awaiting release.
-    // PENDING_RELEASE / AWAITING_RELEASE exist in no state machine.
+    // LEG3 F4: VERIFIED-only hid every payment that had already been
+    // settled — the normal NBE order (settle, then release the 60%)
+    // made the payment invisible in the Payment Release tab. A payment
+    // is pending release while its ledger status is VERIFIED, SETTLED
+    // or CONFIRMED and its PG retention machine has not recorded the
+    // release yet. The ledger carries no release flag, so already
+    // released payments are excluded via the PG retention_status
+    // mirror; if that lookup fails, fall back to the ledger-only
+    // filter rather than 500ing the tab.
+    const releasableStatuses = new Set(['VERIFIED', 'SETTLED', 'CONFIRMED']);
+    let releasedIds = new Set<string>();
+    try {
+      const releasedRows: any[] = await postgresDb.all(
+        `SELECT payment_id FROM payments WHERE retention_status = 'RELEASED'`
+      );
+      releasedIds = new Set(releasedRows.map((r: any) => r.payment_id));
+    } catch (pgErr) {
+      logger.warn('[PAYMENT] Pending-release PG exclusion lookup failed, listing from ledger only:', pgErr);
+    }
     payments = payments.filter((p: any) =>
-      (p.status || p.Status) === 'VERIFIED'
+      releasableStatuses.has(p.status || p.Status) &&
+      !releasedIds.has(p.paymentId || p.PaymentID || p.payment_id || p.PaymentId)
     );
 
     // Apply exporter filter if provided
