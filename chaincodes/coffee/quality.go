@@ -118,15 +118,19 @@ func (c *CoffeeContract) RequestInspection(ctx contractapi.TransactionContextInt
 		}
 	}
 
-	// Shipment is optional for compatibility with earlier workflow steps.
-	// If it exists, keep the relationship; otherwise create the inspection record anyway.
+	// F9 (leg2): a named shipment must exist on the ledger — fail
+	// closed like SubmitCustomsDeclaration (seq 10). An empty
+	// shipmentID is still allowed (legacy pre-shipment inspections
+	// carry no shipment), but a direct Fabric caller must not be able
+	// to create an inspection for a phantom shipment (INSP-FAKE-R2
+	// was created, performed and approved on-chain for SHIP-FAKE-R2).
 	if shipmentID != "" {
 		shipmentExists, err := c.ShipmentExists(ctx, shipmentID)
 		if err != nil {
-			return fmt.Errorf("failed to check shipment: %v", err)
+			return fmt.Errorf("RequestInspection: failed to check shipment: %v", err)
 		}
 		if !shipmentExists {
-			fmt.Printf("RequestInspection: shipment %s not found, creating inspection without shipment linkage\n", shipmentID)
+			return fmt.Errorf("RequestInspection: shipment %s does not exist", shipmentID)
 		}
 	}
 
@@ -204,6 +208,19 @@ func (c *CoffeeContract) PerformInspection(ctx contractapi.TransactionContextInt
 
 	if inspection.Status != "PENDING" {
 		return fmt.Errorf("PerformInspection: inspection %s already completed, current status: %s", inspectionID, inspection.Status)
+	}
+
+	// F9 (leg2): the inspection's shipment must exist — a PENDING
+	// inspection created before this gate must not be performable for
+	// a phantom shipment.
+	if inspection.ShipmentID != "" {
+		shipmentExists, err := c.ShipmentExists(ctx, inspection.ShipmentID)
+		if err != nil {
+			return fmt.Errorf("PerformInspection: failed to check shipment: %v", err)
+		}
+		if !shipmentExists {
+			return fmt.Errorf("PerformInspection: shipment %s does not exist", inspection.ShipmentID)
+		}
 	}
 
 	// AUTO-MAP: Fetch shipment data for EUDR compliance
@@ -402,6 +419,18 @@ func (c *CoffeeContract) ApproveQualityInspection(ctx contractapi.TransactionCon
 		return fmt.Errorf("ApproveQualityInspection: failed to unmarshal: %w", err)
 	}
 
+	// F9 (leg2): the inspection's shipment must exist — see
+	// PerformInspection above.
+	if inspection.ShipmentID != "" {
+		shipmentExists, err := c.ShipmentExists(ctx, inspection.ShipmentID)
+		if err != nil {
+			return fmt.Errorf("ApproveQualityInspection: failed to check shipment: %w", err)
+		}
+		if !shipmentExists {
+			return fmt.Errorf("ApproveQualityInspection: shipment %s does not exist", inspection.ShipmentID)
+		}
+	}
+
 	// GUARD: only an INSPECTED inspection can be approved.
 	if inspection.Status != "INSPECTED" {
 		return fmt.Errorf("ApproveQualityInspection: inspection must be INSPECTED to approve, current status: %s", inspection.Status)
@@ -489,6 +518,18 @@ func (c *CoffeeContract) RejectQualityInspection(ctx contractapi.TransactionCont
 	err = json.Unmarshal(inspectionJSON, &inspection)
 	if err != nil {
 		return fmt.Errorf("RejectQualityInspection: failed to unmarshal: %w", err)
+	}
+
+	// F9 (leg2): the inspection's shipment must exist — see
+	// PerformInspection above.
+	if inspection.ShipmentID != "" {
+		shipmentExists, err := c.ShipmentExists(ctx, inspection.ShipmentID)
+		if err != nil {
+			return fmt.Errorf("RejectQualityInspection: failed to check shipment: %w", err)
+		}
+		if !shipmentExists {
+			return fmt.Errorf("RejectQualityInspection: shipment %s does not exist", inspection.ShipmentID)
+		}
 	}
 
 	// GUARD: only an INSPECTED inspection can be rejected.

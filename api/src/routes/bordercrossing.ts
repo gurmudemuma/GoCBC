@@ -253,6 +253,10 @@ router.post('/initiate', authMiddleware,
 });
 
 // POST /api/v1/bordercrossing/:id/clear — Clear shipment for crossing
+// F6 (leg2): the status after clearing depends on the phase —
+// INSPECTED clears to CLEARED_EXIT (departure-eligible), CROSSED /
+// ARRIVED clear to terminal CLEARED. Read the crossing back after the
+// submit and report its real status instead of hardcoding CLEARED.
 router.post('/:id/clear', authMiddleware,
   requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
   try {
@@ -278,10 +282,21 @@ router.post('/:id/clear', authMiddleware,
 
     logger.info(`[BORDERCROSSING] ✅ Shipment cleared: ${id}`);
 
+    // F6: report the status the ledger actually holds now. Best-effort
+    // read-back — if it fails, omit the status rather than claim
+    // CLEARED (an INSPECTED crossing clears to CLEARED_EXIT).
+    let clearedStatus: string | undefined;
+    try {
+      const readBack = await fabricService.queryChaincode('ReadBorderCrossing', [id]);
+      if (readBack?.success) clearedStatus = (readBack.data as any)?.status;
+    } catch (readErr: any) {
+      logger.warn(`[BORDERCROSSING] Could not read back crossing ${id} after clear:`, readErr?.message || readErr);
+    }
+
     res.json({
       success: true,
       message: 'Shipment cleared successfully',
-      data: { crossingId: id, status: 'CLEARED' },
+      data: { crossingId: id, ...(clearedStatus ? { status: clearedStatus } : {}) },
       txId: result.transactionId
     });
   } catch (error: any) {
@@ -336,8 +351,22 @@ router.post('/:id/detain', authMiddleware,
 });
 
 // POST /api/v1/bordercrossing/:id/clear-exit — Clear for exit
+// F15c (leg2): the route used to pass customsOfficer / clearanceRef
+// straight into submitTransaction, so a client sending the wrong field
+// names (clearanceOfficer / exitPermitNumber — the sibling /clear
+// route's names) passed `undefined` args and 500'd with "unknown
+// outcome" before endorsement. Both fields are validated as PRESENT
+// here, so a wrong-name call is a 400 naming the missing field. This
+// is .exists(), not .notEmpty(): the portal's Clear-for-Exit button
+// deliberately sends both blank (it collects neither), so empty
+// strings must still land — only a missing field is an error.
 router.post('/:id/clear-exit', authMiddleware,
-  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'), async (req, res) => {
+  requireRole('CUSTOMS', 'CUSTOMS_ADMIN'),
+  [
+    body('customsOfficer').exists().withMessage('customsOfficer is required (clear-exit takes customsOfficer and clearanceRef)'),
+    body('clearanceRef').exists().withMessage('clearanceRef is required (clear-exit takes customsOfficer and clearanceRef)'),
+  ],
+  validateRequest, async (req, res) => {
   try {
     const { id } = req.params;
     const { customsOfficer, clearanceRef } = req.body;

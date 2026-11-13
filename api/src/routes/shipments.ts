@@ -1593,6 +1593,26 @@ router.post('/:shipmentID/bill-of-lading',
 
       logger.info(`[SHIPPING] Recording B/L for shipment: ${shipmentID}`);
 
+      // F3 (leg2): a B/L may only be recorded from CUSTOMS_CLEARED,
+      // FREIGHT_BOOKED or LOADED. The old route invoked
+      // RecordBillOfLading from any state, so this recovery path
+      // moved a shipment to LOADED with no status check at all (and
+      // the chaincode set LOADED unconditionally too — now gated in
+      // main.go as well). Refuse honestly before touching the chain:
+      // 404 when the shipment does not exist, 400 when its state
+      // does not allow loading, 503 only when the ledger is
+      // unreachable. Nothing is written on a refusal.
+      const blGate = await shipmentService.assertBillOfLadingAllowed(shipmentID);
+      if (!blGate.ok) {
+        const status = blGate.code === 'SHIPMENT_NOT_FOUND' ? 404
+          : blGate.code === 'SHIPMENT_VERIFY_UNAVAILABLE' ? 503 : 400;
+        return res.status(status).json({
+          success: false,
+          error: { code: blGate.code, message: blGate.message },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // Ledger-first (remaining-fixes #3): the old code wrote the B/L
       // fields straight into ONE peer's CouchDB (db.insert on
       // SHIPMENT_<id>), so the other five peers never saw the B/L and
@@ -2821,6 +2841,21 @@ router.post('/:shipmentID/shipping-document',
 
       logger.info(`[SHIPPING] Recording ${transportMode} document for shipment: ${shipmentID}`);
       logger.info(`[SHIPPING] Carrier: ${carrierName}, Document: ${documentNo}`);
+
+      // F3 (leg2): same loading gate as the B/L route above —
+      // RecordShippingDetails is gated on-chain too, but refuse
+      // honestly here first (400, nothing written) instead of
+      // surfacing the chaincode refusal as a bare RECORDING_FAILED.
+      const docGate = await shipmentService.assertBillOfLadingAllowed(shipmentID);
+      if (!docGate.ok) {
+        const status = docGate.code === 'SHIPMENT_NOT_FOUND' ? 404
+          : docGate.code === 'SHIPMENT_VERIFY_UNAVAILABLE' ? 503 : 400;
+        return res.status(status).json({
+          success: false,
+          error: { code: docGate.code, message: docGate.message },
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // Connect as ECTA organization (exporters submit shipping docs)
       await fabricService.connectAsOrg('ECTAMSP');

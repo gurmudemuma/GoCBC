@@ -2591,6 +2591,18 @@ func (c *CoffeeContract) RecordBillOfLading(ctx contractapi.TransactionContextIn
 		return err
 	}
 
+	// F3 (leg2): a bill of lading is the loading record — it may only
+	// be recorded once the cargo is cleared for loading
+	// (CUSTOMS_CLEARED), booked for loading (FREIGHT_BOOKED), or
+	// already loaded (LOADED, re-issue/correction of the B/L details).
+	// The old code set LOADED from any state with no check, so a B/L
+	// could be recorded for a shipment that was never cleared or even
+	// inspected. The API pre-checks the same gate and returns 400;
+	// this is the fail-closed backstop for direct Fabric callers.
+	if shipment.Status != "CUSTOMS_CLEARED" && shipment.Status != "FREIGHT_BOOKED" && shipment.Status != "LOADED" {
+		return fmt.Errorf("RecordBillOfLading: shipment must be CUSTOMS_CLEARED, FREIGHT_BOOKED or LOADED to record a bill of lading, current status: %s", shipment.Status)
+	}
+
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
@@ -2624,6 +2636,13 @@ func (c *CoffeeContract) RecordAirwayBill(ctx contractapi.TransactionContextInte
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
 		return err
+	}
+
+	// F3 (leg2): same loading gate as RecordBillOfLading — an airway
+	// bill may only be recorded from CUSTOMS_CLEARED, FREIGHT_BOOKED
+	// or LOADED (re-issue).
+	if shipment.Status != "CUSTOMS_CLEARED" && shipment.Status != "FREIGHT_BOOKED" && shipment.Status != "LOADED" {
+		return fmt.Errorf("RecordAirwayBill: shipment must be CUSTOMS_CLEARED, FREIGHT_BOOKED or LOADED to record an airway bill, current status: %s", shipment.Status)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
@@ -2660,6 +2679,13 @@ func (c *CoffeeContract) RecordShippingDetails(ctx contractapi.TransactionContex
 	shipment, err := c.ReadShipment(ctx, shipmentID)
 	if err != nil {
 		return err
+	}
+
+	// F3 (leg2): same loading gate as RecordBillOfLading — shipping
+	// details (B/L or AWB) may only be recorded from CUSTOMS_CLEARED,
+	// FREIGHT_BOOKED or LOADED (re-issue).
+	if shipment.Status != "CUSTOMS_CLEARED" && shipment.Status != "FREIGHT_BOOKED" && shipment.Status != "LOADED" {
+		return fmt.Errorf("RecordShippingDetails: shipment must be CUSTOMS_CLEARED, FREIGHT_BOOKED or LOADED to record shipping details, current status: %s", shipment.Status)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()

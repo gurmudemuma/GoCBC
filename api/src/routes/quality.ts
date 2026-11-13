@@ -444,6 +444,26 @@ router.post('/inspections',
         });
       }
 
+      // F9 (leg2): the named shipment must exist in Postgres AND on
+      // the ledger before an inspection is requested for it — the
+      // chaincode refuses it too (seq 11), but refuse honestly here
+      // first with 404 instead of a 503 chain refusal.
+      const shipmentCheck = await shipmentService.assertShipmentExists(shipmentID);
+      if (!shipmentCheck.ok) {
+        if (shipmentCheck.unavailable) {
+          return res.status(503).json({
+            success: false,
+            error: { code: 'SHIPMENT_VERIFY_UNAVAILABLE', message: shipmentCheck.message },
+            timestamp: new Date().toISOString()
+          });
+        }
+        return res.status(404).json({
+          success: false,
+          error: { code: 'SHIPMENT_NOT_FOUND', message: shipmentCheck.message },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // Check if shipment already has a pending inspection. Only a REAL
       // inspection counts: one created by this endpoint via RequestInspection
       // on-chain, whose Postgres mirror carries a blockchain_tx_id. Shipment
@@ -643,6 +663,38 @@ router.post('/inspections/:inspectionID/perform',
         });
       }
 
+      // F7 (leg2): moistureContent is REQUIRED — never default it.
+      // The old code passed `moistureContent ?? 12` into
+      // PerformInspection (and the raw value into the PG mirror, so
+      // undefined became NULL in PG while the ledger said 12): a
+      // missing-moisture probe returned 200 INSPECTED and consumed the
+      // real perform. The chaincode already rejects an unparseable
+      // moisture (PerformInspection, quality.go) and enforces 8–12%
+      // (ValidateMoistureContent); the 400 here names the missing
+      // field before anything is written, so the ledger and PG can
+      // never disagree on moisture again.
+      if (moistureContent === undefined || moistureContent === null || moistureContent === '') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'moistureContent is required: a quality inspection cannot be performed without a measured moisture content'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+      const moistureNum = Number(moistureContent);
+      if (!Number.isFinite(moistureNum)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'moistureContent must be a number'
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // The overall cupping score may arrive as `cuppingScore` (the
       // missing-steps suite and the lab-results route send cupScore /
       // cuppingScore, not `overall`). Resolve it once so the Postgres
@@ -662,7 +714,7 @@ router.post('/inspections/:inspectionID/perform',
       const cupFields = [fragrance, flavor, aftertaste, acidity, body, balance, uniformity, cleanCup, sweetness, resolvedOverall];
       const totalScore = cupFields.reduce((sum, v) => sum + (Number(v) || 0), 0);
       const defects = Number(defectCount) || 0;
-      const moisture = Number(moistureContent);
+      const moisture = moistureNum;
       let grade = 'Below Grade';
       if (Number.isFinite(moisture) && moisture > 12) {
         grade = 'Below Grade';
@@ -737,21 +789,21 @@ ${remarks || 'No additional remarks'}
       // and swallowed failures, then wrote INSPECTED to Postgres
       // regardless — the phantom the approve step then inherited.
       // Moisture 8–12% is enforced by the chaincode itself
-      // (ValidateMoistureContent, validation.go:300); this route does
-      // NOT pre-block any moisture value — an out-of-range value
-      // fails here, honestly, with 503. Sparse callers (the
-      // missing-steps suite sends only inspectorName / moisture /
-      // defect / remarks; the UI conduct dialog sends moisture /
-      // defectPercentage / findings) get the same defaults the old
-      // CouchDB/PG writes used, so a valid chaincode call is still
-      // built: inspectorID 'AUTO', sampleSize 100, beanSize
-      // 'Screen 17', lab tests 'PASS', cup scores 0.
+      // (ValidateMoistureContent, validation.go:300); an out-of-range
+      // value fails here, honestly, with 503. A MISSING moisture is
+      // refused with 400 above (F7) — it is never defaulted to 12.
+      // Sparse callers (the missing-steps suite sends only
+      // inspectorName / moisture / defect / remarks; the UI conduct
+      // dialog sends moisture / defectPercentage / findings) get the
+      // same defaults the old CouchDB/PG writes used, so a valid
+      // chaincode call is still built: inspectorID 'AUTO', sampleSize
+      // 100, beanSize 'Screen 17', lab tests 'PASS', cup scores 0.
       const performResult = await fabricService.performInspection(
         inspectionID,
         inspectorID || 'AUTO',
         inspectorName || 'ECTA Quality Lab',
         String(sampleSize ?? 100),
-        String(moistureContent ?? 12),
+        String(moistureNum),
         String(defectCount ?? (req.body as any).defectPercentage ?? 0),
         beanSize || 'Screen 17',
         color || 'Green',
@@ -804,7 +856,10 @@ ${remarks || 'No additional remarks'}
           inspectionID,
           inspectorName || 'ECTA Quality Lab',
           sampleSize || 100,
-          moistureContent,
+          // F7: the validated moisture — the old code passed the raw
+          // body value, so a missing moisture became NULL here while
+          // the ledger carried the 12% default.
+          moistureNum,
           defectCount,
           parseInt(beanSize) || 17,
           grade,
@@ -1510,6 +1565,10 @@ router.post('/inspections/:inspectionID/issue-permit',
       // error separately in the response.
       let inspectionMirrorError: string | null = null;
       try {
+        // F10: record the SUBMITTING ECTA officer (the authenticated
+        // user), not just the body-supplied office name — the ledger
+        // signer is BanksMSP, the submitter is this officer.
+        const submittingOfficer = (req as any).user?.username || issuedBy || 'ECTA Export Permit Office';
         await postgresDb.run(
           `UPDATE quality_inspections SET
             status = 'PERMIT_ISSUED',
@@ -1518,7 +1577,7 @@ router.post('/inspections/:inspectionID/issue-permit',
             export_permit_no = $5,
             updated_at = NOW()
           WHERE inspection_id = $1`,
-          [inspectionID, permitNumber, issuedBy || 'ECTA Export Permit Office', blockchain_tx_id, permitNumber]
+          [inspectionID, permitNumber, submittingOfficer, blockchain_tx_id, permitNumber]
         );
       } catch (mirrorErr: any) {
         inspectionMirrorError = mirrorErr?.message || String(mirrorErr);
@@ -1618,6 +1677,20 @@ router.post('/inspections/:inspectionID/issue-permit',
           certificateNo: inspection.certification_number,
           status: 'PERMIT_ISSUED',
           blockchain_tx_id,
+          // F10 (leg2) — signer vs submitter, stated plainly:
+          // IssueCBEExportPermit is BanksMSP-only on-chain
+          // (permit.go:64-66), so the ledger signer is always the
+          // bank however the request arrived. This ECTA path submits
+          // the request as the authenticated ECTA officer below; the
+          // permit IS a CBE (bank) export permit by design, not an
+          // ECTA-issued one. The portal says the same on the button.
+          issuedBy: {
+            signerMsp: 'BanksMSP',
+            signer: 'Commercial Bank of Ethiopia (CBE)',
+            submittedBy: (req as any).user?.username || issuedBy || 'ECTA Export Permit Office',
+            submittedByOrg: 'ECTA',
+            note: 'Bank-issued CBE export permit: signed on the ledger by BanksMSP, submitted by the ECTA officer above.',
+          },
           // #6: the ledger issuance is the truth; a failed PG mirror is
           // reported here, never hidden behind a 500. The shipment
           // mirror is reported the same way: moved / already-past /

@@ -51,7 +51,7 @@ func (c *CoffeeContract) IssuePhytosanitaryCertificate(ctx contractapi.Transacti
 	certificateID, shipmentID, exporterID, inspectorName, botanicalName,
 	treatmentApplied, placeOfOrigin, pointOfEntry, quantityStr,
 	packagingType, numberOfPackagesStr, distinguishMarks, meansOfConveyance,
-	issuedBy string) error {
+	issuedBy, certificateNumber string) error {
 
 	// Parse numeric values
 	quantity, err := strconv.ParseFloat(quantityStr, 64)
@@ -101,9 +101,16 @@ func (c *CoffeeContract) IssuePhytosanitaryCertificate(ctx contractapi.Transacti
 		}
 		issueTxTime := time.Unix(issueTxTimestamp.Seconds, int64(issueTxTimestamp.Nanos)).UTC()
 		existing.Status = "ISSUED"
-		existing.CertificateNumber = fmt.Sprintf("PHYTO-ET-%s-%05d",
-			issueTxTime.Format("20060102"),
-			issueTxTime.Unix()%100000)
+		// F15b (leg2): honour a supplied certificate number; generate
+		// one only when none was supplied. The old code always
+		// generated PHYTO-ET-... and silently ignored the number the
+		// caller supplied.
+		if certificateNumber == "" {
+			certificateNumber = fmt.Sprintf("PHYTO-ET-%s-%05d",
+				issueTxTime.Format("20060102"),
+				issueTxTime.Unix()%100000)
+		}
+		existing.CertificateNumber = certificateNumber
 		existing.ValidUntil = issueTxTime.AddDate(0, 0, 14).Format(time.RFC3339)
 		existing.IssuedBy = issuedBy
 		existing.UpdatedAt = issueTxTime
@@ -140,10 +147,13 @@ func (c *CoffeeContract) IssuePhytosanitaryCertificate(ctx contractapi.Transacti
 	}
 	txTime := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC()
 
-	// Generate certificate number
-	certificateNumber := fmt.Sprintf("PHYTO-ET-%s-%05d",
-		txTime.Format("20060102"),
-		txTime.Unix()%100000)
+	// Generate certificate number only when none was supplied (F15b —
+	// see the bridge branch above).
+	if certificateNumber == "" {
+		certificateNumber = fmt.Sprintf("PHYTO-ET-%s-%05d",
+			txTime.Format("20060102"),
+			txTime.Unix()%100000)
+	}
 
 	// Set validity (typically 14 days)
 	validUntil := txTime.AddDate(0, 0, 14).Format(time.RFC3339)
@@ -263,8 +273,11 @@ func (c *CoffeeContract) RequestPhytosanitaryCertificate(ctx contractapi.Transac
 	if err := ValidateQuantity(quantity, "quantity"); err != nil {
 		return fmt.Errorf("RequestPhytosanitaryCertificate: %w", err)
 	}
-	if plantDescription == "" {
-		plantDescription = "Coffee beans (Coffea arabica)"
+	// F15a (leg2): plantDescription is required — the API and the
+	// form require it, so a direct Fabric caller must not be able to
+	// create a certificate with the silent default either.
+	if err := ValidateNonEmptyString(plantDescription, "plantDescription", MaxStringLen); err != nil {
+		return fmt.Errorf("RequestPhytosanitaryCertificate: %w", err)
 	}
 	if treatmentApplied == "" {
 		treatmentApplied = "Fumigation"
