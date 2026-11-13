@@ -1,7 +1,13 @@
 #!/bin/bash
 set -euo pipefail
-METADIR=$2
-if [ -f "$METADIR/connection.json" ]; then
+# Peer invokes: bin/detect CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR
+# $1 = source dir (extracted code.tar.gz — connection.json lives here for CCAAS)
+# $2 = metadata dir (metadata.json lives here)
+# The old script checked $2 for connection.json, which is never there,
+# so it always exited 1 and the peer fell back to the Docker platform
+# builder ("Unknown chaincodeType: ccaas").
+SOURCEDIR=$1
+if [ -f "$SOURCEDIR/connection.json" ]; then
    exit 0
 fi
 exit 1

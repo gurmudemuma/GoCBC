@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
-BUILD_OUTPUT_DIR=$3
-cp -a $2/* $BUILD_OUTPUT_DIR/
+# Peer invokes: bin/build CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR BUILD_OUTPUT_DIR
+# $1 = source dir (connection.json), $2 = metadata dir, $3 = output dir
+# The old script copied $2 (the metadata dir) instead of $1/connection.json,
+# so the build output held metadata.json and the peer never got connection.json.
+SOURCE=$1
+OUTPUT=$3
+cp "$SOURCE/connection.json" "$OUTPUT/connection.json"
 exit 0
