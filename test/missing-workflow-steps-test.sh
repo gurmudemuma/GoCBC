@@ -22,6 +22,7 @@
 #      POST /payments/:id/swift/confirm (payments.ts:659).
 #  10. NBE forex approve (POST /nbe/forex/:id/approve)
 #  11. Quality sample / lab results (POST /quality/inspections/:id/{collect-sample,lab-results})
+#      Runs in Phase 7A, after shipment creation — F9 requires the shipment to exist.
 #  12. Bill of Lading, both endpoints
 #      (POST /shipments/:id/bill-of-lading, POST /shipping/bookings/:id/bill-of-lading/issue)
 #
@@ -554,7 +555,7 @@ fi
 ################################################################################
 log_section "PHASE 4: ECX LOT — INTAKE, GRADE, ASSIGN, RELEASE"
 
-# The shipment ID is fixed here so the ECX/inspection steps can reference it;
+# The shipment ID is fixed here so the ECX/PSI steps can reference it;
 # the shipment itself is only CREATED later (after forex allocation — see the
 # note above the creation block) because chaincode CreateShipment requires
 # the LC to already be FOREX_ALLOCATED.
@@ -669,124 +670,6 @@ if [ -z "$LOT_ID" ]; then
 else
     call POST "/ecx/lots/$LOT_ID/release" "$ECX_TOKEN" "{\"note\": \"Missing-steps test release\"}"
     check_success_or_blocked "ECX release lot" ".data.lotId"
-fi
-
-################################################################################
-log_section "PHASE 5: QUALITY INSPECTION — SAMPLE, LAB, PERFORM, APPROVE"
-
-log_test "Create quality inspection (POST /quality/inspections, quality.ts:364)"
-Q_INSPECTION_ID="QINS-$TS"
-Q_INSPECTION_DATA="{
-    \"inspectionID\": \"$Q_INSPECTION_ID\",
-    \"exporterID\": \"$EXPORTER_ID\",
-    \"shipmentID\": \"$SHIPMENT_ID\",
-    \"coffeeType\": \"Arabica\",
-    \"quantity\": 50000
-}"
-call POST "/quality/inspections" "$ECTA_TOKEN" "$Q_INSPECTION_DATA"
-CREATED_Q_ID=$(echo "$RESP_BODY" | jq -r '.data.inspectionID // .data.inspection_id // empty')
-if [ -n "$CREATED_Q_ID" ]; then
-    Q_INSPECTION_ID="$CREATED_Q_ID"
-    log_pass "Quality inspection created: $Q_INSPECTION_ID"
-elif is_fabric_error; then
-    log_blocked "Create quality inspection — Fabric/ledger unavailable (HTTP $RESP_CODE)"
-else
-    log_fail "Failed to create quality inspection (HTTP $RESP_CODE)"
-    log_info "Response: $RESP_BODY"
-fi
-
-log_test "Collect sample (POST /quality/inspections/:id/collect-sample, quality.ts:1668)"
-if [ -z "$CREATED_Q_ID" ]; then
-    log_blocked "Collect sample — no quality inspection (create failed/blocked)"
-else
-    SAMPLE_DATA="{
-        \"sampleWeight\": 500,
-        \"collectionDate\": \"$(date +%F)\",
-        \"collectorName\": \"Lab Collector\",
-        \"sealNumber\": \"SEAL-$TS\"
-    }"
-    call POST "/quality/inspections/$Q_INSPECTION_ID/collect-sample" "$ECTA_TOKEN" "$SAMPLE_DATA"
-    check_success_or_blocked "Collect sample"
-fi
-
-log_test "Record lab results (POST /quality/inspections/:id/lab-results, quality.ts:1737)"
-if [ -z "$CREATED_Q_ID" ]; then
-    log_blocked "Record lab results — no quality inspection (create failed/blocked)"
-else
-    LAB_DATA="{
-        \"moistureContent\": 10.5,
-        \"defectCount\": 2,
-        \"grade\": \"GRADE_1\",
-        \"cuppingScore\": 86,
-        \"labTechnician\": \"Lab Analyst\",
-        \"testDate\": \"$(date +%F)\"
-    }"
-    call POST "/quality/inspections/$Q_INSPECTION_ID/lab-results" "$ECTA_TOKEN" "$LAB_DATA"
-    check_success_or_blocked "Record lab results"
-fi
-
-# NOTE: perform requires status PENDING/REQUESTED (quality.ts:563) and moves
-# the inspection to INSPECTED — so it cannot run on the same inspection after
-# collect-sample/lab-results already moved it to INSPECTED. Use a second
-# fresh inspection for the perform path; the first covers sample + lab.
-log_test "Perform quality inspection (POST /quality/inspections/:id/perform, quality.ts:512)"
-Q2_INSPECTION_ID="QINS2-$TS"
-Q2_INSPECTION_DATA="{
-    \"inspectionID\": \"$Q2_INSPECTION_ID\",
-    \"exporterID\": \"$EXPORTER_ID\",
-    \"shipmentID\": \"$SHIPMENT_ID\",
-    \"coffeeType\": \"Arabica\",
-    \"quantity\": 50000
-}"
-call POST "/quality/inspections" "$ECTA_TOKEN" "$Q2_INSPECTION_DATA"
-CREATED_Q2_ID=$(echo "$RESP_BODY" | jq -r '.data.inspectionID // .data.inspection_id // empty')
-if [ -z "$CREATED_Q2_ID" ]; then
-    if is_fabric_error; then
-        log_blocked "Perform quality inspection — second inspection create Fabric-blocked (HTTP $RESP_CODE)"
-    else
-        log_fail "Perform quality inspection — second inspection create failed (HTTP $RESP_CODE)"
-        log_info "Response: $RESP_BODY"
-    fi
-else
-    PERFORM_DATA="{
-        \"inspectorName\": \"Abebe Inspector\",
-        \"moistureContent\": 10.5,
-        \"defectCount\": 2,
-        \"grade\": \"GRADE_1\",
-        \"fragrance\": 88,
-        \"flavor\": 88,
-        \"aftertaste\": 87,
-        \"acidity\": 88,
-        \"body\": 88,
-        \"balance\": 87,
-        \"uniformity\": 88,
-        \"cleanCup\": 88,
-        \"sweetness\": 88,
-        \"overall\": 88,
-        \"remarks\": \"Missing-steps test perform\"
-    }"
-    # N2: all ten cupping fields are required by POST .../perform
-    # (quality.ts) — a missing one is 400, never defaulted to 0.
-    # The ten values above sum to totalScore 878.
-    call POST "/quality/inspections/$Q2_INSPECTION_ID/perform" "$ECTA_TOKEN" "$PERFORM_DATA"
-    check_success_or_blocked "Perform quality inspection"
-fi
-
-log_test "Complete quality inspection (POST /quality/inspections/:id/complete, quality.ts:1307)"
-if [ -z "$CREATED_Q_ID" ]; then
-    log_blocked "Complete quality inspection — no quality inspection (create failed/blocked)"
-else
-    COMPLETE_Q_DATA="{\"grade\": \"GRADE_1\", \"passed\": true}"
-    call POST "/quality/inspections/$Q_INSPECTION_ID/complete" "$ECTA_TOKEN" "$COMPLETE_Q_DATA"
-    check_success_or_blocked "Complete quality inspection"
-fi
-
-log_test "Approve quality inspection (POST /quality/inspections/:id/approve, quality.ts:746)"
-if [ -z "$CREATED_Q_ID" ]; then
-    log_blocked "Approve quality inspection — no quality inspection (create failed/blocked)"
-else
-    call POST "/quality/inspections/$Q_INSPECTION_ID/approve" "$ECTA_TOKEN" ""
-    check_success_or_blocked "Approve quality inspection"
 fi
 
 ################################################################################
@@ -993,9 +876,11 @@ fi
 
 # NOTE: shipment creation lives here (after forex allocation), not up with
 # the contract steps: chaincode CreateShipment requires the LC to already
-# be FOREX_ALLOCATED on the ledger, and the ECX/inspection steps above
-# deliberately tolerate a not-yet-created shipment (RequestInspection
-# creates the inspection without shipment linkage when it is missing).
+# be FOREX_ALLOCATED on the ledger. The ECX lot steps and the PSI request
+# above deliberately tolerate a not-yet-created shipment (RequestInspection
+# creates the inspection without shipment linkage when it is missing) —
+# but the QUALITY inspection does not (F9 fail-closed, 404), so it runs
+# in Phase 7A immediately below, after this creation and before the permit.
 
 log_test "Create shipment (EXPORTER token)"
 SHIPMENT_ID="SHP-$TS"
@@ -1025,6 +910,133 @@ else
         log_fail "Failed to create shipment (HTTP $RESP_CODE)"
         log_info "Response: $RESP_BODY"
     fi
+fi
+
+################################################################################
+# PHASE 7A — quality inspection runs HERE, after shipment creation
+# (#51) and before permit issuance, NOT in its old Phase 5 slot. F9
+# (leg2) made quality-inspection create fail closed: POST
+# /quality/inspections 404s SHIPMENT_NOT_FOUND when the named shipment
+# does not exist yet (quality.ts + chaincode RequestInspection, seq 11),
+# so the old order (Phase 5 before the shipment was created in Phase 7)
+# 404d #30/#33 and blocked #31/#32/#34/#35. This slot preserves the
+# literal workflow order inspect -> permit -> customs: the inspection
+# completes and is approved before the permit is issued below.
+log_section "PHASE 7A: QUALITY INSPECTION — SAMPLE, LAB, PERFORM, APPROVE"
+
+log_test "Create quality inspection (POST /quality/inspections, quality.ts:364)"
+Q_INSPECTION_ID="QINS-$TS"
+Q_INSPECTION_DATA="{
+    \"inspectionID\": \"$Q_INSPECTION_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"coffeeType\": \"Arabica\",
+    \"quantity\": 50000
+}"
+call POST "/quality/inspections" "$ECTA_TOKEN" "$Q_INSPECTION_DATA"
+CREATED_Q_ID=$(echo "$RESP_BODY" | jq -r '.data.inspectionID // .data.inspection_id // empty')
+if [ -n "$CREATED_Q_ID" ]; then
+    Q_INSPECTION_ID="$CREATED_Q_ID"
+    log_pass "Quality inspection created: $Q_INSPECTION_ID"
+elif is_fabric_error; then
+    log_blocked "Create quality inspection — Fabric/ledger unavailable (HTTP $RESP_CODE)"
+else
+    log_fail "Failed to create quality inspection (HTTP $RESP_CODE)"
+    log_info "Response: $RESP_BODY"
+fi
+
+log_test "Collect sample (POST /quality/inspections/:id/collect-sample, quality.ts:1668)"
+if [ -z "$CREATED_Q_ID" ]; then
+    log_blocked "Collect sample — no quality inspection (create failed/blocked)"
+else
+    SAMPLE_DATA="{
+        \"sampleWeight\": 500,
+        \"collectionDate\": \"$(date +%F)\",
+        \"collectorName\": \"Lab Collector\",
+        \"sealNumber\": \"SEAL-$TS\"
+    }"
+    call POST "/quality/inspections/$Q_INSPECTION_ID/collect-sample" "$ECTA_TOKEN" "$SAMPLE_DATA"
+    check_success_or_blocked "Collect sample"
+fi
+
+log_test "Record lab results (POST /quality/inspections/:id/lab-results, quality.ts:1737)"
+if [ -z "$CREATED_Q_ID" ]; then
+    log_blocked "Record lab results — no quality inspection (create failed/blocked)"
+else
+    LAB_DATA="{
+        \"moistureContent\": 10.5,
+        \"defectCount\": 2,
+        \"grade\": \"GRADE_1\",
+        \"cuppingScore\": 86,
+        \"labTechnician\": \"Lab Analyst\",
+        \"testDate\": \"$(date +%F)\"
+    }"
+    call POST "/quality/inspections/$Q_INSPECTION_ID/lab-results" "$ECTA_TOKEN" "$LAB_DATA"
+    check_success_or_blocked "Record lab results"
+fi
+
+# NOTE: perform requires status PENDING/REQUESTED (quality.ts:563) and moves
+# the inspection to INSPECTED — so it cannot run on the same inspection after
+# collect-sample/lab-results already moved it to INSPECTED. Use a second
+# fresh inspection for the perform path; the first covers sample + lab.
+log_test "Perform quality inspection (POST /quality/inspections/:id/perform, quality.ts:512)"
+Q2_INSPECTION_ID="QINS2-$TS"
+Q2_INSPECTION_DATA="{
+    \"inspectionID\": \"$Q2_INSPECTION_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"shipmentID\": \"$SHIPMENT_ID\",
+    \"coffeeType\": \"Arabica\",
+    \"quantity\": 50000
+}"
+call POST "/quality/inspections" "$ECTA_TOKEN" "$Q2_INSPECTION_DATA"
+CREATED_Q2_ID=$(echo "$RESP_BODY" | jq -r '.data.inspectionID // .data.inspection_id // empty')
+if [ -z "$CREATED_Q2_ID" ]; then
+    if is_fabric_error; then
+        log_blocked "Perform quality inspection — second inspection create Fabric-blocked (HTTP $RESP_CODE)"
+    else
+        log_fail "Perform quality inspection — second inspection create failed (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
+else
+    PERFORM_DATA="{
+        \"inspectorName\": \"Abebe Inspector\",
+        \"moistureContent\": 10.5,
+        \"defectCount\": 2,
+        \"grade\": \"GRADE_1\",
+        \"fragrance\": 88,
+        \"flavor\": 88,
+        \"aftertaste\": 87,
+        \"acidity\": 88,
+        \"body\": 88,
+        \"balance\": 87,
+        \"uniformity\": 88,
+        \"cleanCup\": 88,
+        \"sweetness\": 88,
+        \"overall\": 88,
+        \"remarks\": \"Missing-steps test perform\"
+    }"
+    # N2: all ten cupping fields are required by POST .../perform
+    # (quality.ts) — a missing one is 400, never defaulted to 0.
+    # The ten values above sum to totalScore 878.
+    call POST "/quality/inspections/$Q2_INSPECTION_ID/perform" "$ECTA_TOKEN" "$PERFORM_DATA"
+    check_success_or_blocked "Perform quality inspection"
+fi
+
+log_test "Complete quality inspection (POST /quality/inspections/:id/complete, quality.ts:1307)"
+if [ -z "$CREATED_Q_ID" ]; then
+    log_blocked "Complete quality inspection — no quality inspection (create failed/blocked)"
+else
+    COMPLETE_Q_DATA="{\"grade\": \"GRADE_1\", \"passed\": true}"
+    call POST "/quality/inspections/$Q_INSPECTION_ID/complete" "$ECTA_TOKEN" "$COMPLETE_Q_DATA"
+    check_success_or_blocked "Complete quality inspection"
+fi
+
+log_test "Approve quality inspection (POST /quality/inspections/:id/approve, quality.ts:746)"
+if [ -z "$CREATED_Q_ID" ]; then
+    log_blocked "Approve quality inspection — no quality inspection (create failed/blocked)"
+else
+    call POST "/quality/inspections/$Q_INSPECTION_ID/approve" "$ECTA_TOKEN" ""
+    check_success_or_blocked "Approve quality inspection"
 fi
 
 log_test "Issue export permit (POST /permits/export, permits.ts:30)"
@@ -1321,37 +1333,213 @@ else
     log_info "Response: $RESP_BODY"
 fi
 
+# BILL OF LADING — WHY A SECOND SHIPMENT (F3 gate analysis, 2026-11-13):
+# RecordBillOfLading only accepts CUSTOMS_CLEARED, FREIGHT_BOOKED or
+# LOADED (shipments.ts:1597 + chaincode main.go:2585), and it SETS the
+# shipment to LOADED. On the main shipment there is NO point in the
+# lifecycle where that works: after destination arrival the shipment is
+# DESTINATION_ARRIVED (the old #76/#77 failed here with 400
+# INVALID_SHIPMENT_STATUS "is DELIVERED"); after vessel loading it is
+# VESSEL_LOADED, which the gate does NOT accept (it wants LOADED, while
+# DepartFromPort requires VESSEL_LOADED); and recording a B/L right
+# after customs clearance would set LOADED and strand the lifecycle,
+# because StartLandTransport requires CUSTOMS_CLEARED or FREIGHT_BOOKED
+# (main.go:3496) — #67-#74 and all of Phase 11 would cascade-block.
+# A plain "move B/L before delivery-complete" therefore cannot pass.
+# So the B/L steps run on a DEDICATED second shipment under the same
+# contract/LC/forex, driven only as far as customs clearance
+# (create -> permit -> declaration -> review/inspect/complete -> duty ->
+# clear -> book freight), where the gate passes honestly. The main
+# shipment keeps its full lifecycle to delivery untouched above.
+# (CreateShipment has no per-contract uniqueness guard — it only needs
+# the contract's LC FOREX_ALLOCATED, main.go:2006 — and the permit
+# cascade moves every CREATED shipment under the contract to
+# PERMIT_ISSUED, permit.go:248.)
+log_test "Create second shipment for Bill of Lading (same contract/LC)"
+SHIPMENT2_ID="SHP2-$TS"
+SHIPMENT2_DATA="{
+    \"shipmentID\": \"$SHIPMENT2_ID\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"buyerID\": \"$BUYER_ID\",
+    \"origin\": \"ADDIS_ABABA\",
+    \"quantity\": 50000,
+    \"grade\": \"GRADE_1\",
+    \"icoNumber\": \"ICO-$TS\",
+    \"channel\": \"ECX\",
+    \"ecxLotNumber\": \"ECX-$TS\",
+    \"forexRate\": 55.50,
+    \"valueUSD\": 275000,
+    \"eudrCompliant\": true
+}"
+if [ -z "$EXPORTER_TOKEN" ]; then
+    log_blocked "Create second shipment — no EXPORTER token"
+else
+    call POST "/shipments" "$EXPORTER_TOKEN" "$SHIPMENT2_DATA"
+    CREATED_SHIPMENT2_ID=$(echo "$RESP_BODY" | jq -r '.data.shipmentID // .data.shipment_id // empty')
+    if [ -n "$CREATED_SHIPMENT2_ID" ]; then
+        log_pass "Second shipment created: $SHIPMENT2_ID"
+    else
+        log_fail "Failed to create second shipment (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
+fi
+
+log_test "Issue export permit for second shipment (POST /permits/export, permits.ts:30)"
+if [ -z "$CREATED_SHIPMENT2_ID" ]; then
+    log_blocked "Issue export permit for second shipment — no second shipment (create failed/blocked)"
+else
+    call POST "/permits/export" "$BANKS_TOKEN" "{
+    \"permitID\": \"PERMIT2-$TS\",
+    \"shipmentID\": \"$SHIPMENT2_ID\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"quantity\": 50000,
+    \"certificateID\": \"CERT2-$TS\"
+}"
+    check_success_or_blocked "Issue export permit for second shipment"
+fi
+
+log_test "Submit customs declaration for second shipment (POST /customs/declaration/submit, customs.ts:676)"
+DECLARATION2_ID="DEC2-$TS"
+DECLARATION2_DATA="{
+    \"declarationID\": \"$DECLARATION2_ID\",
+    \"shipmentID\": \"$SHIPMENT2_ID\",
+    \"exporterID\": \"$EXPORTER_ID\",
+    \"permitNumber\": \"PERMIT2-$TS\",
+    \"contractID\": \"$CONTRACT_ID\",
+    \"value\": 275000,
+    \"quantity\": 50000,
+    \"destination\": \"USA\"
+}"
+# NOTE: an explicit submit needs a positive customs value (customs.ts:911).
+# The main shipment's submit never reaches this check — its declaration is
+# auto-created at permit issuance (DECLARATION_EXISTS path) — but the
+# second shipment has no passed inspection, so no auto-declaration fires
+# and this submit must carry the value itself. contractID alone cannot
+# resolve it: the contracts row carries total_value NULL (quantity x
+# pricePerKg only), so the value/quantity/destination below are the
+# contract's own real terms (50000 kg x $5.50 = $275,000, buyer USA) —
+# the same $275,000 the auto-created main declaration carries.
+call POST "/customs/declaration/submit" "$CUSTOMS_TOKEN" "$DECLARATION2_DATA"
+CREATED_DEC2_ID=$(echo "$RESP_BODY" | jq -r '.data.declarationID // .data.declaration_id // empty')
+if [ -n "$CREATED_DEC2_ID" ]; then
+    log_pass "Customs declaration submitted for second shipment: $DECLARATION2_ID"
+elif [ "$(echo "$RESP_BODY" | jq -r '.error.code // empty')" = "DECLARATION_EXISTS" ]; then
+    # As on the main shipment, the permit issuance may already have
+    # auto-created the declaration (literal order inspect -> permit ->
+    # customs); resolve the auto-created id and run the remaining
+    # customs steps against it instead of the unsubmitted id.
+    EXISTING_DEC2_ID=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT2_ID" '.data[]? | select(.shipmentId==$SHIP) | .declarationId' | head -1)
+    if [ -n "$EXISTING_DEC2_ID" ]; then
+        DECLARATION2_ID="$EXISTING_DEC2_ID"
+        CREATED_DEC2_ID="$EXISTING_DEC2_ID"
+        log_pass "Customs declaration already auto-created at permit issuance for second shipment: $DECLARATION2_ID"
+    else
+        log_fail "Failed to submit customs declaration for second shipment (HTTP $RESP_CODE)"
+        log_info "Response: $RESP_BODY"
+    fi
+else
+    log_fail "Failed to submit customs declaration for second shipment (HTTP $RESP_CODE)"
+    log_info "Response: $RESP_BODY"
+fi
+
+for STEP in "review:Review customs declaration for second shipment:/customs/declaration/$DECLARATION2_ID/review:customs.ts:1624" "inspect:Inspect customs declaration for second shipment:/customs/declaration/$DECLARATION2_ID/inspect:customs.ts:1820" "complete-inspection:Complete customs inspection for second shipment:/customs/declaration/$DECLARATION2_ID/complete-inspection:customs.ts:1837"; do
+    NAME="${STEP%%:*}"; REST="${STEP#*:}"; LABEL="${REST%%:*}"; ENDPOINT="${REST#*:}"; ENDPOINT="${ENDPOINT%%:*}"
+    log_test "$LABEL (POST $ENDPOINT)"
+    if [ -z "$CREATED_DEC2_ID" ]; then
+        log_blocked "$LABEL — no second-shipment declaration (submit failed)"
+    else
+        call POST "$ENDPOINT" "$CUSTOMS_TOKEN" ""
+        check_success "$LABEL"
+    fi
+done
+
+log_test "Calculate customs duty for second shipment (POST /customs/declaration/:id/calculate-duty, customs.ts:1490)"
+if [ -z "$CREATED_DEC2_ID" ]; then
+    log_blocked "Calculate customs duty for second shipment — no declaration (submit failed)"
+else
+    DECL2_VALUE=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT2_ID" '.data[]? | select(.shipmentId==$SHIP) | .customsValueUSD' | head -1)
+    DECL2_HS=$(curl -s -H "Authorization: Bearer $CUSTOMS_TOKEN" "$API_URL/customs/declarations" | jq -r --arg SHIP "$SHIPMENT2_ID" '.data[]? | select(.shipmentId==$SHIP) | .hsCode' | head -1)
+    DUTY2_DATA="{
+    \"customsValueUSD\": ${DECL2_VALUE:-0},
+    \"hsCode\": \"${DECL2_HS:-090111}\"
+}"
+    call POST "/customs/declaration/$DECLARATION2_ID/calculate-duty" "$CUSTOMS_TOKEN" "$DUTY2_DATA"
+    CALC_DUTY2=$(echo "$RESP_BODY" | jq -r '.data.amounts.dutyAmount // empty')
+    check_success "Calculate customs duty for second shipment" ".data.amounts.totalDuty"
+fi
+
+log_test "Clear customs declaration for second shipment (POST /customs/declaration/$DECLARATION2_ID/clear, customs.ts:2289)"
+if [ -z "$CREATED_DEC2_ID" ]; then
+    log_blocked "Clear customs declaration for second shipment — no declaration (submit failed)"
+elif [ -z "$CALC_DUTY2" ] || [ "$CALC_DUTY2" = "null" ]; then
+    log_blocked "Clear customs declaration for second shipment — no calculated duty (calculate-duty failed)"
+else
+    # Clear requires the submitted exportDuty to equal the stored
+    # basic_duty_amount (±0.01) — echo the duty just calculated.
+    CLEAR2_DATA="{\"exportDuty\": $CALC_DUTY2}"
+    call POST "/customs/declaration/$DECLARATION2_ID/clear" "$CUSTOMS_TOKEN" "$CLEAR2_DATA"
+    check_success "Clear customs declaration for second shipment"
+fi
+
+log_test "Create freight booking for second shipment (POST /shipping/bookings, shipping.ts:410)"
+BOOKING2_ID="BOOK2-$TS"
+BOOKING2_DATA="{
+    \"bookingID\": \"$BOOKING2_ID\",
+    \"shipmentID\": \"$SHIPMENT2_ID\",
+    \"carrier\": \"Maersk Line\",
+    \"vesselName\": \"MSC MEDITERRANEAN\",
+    \"containerNumber\": \"CONT2-$TS\"
+}"
+call POST "/shipping/bookings" "$SHIPPING_TOKEN" "$BOOKING2_DATA"
+CREATED_BOOKING2_ID=$(echo "$RESP_BODY" | jq -r '.data.bookingID // .data.booking_id // empty')
+if [ -n "$CREATED_BOOKING2_ID" ]; then
+    log_pass "Freight booking created for second shipment: $BOOKING2_ID"
+elif is_fabric_error; then
+    log_blocked "Create freight booking for second shipment — Fabric/ledger unavailable (HTTP $RESP_CODE)"
+else
+    log_fail "Failed to create freight booking for second shipment (HTTP $RESP_CODE)"
+    log_info "Response: $RESP_BODY"
+fi
+
 log_test "Bill of Lading on shipment (POST /shipments/:id/bill-of-lading, shipments.ts:1499)"
 BOL_DATA="{
-    \"billOfLadingNo\": \"BOL-$TS\",
+    \"billOfLadingNo\": \"BOL2-$TS\",
     \"vesselName\": \"MSC MEDITERRANEAN\",
     \"departurePort\": \"Djibouti\",
     \"destinationPort\": \"Mombasa\",
     \"estimatedArrival\": \"2027-01-15\"
 }"
-call POST "/shipments/$SHIPMENT_ID/bill-of-lading" "$SHIPPING_TOKEN" "$BOL_DATA"
+call POST "/shipments/$SHIPMENT2_ID/bill-of-lading" "$SHIPPING_TOKEN" "$BOL_DATA"
 check_success_or_blocked "Bill of Lading on shipment"
 
 log_test "Bill of Lading issue on booking (POST /shipping/bookings/:id/bill-of-lading/issue, shipping.ts:812)"
 BOL_ISSUE_DATA="{
-    \"blNumber\": \"BOL-$TS\",
+    \"blNumber\": \"BOL2-$TS\",
     \"blType\": \"NEGOTIABLE\",
     \"shipper\": \"Missing Steps Coffee Exporters Ltd\",
     \"consignee\": \"International Coffee Importers Inc\"
 }"
-if [ -z "$CREATED_BOOKING_ID" ]; then
+if [ -z "$CREATED_BOOKING2_ID" ]; then
     log_blocked "Bill of Lading issue on booking — no booking (create failed/blocked)"
 else
-    call POST "/shipping/bookings/$BOOKING_ID/bill-of-lading/issue" "$SHIPPING_TOKEN" "$BOL_ISSUE_DATA"
+    call POST "/shipping/bookings/$BOOKING2_ID/bill-of-lading/issue" "$SHIPPING_TOKEN" "$BOL_ISSUE_DATA"
     check_success_or_blocked "Bill of Lading issue on booking"
 fi
 
 log_test "Request phytosanitary certificate (POST /phytosanitary/request, phytosanitary.ts:43)"
 PHYTO_ID="PHYTO-$TS"
+# F15 (leg2): plantDescription is REQUIRED by POST /phytosanitary/request
+# (phytosanitary.ts:54 + chaincode seq 11) — the old payload sent only
+# certificateID/shipmentID/exporterID/quantity and 400d VALIDATION_ERROR.
+# Value matches the rest of this script's test data (Arabica, Grade 1,
+# Washed, Sidama origin); the pre-F15 default was 'Coffee beans (Coffea arabica)'.
 PHYTO_DATA="{
     \"certificateID\": \"$PHYTO_ID\",
     \"shipmentID\": \"$SHIPMENT_ID\",
     \"exporterID\": \"$EXPORTER_ID\",
+    \"plantDescription\": \"Coffee beans (Coffea arabica), Grade 1, Washed, Sidama origin\",
     \"quantity\": 50000
 }"
 if [ -z "$CREATED_SHIPMENT_ID" ]; then
@@ -1568,6 +1756,9 @@ echo "  - Exporter: $EXPORTER_ID" | tee -a "$LOG_FILE"
 echo "  - Contract: $CONTRACT_ID" | tee -a "$LOG_FILE"
 echo "  - ECX lot: ${LOT_ID:-none}" | tee -a "$LOG_FILE"
 echo "  - Shipment: $SHIPMENT_ID" | tee -a "$LOG_FILE"
+echo "  - Second shipment (B/L): ${SHIPMENT2_ID:-none}" | tee -a "$LOG_FILE"
+echo "  - Second booking: ${BOOKING2_ID:-none}" | tee -a "$LOG_FILE"
+echo "  - Second declaration: ${CREATED_DEC2_ID:-none}" | tee -a "$LOG_FILE"
 echo "  - LC: $LC_ID" | tee -a "$LOG_FILE"
 echo "  - Forex: $FOREX_ID" | tee -a "$LOG_FILE"
 echo "  - Payment: $PAYMENT_ID" | tee -a "$LOG_FILE"
