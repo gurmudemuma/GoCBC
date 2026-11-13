@@ -428,6 +428,91 @@ router.post('/:documentID/verify',
   }
 );
 
+// POST /api/v1/documents/:documentId/retry-sync
+// Re-register a document's hash on-chain when the original upload saved
+// the PG row but the blockchain write failed or timed out (upload returns
+// blockchainSynced:false and leaves blockchain_tx_id NULL). There was no
+// way to heal such a PG-only document: it stayed unverifiable forever and
+// nothing retried it. Idempotent: a document that already has a tx id
+// returns it without re-registering. Refuses when the stored file is
+// missing (404) or no longer matches the recorded hash (409) —
+// re-anchoring tampered bytes would launder the tamper.
+router.post('/:documentId/retry-sync',
+  authMiddleware,
+  requireRole('ADMIN', 'ECTA', 'ECTA_ADMIN'),
+  async (req: Request, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      const doc = await postgresDb.get(
+        'SELECT * FROM documents WHERE document_id = $1',
+        [documentId]
+      );
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document not found' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (doc.blockchain_tx_id) {
+        return res.json({
+          success: true,
+          data: { documentId, alreadySynced: true, blockchainTxId: doc.blockchain_tx_id },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const resolvedPath = resolveDocumentPath(doc.file_path, doc.file_name);
+      if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'FILE_NOT_FOUND', message: 'Document file not found on server; cannot re-register its hash' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const fileHash = crypto.createHash('sha256').update(fs.readFileSync(resolvedPath)).digest('hex');
+      if (doc.file_hash && doc.file_hash !== fileHash) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'HASH_MISMATCH', message: 'Stored file no longer matches the recorded hash; refusing to re-register' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const result = await fabricService.registerDocumentHash(
+        documentId,
+        doc.entity_id,
+        doc.entity_type,
+        fileHash,
+        doc.ipfs_hash || '',
+        doc.file_name,
+        doc.document_type,
+      );
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'BLOCKCHAIN_ERROR', message: 'Document rejected by blockchain network', details: result.error },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      await postgresDb.run(
+        'UPDATE documents SET blockchain_tx_id = $1, verification_status = $2 WHERE document_id = $3',
+        [result.txId, 'pending', documentId]
+      );
+      res.json({
+        success: true,
+        data: { documentId, alreadySynced: false, blockchainTxId: result.txId, hash: fileHash },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('Document retry-sync error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
 router.get('/',
   authMiddleware,
   async (req: Request, res: Response) => {
