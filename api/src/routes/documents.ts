@@ -253,7 +253,6 @@ router.post('/:documentID/verify',
       const { documentID } = req.params;
       const { verified, remarks } = req.body;
       const user = (req as any).user;
-      const verificationID = `VER-${Date.now()}`;
 
       // Get document details for blockchain signature
       const doc = await postgresDb.get(
@@ -364,20 +363,41 @@ router.post('/:documentID/verify',
       }
 
       // ✅ Cache verification in PostgreSQL
+      // LEG3 F1: the old INSERT referenced columns that do not exist on
+      // document_verifications (000_initial_schema.sql:127 defines only
+      // id, document_id, verified_by INTEGER, verification_date, status,
+      // notes) — every verify 500'd AFTER the chain write had already
+      // landed, so the chain said VERIFIED while PG stayed pending.
+      // Align with the real schema: verified_by is the numeric users.id
+      // (never the username string), status is 'verified'/'rejected',
+      // and the tx id rides in notes — there is no blockchain_tx_id,
+      // verified_by_org, verified or remarks column on this table.
+      const newStatus = verified ? 'verified' : 'rejected';
+      const verifiedById = /^\d+$/.test(String(user?.userId || '')) ? parseInt(String(user.userId), 10) : null;
       await postgresDb.run(
         `INSERT INTO document_verifications (
-          verification_id, document_id, verified_by, verified_by_org, verified, remarks, blockchain_tx_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [verificationID, documentID, user.username, user.organization, verified, remarks || null, blockchainResult.txId]
+          document_id, verified_by, verification_date, status, notes
+        ) VALUES ($1, $2, NOW(), $3, $4)`,
+        [
+          documentID,
+          verifiedById,
+          newStatus,
+          [remarks || null, blockchainResult.txId ? `tx:${blockchainResult.txId}` : null].filter(Boolean).join(' | ') || null,
+        ]
       );
 
       // ✅ Update document's verification_status
-      const newStatus = verified ? 'verified' : 'rejected';
+      // LEG3 F1: the old UPDATE set verified_by/verified_at, which do
+      // not exist on documents (only the verified BOOLEAN from 000 plus
+      // verification_status from migration 042) — it would have 500'd
+      // next even with the INSERT fixed. The M-4 LC-release gate
+      // (banking.ts) reads verification_status, so this is the field
+      // that unblocks payment release.
       await postgresDb.run(
-        `UPDATE documents 
-         SET verification_status = $1, verified_by = $2, verified_at = NOW()
+        `UPDATE documents
+         SET verification_status = $1, verified = $2
          WHERE document_id = $3`,
-        [newStatus, user.username, documentID]
+        [newStatus, verified, documentID]
       );
 
       logger.info(`✅ Document ${documentID} verification cached in database: ${newStatus}`);
@@ -838,22 +858,31 @@ router.post('/upload-registration',
       }
 
       // ✅ Cache in PostgreSQL
+      // LEG3 F2: uploaded_by is INTEGER (users.id). This route is
+      // public (applicants have no token yet), so there is usually no
+      // req.user at all — the old literal 'applicant' string 500'd with
+      // 22P02 AFTER the chain write already succeeded, leaving an
+      // orphan on-chain hash with no PG row. Same class as the M-9 fix
+      // in the authenticated register route: parse the numeric user id,
+      // null when there is none.
+      const reqUserId = (req as any).user?.userId;
+      const uploadedById = /^\d+$/.test(String(reqUserId || '')) ? parseInt(String(reqUserId), 10) : null;
       await postgresDb.run(
         `INSERT INTO documents (
           document_id, entity_type, entity_id, document_type, file_name,
           file_hash, mime_type, file_size, file_path, uploaded_by, status, blockchain_tx_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
-          documentID, 
-          finalEntityType, 
-          finalEntityId, 
-          finalDocType, 
+          documentID,
+          finalEntityType,
+          finalEntityId,
+          finalDocType,
           finalFileName,
           fileHash,
           file.mimetype,
           file.size,
           file.path,
-          'applicant',
+          uploadedById,
           'active',
           blockchainResult.txId
         ]

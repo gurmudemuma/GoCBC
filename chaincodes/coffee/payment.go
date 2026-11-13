@@ -36,6 +36,20 @@ type PaymentSettlement struct {
 	RetentionConvertedBy    string  `json:"retentionConvertedBy"`
 	RetentionConversionRef  string  `json:"retentionConversionRef"`
 	RetentionConversionDate string  `json:"retentionConversionDate"`
+	// ==================== RETENTION RELEASE FIELDS ====================
+	// Set by RecordRetentionRelease (LEG3 F4): the non-retained (60%)
+	// USD released to the exporter after settlement. Like
+	// ConvertRetention / RecordForexRepatriation, recording the release
+	// does NOT change Status — no value in the payment machine
+	// represents the disbursement, so the payment stays SETTLED (or
+	// CONFIRMED after ConfirmSettlement). PG mirrors this in
+	// payments.retention_status = 'RELEASED'.
+	RetentionReleased      bool    `json:"retentionReleased"`
+	RetentionReleaseAmount float64 `json:"retentionReleaseAmount"`
+	RetentionReleasedBy    string  `json:"retentionReleasedBy"`
+	RetentionReleasedByMSP string  `json:"retentionReleasedByMsp"`
+	RetentionReleaseRef    string  `json:"retentionReleaseRef"`
+	RetentionReleaseDate   string  `json:"retentionReleaseDate"`
 	Status               string       `json:"status"`          // PENDING, DOCUMENTS_SUBMITTED, VERIFIED, SWIFT_INITIATED, SWIFT_RECEIVED, SETTLED, CONFIRMED
 	PaymentMethod        string       `json:"paymentMethod"`   // LC, CAD, TT_ADVANCE, TT_POST, ADVANCE
 	PaymentDate          string       `json:"paymentDate"`
@@ -1070,6 +1084,108 @@ func (c *CoffeeContract) ConvertRetention(ctx contractapi.TransactionContextInte
 		fmt.Sprintf("Retention converted for payment %s: %.2f Birr @ %.4f", paymentID, amountBirr, exchangeRate),
 		ComplianceMetadata{NBECompliance: true, ComplianceNote: "NBE retention conversion"}); err != nil {
 		return fmt.Errorf("ConvertRetention: failed to create audit log: %w", err)
+	}
+	return nil
+}
+
+// RecordRetentionRelease - Record the NBE 60% release of a settled
+// payment to the exporter (LEG3 F4). Before this, the API's release
+// path skipped the chain call entirely for an already-SETTLED payment
+// (SettlePayment only accepts VERIFIED/SWIFT_RECEIVED), so the release
+// lived only in Postgres and the ledger never showed it. This records
+// the release evidence on the payment WITHOUT changing Status —
+// following the ConvertRetention / RecordForexRepatriation precedent —
+// and refuses a second release. Allowed only once the payment is
+// SETTLED or CONFIRMED: a VERIFIED payment is released via the settle
+// path (SettlePayment), not here.
+// Called by PaymentService.releasePayment with (paymentID,
+// releaseAmount, releasedBy, releaseRef, releaseDate). The API
+// connects as NBEMSP: the release is an NBE action.
+// NOTE: needs a chaincode redeploy (seq 11) before the API can invoke
+// it; until then the API falls back to the PG-only release with a
+// warning (see paymentService.releasePayment).
+func (c *CoffeeContract) RecordRetentionRelease(ctx contractapi.TransactionContextInterface,
+	paymentID, releaseAmountStr, releasedBy, releaseRef, releaseDate string) error {
+	if err := ValidateID(paymentID, "paymentID"); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+	if err := ValidateNonEmptyString(releasedBy, "releasedBy", MaxStringLen); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+	if err := ValidateNonEmptyString(releaseRef, "releaseRef", MaxStringLen); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+	if err := ValidateNonEmptyString(releaseDate, "releaseDate", MaxStringLen); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+
+	releaseAmount, err := strconv.ParseFloat(releaseAmountStr, 64)
+	if err != nil {
+		return fmt.Errorf("RecordRetentionRelease: invalid releaseAmount: %w", err)
+	}
+	if err := ValidateAmount(releaseAmount, "releaseAmount"); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("RecordRetentionRelease: failed to get MSP ID: %w", err)
+	}
+
+	payment, err := c.ReadPayment(ctx, paymentID)
+	if err != nil {
+		return fmt.Errorf("RecordRetentionRelease: %w", err)
+	}
+	if payment.RetentionReleased {
+		return fmt.Errorf("RecordRetentionRelease: retention already released for payment %s", paymentID)
+	}
+	switch payment.Status {
+	case "SETTLED", "CONFIRMED":
+	default:
+		return fmt.Errorf("RecordRetentionRelease: payment %s retention can only be released once settled, current status: %s", paymentID, payment.Status)
+	}
+
+	txTime, err := ledgerTransactionTime(ctx)
+	if err != nil {
+		return fmt.Errorf("RecordRetentionRelease: failed to read Fabric transaction timestamp: %w", err)
+	}
+
+	payment.RetentionReleased = true
+	payment.RetentionReleaseAmount = releaseAmount
+	payment.RetentionReleasedBy = releasedBy
+	payment.RetentionReleasedByMSP = mspID
+	payment.RetentionReleaseRef = releaseRef
+	payment.RetentionReleaseDate = releaseDate
+	payment.UpdatedAt = txTime
+
+	paymentJSON, err := json.Marshal(payment)
+	if err != nil {
+		return fmt.Errorf("RecordRetentionRelease: failed to marshal payment: %w", err)
+	}
+	if err := ctx.GetStub().PutState("PAYMENT_"+paymentID, paymentJSON); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: failed to save payment: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"eventType":     "RetentionReleased",
+		"paymentID":     paymentID,
+		"releaseAmount": releaseAmount,
+		"releasedBy":    releasedBy,
+		"releaseRef":    releaseRef,
+		"timestamp":     txTime.Format(time.RFC3339),
+	}
+	eventJSON, _ := json.Marshal(event)
+	ctx.GetStub().SetEvent("RetentionReleased", eventJSON)
+
+	if err := c.CreateAuditLog(ctx, "RELEASE_RETENTION", "PAYMENT", paymentID, payment.Status, payment.Status,
+		[]FieldChange{
+			{FieldName: "retentionReleased", OldValue: "false", NewValue: "true", DataType: "bool"},
+			{FieldName: "retentionReleaseAmount", OldValue: "", NewValue: releaseAmountStr, DataType: "number"},
+			{FieldName: "retentionReleaseRef", OldValue: "", NewValue: releaseRef, DataType: "string"},
+		},
+		fmt.Sprintf("Retention released for payment %s: %.2f USD to exporter (ref %s)", paymentID, releaseAmount, releaseRef),
+		ComplianceMetadata{NBECompliance: true, ComplianceNote: "NBE 60% retention release"}); err != nil {
+		return fmt.Errorf("RecordRetentionRelease: failed to create audit log: %w", err)
 	}
 	return nil
 }
