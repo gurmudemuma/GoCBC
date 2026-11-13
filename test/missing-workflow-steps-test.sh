@@ -40,12 +40,15 @@
 #     CUSTOMS, SHIPPING, EXPORTER), so the run does not depend on how the
 #     seeded admin accounts were spelled. Seeded logins are only the fallback
 #     for creating those users (admin/admin123, then ecta_admin/password123).
-#   - Applicant positive login: the temporary password is ONLY delivered by
-#     email (api/src/routes/exporters.ts approve response returns a
-#     passwordNote, never the password), so a positive login runs only when
-#     APPLICANT_USERNAME and APPLICANT_PASSWORD are supplied in the
-#     environment; otherwise that one test is BLOCKED with the reason, and
-#     the negative paths (400 validation, 401 wrong password) are asserted.
+#   - Applicant positive login: the temporary password is returned
+#     ONE-TIME in the 201 submit response
+#     (data.credentials.tempPassword, exporters.ts:342; F8) and is
+#     captured in-script as APP_PASSWORD, so the positive login runs
+#     without env vars. APPLICANT_USERNAME / APPLICANT_PASSWORD in the
+#     environment still override when supplied. Email is the delivery
+#     channel when SMTP works; when it does not, the one-time display
+#     is the only way the applicant can ever log in (ECTA can reset it
+#     via POST /exporter-applications/:id/reset-credentials).
 #
 # Route evidence (all verified in api/src/routes/*.ts at features c7567b0e):
 #   auth.ts:511 POST /auth/applicant/login; auth.ts:608 GET /auth/applicant/status
@@ -377,6 +380,7 @@ APP_DATA="{
     \"region\": \"Addis Ababa\",
     \"contactPerson\": \"Jane Doe\",
     \"capitalRequirement\": \"20000000\",
+    \"bankAccountNumber\": \"1000123456789\",
     \"professionalTaster\": \"yes\",
     \"tasterCertificate\": \"TC$TS\",
     \"exporterType\": \"company\"
@@ -384,6 +388,11 @@ APP_DATA="{
 call POST "/exporters/exporter-applications" "$ECTA_TOKEN" "$APP_DATA"
 APPLICATION_ID=$(echo "$RESP_BODY" | jq -r '.data.applicationId // empty')
 APP_USERNAME=$(echo "$RESP_BODY" | jq -r '.data.credentials.username // empty')
+# F8: the temp password is returned ONE-TIME in the 201 response
+# (data.credentials.tempPassword) — capture it now; it is never
+# returned again, so the positive-login test below uses this value
+# unless APPLICANT_PASSWORD is supplied in the environment.
+APP_PASSWORD=$(echo "$RESP_BODY" | jq -r '.data.credentials.tempPassword // empty')
 if [ -n "$APPLICATION_ID" ]; then
     log_pass "Application submitted: $APPLICATION_ID (applicant username: ${APP_USERNAME:-unknown})"
 else
@@ -404,8 +413,13 @@ else
 fi
 
 log_test "Applicant login with temporary credentials (positive path)"
-if [ -n "${APPLICANT_USERNAME:-}" ] && [ -n "${APPLICANT_PASSWORD:-}" ]; then
-    call POST "/auth/applicant/login" "" "{\"username\":\"$APPLICANT_USERNAME\",\"password\":\"$APPLICANT_PASSWORD\"}"
+# F8: temp password captured one-time from the 201 submit response
+# above (APP_PASSWORD); env APPLICANT_USERNAME/APPLICANT_PASSWORD
+# still override when supplied.
+LOGIN_USERNAME="${APPLICANT_USERNAME:-$APP_USERNAME}"
+LOGIN_PASSWORD="${APPLICANT_PASSWORD:-$APP_PASSWORD}"
+if [ -n "$LOGIN_USERNAME" ] && [ -n "$LOGIN_PASSWORD" ]; then
+    call POST "/auth/applicant/login" "" "{\"username\":\"$LOGIN_USERNAME\",\"password\":\"$LOGIN_PASSWORD\"}"
     APPLICANT_TOKEN=$(echo "$RESP_BODY" | jq -r '.data.token // empty')
     APPLICANT_ROLE=$(echo "$RESP_BODY" | jq -r '.data.user.role // empty')
     if [ -n "$APPLICANT_TOKEN" ] && [ "$APPLICANT_ROLE" = "APPLICANT" ]; then
@@ -417,7 +431,7 @@ if [ -n "${APPLICANT_USERNAME:-}" ] && [ -n "${APPLICANT_PASSWORD:-}" ]; then
         log_info "Response: $RESP_BODY"
     fi
 else
-    log_blocked "Applicant login with temporary credentials — no APPLICANT_USERNAME/APPLICANT_PASSWORD in env. The temp password is only delivered by email (exporters.ts approve returns a passwordNote, never the password), so a positive login cannot be scripted without it. Negative paths above (400/401) prove the endpoint is live."
+    log_blocked "Applicant login with temporary credentials — no temp username/password captured (application submit failed or the 201 response carried none)"
 fi
 
 log_test "Applicant status without a token is rejected (401)"
@@ -739,9 +753,21 @@ else
         \"moistureContent\": 10.5,
         \"defectCount\": 2,
         \"grade\": \"GRADE_1\",
-        \"cuppingScore\": 86,
+        \"fragrance\": 88,
+        \"flavor\": 88,
+        \"aftertaste\": 87,
+        \"acidity\": 88,
+        \"body\": 88,
+        \"balance\": 87,
+        \"uniformity\": 88,
+        \"cleanCup\": 88,
+        \"sweetness\": 88,
+        \"overall\": 88,
         \"remarks\": \"Missing-steps test perform\"
     }"
+    # N2: all ten cupping fields are required by POST .../perform
+    # (quality.ts) — a missing one is 400, never defaulted to 0.
+    # The ten values above sum to totalScore 878.
     call POST "/quality/inspections/$Q2_INSPECTION_ID/perform" "$ECTA_TOKEN" "$PERFORM_DATA"
     check_success_or_blocked "Perform quality inspection"
 fi

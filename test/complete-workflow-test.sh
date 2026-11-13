@@ -530,9 +530,21 @@ PERFORM_RESPONSE=$(curl -s -X POST ${API_BASE}/quality/inspections/$NEW_INSPECTI
     \"moistureContent\": 10.5,
     \"defectCount\": 2,
     \"grade\": \"GRADE_1\",
-    \"cuppingScore\": 86,
+    \"fragrance\": 88,
+    \"flavor\": 88,
+    \"aftertaste\": 87,
+    \"acidity\": 88,
+    \"body\": 88,
+    \"balance\": 87,
+    \"uniformity\": 88,
+    \"cleanCup\": 88,
+    \"sweetness\": 88,
+    \"overall\": 88,
     \"remarks\": \"Flagship test perform\"
   }")
+# N2: all ten cupping fields are required by POST .../perform
+# (quality.ts) — a missing one is 400, never defaulted to 0.
+# The ten values above sum to totalScore 878.
 
 if echo "$PERFORM_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
     log_pass "Quality inspection performed: $NEW_INSPECTION_ID (INSPECTED)"

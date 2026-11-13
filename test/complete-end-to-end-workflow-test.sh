@@ -317,7 +317,26 @@ else
 fi
 
 log_test "Perform inspection"
-PERFORM_RESPONSE=$(api_call POST "/quality/inspections/$INSPECTION_ID/perform" "$ECTA_TOKEN" "")
+# N2: all ten cupping fields are required by POST .../perform
+# (quality.ts) — a missing one is 400, never defaulted to 0.
+# The ten values below sum to totalScore 878.
+PERFORM_DATA="{
+    \"inspectorName\": \"Abebe Inspector\",
+    \"moistureContent\": 10.5,
+    \"defectCount\": 2,
+    \"fragrance\": 88,
+    \"flavor\": 88,
+    \"aftertaste\": 87,
+    \"acidity\": 88,
+    \"body\": 88,
+    \"balance\": 87,
+    \"uniformity\": 88,
+    \"cleanCup\": 88,
+    \"sweetness\": 88,
+    \"overall\": 88,
+    \"remarks\": \"Flagship test perform\"
+}"
+PERFORM_RESPONSE=$(api_call POST "/quality/inspections/$INSPECTION_ID/perform" "$ECTA_TOKEN" "$PERFORM_DATA")
 PERFORM_SUCCESS=$(echo "$PERFORM_RESPONSE" | jq -r '.success // empty')
 
 if [ "$PERFORM_SUCCESS" = "true" ]; then

@@ -695,11 +695,49 @@ router.post('/inspections/:inspectionID/perform',
         });
       }
 
-      // The overall cupping score may arrive as `cuppingScore` (the
-      // missing-steps suite and the lab-results route send cupScore /
-      // cuppingScore, not `overall`). Resolve it once so the Postgres
-      // grade below and the chaincode total score agree.
-      const resolvedOverall = overall ?? (req.body as any).cuppingScore ?? 0;
+      // N2: ALL TEN cupping fields are REQUIRED — the F7 treatment
+      // for fragrance/flavor/aftertaste/acidity/body/balance/
+      // uniformity/cleanCup/sweetness/overall. The old code defaulted
+      // every missing field to 0 (`fragrance || 0` in the PG mirror,
+      // `String(fragrance ?? 0)` in the chaincode call), so a
+      // missing-fragrance probe returned 200 INSPECTED with
+      // fragrance 0 and totalScore 790 instead of 878 — and the
+      // chaincode cannot catch it: PerformInspection ParseFloats
+      // with the error discarded, so a missing/non-numeric field
+      // silently becomes 0 there too (ValidateCuppingScore only
+      // range-checks 0–100). The 400 here names the missing field
+      // before anything is written, so ledger and PG can never
+      // disagree on a cupping score again. `overall` may still
+      // arrive as `cuppingScore` (the documented alias); the alias
+      // is resolved first, then required like the rest.
+      const overallRaw = (overall === undefined || overall === null || overall === '')
+        ? (req.body as any).cuppingScore
+        : overall;
+      const cuppingRaw: Record<string, unknown> = {
+        fragrance, flavor, aftertaste, acidity, body, balance,
+        uniformity, cleanCup, sweetness, overall: overallRaw,
+      };
+      const cupping: Record<string, number> = {};
+      for (const [field, value] of Object.entries(cuppingRaw)) {
+        const fail = (message: string) => res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+          timestamp: new Date().toISOString()
+        });
+        if (value === undefined || value === null || value === '' ||
+            (typeof value === 'string' && value.trim() === '')) {
+          return fail(`${field} is required: a quality inspection cannot be performed without a measured ${field} cupping score`);
+        }
+        const n = Number(value);
+        if (!Number.isFinite(n)) {
+          return fail(`${field} must be a number`);
+        }
+        if (n < 0 || n > 100) {
+          return fail(`${field} must be between 0 and 100 (chaincode ValidateCuppingScore)`);
+        }
+        cupping[field] = n;
+      }
+      const resolvedOverall = cupping.overall;
 
       // Grade the SAME totalScore the chaincode grades (leg2 audit #3):
       // PerformInspection sums all ten cupping fields (each 0–100) into
@@ -711,8 +749,8 @@ router.post('/inspections/:inspectionID/perform',
       // (moisture > 12% is not exportable — see #19): the same
       // inspection can no longer be Below Grade in PG and Grade 1
       // on-chain. Chaincode grades 6–9 collapse to 'Below Grade' here.
-      const cupFields = [fragrance, flavor, aftertaste, acidity, body, balance, uniformity, cleanCup, sweetness, resolvedOverall];
-      const totalScore = cupFields.reduce((sum, v) => sum + (Number(v) || 0), 0);
+      const cupFields = [cupping.fragrance, cupping.flavor, cupping.aftertaste, cupping.acidity, cupping.body, cupping.balance, cupping.uniformity, cupping.cleanCup, cupping.sweetness, resolvedOverall];
+      const totalScore = cupFields.reduce((sum, v) => sum + v, 0);
       const defects = Number(defectCount) || 0;
       const moisture = moistureNum;
       let grade = 'Below Grade';
@@ -724,17 +762,19 @@ router.post('/inspections/:inspectionID/perform',
       else if (defects <= 45 && totalScore >= 70) grade = 'Grade 4';
       else if (defects <= 100 && totalScore >= 60) grade = 'Grade 5';
 
-      // Build cup quality summary with all scores
+      // Build cup quality summary with all scores (N2: validated
+      // values only — a missing field was already refused with 400
+      // above, so no `|| 0` default can reach the PG mirror).
       const cupQualityScores = {
-        fragrance: fragrance || 0,
-        flavor: flavor || 0,
-        aftertaste: aftertaste || 0,
-        acidity: acidity || 0,
-        body: body || 0,
-        balance: balance || 0,
-        uniformity: uniformity || 0,
-        cleanCup: cleanCup || 0,
-        sweetness: sweetness || 0,
+        fragrance: cupping.fragrance,
+        flavor: cupping.flavor,
+        aftertaste: cupping.aftertaste,
+        acidity: cupping.acidity,
+        body: cupping.body,
+        balance: cupping.balance,
+        uniformity: cupping.uniformity,
+        cleanCup: cupping.cleanCup,
+        sweetness: cupping.sweetness,
         overall: resolvedOverall
       };
       
@@ -795,9 +835,11 @@ ${remarks || 'No additional remarks'}
       // Sparse callers (the missing-steps suite sends only
       // inspectorName / moisture / defect / remarks; the UI conduct
       // dialog sends moisture / defectPercentage / findings) get the
-      // same defaults the old CouchDB/PG writes used, so a valid
-      // chaincode call is still built: inspectorID 'AUTO', sampleSize
-      // 100, beanSize 'Screen 17', lab tests 'PASS', cup scores 0.
+      // same defaults the old CouchDB/PG writes used for the
+      // NON-cupping fields, so a valid chaincode call is still built:
+      // inspectorID 'AUTO', sampleSize 100, beanSize 'Screen 17',
+      // lab tests 'PASS'. The ten cupping scores have NO defaults
+      // (N2): a missing one was already refused with 400 above.
       const performResult = await fabricService.performInspection(
         inspectionID,
         inspectorID || 'AUTO',
@@ -808,15 +850,15 @@ ${remarks || 'No additional remarks'}
         beanSize || 'Screen 17',
         color || 'Green',
         odor || 'Fresh',
-        String(fragrance ?? 0),
-        String(flavor ?? 0),
-        String(aftertaste ?? 0),
-        String(acidity ?? 0),
-        String(body ?? 0),
-        String(balance ?? 0),
-        String(uniformity ?? 0),
-        String(cleanCup ?? 0),
-        String(sweetness ?? 0),
+        String(cupping.fragrance),
+        String(cupping.flavor),
+        String(cupping.aftertaste),
+        String(cupping.acidity),
+        String(cupping.body),
+        String(cupping.balance),
+        String(cupping.uniformity),
+        String(cupping.cleanCup),
+        String(cupping.sweetness),
         String(resolvedOverall),
         classification || grade,
         pesticideTest || 'PASS',
