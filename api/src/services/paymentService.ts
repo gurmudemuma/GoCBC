@@ -323,6 +323,82 @@ export class PaymentService {
   }
 
   /**
+   * N6: record the 60% retention release on the ledger via
+   * RecordRetentionRelease (chaincode payment.go, seq 11). The release
+   * is an NBE action, so it is signed as NBEMSP, and it writes the
+   * release evidence (retentionReleased=true, amount, released-by,
+   * MSP, ref) WITHOUT changing Status — the same no-status-change
+   * precedent as ConvertRetention. It only accepts SETTLED/CONFIRMED
+   * payments and refuses a second release, so callers must settle
+   * first on the settleable path. Throws on a chain rejection: the
+   * transitional PG-only fallback was removed (N5), so a failure here
+   * is a real failure, like SettlePayment. Returns the chain txId.
+   * Used by BOTH release paths so both leave the identical ledger
+   * record; factored out so the two paths cannot diverge again.
+   */
+  private async recordRetentionReleaseOnChain(params: {
+    paymentID: string;
+    releaseAmount: number;
+    releasedBy: string;
+    releaseRef: string;
+    releaseDate: string;
+  }): Promise<string | null> {
+    await this.fabricService.connectAsOrg('NBEMSP');
+    const releaseResult = await this.fabricService.invokeChaincode('RecordRetentionRelease', [
+      params.paymentID,
+      String(params.releaseAmount),
+      params.releasedBy,
+      params.releaseRef,
+      params.releaseDate,
+    ]);
+    if (!releaseResult.success) {
+      throw new Error((releaseResult as any).error || 'Fabric rejected transaction RecordRetentionRelease');
+    }
+    const txId = (releaseResult as any).txId || (releaseResult as any).transactionId || null;
+    logger.info(`[PaymentService] Payment ${params.paymentID} 60% release recorded on-chain (TX: ${txId})`);
+    return txId;
+  }
+
+  /**
+   * N7 (F11 pattern): record a release chain call where it can be found
+   * without a block scan — a blockchain_signatures row (signer + tx).
+   * Best-effort: the ledger write already committed, so a failed PG
+   * write must not turn the release into a 500.
+   */
+  private async recordReleaseSignature(params: {
+    paymentID: string;
+    txId: string | null;
+    chaincodeFunction: string;
+    signerOrg: string;
+    signerUsername: string;
+    actionType: string;
+  }): Promise<void> {
+    try {
+      const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+      await this.dbService.run(
+        `INSERT INTO blockchain_signatures (
+          signature_id, blockchain_tx_id, entity_type, entity_id,
+          chaincode_function, signer_org, signer_username,
+          blockchain_timestamp, action_type, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+        ON CONFLICT (signature_id) DO NOTHING`,
+        [
+          signatureId,
+          params.txId || null,
+          'PAYMENT',
+          params.paymentID,
+          params.chaincodeFunction,
+          params.signerOrg,
+          params.signerUsername,
+          params.actionType,
+        ]
+      );
+    } catch (sigErr: any) {
+      logger.warn(`[PaymentService] Failed to store release signature for ${params.paymentID} (${params.chaincodeFunction}): ${sigErr?.message}`);
+    }
+  }
+
+  /**
    * Release 60% to exporter - Bank releases non-retained portion
    * @workflow Retention Converted → 60% Released to Exporter
    */
@@ -389,7 +465,24 @@ export class PaymentService {
       // so the ledger reader is ExchangeRateService.getCurrentRate.
       // It throws when no active rate is recorded: fail honestly rather
       // than settle at a fabricated rate.
-      let blockchainTxId: string | null = null;
+      // N6: the 60% release amount. recordPayment stores release_amount
+      // (60% of amount_usd) at initiation; derive it from the same NBE
+      // 40/60 rule only when the stored value is missing, and fail
+      // honestly when neither is available — RecordRetentionRelease
+      // rejects an unparseable amount on-chain.
+      const releaseAmount = payment.release_amount != null
+        ? Number(payment.release_amount)
+        : (payment.amount_usd != null ? Number(payment.amount_usd) * 0.6 : NaN);
+      if (!Number.isFinite(releaseAmount) || releaseAmount <= 0) {
+        throw new Error(`Cannot release payment ${releaseData.paymentID}: no 60% release amount on record (release_amount is ${payment.release_amount ?? 'null'})`);
+      }
+
+      // N7: keep each chain txId separately — the settleable path now
+      // makes TWO chain calls (SettlePayment, then the retention
+      // release), and the response must carry the txId that proves the
+      // release. blockchainTxId below is the retention-release tx.
+      let settleTxId: string | null = null;
+      let releaseTxId: string | null = null;
       if (settleable) {
         const liveRate = await this.exchangeRateService.getCurrentRate(payment.currency || 'USD');
         const blockchainResult = await this.settleOnChain({
@@ -404,7 +497,23 @@ export class PaymentService {
         if (!blockchainResult.success) {
           throw new Error(blockchainResult.error || 'Fabric rejected transaction SettlePayment');
         }
-        blockchainTxId = typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId || null;
+        settleTxId = typeof blockchainResult === 'string' ? JSON.parse(blockchainResult).transactionId : blockchainResult.txId || null;
+        // N6: SettlePayment settles on-chain but never sets
+        // retentionReleased — only RecordRetentionRelease does
+        // (chaincode payment.go). The settleable path used to stop
+        // here, so the ledger kept retentionReleased=false while PG
+        // said RELEASED. SettlePayment leaves the payment SETTLED,
+        // which is exactly the state RecordRetentionRelease accepts,
+        // so record the release on-chain right after settling — the
+        // same call the already-settled path below makes. A failure
+        // here fails honestly (N5: no PG-only fallback).
+        releaseTxId = await this.recordRetentionReleaseOnChain({
+          paymentID: releaseData.paymentID,
+          releaseAmount,
+          releasedBy: releaseData.releasedBy,
+          releaseRef: releaseData.releaseRef,
+          releaseDate: releaseData.releaseDate,
+        });
       } else {
         // LEG3 F4: the old code skipped the chain call entirely for an
         // already-settled payment, so the 60% release left no ledger
@@ -419,19 +528,40 @@ export class PaymentService {
         // is live and both release paths were re-probed writing
         // on-chain, so a RecordRetentionRelease failure is now a real
         // failure and fails honestly, like SettlePayment above.
-        await this.fabricService.connectAsOrg('NBEMSP');
-        const releaseResult = await this.fabricService.invokeChaincode('RecordRetentionRelease', [
-          releaseData.paymentID,
-          String(payment.release_amount ?? ''),
-          releaseData.releasedBy,
-          releaseData.releaseRef,
-          releaseData.releaseDate,
-        ]);
-        if (!releaseResult.success) {
-          throw new Error((releaseResult as any).error || 'Fabric rejected transaction RecordRetentionRelease');
-        }
-        blockchainTxId = (releaseResult as any).txId || (releaseResult as any).transactionId || null;
-        logger.info(`[PaymentService] Payment ${releaseData.paymentID} 60% release recorded on-chain (TX: ${blockchainTxId})`);
+        // N6: same helper the settleable path uses, so both paths leave
+        // the identical ledger record.
+        releaseTxId = await this.recordRetentionReleaseOnChain({
+          paymentID: releaseData.paymentID,
+          releaseAmount,
+          releasedBy: releaseData.releasedBy,
+          releaseRef: releaseData.releaseRef,
+          releaseDate: releaseData.releaseDate,
+        });
+      }
+      const blockchainTxId = releaseTxId;
+
+      // N7 (F11 pattern): signature rows for the chain call(s) so the
+      // signer and tx are findable without a block scan. Best-effort:
+      // the ledger writes already committed.
+      if (settleTxId) {
+        await this.recordReleaseSignature({
+          paymentID: releaseData.paymentID,
+          txId: settleTxId,
+          chaincodeFunction: 'SettlePayment',
+          signerOrg: 'BanksMSP',
+          signerUsername: releaseData.releasedBy,
+          actionType: 'PAYMENT_SETTLEMENT',
+        });
+      }
+      if (releaseTxId) {
+        await this.recordReleaseSignature({
+          paymentID: releaseData.paymentID,
+          txId: releaseTxId,
+          chaincodeFunction: 'RecordRetentionRelease',
+          signerOrg: 'NBEMSP',
+          signerUsername: releaseData.releasedBy,
+          actionType: 'RETENTION_RELEASE',
+        });
       }
 
       // Update database — SettlePayment settles the payment on-chain, so
@@ -469,22 +599,33 @@ export class PaymentService {
         metadata: {
           status: 'SETTLED',
           retentionStatus: 'RELEASED',
-          releaseAmount: payment.release_amount,
+          releaseAmount: releaseAmount,
           exporterAccount: releaseData.exporterAccount,
-          blockchainTxId: blockchainTxId
+          blockchainTxId: blockchainTxId,
+          settleTxId: settleTxId,
+          retentionReleaseTxId: releaseTxId
         }
       });
 
-      logger.info(`[PaymentService] ✅ Payment released: ${payment.release_amount} USD to exporter account ${releaseData.exporterAccount}`);
+      logger.info(`[PaymentService] ✅ Payment released: ${releaseAmount} USD to exporter account ${releaseData.exporterAccount}`);
 
+      // N7: return the chain txId(s) — the release response used to
+      // carry none, so the chain tx had to be recovered via a block
+      // scan. txId/blockchainTxId is the retention-release tx (the
+      // record that proves the release); settleTxId is the settle tx
+      // on the settleable path (null when already settled).
       return {
         success: true,
         paymentID: releaseData.paymentID,
         status: 'SETTLED',
         retentionStatus: 'RELEASED',
-        releaseAmount: payment.release_amount,
+        releaseAmount: releaseAmount,
         totalAmount: payment.amount_usd,
-        retentionAmount: payment.retention_amount
+        retentionAmount: payment.retention_amount,
+        txId: blockchainTxId,
+        blockchainTxId: blockchainTxId,
+        settleTxId: settleTxId,
+        retentionReleaseTxId: releaseTxId
       };
 
     } catch (error) {
