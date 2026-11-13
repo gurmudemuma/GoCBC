@@ -126,13 +126,57 @@ async function doFetch(
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(buildApiUrl(path), {
+  const method = (options.method || 'GET').toUpperCase();
+  const url = buildApiUrl(path);
+  const key = mutationDedupeKey(method, url, options.body);
+  if (key) {
+    const inFlight = inFlightMutations.get(key);
+    if (inFlight) {
+      // Identical mutation already in flight (e.g. a double-clicked submit
+      // button): share it instead of firing a second request. Each caller
+      // gets its own clone — a fetch Response body can only be read once.
+      return inFlight.then((r) => r.clone());
+    }
+    const p = fetch(url, { ...options, headers });
+    inFlightMutations.set(key, p);
+    p.then(
+      () => inFlightMutations.delete(key),
+      () => inFlightMutations.delete(key)
+    );
+    const response = await p;
+    if (withAuth) handleUnauthorized(response);
+    return response.clone();
+  }
+
+  const response = await fetch(url, {
     ...options,
     headers,
   });
 
   if (withAuth) handleUnauthorized(response);
   return response;
+}
+
+// In-flight deduplication for mutations (round 3, Area 2): a double-clicked
+// submit fires the same POST/PUT/PATCH/DELETE twice, and almost no portal
+// handler disables its button while the request is in flight. The shared
+// client is the one place that can stop the duplicate for all 120+ submit
+// paths at once. Only identical (method, URL, body) requests still in
+// flight are shared; nothing is cached after the request settles, so a
+// retry after failure or a later identical submit still goes through.
+// FormData bodies (file uploads) are never deduped — they cannot be
+// compared by value.
+const inFlightMutations = new Map<string, Promise<Response>>();
+
+function mutationDedupeKey(
+  method: string,
+  url: string,
+  body: unknown
+): string | null {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return null;
+  if (body === undefined || body === null) return `${method} ${url} `;
+  if (typeof body !== 'string') return null;
+  return `${method} ${url} ${body}`;
 }
 
 /** Authenticated fetch. Returns the raw Response — callers do
