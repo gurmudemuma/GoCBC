@@ -887,6 +887,20 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
       });
     }
 
+    // E2E leg 1 (F16): the allocating officer is required — it used to
+    // default silently to the caller, so a missing officer recorded an
+    // allocation against whoever happened to hold the token.
+    if (!officer || !String(officer).trim()) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Officer is required'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
     logger.info(`[FOREX] Allocating forex: ${forexId} with retention rate: ${retentionRate || '40% (default)'}`);
 
     // Use ForexService which includes 40% retention logic
@@ -896,7 +910,7 @@ router.post('/allocate', authMiddleware, requireRole(['BANKS', 'BANK_ADMIN', 'BA
       amount: amount ? Number(amount) : 0,
       exchangeRate: exchangeRate ? Number(exchangeRate) : 1,
       retentionRate: retentionRate ? Number(retentionRate) : 40, // Defaults to 40% (percent units — must match the active NBE COFFEE policy, forex.go AllocateForex)
-      officer: officer || user?.username || user?.sub || '',
+      officer: String(officer).trim(),
       approvalRef: approvalRef || '',
       expiryDate: expiryDate || null, // Pass null instead of empty string
       userId: user?.username || user?.sub,
@@ -1004,6 +1018,19 @@ router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_AD
       });
     }
 
+    // E2E leg 1 (F16): the allocating officer is required — it used to
+    // default silently to the caller (see the /allocate route above).
+    if (!officer || !String(officer).trim()) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Officer is required'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
     logger.info(`[FOREX] Allocating forex: ${forexID} with retention rate: ${retentionRate || '40% (default)'}`);
 
     // Use ForexService which includes 40% retention logic
@@ -1013,7 +1040,7 @@ router.post('/:forexID/allocate', authMiddleware, requireRole(['BANKS', 'BANK_AD
       amount: amount ? Number(amount) : 0,
       exchangeRate: exchangeRate ? Number(exchangeRate) : 1,
       retentionRate: retentionRate ? Number(retentionRate) : 40,
-      officer: officer || user?.username || user?.sub || '',
+      officer: String(officer).trim(),
       approvalRef: approvalRef || '',
       expiryDate: expiryDate || null,
       userId: user?.username || user?.sub,

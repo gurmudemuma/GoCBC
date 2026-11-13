@@ -128,6 +128,10 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
     // rejects with "only NBE can confirm forex (caller: BanksMSP)".
     let blockchainSynced = false;
     let blockchainWarning: string | null = null;
+    // E2E leg 1 (F11): keep the chaincode transaction id — the confirm
+    // used to return no txId and write no signature/audit row, so the
+    // signer was only provable by scanning blocks.
+    let confirmTxId: string | undefined;
     try {
       await fabricService.connectAsOrg('NBEMSP');
       const chainResult = await fabricService.invokeChaincode('ConfirmForex', [
@@ -137,6 +141,7 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
       ], 'NBEMSP');
       if (chainResult.success) {
         blockchainSynced = true;
+        confirmTxId = (chainResult as any)?.txId || undefined;
       } else {
         blockchainWarning = `Chaincode ConfirmForex did not confirm ${forexId}: ${chainResult.error || 'unknown error'}`;
         logger.warn(`[NBE] ${blockchainWarning}`);
@@ -176,9 +181,66 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
           updated_at = CURRENT_TIMESTAMP
       WHERE allocation_id = $2 OR forex_id = $2 OR CAST(id AS TEXT) = $2
     `, [userId, forexId]);
-    
+
+    // E2E leg 1 (F11): record the confirmation where it can be found
+    // without a block scan — a blockchain_signatures row (the signer
+    // and tx) and an audit_trail row (the state change). Best-effort:
+    // the ledger confirmation already committed, so a failed audit
+    // write must not turn a confirmed forex into a 500.
+    try {
+      const signatureId = `SIG-${Date.now()}-${require('crypto').randomBytes(8).toString('hex')}`;
+      await db.run(
+        `INSERT INTO blockchain_signatures (
+          signature_id, blockchain_tx_id, entity_type, entity_id,
+          chaincode_function, signer_org, signer_username,
+          blockchain_timestamp, action_type, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, NOW())
+        ON CONFLICT (signature_id) DO NOTHING`,
+        [
+          signatureId,
+          confirmTxId || null,
+          'FOREX',
+          forexId,
+          'ConfirmForex',
+          'NBEMSP',
+          user?.username || 'NBE Officer',
+          'CONFIRMED'
+        ]
+      );
+    } catch (sigErr: any) {
+      logger.warn(`[NBE] Failed to store forex-confirm signature for ${forexId}: ${sigErr?.message}`);
+    }
+    try {
+      await db.run(
+        `INSERT INTO audit_trail (
+          entity_type, entity_id, action, performed_by, performed_by_org,
+          old_value, new_value, reason, metadata, ip_address
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          'FOREX',
+          forexId,
+          'CONFIRM',
+          user?.username || 'NBE Officer',
+          'NBEMSP',
+          JSON.stringify({ status: allocation.status }),
+          JSON.stringify({ status: 'CONFIRMED' }),
+          'Forex allocation confirmed by NBE',
+          JSON.stringify({
+            forexId,
+            approvedBy: user?.username,
+            transactionId: confirmTxId || null,
+            action: 'Forex Confirmation',
+            timestamp: new Date().toISOString()
+          }),
+          req.ip || 'unknown'
+        ]
+      );
+    } catch (auditErr: any) {
+      logger.warn(`[NBE] Failed to store forex-confirm audit row for ${forexId}: ${auditErr?.message}`);
+    }
+
     logger.info(`[NBE] ✅ Forex allocation confirmed: ${forexId} (blockchainSynced: ${blockchainSynced})`);
-    
+
     res.json({
       success: true,
       data: {
@@ -187,8 +249,10 @@ router.post('/forex/:forexId/approve', authMiddleware, requireRole('NBE'), async
         approvedBy: user?.username || 'NBE Officer',
         approvalNotes,
         blockchainSynced,
-        blockchainWarning
+        blockchainWarning,
+        txId: confirmTxId || null
       },
+      txId: confirmTxId || null,
       timestamp: new Date().toISOString()
     });
     

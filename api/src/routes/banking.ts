@@ -101,7 +101,11 @@ router.post('/lc/request',
     // stored only 7 of them — and stored bankName (the ADVISING bank)
     // as issuing_bank. bankName is kept as a fallback for the advising
     // bank only; issuingBank is the buyer's bank.
-    body('issuingBank').optional().isString(),
+    // E2E leg 1 (F16): issuingBank is required — the buyer's bank
+    // that opens the LC. It used to be optional and silently auto-mapped
+    // from the contract; the form now pre-fills it from the contract
+    // (editable) and sends it explicitly.
+    body('issuingBank').notEmpty().withMessage('Issuing bank is required'),
     body('advisingBank').optional().isString(),
     body('beneficiary').optional().isString(),
     body('terms').optional().isString(),
@@ -209,7 +213,10 @@ router.post('/lc/request',
       // ADVISING bank there, and the old code stored it as
       // issuing_bank. Advising bank = explicit, else the contract's
       // exporter bank, else bankName as a last resort.
-      const finalIssuingBank = issuingBank || autoMappedData.issuingBank || '';
+      // E2E leg 1 (F16): no silent auto-map — the validator above
+      // already 400s a missing issuingBank. The contract-derived bank
+      // remains only as a chaincode-level fallback for older callers.
+      const finalIssuingBank = issuingBank || '';
       const finalAdvisingBank = advisingBank || autoMappedData.advisingBank || bankName || '';
       // Beneficiary is the exporter company. When the form omits it,
       // resolve the company name from PG; the chaincode also falls back
@@ -251,7 +258,13 @@ router.post('/lc/request',
         // the API response below (previously the chaincode always
         // derived them from the contract, diverging from both).
         finalIssuingBank,
-        finalAdvisingBank
+        finalAdvisingBank,
+        // SEQ 11 (E2E leg 1, F14): the four form fields that used to
+        // live PG-only — now carried to the ledger.
+        latestShipmentDate || '',
+        portOfLoading || '',
+        portOfDischarge || '',
+        paymentTerms || ''
       );
 
       if (result.success) {
@@ -339,6 +352,10 @@ router.post('/lc/request',
             advisingBank: finalAdvisingBank,
             beneficiary: finalBeneficiary,
             status: 'REQUESTED',
+            latestShipmentDate: latestShipmentDate || null,
+            portOfLoading: portOfLoading || null,
+            portOfDischarge: portOfDischarge || null,
+            paymentTerms: paymentTerms || null,
             ...result.data,
           },
           autoMapped: {
@@ -1272,12 +1289,17 @@ router.post('/lc/:lcID/allocate-forex',
     param('lcID').notEmpty().withMessage('LC ID is required'),
     body('exchangeRate').isNumeric().withMessage('Exchange rate must be numeric'),
     body('allocatedAmount').isNumeric().withMessage('Allocated amount must be numeric'),
+    // E2E leg 1 (F16): the allocating officer is required — it used to
+    // default silently to the caller, so a missing officer recorded an
+    // allocation against whoever happened to hold the token. The
+    // allocation dialog already requires it; the API now does too.
+    body('officer').notEmpty().withMessage('Officer is required'),
   ],
   validateRequest,
   async (req: Request, res: Response) => {
     try {
       const { lcID } = req.params;
-      const { exchangeRate, allocatedAmount, forexID, forexId, forexAllocationId, approvalRef, retentionRate, expiryDate } = req.body;
+      const { exchangeRate, allocatedAmount, forexID, forexId, forexAllocationId, approvalRef, retentionRate, expiryDate, officer } = req.body;
       const user = (req as any).user;
 
       logger.info(`[FOREX] Allocating forex for LC: ${lcID}`, {
@@ -1413,7 +1435,7 @@ router.post('/lc/:lcID/allocate-forex',
           amount: Number(allocatedAmount),
           exchangeRate: Number(exchangeRate),
           retentionRate: resolvedRetentionRate,
-          officer: user?.username || user?.sub || '',
+          officer: officer,
           approvalRef: resolvedApprovalRef,
           expiryDate: resolvedExpiryDate,
           userId: user?.username || user?.sub,

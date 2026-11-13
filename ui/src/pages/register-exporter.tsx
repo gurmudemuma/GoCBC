@@ -235,7 +235,7 @@ const RegisterExporterPage = () => {
   // the real applicationId + login username + email-delivery outcome.
   // The old success screen invented `APP-${Date.now()}` and discarded
   // all three, so applicants could not track or log in.
-  const [submittedApp, setSubmittedApp] = useState<{ applicationId: string; username: string; emailSent: boolean } | null>(null);
+  const [submittedApp, setSubmittedApp] = useState<{ applicationId: string; username: string; emailSent: boolean; tempPassword?: string } | null>(null);
   const [uploadFailures, setUploadFailures] = useState<string[]>([]);
   const [mounted, setMounted] = React.useState(false);
   const [docsTouched, setDocsTouched] = useState(false); // turns upload buttons red after first failed attempt
@@ -290,6 +290,8 @@ const RegisterExporterPage = () => {
       return 'Valid email address is required';
     if (!formData.phone || formData.phone.length !== 9)
       return 'Phone number must be exactly 9 digits after +251';
+    if (!formData.bankAccountNumber)
+      return 'Bank account number is required';
     if (formData.bankAccountNumber.length > 13)
       return 'Bank account number must not exceed 13 digits';
     if (!formData.address.trim())              return 'Physical address is required';
@@ -322,6 +324,10 @@ const RegisterExporterPage = () => {
         applicationId: appId,
         username: res.data.data.credentials?.username || '',
         emailSent: res.data.data.emailDelivery === 'sent',
+        // E2E leg 1 (F8): the server returns the temp password ONCE
+        // in this response — show it on the success screen below so
+        // the applicant can log in even when email delivery failed.
+        tempPassword: res.data.data.credentials?.tempPassword || '',
       });
       // Uploads used a hardcoded http://localhost:3001 (bypassing the
       // configured API base — broken off-localhost) and Promise.all
@@ -385,9 +391,16 @@ const RegisterExporterPage = () => {
                     Your login username is <strong>{submittedApp.username}</strong>. Use it with the temporary password to track your application status.
                   </Typography>
                 )}
+                {submittedApp?.tempPassword && (
+                  <Alert severity="info" sx={{ mb: 2, textAlign: 'left' }}>
+                    <strong>Save your temporary password now — it is shown once and will not be shown again:</strong>
+                    <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 700, mt: 1, wordBreak: 'break-all' }}>{submittedApp.tempPassword}</Typography>
+                    Log in with the username above and this password to track your application. If you lose it, ECTA can reset it.
+                  </Alert>
+                )}
                 {submittedApp && !submittedApp.emailSent && (
                   <Alert severity="warning" sx={{ mb: 2, textAlign: 'left' }}>
-                    <strong>We could not email your login credentials.</strong> Contact ECTA with your application ID ({submittedApp.applicationId}) to receive or reset them — do not lose this ID.
+                    <strong>We could not email your login credentials.</strong> Use the temporary password shown above, or contact ECTA with your application ID ({submittedApp.applicationId}) to have them reset — do not lose this ID.
                   </Alert>
                 )}
                 {uploadFailures.length > 0 && (
@@ -846,9 +859,9 @@ const RegisterExporterPage = () => {
                     </Grid>
 
                     <Grid item xs={12} md={6}>
-                      <TextField fullWidth label="Bank Account Number" value={formData.bankAccountNumber} onChange={handleChange('bankAccountNumber')} size="small"
+                      <TextField fullWidth label="Bank Account Number *" value={formData.bankAccountNumber} onChange={handleChange('bankAccountNumber')} size="small" required
                         inputProps={{ inputMode: 'numeric', maxLength: 13, pattern: '[0-9]*' }}
-                        helperText="Enter up to 13 digits"
+                        helperText="Required — up to 13 digits"
                         InputProps={{ startAdornment: <InputAdornment position="start"><AccountBalance sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 

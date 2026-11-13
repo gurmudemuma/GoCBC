@@ -30,6 +30,14 @@ type LetterOfCredit struct {
 	UtilizationDate string    `json:"utilizationDate"`
 	Documents       []string  `json:"documents"` // Required documents
 	Terms           string    `json:"terms"`
+	// SEQ 11 (E2E leg 1, F14): the 17-field LC form's shipping /
+	// payment fields. They were PG-only — the ledger LC read null for
+	// all four. Optional + omitempty so legacy pre-v2.3 LCs still read
+	// (same pattern as the rejection fields below).
+	LatestShipmentDate string `json:"latestShipmentDate,omitempty" metadata:",optional"`
+	PortOfLoading      string `json:"portOfLoading,omitempty" metadata:",optional"`
+	PortOfDischarge    string `json:"portOfDischarge,omitempty" metadata:",optional"`
+	PaymentTerms       string `json:"paymentTerms,omitempty" metadata:",optional"`
 	// LC Amendments (real-world LCs frequently amended)
 	Amendments     []LCAmendment `json:"amendments"`     // Amendment history
 	AmendmentCount int           `json:"amendmentCount"` // Total amendments
@@ -124,7 +132,12 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	// SEQ 9 (F6a fix): explicit issuing/advising banks. Appended after
 	// beneficiary/terms so existing 7- and 9-arg callers keep working
 	// once updated; empty means "derive from the contract".
-	issuingBankArg, advisingBankArg string) error {
+	// SEQ 11 (E2E leg 1, F14): the 17-field LC form's shipping/payment
+	// fields, appended after the banks. Empty means "not supplied" — the
+	// API now requires them on the manual request path, and the
+	// contract-approval handoff derives them from the contract.
+	issuingBankArg, advisingBankArg string,
+	latestShipmentDate, portOfLoading, portOfDischarge, paymentTerms string) error {
 
 	fmt.Printf("=== RequestLC called: lcID=%s, contractID=%s ===\n", lcID, contractID)
 	requesterMSP, err := ctx.GetClientIdentity().GetMSPID()
@@ -165,6 +178,14 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 	if expiryDate != "" {
 		if err := ValidateDate(expiryDate); err != nil {
 			return fmt.Errorf("RequestLC: %w", err)
+		}
+	}
+
+	// SEQ 11 (E2E leg 1, F14): latest shipment date, when supplied,
+	// must be a valid date like the expiry date.
+	if latestShipmentDate != "" {
+		if err := ValidateDate(latestShipmentDate); err != nil {
+			return fmt.Errorf("RequestLC: invalid latestShipmentDate: %w", err)
 		}
 	}
 
@@ -313,6 +334,12 @@ func (c *CoffeeContract) RequestLC(ctx contractapi.TransactionContextInterface,
 		Status:       "REQUESTED",
 		ExpiryDate:   expiryDate,
 		Terms:        terms,
+		// SEQ 11 (E2E leg 1, F14): the form's shipping/payment fields
+		// now reach the ledger instead of living PG-only.
+		LatestShipmentDate: latestShipmentDate,
+		PortOfLoading:      portOfLoading,
+		PortOfDischarge:    portOfDischarge,
+		PaymentTerms:       paymentTerms,
 		RequestDate:  txTime,
 		Documents:    []string{},
 		CreatedAt:    txTime,

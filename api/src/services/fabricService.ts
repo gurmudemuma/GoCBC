@@ -1339,7 +1339,14 @@ export class FabricService {
     // to chaincode RequestLC as args 10-11. Empty falls back to the
     // contract's buyerBank/exporterBank on-chain.
     issuingBank?: string,
-    advisingBank?: string
+    advisingBank?: string,
+    // SEQ 11 (E2E leg 1, F14): the form's shipping/payment fields,
+    // passed through to chaincode RequestLC as args 12-15. Empty means
+    // "not supplied" on-chain.
+    latestShipmentDate?: string,
+    portOfLoading?: string,
+    portOfDischarge?: string,
+    paymentTerms?: string
   ): Promise<ChaincodeResponse> {
     // RequestLC validates the exporter from ledger state inside the same
     // transaction, avoiding a separate preflight query and TOCTOU gap.
@@ -1358,6 +1365,10 @@ export class FabricService {
       terms || '',
       issuingBank || '',
       advisingBank || '',
+      latestShipmentDate || '',
+      portOfLoading || '',
+      portOfDischarge || '',
+      paymentTerms || '',
     ], mspId);
   }
 
