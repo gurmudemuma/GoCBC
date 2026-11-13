@@ -1,7 +1,7 @@
 // Animated Button Component - 2026 Design
 // Button with loading/success states and brand gradients
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Button,
   ButtonProps,
@@ -212,32 +212,58 @@ export const AnimatedButton: React.FC<AnimatedButtonProps> = ({
 }) => {
   const [internalLoading, setInternalLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  
+
+  // Synchronous re-entry guard (round 3, Area 2). The previous guard read
+  // `loading` from the render scope, but setInternalLoading(true) only ran
+  // AFTER onClick() started and React had not re-rendered yet — so a fast
+  // double-click invoked onClick twice and fired the mutation twice. A ref
+  // flips synchronously in the same tick as the first click, so the second
+  // click is refused before any work starts.
+  const busyRef = useRef(false);
+
   const loading = externalLoading ?? internalLoading;
   const isDisabled = disabled || loading || success;
-  
+
   const handleClick = async () => {
-    if (!onClick || loading || success) return;
-    
+    if (!onClick || busyRef.current) return;
+    busyRef.current = true;
+
     try {
       const result = onClick();
-      
+
       // Check if it's a Promise
       if (result instanceof Promise) {
         setInternalLoading(true);
-        await result;
-        setInternalLoading(false);
-        
-        // Show success state
-        if (showSuccess) {
+        let value: unknown;
+        try {
+          value = await result;
+        } finally {
+          setInternalLoading(false);
+          busyRef.current = false;
+        }
+
+        // Show the success check only when the handler actually
+        // succeeded. Handlers that swallow an API failure and resolve
+        // normally used to flash the green check anyway; an explicit
+        // failure value (false, {success:false}, axios {data:{success:false}})
+        // now suppresses it so the button never claims a failed submit.
+        const failed =
+          value === false ||
+          (value !== null && typeof value === 'object' &&
+            ((value as any).success === false ||
+              (value as any).data?.success === false));
+        if (showSuccess && !failed) {
           setSuccess(true);
           setTimeout(() => {
             setSuccess(false);
           }, successDuration);
         }
+      } else {
+        busyRef.current = false;
       }
     } catch (error) {
       setInternalLoading(false);
+      busyRef.current = false;
       console.error('Button action failed:', error);
       throw error;
     }

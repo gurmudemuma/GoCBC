@@ -1066,7 +1066,10 @@ router.post('/test-shipment-update/:shipmentId',
       const shipment = await fabricService.getShipment(shipmentId);
       
       if (!shipment.success || !shipment.data) {
-        return res.json({
+        // Fail-honest status: a missing shipment is a 404, not a 200
+        // carrying success:false (previously indistinguishable from success
+        // to callers that only check the HTTP status).
+        return res.status(404).json({
           success: false,
           error: 'Shipment not found on blockchain',
           shipmentId
@@ -1196,6 +1199,55 @@ router.get('/declarations/:declarationID',
 );
 
 /**
+ * Risk rules: the defaults previously hardcoded in GET /risk-rules, used
+ * until a super admin saves a replacement via PUT /risk-rules (stored in
+ * customs_risk_rules, migration 079).
+ */
+const DEFAULT_RISK_RULES = {
+  highRiskCountries: ['Country with sanctions', 'High-risk jurisdictions'],
+  valueThresholds: {
+    automatic_inspection: 100000, // USD - trigger automatic inspection
+    enhanced_scrutiny: 500000,    // USD - require enhanced due diligence
+    senior_approval: 1000000      // USD - require senior officer approval
+  },
+  redFlags: [
+    { id: 'rf001', category: 'Documentation', description: 'Missing or incomplete export documentation', riskLevel: 'HIGH', action: 'MANDATORY_INSPECTION' },
+    { id: 'rf002', category: 'Compliance', description: 'Exporter history of non-compliance', riskLevel: 'HIGH', action: 'ENHANCED_REVIEW' },
+    { id: 'rf003', category: 'Value', description: 'Declared value significantly differs from market rate', riskLevel: 'MEDIUM', action: 'VALUE_VERIFICATION' },
+    { id: 'rf004', category: 'Origin', description: 'Questionable origin documentation', riskLevel: 'HIGH', action: 'ORIGIN_VERIFICATION' },
+    { id: 'rf005', category: 'Quality', description: 'Quality certification missing or expired', riskLevel: 'MEDIUM', action: 'QUALITY_INSPECTION' }
+  ],
+  inspectionTriggers: {
+    first_time_exporter: true,
+    high_value_shipment: true,
+    high_risk_destination: true,
+    previous_discrepancies: true,
+    random_selection: true, // 10% of all shipments
+    random_selection_rate: 0.1
+  },
+  complianceChecks: [
+    'Export license validation',
+    'Phytosanitary certificate verification',
+    'Quality inspection certificate',
+    'Origin certificate',
+    'Customs declaration completeness',
+    'Payment documentation',
+    'LC documentation (if applicable)'
+  ]
+};
+
+async function getRiskRules(): Promise<any> {
+  try {
+    const row = await postgresDb.get('SELECT config FROM customs_risk_rules WHERE id = 1', []);
+    if (row?.config) return typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+  } catch (e) {
+    // Table not yet migrated: fall back to defaults rather than 500ing.
+    logger.warn('[CUSTOMS] customs_risk_rules unreadable, using default risk rules');
+  }
+  return DEFAULT_RISK_RULES;
+}
+
+/**
  * GET /api/v1/customs/risk-rules
  * Get customs risk assessment rules configuration
  * Used by RiskRulesManager for displaying and managing risk assessment criteria
@@ -1203,77 +1255,13 @@ router.get('/declarations/:declarationID',
 router.get('/risk-rules', authMiddleware, async (req, res) => {
   try {
     logger.info('[CUSTOMS] 📋 Fetching risk assessment rules...');
-    
-    // Return risk assessment rules configuration
-    // This can be stored in database or configuration file
-    const riskRules = {
-      highRiskCountries: [
-        'Country with sanctions',
-        'High-risk jurisdictions'
-      ],
-      valueThresholds: {
-        automatic_inspection: 100000, // USD - trigger automatic inspection
-        enhanced_scrutiny: 500000,    // USD - require enhanced due diligence
-        senior_approval: 1000000      // USD - require senior officer approval
-      },
-      redFlags: [
-        {
-          id: 'rf001',
-          category: 'Documentation',
-          description: 'Missing or incomplete export documentation',
-          riskLevel: 'HIGH',
-          action: 'MANDATORY_INSPECTION'
-        },
-        {
-          id: 'rf002',
-          category: 'Compliance',
-          description: 'Exporter history of non-compliance',
-          riskLevel: 'HIGH',
-          action: 'ENHANCED_REVIEW'
-        },
-        {
-          id: 'rf003',
-          category: 'Value',
-          description: 'Declared value significantly differs from market rate',
-          riskLevel: 'MEDIUM',
-          action: 'VALUE_VERIFICATION'
-        },
-        {
-          id: 'rf004',
-          category: 'Origin',
-          description: 'Questionable origin documentation',
-          riskLevel: 'HIGH',
-          action: 'ORIGIN_VERIFICATION'
-        },
-        {
-          id: 'rf005',
-          category: 'Quality',
-          description: 'Quality certification missing or expired',
-          riskLevel: 'MEDIUM',
-          action: 'QUALITY_INSPECTION'
-        }
-      ],
-      inspectionTriggers: {
-        first_time_exporter: true,
-        high_value_shipment: true,
-        high_risk_destination: true,
-        previous_discrepancies: true,
-        random_selection: true, // 10% of all shipments
-        random_selection_rate: 0.1
-      },
-      complianceChecks: [
-        'Export license validation',
-        'Phytosanitary certificate verification',
-        'Quality inspection certificate',
-        'Origin certificate',
-        'Customs declaration completeness',
-        'Payment documentation',
-        'LC documentation (if applicable)'
-      ]
-    };
-    
+
+    // Stored rules (PUT /risk-rules, migration 079) win; until one has
+    // been saved, return the previous hardcoded defaults unchanged.
+    const riskRules = await getRiskRules();
+
     logger.info('[CUSTOMS] ✅ Risk rules fetched successfully');
-    
+
     res.json({
       success: true,
       data: riskRules,
@@ -1288,6 +1276,66 @@ router.get('/risk-rules', authMiddleware, async (req, res) => {
     });
   }
 });
+
+/**
+ * PUT /api/v1/customs/risk-rules
+ * Save customs risk assessment rules configuration (super admin only).
+ * The Admin portal's RiskRulesManager calls this on Save; previously no
+ * PUT route existed (404), so the super admin could never persist edits.
+ */
+router.put('/risk-rules',
+  authMiddleware,
+  requireRole('ADMIN'),
+  async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { highRiskCountries, valueThresholds, redFlags, inspectionTriggers, complianceChecks } = req.body || {};
+
+      if (!valueThresholds || typeof valueThresholds !== 'object'
+        || !Array.isArray(redFlags) || !Array.isArray(highRiskCountries)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'highRiskCountries (array), valueThresholds (object) and redFlags (array) are required',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      for (const key of ['automatic_inspection', 'enhanced_scrutiny', 'senior_approval']) {
+        if (typeof valueThresholds[key] !== 'number' || valueThresholds[key] < 0) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: `valueThresholds.${key} must be a non-negative number` },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      const config = { highRiskCountries, valueThresholds, redFlags, inspectionTriggers, complianceChecks };
+      await postgresDb.run(
+        `INSERT INTO customs_risk_rules (id, config, updated_by, updated_at)
+         VALUES (1, $1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP`,
+        [JSON.stringify(config), user.username]
+      );
+
+      res.json({
+        success: true,
+        data: config,
+        message: 'Risk rules updated successfully',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      logger.error('[CUSTOMS] ❌ Error saving risk rules:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SAVE_FAILED', message: error.message },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
 
 // ==================== CUSTOMS EXTENDED OPERATIONS ====================
 

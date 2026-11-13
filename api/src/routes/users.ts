@@ -14,6 +14,31 @@ const router = Router();
 const db = DatabaseService.getInstance();
 const generateTemporaryPassword = (): string => crypto.randomBytes(18).toString('base64url');
 
+// Canonical user roles. POST /users previously validated role only as
+// "a non-empty string", so any garbage role (e.g. "SUPERHERO") was stored
+// with HTTP 201 and the account then logged in with fallback EXPORTER
+// permissions. Creation (and role change via PUT) must use this list.
+// SUPER_ADMIN is deliberately NOT here: it is a legacy alias normalised
+// to ADMIN elsewhere; the canonical super-admin role is ADMIN.
+const VALID_USER_ROLES = [
+  'ADMIN',
+  'APPLICANT',
+  'BANK',
+  'BANKS',
+  'BANK_ADMIN',
+  'CUSTOMS',
+  'CUSTOMS_ADMIN',
+  'ECTA',
+  'ECTA_ADMIN',
+  'ECX',
+  'ECX_ADMIN',
+  'EXPORTER',
+  'NBE',
+  'NBE_ADMIN',
+  'SHIPPING',
+  'SHIPPING_ADMIN',
+] as const;
+
 // ============================================================================
 // AUDIT LOGGING HELPER
 // ============================================================================
@@ -275,7 +300,8 @@ router.post('/',
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('fullName').notEmpty().withMessage('Full name is required'),
     body('role').notEmpty().withMessage('Role is required')
-      .isString().withMessage('Role must be a string'),
+      .isString().withMessage('Role must be a string')
+      .isIn([...VALID_USER_ROLES]).withMessage(`Role must be one of: ${VALID_USER_ROLES.join(', ')}`),
     body('organization').notEmpty().withMessage('Organization is required'),
   ],
   validateRequest,
@@ -460,6 +486,125 @@ router.post('/',
  *       500:
  *         description: Internal server error
  */
+/**
+ * @swagger
+ * /api/v1/users/activity-log:
+ *   get:
+ *     summary: Get user management activity log (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *         description: Filter by specific user ID
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *           enum: [CREATE, UPDATE, DELETE, SUSPEND, ACTIVATE, GRANT_PERMISSION, REVOKE_PERMISSION, RESET_PASSWORD]
+ *         description: Filter by action type
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: Activity log retrieved successfully
+ */
+
+router.get('/activity-log',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const requestingUser = (req as any).user;
+
+      // Only admins can view activity log
+      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only administrators can view activity log',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const { userId, action, limit = 50, offset = 0 } = req.query;
+
+      // Query from audit table (assuming we have one)
+      let query = `
+        SELECT * FROM user_activity_log 
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+
+      // pg uses $n placeholders, not '?' (see the profile-update fix above)
+      if (userId) {
+        query += ` AND user_id = $${params.length + 1}`;
+        params.push(userId);
+      }
+
+      if (action) {
+        query += ` AND action = $${params.length + 1}`;
+        params.push(action);
+      }
+
+      query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      params.push(parseInt(limit as string), parseInt(offset as string));
+
+      const logs = await db.all(query, params);
+
+      // Get total count
+      let countQuery = 'SELECT COUNT(*) as total FROM user_activity_log WHERE 1=1';
+      const countParams: any[] = [];
+
+      if (userId) {
+        countQuery += ` AND user_id = $${countParams.length + 1}`;
+        countParams.push(userId);
+      }
+
+      if (action) {
+        countQuery += ` AND action = $${countParams.length + 1}`;
+        countParams.push(action);
+      }
+
+      const countResult = await db.get(countQuery, countParams);
+
+      res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          total: countResult.total,
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      logger.error('Error retrieving activity log:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to retrieve activity log',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
 router.get('/:userId',
   authMiddleware,
   [param('userId').notEmpty().withMessage('User ID is required')],
@@ -595,7 +740,7 @@ router.put('/:userId',
     try {
       const { userId } = req.params;
       const requestingUser = (req as any).user;
-      const { email, fullName, phone, permissions } = req.body;
+      const { email, fullName, phone, permissions, role } = req.body;
 
       const isAdmin = requestingUser.role === 'ADMIN';
       const isOwnProfile = requestingUser.userId === userId;
@@ -679,6 +824,45 @@ router.put('/:userId',
       if (permissions && (isAdmin || (canManageUsers && isSameOrg))) {
         updates.push(`permissions = ${placeholder()}`);
         params.push(JSON.stringify(permissions));
+      }
+
+      // Role changes: super admin only, validated against the canonical
+      // list, and never on your own account (an admin demoting or
+      // re-roling themselves could lock the system out of ADMIN).
+      // There was previously NO way to change a role after creation.
+      if (role !== undefined) {
+        if (!isAdmin) {
+          return res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Only super administrators can change user roles',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        if (String(requestingUser.userId) === String(userId)) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_OPERATION',
+              message: 'You cannot change your own role',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        if (!(VALID_USER_ROLES as readonly string[]).includes(role)) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Role must be one of: ${VALID_USER_ROLES.join(', ')}`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        updates.push(`role = ${placeholder()}`);
+        params.push(role);
       }
 
       if (updates.length === 0) {
@@ -1576,7 +1760,7 @@ router.delete('/:userId',
 
       // Soft delete: set status to inactive
       await db.run(
-        'UPDATE users SET status = "inactive", updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        'UPDATE users SET status = \'inactive\', updated_at = CURRENT_TIMESTAMP WHERE id = $1',
         [userId]
       );
 
@@ -1677,8 +1861,15 @@ router.put('/:userId/permissions',
       const requestingUser = (req as any).user;
       const { permissions, action = 'set' } = req.body;
 
-      // Only admins can update permissions
-      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
+      // Permissions: super admin (ADMIN) may set any user's permissions.
+      // Organisation admins (ECTA/ECX/NBE/BANKS/CUSTOMS/SHIPPING) may only
+      // set permissions for users in their own organisation who are not
+      // portal administrators — the previous gate (ADMIN or ECTA, no
+      // target check at all) let an ECTA admin overwrite bank_admin's
+      // permissions cross-org (proven live 2026-11-13).
+      const isAdmin = requestingUser.role === 'ADMIN';
+      const canManageUsers = ['ADMIN', 'ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(requestingUser.role);
+      if (!canManageUsers) {
         return res.status(403).json({
           success: false,
           error: {
@@ -1691,7 +1882,7 @@ router.put('/:userId/permissions',
 
       // Get current user
       const user = await db.get(
-        'SELECT id, username, permissions FROM users WHERE id = $1',
+        'SELECT id, username, permissions, organization, role FROM users WHERE id = $1',
         [userId]
       );
 
@@ -1704,6 +1895,20 @@ router.put('/:userId/permissions',
           },
           timestamp: new Date().toISOString(),
         });
+      }
+
+      if (!isAdmin) {
+        const targetIsPortalAdmin = ['ECTA', 'ECX', 'NBE', 'BANKS', 'CUSTOMS', 'SHIPPING'].includes(user.role);
+        if (targetIsPortalAdmin || user.organization !== requestingUser.organization) {
+          return res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'You can only update permissions for users in your organization',
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
 
       // Parse current permissions
@@ -1776,123 +1981,6 @@ router.put('/:userId/permissions',
   }
 );
 
-/**
- * @swagger
- * /api/v1/users/activity-log:
- *   get:
- *     summary: Get user management activity log (Admin only)
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: userId
- *         schema:
- *           type: string
- *         description: Filter by specific user ID
- *       - in: query
- *         name: action
- *         schema:
- *           type: string
- *           enum: [CREATE, UPDATE, DELETE, SUSPEND, ACTIVATE, GRANT_PERMISSION, REVOKE_PERMISSION, RESET_PASSWORD]
- *         description: Filter by action type
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 50
- *       - in: query
- *         name: offset
- *         schema:
- *           type: integer
- *           default: 0
- *     responses:
- *       200:
- *         description: Activity log retrieved successfully
- */
-router.get('/activity-log',
-  authMiddleware,
-  async (req: Request, res: Response) => {
-    try {
-      const requestingUser = (req as any).user;
-
-      // Only admins can view activity log
-      if (requestingUser.role !== 'ADMIN' && requestingUser.role !== 'ECTA') {
-        return res.status(403).json({
-          success: false,
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Only administrators can view activity log',
-          },
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      const { userId, action, limit = 50, offset = 0 } = req.query;
-
-      // Query from audit table (assuming we have one)
-      let query = `
-        SELECT * FROM user_activity_log 
-        WHERE 1=1
-      `;
-      const params: any[] = [];
-
-      // pg uses $n placeholders, not '?' (see the profile-update fix above)
-      if (userId) {
-        query += ` AND user_id = $${params.length + 1}`;
-        params.push(userId);
-      }
-
-      if (action) {
-        query += ` AND action = $${params.length + 1}`;
-        params.push(action);
-      }
-
-      query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(parseInt(limit as string), parseInt(offset as string));
-
-      const logs = await db.all(query, params);
-
-      // Get total count
-      let countQuery = 'SELECT COUNT(*) as total FROM user_activity_log WHERE 1=1';
-      const countParams: any[] = [];
-
-      if (userId) {
-        countQuery += ` AND user_id = $${countParams.length + 1}`;
-        countParams.push(userId);
-      }
-
-      if (action) {
-        countQuery += ` AND action = $${countParams.length + 1}`;
-        countParams.push(action);
-      }
-
-      const countResult = await db.get(countQuery, countParams);
-
-      res.json({
-        success: true,
-        data: logs,
-        pagination: {
-          total: countResult.total,
-          limit: parseInt(limit as string),
-          offset: parseInt(offset as string),
-        },
-        timestamp: new Date().toISOString(),
-      });
-
-    } catch (error) {
-      logger.error('Error retrieving activity log:', error);
-      res.status(500).json({
-        success: false,
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: 'Failed to retrieve activity log',
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }
-);
 
 /**
  * GET /api/v1/users/debug/exporter/:exporterId

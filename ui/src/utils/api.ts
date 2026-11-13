@@ -79,25 +79,62 @@ class CECBSApi {
     );
   }
 
-  // Generic HTTP methods
+  // Generic HTTP methods. Mutations are deduplicated while in flight (round
+  // 3, Area 2): a double-clicked submit fires the same POST twice, and most
+  // portal handlers never disable their button mid-request. Sharing the
+  // in-flight promise for an identical (method, URL, body) call stops the
+  // duplicate at the one layer every submit path uses. Axios responses are
+  // plain parsed objects, so sharing the promise is safe. Nothing is cached
+  // after the request settles — retries and later identical submits still
+  // go through. FormData bodies are never deduped.
+  private inFlightMutations = new Map<string, Promise<AxiosResponse>>();
+
+  private dedupeMutation<T extends Promise<AxiosResponse>>(
+    method: string,
+    url: string,
+    data: any,
+    fire: () => T
+  ): T {
+    let key: string | null = null;
+    if (data === undefined || data === null) {
+      key = `${method} ${url} `;
+    } else if (typeof FormData === 'undefined' || !(data instanceof FormData)) {
+      try {
+        key = `${method} ${url} ${JSON.stringify(data)}`;
+      } catch {
+        key = null;
+      }
+    }
+    if (!key) return fire();
+    const existing = this.inFlightMutations.get(key);
+    if (existing) return existing as T;
+    const p = fire();
+    this.inFlightMutations.set(key, p);
+    p.then(
+      () => this.inFlightMutations.delete(key),
+      () => this.inFlightMutations.delete(key)
+    );
+    return p;
+  }
+
   async get(url: string, config?: any): Promise<AxiosResponse> {
     return this.client.get(url, config);
   }
 
   async post(url: string, data?: any, config?: any): Promise<AxiosResponse> {
-    return this.client.post(url, data, config);
+    return this.dedupeMutation('POST', url, data, () => this.client.post(url, data, config));
   }
 
   async put(url: string, data?: any, config?: any): Promise<AxiosResponse> {
-    return this.client.put(url, data, config);
+    return this.dedupeMutation('PUT', url, data, () => this.client.put(url, data, config));
   }
 
   async patch(url: string, data?: any, config?: any): Promise<AxiosResponse> {
-    return this.client.patch(url, data, config);
+    return this.dedupeMutation('PATCH', url, data, () => this.client.patch(url, data, config));
   }
 
   async delete(url: string, config?: any): Promise<AxiosResponse> {
-    return this.client.delete(url, config);
+    return this.dedupeMutation('DELETE', url, config?.data, () => this.client.delete(url, config));
   }
 
   // Authentication
