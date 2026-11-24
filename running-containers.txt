@@ -1,0 +1,17 @@
+cecbs-api
+cecbs-postgres
+cecbs-redis
+coffee-chaincode
+couchdb.banks
+couchdb.customs
+couchdb.ecta
+couchdb.ecx
+couchdb.nbe
+couchdb.shipping
+orderer.cecbs.et
+peer0.banks.cecbs.et
+peer0.customs.cecbs.et
+peer0.ecta.cecbs.et
+peer0.ecx.cecbs.et
+peer0.nbe.cecbs.et
+peer0.shipping.cecbs.et

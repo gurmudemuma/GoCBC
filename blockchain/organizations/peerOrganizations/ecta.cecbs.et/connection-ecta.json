@@ -1,0 +1,188 @@
+{
+  "name": "cecbs-network",
+  "version": "1.0.0",
+  "description": "Ethiopian Coffee Export Consortium Blockchain System (CECBS) - Connection Profile for ECTA Organization",
+  "client": {
+    "organization": "ECTA",
+    "connection": {
+      "timeout": {
+        "peer": {
+          "endorser": "300"
+        },
+        "orderer": "300"
+      }
+    }
+  },
+  "organizations": {
+    "ECTA": {
+      "mspid": "ECTAMSP",
+      "peers": [
+        "peer0.ecta.cecbs.et"
+      ],
+      "certificateAuthorities": [
+        "ca.ecta.cecbs.et"
+      ]
+    },
+    "ECX": {
+      "mspid": "ECXMSP",
+      "peers": [
+        "peer0.ecx.cecbs.et"
+      ]
+    },
+    "Banks": {
+      "mspid": "BanksMSP",
+      "peers": [
+        "peer0.banks.cecbs.et"
+      ]
+    },
+    "NBE": {
+      "mspid": "NBEMSP",
+      "peers": [
+        "peer0.nbe.cecbs.et"
+      ]
+    },
+    "Customs": {
+      "mspid": "CustomsMSP",
+      "peers": [
+        "peer0.customs.cecbs.et"
+      ]
+    },
+    "Shipping": {
+      "mspid": "ShippingMSP",
+      "peers": [
+        "peer0.shipping.cecbs.et"
+      ]
+    }
+  },
+  "orderers": {
+    "orderer.cecbs.et": {
+      "url": "grpcs://orderer.cecbs.et:7050",
+      "tlsCACerts": {
+        "path": "organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts/tlsca.cecbs.et-cert.pem"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "orderer.cecbs.et",
+        "hostnameOverride": "orderer.cecbs.et"
+      }
+    }
+  },
+  "peers": {
+    "peer0.ecta.cecbs.et": {
+      "url": "grpcs://peer0.ecta.cecbs.et:7051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.ecta.cecbs.et",
+        "hostnameOverride": "peer0.ecta.cecbs.et"
+      }
+    },
+    "peer0.ecx.cecbs.et": {
+      "url": "grpcs://peer0.ecx.cecbs.et:8051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/ecx.cecbs.et/peers/peer0.ecx.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.ecx.cecbs.et",
+        "hostnameOverride": "peer0.ecx.cecbs.et"
+      }
+    },
+    "peer0.banks.cecbs.et": {
+      "url": "grpcs://peer0.banks.cecbs.et:9051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/banks.cecbs.et/peers/peer0.banks.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.banks.cecbs.et",
+        "hostnameOverride": "peer0.banks.cecbs.et"
+      }
+    },
+    "peer0.nbe.cecbs.et": {
+      "url": "grpcs://peer0.nbe.cecbs.et:10051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.nbe.cecbs.et",
+        "hostnameOverride": "peer0.nbe.cecbs.et"
+      }
+    },
+    "peer0.customs.cecbs.et": {
+      "url": "grpcs://peer0.customs.cecbs.et:11051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/customs.cecbs.et/peers/peer0.customs.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.customs.cecbs.et",
+        "hostnameOverride": "peer0.customs.cecbs.et"
+      }
+    },
+    "peer0.shipping.cecbs.et": {
+      "url": "grpcs://peer0.shipping.cecbs.et:12051",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/tls/ca.crt"
+      },
+      "grpcOptions": {
+        "ssl-target-name-override": "peer0.shipping.cecbs.et",
+        "hostnameOverride": "peer0.shipping.cecbs.et"
+      }
+    }
+  },
+  "certificateAuthorities": {
+    "ca.ecta.cecbs.et": {
+      "url": "https://ca.ecta.cecbs.et:7054",
+      "caName": "ca-ecta",
+      "tlsCACerts": {
+        "path": "organizations/peerOrganizations/ecta.cecbs.et/ca/ca.ecta.cecbs.et-cert.pem"
+      },
+      "httpOptions": {
+        "verify": false
+      }
+    }
+  },
+  "channels": {
+    "coffeechannel": {
+      "orderers": [
+        "orderer.cecbs.et"
+      ],
+      "peers": {
+        "peer0.ecta.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        },
+        "peer0.ecx.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        },
+        "peer0.banks.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        },
+        "peer0.nbe.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        },
+        "peer0.customs.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        },
+        "peer0.shipping.cecbs.et": {
+          "endorsingPeer": true,
+          "chaincodeQuery": true,
+          "ledgerQuery": true,
+          "eventSource": true
+        }
+      }
+    }
+  }
+}

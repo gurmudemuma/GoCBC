@@ -1,0 +1,7 @@
+CONTAINER ID   IMAGE                            COMMAND             CREATED          STATUS          PORTS                                                       NAMES
+6aaa8800e0ca   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 13 minutes   7051/tcp, 0.0.0.0:10051->10051/tcp, [::]:10051->10051/tcp   peer0.nbe.cecbs.et
+cbc2cef28254   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 14 minutes   7051/tcp, 0.0.0.0:8051->8051/tcp, [::]:8051->8051/tcp       peer0.ecx.cecbs.et
+9b0360f94a3d   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 13 minutes   7051/tcp, 0.0.0.0:9051->9051/tcp, [::]:9051->9051/tcp       peer0.banks.cecbs.et
+2df97c178210   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 13 minutes   7051/tcp, 0.0.0.0:11051->11051/tcp, [::]:11051->11051/tcp   peer0.customs.cecbs.et
+ad2aaa7fc217   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 14 minutes   0.0.0.0:7051->7051/tcp, [::]:7051->7051/tcp                 peer0.ecta.cecbs.et
+6e5aebb8fa4c   hyperledger/fabric-peer:2.5.16   "peer node start"   25 minutes ago   Up 13 minutes   7051/tcp, 0.0.0.0:12051->12051/tcp, [::]:12051->12051/tcp   peer0.shipping.cecbs.et

@@ -1,0 +1,10 @@
+Removing old coffee-chaincode container...
+coffee-chaincode
+Starting coffee-chaincode with correct CHAINCODE_ID...
+Waiting 5s for chaincode to start...
+=== coffee-chaincode status ===
+NAMES              STATUS         PORTS
+coffee-chaincode   Up 5 seconds   0.0.0.0:9999->9999/tcp, [::]:9999->9999/tcp
+=== coffee-chaincode logs ===
+2026/06/29 12:17:50 Starting Coffee Chaincode - CCID: coffee_1.11:5b88e02ae2c89bb4dd97cbd582c6a75b4364467667550fb172edede01b35e40d, Address: 0.0.0.0:9999
+2026/06/29 12:17:51 Starting chaincode server on 0.0.0.0:9999

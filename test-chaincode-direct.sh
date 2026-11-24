@@ -1,21 +1,47 @@
 #!/bin/bash
-set -e
+echo "======================================"
+echo "Direct Chaincode Invocation Test"
+echo "======================================"
+echo ""
+echo "Starting chaincode and peer log monitoring..."
+echo ""
 
-echo "=== Testing Direct Chaincode Query ==="
-echo "Querying coffee_2.13 chaincode via peer0.ecta..."
+# Clear recent logs by marking the time
+START_TIME=$(date -u +"%Y-%m-%d %H:%M:%S")
 
-# Set environment for ECTA peer
-export CORE_PEER_TLS_ENABLED=false
-export CORE_PEER_LOCALMSPID="ECTAMSP"
-export CORE_PEER_ADDRESS="peer0.ecta.cecbs.et:7051"
-export CORE_PEER_MSPCONFIGPATH="/home/guda/GoCBC/blockchain/organizations/peerOrganizations/ecta.cecbs.et/users/Admin@ecta.cecbs.et/msp"
-
-# Simple query with 10 second timeout
-timeout 15 docker exec peer0.ecta.cecbs.et peer chaincode query \
+# Run a query in background
+echo "Invoking chaincode query (will timeout after 30s)..."
+timeout 30 docker exec peer0.ecta.cecbs.et peer chaincode query \
   -C coffeechannel \
   -n coffee \
-  -c '{"Args":["QueryAllLCs"]}' \
-  2>&1 || echo "Query timed out or failed"
+  -c '{"Args":["GetAllExporters"]}' \
+  2>&1 | head -20 &
+
+QUERY_PID=$!
+
+# Wait 5 seconds for query to start
+sleep 5
+
+# Check chaincode logs for any connection attempts
+echo ""
+echo "Chaincode logs (last 20 lines):"
+echo "--------------------------------------"
+docker logs coffee-chaincode 2>&1 | tail -20
 
 echo ""
-echo "=== Test Complete ==="
+echo "Peer logs (since query started):"
+echo "--------------------------------------"
+docker logs peer0.ecta.cecbs.et --since "${START_TIME}" 2>&1 | grep -i "coffee\|chaincode\|external\|grpc" | head -30
+
+# Wait for query to finish or timeout
+wait $QUERY_PID
+RESULT=$?
+
+echo ""
+echo "======================================"
+if [ $RESULT -eq 124 ]; then
+  echo "Query TIMED OUT (as expected)"
+else
+  echo "Query completed with exit code: $RESULT"
+fi
+echo "======================================"

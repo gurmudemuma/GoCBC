@@ -44,19 +44,21 @@ const CITIES_BY_REGION: Record<string, string[]> = {
 };
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
+// Simplified to purple, black, and golden to match login form
 
 const C = {
   purple: '#9b30b7',
   purpleDark: '#7a2596',
   purpleDarker: '#6d1f8a',
   gold: '#FFD700',
-  green: '#2e7d32',
-  blue: '#1565c0',
-  orange: '#e65100',
-  teal: '#00838f',
-  indigo: '#6a1b9a',
+  goldDark: '#FFC700',
+  black: '#1a1a1a',
+  blackLight: '#2d2d2d',
+  gray: '#616161',
+  grayLight: '#9e9e9e',
 };
 const purpleGrad = `linear-gradient(135deg, ${C.purple} 0%, ${C.purpleDark} 100%)`;
+const goldGrad = `linear-gradient(135deg, ${C.gold} 0%, ${C.goldDark} 100%)`;
 const btnSx = { textTransform: 'none' as const, fontWeight: 700, borderRadius: 2, px: 4, py: 1.5 };
 const MIN_CAPITAL_BY_EXPORTER_TYPE: Record<string, number> = {
   private: 15_000_000,
@@ -162,17 +164,17 @@ const HistoryUpload: React.FC<{ file: File | null; onChange: (key: DocKey, f: Fi
     <Box
       onClick={() => !file && ref.current?.click()}
       sx={{
-        border: `2px dashed`, borderColor: file ? C.indigo : alpha(C.indigo, 0.3),
+        border: `2px dashed`, borderColor: file ? C.purple : alpha(C.purple, 0.3),
         borderRadius: 2, p: 2, cursor: file ? 'default' : 'pointer',
-        bgcolor: file ? alpha(C.indigo, 0.05) : 'transparent',
+        bgcolor: file ? alpha(C.purple, 0.05) : 'transparent',
         transition: 'all 0.18s ease',
-        '&:hover': !file ? { borderColor: C.indigo, bgcolor: alpha(C.indigo, 0.05), boxShadow: `0 0 0 3px ${alpha(C.indigo, 0.1)}` } : {},
+        '&:hover': !file ? { borderColor: C.purple, bgcolor: alpha(C.purple, 0.05), boxShadow: `0 0 0 3px ${alpha(C.purple, 0.1)}` } : {},
       }}
     >
       <input ref={ref} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" style={{ display: 'none' }}
         onChange={e => { const f = e.target.files?.[0]; if (f) onChange('historyDoc', f); e.target.value = ''; }} />
       <Stack direction="row" alignItems="center" spacing={1.5}>
-        <Avatar sx={{ width: 38, height: 38, bgcolor: file ? C.indigo : alpha(C.indigo, 0.12), color: file ? 'white' : C.indigo }}>
+        <Avatar sx={{ width: 38, height: 38, bgcolor: file ? C.purple : alpha(C.purple, 0.12), color: file ? 'white' : C.purple }}>
           {file ? <CheckCircle sx={{ fontSize: 22 }} /> : <HistoryEdu sx={{ fontSize: 20 }} />}
         </Avatar>
         <Box flex={1} minWidth={0}>
@@ -180,7 +182,7 @@ const HistoryUpload: React.FC<{ file: File | null; onChange: (key: DocKey, f: Fi
             <Typography variant="body2" fontWeight={700} sx={{ color: '#1a1a1a' }}>Company History / References</Typography>
             <Chip label="Optional" size="small" sx={{ height: 15, fontSize: '0.6rem', bgcolor: alpha('#616161', 0.1), color: '#616161' }} />
           </Stack>
-          <Typography variant="caption" sx={{ color: file ? C.indigo : '#9e9e9e' }}>
+          <Typography variant="caption" sx={{ color: file ? C.purple : C.grayLight }}>
             {file ? `${file.name} (${(file.size / 1024).toFixed(0)} KB)` : 'Business history or trade references — click to upload'}
           </Typography>
         </Box>
@@ -191,7 +193,7 @@ const HistoryUpload: React.FC<{ file: File | null; onChange: (key: DocKey, f: Fi
             </IconButton>
           </Tooltip>
         ) : (
-          <CloudUpload sx={{ color: alpha(C.indigo, 0.45), fontSize: 22 }} />
+          <CloudUpload sx={{ color: alpha(C.purple, 0.45), fontSize: 22 }} />
         )}
       </Stack>
     </Box>
@@ -470,7 +472,7 @@ const RegisterExporterPage = () => {
         ],
       },
       {
-        title: 'ECTA Requirements', icon: <VerifiedUser />, color: C.green,
+        title: 'ECTA Requirements', icon: <VerifiedUser />, color: C.purple,
         rows: [
           ['Exporter Type', typeLabel],
           ['Capital', `${Number(formData.capitalRequirement).toLocaleString()} ETB`],
@@ -481,7 +483,7 @@ const RegisterExporterPage = () => {
         ],
       },
       {
-        title: 'Contact Details', icon: <Person />, color: C.blue,
+        title: 'Contact Details', icon: <Person />, color: C.gold,
         rows: [
           ['Contact Person', formData.contactPerson], ['Email', formData.email],
           ['Phone', formData.phone], ['Address', formData.address],
@@ -539,12 +541,12 @@ const RegisterExporterPage = () => {
                 ))}
 
                 {/* Documents */}
-                <Paper elevation={0} sx={{ mb: 3, borderRadius: 2.5, overflow: 'hidden', border: `1px solid ${alpha(C.teal, 0.2)}`, boxShadow: `0 2px 12px ${alpha(C.teal, 0.08)}` }}>
-                  <Box sx={{ px: 3, py: 1.5, background: alpha(C.teal, 0.06), borderBottom: `1px solid ${alpha(C.teal, 0.12)}` }}>
+                <Paper elevation={0} sx={{ mb: 3, borderRadius: 2.5, overflow: 'hidden', border: `1px solid ${alpha(C.purple, 0.2)}`, boxShadow: `0 2px 12px ${alpha(C.purple, 0.08)}` }}>
+                  <Box sx={{ px: 3, py: 1.5, background: alpha(C.purple, 0.06), borderBottom: `1px solid ${alpha(C.purple, 0.12)}` }}>
                     <Stack direction="row" alignItems="center" spacing={1}>
-                      <CloudUpload sx={{ fontSize: 18, color: C.teal }} />
-                      <Typography variant="subtitle2" fontWeight={700} sx={{ color: C.teal }}>Uploaded Documents</Typography>
-                      <Chip label={`${uploadedDocs.length} file${uploadedDocs.length !== 1 ? 's' : ''}`} size="small" sx={{ bgcolor: alpha(C.teal, 0.12), color: C.teal, fontWeight: 700 }} />
+                      <CloudUpload sx={{ fontSize: 18, color: C.purple }} />
+                      <Typography variant="subtitle2" fontWeight={700} sx={{ color: C.purple }}>Uploaded Documents</Typography>
+                      <Chip label={`${uploadedDocs.length} file${uploadedDocs.length !== 1 ? 's' : ''}`} size="small" sx={{ bgcolor: alpha(C.purple, 0.12), color: C.purple, fontWeight: 700 }} />
                     </Stack>
                   </Box>
                   <Box sx={{ px: 3, py: 2 }}>
@@ -555,7 +557,7 @@ const RegisterExporterPage = () => {
                           {uploadedDocs.map(([key, f]) => (
                             <Grid item xs={12} sm={6} key={key}>
                               <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 0.5 }}>
-                                <CheckCircle sx={{ fontSize: 15, color: C.teal }} />
+                                <CheckCircle sx={{ fontSize: 15, color: C.purple }} />
                                 <Box minWidth={0}>
                                   <Typography variant="caption" fontWeight={700} sx={{ color: '#1a1a1a', textTransform: 'capitalize' }}>
                                     {key.replace(/Doc$/, '').replace(/([A-Z])/g, ' $1').trim()}
@@ -700,7 +702,7 @@ const RegisterExporterPage = () => {
                         error={docsTouched && !docFiles.businessLicenseDoc}
                         helperText={docsTouched && !docFiles.businessLicenseDoc ? 'Business license upload required' : ''}
                         InputProps={{
-                          endAdornment: <UploadAdornment docKey="businessLicenseDoc" file={docFiles.businessLicenseDoc} color={C.green} touched={docsTouched && !docFiles.businessLicenseDoc} onChange={handleDoc} />,
+                          endAdornment: <UploadAdornment docKey="businessLicenseDoc" file={docFiles.businessLicenseDoc} color={C.purple} touched={docsTouched && !docFiles.businessLicenseDoc} onChange={handleDoc} />,
                         }} />
                     </Grid>
 
@@ -712,14 +714,14 @@ const RegisterExporterPage = () => {
                   </Grid>
 
                   {/* ══ 2. ECTA Requirements ══ */}
-                  <SectionHeader icon={<VerifiedUser />} color={C.green} title="ECTA Requirements" subtitle="As per Directive 1106/2025 (Effective 2026)" />
+                  <SectionHeader icon={<VerifiedUser />} color={C.purple} title="ECTA Requirements" subtitle="As per Directive 1106/2025 (Effective 2026)" />
 
                   <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
                     <Typography variant="caption" fontWeight={700}>Minimum Capital Requirements:</Typography>
                     <Stack direction="row" spacing={1} flexWrap="wrap" mt={0.5}>
-                      <Chip label="Private: 15,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
-                      <Chip label="Company: 20,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
-                      <Chip label="Individual: 10,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.green, 0.1), color: C.green, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Private: 15,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.purple, 0.1), color: C.purple, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Company: 20,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.purple, 0.1), color: C.purple, fontWeight: 600, fontSize: '0.7rem' }} />
+                      <Chip label="Individual: 10,000,000 ETB" size="small" sx={{ bgcolor: alpha(C.purple, 0.1), color: C.purple, fontWeight: 600, fontSize: '0.7rem' }} />
                     </Stack>
                   </Alert>
 
@@ -752,15 +754,15 @@ const RegisterExporterPage = () => {
                         }
                         inputProps={{ min: minCapital, step: 1 }}
                         InputProps={{
-                          startAdornment: <InputAdornment position="start"><AttachMoney sx={{ color: C.green, fontSize: 18 }} /></InputAdornment>,
-                          endAdornment: <UploadAdornment docKey="bankStatementDoc" file={docFiles.bankStatementDoc} color={C.blue} touched={docsTouched && !docFiles.bankStatementDoc} onChange={handleDoc} />,
+                          startAdornment: <InputAdornment position="start"><AttachMoney sx={{ color: C.gold, fontSize: 18 }} /></InputAdornment>,
+                          endAdornment: <UploadAdornment docKey="bankStatementDoc" file={docFiles.bankStatementDoc} color={C.gold} touched={docsTouched && !docFiles.bankStatementDoc} onChange={handleDoc} />,
                         }} />
                     </Grid>
 
                     {/* Professional taster */}
                     <Grid item xs={12} md={6}>
                       <TextField fullWidth required label="Professional Taster Name" value={formData.professionalTaster} onChange={handleChange('professionalTaster')} size="small"
-                        InputProps={{ startAdornment: <InputAdornment position="start"><Person sx={{ color: C.green, fontSize: 18 }} /></InputAdornment> }}
+                        InputProps={{ startAdornment: <InputAdornment position="start"><Person sx={{ color: C.purple, fontSize: 18 }} /></InputAdornment> }}
                         helperText="Must hold at least a diploma" />
                     </Grid>
 
@@ -770,8 +772,8 @@ const RegisterExporterPage = () => {
                         error={docsTouched && !docFiles.tasterCertDoc}
                         helperText={docsTouched && !docFiles.tasterCertDoc ? 'Taster certificate upload required' : 'Renewed / valid certificate number'}
                         InputProps={{
-                          startAdornment: <InputAdornment position="start"><Description sx={{ color: C.green, fontSize: 18 }} /></InputAdornment>,
-                          endAdornment: <UploadAdornment docKey="tasterCertDoc" file={docFiles.tasterCertDoc} color={C.orange} touched={docsTouched && !docFiles.tasterCertDoc} onChange={handleDoc} />,
+                          startAdornment: <InputAdornment position="start"><Description sx={{ color: C.purple, fontSize: 18 }} /></InputAdornment>,
+                          endAdornment: <UploadAdornment docKey="tasterCertDoc" file={docFiles.tasterCertDoc} color={C.gold} touched={docsTouched && !docFiles.tasterCertDoc} onChange={handleDoc} />,
                         }} />
                     </Grid>
 
@@ -792,7 +794,7 @@ const RegisterExporterPage = () => {
                           error={docsTouched && !docFiles.labCertDoc}
                           helperText={docsTouched && !docFiles.labCertDoc ? 'Lab certificate upload required' : 'ECTA-certified lab certificate number'}
                           InputProps={{
-                            endAdornment: <UploadAdornment docKey="labCertDoc" file={docFiles.labCertDoc} color={C.teal} touched={docsTouched && !docFiles.labCertDoc} onChange={handleDoc} />,
+                            endAdornment: <UploadAdornment docKey="labCertDoc" file={docFiles.labCertDoc} color={C.purple} touched={docsTouched && !docFiles.labCertDoc} onChange={handleDoc} />,
                           }} />
                       </Grid>
                     )}
@@ -800,24 +802,24 @@ const RegisterExporterPage = () => {
                   </Grid>
 
                   {/* ══ 3. Company History (standalone optional upload) ══ */}
-                  <SectionHeader icon={<HistoryEdu />} color={C.indigo} title="Company History" subtitle="Optional — trade references or business history" />
+                  <SectionHeader icon={<HistoryEdu />} color={C.purple} title="Company History" subtitle="Optional — trade references or business history" />
                   <Box sx={{ mb: 4 }}>
                     <HistoryUpload file={docFiles.historyDoc} onChange={handleDoc} />
                   </Box>
 
                   {/* ══ 4. Contact Details ══ */}
-                  <SectionHeader icon={<Person />} color={C.blue} title="Contact Details" subtitle="How ECTA will reach you regarding your application" />
+                  <SectionHeader icon={<Person />} color={C.gold} title="Contact Details" subtitle="How ECTA will reach you regarding your application" />
 
                   <Grid container spacing={2} sx={{ mb: 4 }}>
 
                     <Grid item xs={12} md={6}>
                       <TextField fullWidth required label="Contact Person" value={formData.contactPerson} onChange={handleChange('contactPerson')} size="small"
-                        InputProps={{ startAdornment: <InputAdornment position="start"><Person sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
+                        InputProps={{ startAdornment: <InputAdornment position="start"><Person sx={{ color: C.gold, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 
                     <Grid item xs={12} md={6}>
                       <TextField fullWidth required type="email" label="Email Address" value={formData.email} onChange={handleChange('email')} size="small"
-                        InputProps={{ startAdornment: <InputAdornment position="start"><Email sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
+                        InputProps={{ startAdornment: <InputAdornment position="start"><Email sx={{ color: C.gold, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 
                     {/* Phone — country-code selector + per-country length (field validation 2026-11-16) */}
@@ -832,7 +834,7 @@ const RegisterExporterPage = () => {
 
                     <Grid item xs={12}>
                       <TextField fullWidth required label="Physical Address" value={formData.address} onChange={handleChange('address')} size="small" multiline rows={2} placeholder="Street address, building name, floor…"
-                        InputProps={{ startAdornment: <InputAdornment position="start"><LocationOn sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
+                        InputProps={{ startAdornment: <InputAdornment position="start"><LocationOn sx={{ color: C.gold, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 
                     <Grid item xs={12} md={6}>
@@ -867,7 +869,7 @@ const RegisterExporterPage = () => {
                         // just a red border.
                         helperText={(() => { const c = validateBankAccount(formData.bankName, formData.bankAccountNumber); return formData.bankAccountNumber.length > 0 && !c.valid ? (c.error || '') : bankAccountHelperText(formData.bankName); })()}
                         error={formData.bankAccountNumber.length > 0 && !validateBankAccount(formData.bankName, formData.bankAccountNumber).valid}
-                        InputProps={{ startAdornment: <InputAdornment position="start"><AccountBalance sx={{ color: C.blue, fontSize: 18 }} /></InputAdornment> }} />
+                        InputProps={{ startAdornment: <InputAdornment position="start"><AccountBalance sx={{ color: C.gold, fontSize: 18 }} /></InputAdornment> }} />
                     </Grid>
 
                     <Grid item xs={12}>

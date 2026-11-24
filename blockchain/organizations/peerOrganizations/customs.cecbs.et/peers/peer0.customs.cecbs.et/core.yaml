@@ -1,4 +1,35 @@
+# ============================================================
+# Customs Peer Configuration
+# Ethiopian Customs Commission
+# ============================================================
+#
+# This configuration is minimal - most settings are overridden
+# by docker-compose environment variables in docker-compose-fabric.yml
+#
+# Key settings managed by docker-compose:
+# - CORE_PEER_LOCALMSPID=CustomsMSP
+# - CORE_PEER_ADDRESS=peer0.customs.cecbs.et:11051
+# - CORE_PEER_LISTENADDRESS=0.0.0.0:11051
+# - CORE_PEER_TLS_ENABLED=true
+# - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+# ============================================================
+
+peer:
+  # Identifier of the local MSP
+  # This is overridden by CORE_PEER_LOCALMSPID in docker-compose
+  localMspId: CustomsMSP
+
+  # Gossip configuration
+  gossip:
+    # This peer is configured as org leader
+    useLeaderElection: false
+    orgLeader: true
+    
+    # External endpoint for cross-org communication
+    externalEndpoint: peer0.customs.cecbs.et:11051
+
 chaincode:
+  # External chaincode builder for Chaincode-as-a-Service (CCAAS)
   externalBuilders:
     - name: ccaas_builder
       path: /builders/ccaas

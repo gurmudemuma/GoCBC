@@ -1,0 +1,5 @@
+/var/hyperledger/production/externalbuilder/builds/coffee_2.3-d9bd4854c13d34634d246f83a50bf293e9bc716309e4ff1785f655355be68bd1/release/chaincode/server/connection.json
+/var/hyperledger/production/externalbuilder/builds/coffee_2.3-d9bd4854c13d34634d246f83a50bf293e9bc716309e4ff1785f655355be68bd1/bld/connection.json
+/var/hyperledger/production/externalbuilder/builds/coffee_2.4-de45e573b492a28f2d52692058059d24379473ecde64d6703c5449f1e9609528/release/connection.json
+/var/hyperledger/production/externalbuilder/builds/coffee_2.4-de45e573b492a28f2d52692058059d24379473ecde64d6703c5449f1e9609528/bld/connection.json
+/var/hyperledger/production/externalbuilder/builds/coffee_2.4-85ae0a0d21be9e963d7aa0be16ce780b3984e04dcd057319f09d926c5db41e6f/release/connection.json

@@ -1,0 +1,37 @@
+# ============================================================
+# ECX Peer Configuration
+# Ethiopian Commodity Exchange (ECX)
+# ============================================================
+#
+# This configuration is minimal - most settings are overridden
+# by docker-compose environment variables in docker-compose-fabric.yml
+#
+# Key settings managed by docker-compose:
+# - CORE_PEER_LOCALMSPID=ECXMSP
+# - CORE_PEER_ADDRESS=peer0.ecx.cecbs.et:8051
+# - CORE_PEER_LISTENADDRESS=0.0.0.0:8051
+# - CORE_PEER_TLS_ENABLED=true
+# - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+# ============================================================
+
+peer:
+  # Identifier of the local MSP
+  # This is overridden by CORE_PEER_LOCALMSPID in docker-compose
+  localMspId: ECXMSP
+
+  # Gossip configuration
+  gossip:
+    # This peer is configured as org leader
+    useLeaderElection: false
+    orgLeader: true
+    
+    # External endpoint for cross-org communication
+    externalEndpoint: peer0.ecx.cecbs.et:8051
+
+chaincode:
+  # External chaincode builder for Chaincode-as-a-Service (CCAAS)
+  externalBuilders:
+    - name: ccaas_builder
+      path: /builders/ccaas
+      propagateEnvironment:
+        - CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG

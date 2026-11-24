@@ -1,0 +1,2 @@
+Installed chaincodes on peer:
+Package ID: coffee_1.11:5b88e02ae2c89bb4dd97cbd582c6a75b4364467667550fb172edede01b35e40d, Label: coffee_1.11

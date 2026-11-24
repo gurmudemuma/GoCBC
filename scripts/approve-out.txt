@@ -1,0 +1,25 @@
+
+Package ID: coffee_1.11:5b88e02ae2c89bb4dd97cbd582c6a75b4364467667550fb172edede01b35e40d
+
+[0;36m[INFO][0m  [4/6] Approving for all organizations...
+  Approving ECTAMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+  Approving ECXMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+  Approving BanksMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+  Approving NBEMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+  Approving CustomsMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+  Approving ShippingMSP... [1;33mWARN: Error: proposal failed with status: 500 - failed to invoke backing implementation of 'ApproveChaincodeDefinitionForMyOrg': attempted to redefine uncommitted sequence (1) for namespace coffee with unchanged content[0m
+[0;36m[INFO][0m  [5/6] Checking commit readiness...
+{
+	"approvals": {
+		"BanksMSP": true,
+		"CustomsMSP": true,
+		"ECTAMSP": true,
+		"ECXMSP": true,
+		"NBEMSP": true,
+		"ShippingMSP": true
+	}
+}
+[0;36m[INFO][0m  [6/6] Committing chaincode...
+[0;32m[OK][0m    Chaincode committed (or already committed)
+[0;36m[INFO][0m  Verifying commit...
+Error: query failed with status: 404 - namespace coffee is not defined

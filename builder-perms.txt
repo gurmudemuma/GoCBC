@@ -1,0 +1,5 @@
+Permissions Size User Date Modified Name
+.rwxr-xr-x   972 guda 19 Nov 17:49  build
+.rwxr-xr-x  1.5k guda 19 Nov 17:49  detect
+.rwxr-xr-x   824 guda 19 Nov 17:49  release
+.rwxr-xr-x  1.1k guda 19 Nov 17:49  run

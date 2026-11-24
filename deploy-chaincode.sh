@@ -78,57 +78,70 @@ else
     exit 1
 fi
 
-# Check if already committed and determine version/sequence
-echo -e "${YELLOW}Checking if chaincode is already deployed...${NC}"
-CURRENT_VERSION=""
-CURRENT_SEQUENCE=""
-# The current code version is the label in chaincodes/coffee/metadata.json
-# (coffee_2.3). A fresh channel deploys that version at sequence 1; an
-# upgrade bumps the minor version and sequence from what is committed.
-METADATA_VERSION=$(grep -oP '"label":\s*"coffee_\K[0-9.]+' "$CHAINCODE_DIR/metadata.json" 2>/dev/null || echo "2.3")
-VERSION="$METADATA_VERSION"
+# Simple versioning: always use version "1" and sequence "1"
+# The label in metadata.json is just "coffee" (no version suffix)
+VERSION="1"
 SEQUENCE="1"
+
+echo -e "${YELLOW}Checking if chaincode is already deployed...${NC}"
 
 if docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
     --channelID coffeechannel --name coffee 2>/dev/null | grep -q "Version:"; then
     
-    # Get current version and sequence
+    # Chaincode already exists - wipe and redeploy
     CHAINCODE_INFO=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode querycommitted \
         --channelID coffeechannel --name coffee 2>/dev/null)
     
-    CURRENT_VERSION=$(echo "$CHAINCODE_INFO" | grep -oP 'Version: \K[0-9.]+' || echo "1.0")
-    CURRENT_SEQUENCE=$(echo "$CHAINCODE_INFO" | grep -oP 'Sequence: \K[0-9]+' || echo "1")
+    CURRENT_VERSION=$(echo "$CHAINCODE_INFO" | grep -oP 'Version: \K[0-9.]+' || echo "unknown")
+    CURRENT_SEQUENCE=$(echo "$CHAINCODE_INFO" | grep -oP 'Sequence: \K[0-9]+' || echo "unknown")
     
-    echo -e "${GREEN}✓ Chaincode already deployed: v${CURRENT_VERSION}, sequence ${CURRENT_SEQUENCE}${NC}"
+    echo -e "${YELLOW}⚠ Chaincode already deployed: v${CURRENT_VERSION}, sequence ${CURRENT_SEQUENCE}${NC}"
+    echo -e "${YELLOW}  Wiping blockchain and redeploying with simple 'coffee' label...${NC}"
+    echo ""
     
-    # Check if chaincode source has changed
-    if [ -f "$CHAINCODE_DIR/.last_deployed" ]; then
-        LAST_HASH=$(cat "$CHAINCODE_DIR/.last_deployed" 2>/dev/null || echo "")
-        CURRENT_HASH=$(chaincode_source_hash)
-        
-        if [ "$LAST_HASH" == "$CURRENT_HASH" ]; then
-            echo -e "${GREEN}✓ No chaincode changes detected - skipping redeployment${NC}"
-            echo ""
-            echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-            echo -e "${GREEN}  Chaincode is up-to-date and ready${NC}"
-            echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-            exit 0
-        else
-            echo -e "${YELLOW}⚠ Chaincode changes detected - upgrading...${NC}"
-        fi
+    # Determine compose command
+    if docker compose version &> /dev/null 2>&1; then
+        COMPOSE_CMD="docker compose"
+    else
+        COMPOSE_CMD="docker-compose"
     fi
     
-    # Increment version for upgrade
-    MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-    MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-    MINOR=$((MINOR + 1))
-    VERSION="${MAJOR}.${MINOR}"
-    SEQUENCE=$((CURRENT_SEQUENCE + 1))
+    # Wipe everything
+    echo -e "${YELLOW}Stopping and removing all containers with volumes...${NC}"
+    $COMPOSE_CMD -f "$COMPOSE_FILE" down -v
+    sleep 5
     
-    echo -e "${BLUE}➜ Upgrading to v${VERSION}, sequence ${SEQUENCE}${NC}"
+    echo -e "${YELLOW}Restarting blockchain network...${NC}"
+    echo -e "${BLUE}  Please wait, this will take 2-3 minutes...${NC}"
+    
+    # Start in proper order
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d postgres redis
+    sleep 10
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d couchdb.ecta couchdb.ecx couchdb.banks couchdb.nbe couchdb.customs couchdb.shipping
+    sleep 10
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d orderer.cecbs.et
+    sleep 30
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d peer0.ecta.cecbs.et peer0.ecx.cecbs.et peer0.banks.cecbs.et peer0.nbe.cecbs.et peer0.customs.cecbs.et peer0.shipping.cecbs.et
+    sleep 20
+    
+    # Recreate channel
+    echo -e "${YELLOW}Recreating channel...${NC}"
+    "$REPO_ROOT/scripts/create-channel-docker.sh" || {
+        echo -e "${RED}✗ Failed to recreate channel${NC}"
+        exit 1
+    }
+    
+    echo -e "${GREEN}✓ Blockchain wiped and restarted${NC}"
+    echo -e "${BLUE}➜ Proceeding with fresh deployment${NC}"
+    
+    # Clear CURRENT_SEQUENCE since we now have a fresh blockchain
+    CURRENT_SEQUENCE=""
+    
 else
-    echo -e "${YELLOW}⚠ Chaincode not yet deployed - performing initial deployment${NC}"
+    echo -e "${YELLOW}⚠ No chaincode deployed - proceeding with fresh deployment${NC}"
 fi
+
+echo -e "${BLUE}➜ Deploying version ${VERSION}, sequence ${SEQUENCE}${NC}"
 
 # ── Fail fast on the packaged connection.json (TLS-mismatch trap, 2026-11-19) ──
 # The peer dials the address in the INSTALLED package's connection.json —
@@ -176,14 +189,14 @@ fi
 echo ""
 
 # Locate or create chaincode package
-CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee_${VERSION}.tar.gz"
+CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee.tar.gz"
 
 # Always rebuild package for deployment
-echo -e "${YELLOW}Building chaincode package v${VERSION}...${NC}"
+echo -e "${YELLOW}Building chaincode package...${NC}"
 cd "$CHAINCODE_DIR"
 
 # Remove old package
-rm -f "coffee_${VERSION}.tar.gz"
+rm -f "coffee.tar.gz"
 
 # Package the chaincode - CCAAS (Chaincode-as-a-Service), NOT golang.
 # The live chaincode runs as the coffee-chaincode Docker image at
@@ -193,36 +206,14 @@ rm -f "coffee_${VERSION}.tar.gz"
 # above from the live channel: with v2.2 / seq 21 committed, the next
 # run packages v2.3 / seq 22.
 
-# Build the CCAAS package directory: label must match this run's version.
-rm -rf pkg-temp code-temp
-mkdir -p pkg-temp
-cat > pkg-temp/metadata.json <<EOF
-{
-  "label": "coffee_${VERSION}",
-  "type": "ccaas"
-}
-EOF
-
-# For CCAAS external chaincode in Fabric 2.5:
-# Package structure MUST have:
-#   - metadata.json with "type": "ccaas" — the external-builder detect step
-#     requires it. Without the type field the peer install fails with
-#     "Unknown chaincodeType"; that was the seq-21 install failure, fixed
-#     in the repo's chaincodes/coffee/metadata.json in ffaad3f8. A package
-#     built with label only reintroduces it.
-#   - code.tar.gz (containing connection.json + META-INF/statedb/... indexes)
-# Fabric requires code.tar.gz to exist, and extracts it before calling builders
-
-# Create the package directory
+# Build the CCAAS package directory with simple "coffee" label
 rm -rf pkg-temp code-temp
 mkdir -p pkg-temp code-temp
 
-# Create metadata.json — label AND type. The type field must match the
-# repo's chaincodes/coffee/metadata.json exactly, or the host install
-# reintroduces the seq-21 external-builder detect failure (see above).
+# Create metadata.json — simple "coffee" label, no version suffix
 cat > pkg-temp/metadata.json <<EOF
 {
-  "label": "coffee_${VERSION}",
+  "label": "coffee",
   "type": "ccaas"
 }
 EOF
@@ -249,25 +240,27 @@ ls -la pkg-temp/
 echo "Contents of code.tar.gz:"
 tar -tzf pkg-temp/code.tar.gz
 
-# Create the final package: metadata.json and code.tar.gz at root
-tar -czf "coffee_${VERSION}.tar.gz" -C pkg-temp metadata.json code.tar.gz
+# Create the final package with simple "coffee" label
+tar -czf "coffee.tar.gz" -C pkg-temp metadata.json code.tar.gz
 
 # Clean up
 rm -rf pkg-temp code-temp
+
+CHAINCODE_PACKAGE="$CHAINCODE_DIR/coffee.tar.gz"
 
 if [ ! -f "$CHAINCODE_PACKAGE" ]; then
     echo -e "${RED}✗ Failed to create chaincode package${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✓ Chaincode package created: coffee_${VERSION}.tar.gz${NC}"
+echo -e "${GREEN}✓ Chaincode package created: coffee.tar.gz${NC}"
 echo ""
 
 cd "$REPO_ROOT"
 
 # Install on ECTA peer first
-echo -e "${YELLOW}Installing chaincode v${VERSION} on ECTA peer...${NC}"
-if ! docker cp "$CHAINCODE_PACKAGE" peer0.ecta.cecbs.et:/tmp/coffee_${VERSION}.tar.gz; then
+echo -e "${YELLOW}Installing chaincode on ECTA peer...${NC}"
+if ! docker cp "$CHAINCODE_PACKAGE" peer0.ecta.cecbs.et:/tmp/coffee.tar.gz; then
     echo -e "${RED}✗ Failed to copy package to ECTA peer — is peer0.ecta.cecbs.et running? (docker ps)${NC}"
     exit 1
 fi
@@ -279,7 +272,7 @@ fi
 INSTALL_OUT=$(docker exec \
     -e CORE_PEER_LOCALMSPID=ECTAMSP \
     -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
-    peer0.ecta.cecbs.et peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1)
+    peer0.ecta.cecbs.et peer lifecycle chaincode install /tmp/coffee.tar.gz 2>&1)
 INSTALL_RC=$?
 if [ $INSTALL_RC -ne 0 ] || ! echo "$INSTALL_OUT" | grep -qE "Installed remotely|already successfully installed"; then
     echo -e "${RED}✗ Install on ECTA failed (exit ${INSTALL_RC})${NC}"
@@ -299,7 +292,7 @@ for peer_info in "peer0.ecx.cecbs.et:ECXMSP:ecx.cecbs.et:ECX" \
     IFS=':' read -r peer_name msp_id org_domain org_name <<< "$peer_info"
     
     echo -e "${YELLOW}Installing on $org_name...${NC}"
-    if ! docker cp "$CHAINCODE_PACKAGE" "$peer_name":/tmp/coffee_${VERSION}.tar.gz; then
+    if ! docker cp "$CHAINCODE_PACKAGE" "$peer_name":/tmp/coffee.tar.gz; then
         echo -e "${RED}✗ Failed to copy package to $org_name peer ($peer_name) — is the container running? (docker ps)${NC}"
         exit 1
     fi
@@ -307,7 +300,7 @@ for peer_info in "peer0.ecx.cecbs.et:ECXMSP:ecx.cecbs.et:ECX" \
     INSTALL_OUT=$(docker exec \
         -e CORE_PEER_LOCALMSPID="$msp_id" \
         -e CORE_PEER_MSPCONFIGPATH="/etc/hyperledger/fabric/users/Admin@$org_domain/msp" \
-        "$peer_name" peer lifecycle chaincode install /tmp/coffee_${VERSION}.tar.gz 2>&1)
+        "$peer_name" peer lifecycle chaincode install /tmp/coffee.tar.gz 2>&1)
     INSTALL_RC=$?
     if [ $INSTALL_RC -ne 0 ] || ! echo "$INSTALL_OUT" | grep -qE "Installed remotely|already successfully installed"; then
         echo -e "${RED}✗ Install on $org_name failed (exit ${INSTALL_RC})${NC}"
@@ -328,7 +321,8 @@ QUERY_OUT=$(docker exec \
     -e CORE_PEER_LOCALMSPID=ECTAMSP \
     -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/users/Admin@ecta.cecbs.et/msp \
     peer0.ecta.cecbs.et peer lifecycle chaincode queryinstalled 2>&1)
-PACKAGE_ID=$(echo "$QUERY_OUT" | grep "coffee_${VERSION}" | awk '{print $3}' | sed 's/,//' | head -1)
+# Match either "Package ID: coffee:hash, Label: coffee" or "coffee:hash" format
+PACKAGE_ID=$(echo "$QUERY_OUT" | grep -E "(Package ID: coffee:|Label: coffee)" | grep -oE "coffee:[a-f0-9]+" | head -1)
 
 if [ -z "$PACKAGE_ID" ]; then
     echo -e "${RED}✗ Failed to get package ID${NC}"
@@ -358,7 +352,7 @@ echo ""
 # An unreadable bld/ copy is a HARD FAIL now, not a skipped check:
 # install just succeeded, so the build dir must be there.
 PKG_HASH="${PACKAGE_ID##*:}"
-PKG_BUILD_DIR="/var/hyperledger/production/externalbuilder/builds/coffee_${VERSION}-${PKG_HASH}"
+PKG_BUILD_DIR="/var/hyperledger/production/externalbuilder/builds/coffee-${PKG_HASH}"
 INSTALLED_CONN=$(docker exec peer0.ecta.cecbs.et cat "$PKG_BUILD_DIR/bld/connection.json" 2>/dev/null || echo "")
 INSTALLED_ADDR=$(echo "$INSTALLED_CONN" | grep -oP '"address":\s*"\K[^"]+' || echo "")
 INSTALLED_TLS=$(echo "$INSTALLED_CONN" | grep -oP '"tls_required":\s*\K(true|false)' || echo "")
@@ -390,17 +384,12 @@ echo ""
 # ── Update the chaincode server for the new package ID ──────────────────────
 # CCAAS peers route invocations to the chaincode server registered under the
 # package ID of the committed definition. The server (coffee-chaincode
-# container) still registers under the OLD package ID, so after an upgrade
-# every invoke/query would fail with no server for the new ID. Before
-# approving/committing, point the compose file at the new package ID and
-# image tag, rebuild the server image (it carries the new Go code), and
-# recreate the container so it registers under the new ID. If the ID is
-# unchanged (same version re-installed) this is a no-op rewrite.
+# container) registers under the package ID. Update the compose file with
+# the package ID and rebuild the server image.
 echo -e "${YELLOW}Updating chaincode server to package ID ${PACKAGE_ID}...${NC}"
-sed -i "s|^\(\s*\)image: coffee-chaincode:.*|\1image: coffee-chaincode:${VERSION}|" "$COMPOSE_FILE"
+sed -i "s|^\(\s*\)image: coffee-chaincode:.*|\1image: coffee-chaincode:1|" "$COMPOSE_FILE"
 sed -i "s|^\(\s*- \)CORE_CHAINCODE_ID_NAME=.*|\1CORE_CHAINCODE_ID_NAME=${PACKAGE_ID}|" "$COMPOSE_FILE"
-sed -i "s|\"label\": \"coffee_[0-9.]*\"|\"label\": \"coffee_${VERSION}\"|" "$CHAINCODE_DIR/metadata.json"
-echo -e "${GREEN}✓ Compose file updated: coffee-chaincode:${VERSION}, ID ${PACKAGE_ID}${NC}"
+echo -e "${GREEN}✓ Compose file updated: coffee-chaincode:1, ID ${PACKAGE_ID}${NC}"
 
 cd "$REPO_ROOT"
 # F8: --no-cache so a stale layer can never resurrect old Go code, and
@@ -766,17 +755,17 @@ COMMIT_OUTPUT=$(docker exec peer0.ecta.cecbs.et peer lifecycle chaincode commit 
     --tls --cafile /var/hyperledger/orderer-tls/tlsca.cecbs.et-cert.pem \
     --channelID coffeechannel --name coffee --version ${VERSION} --sequence ${SEQUENCE} \
     --peerAddresses peer0.ecta.cecbs.et:7051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/ecta-ca.crt \
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/ecta.cecbs.et/peers/peer0.ecta.cecbs.et/tls/ca.crt \
     --peerAddresses peer0.ecx.cecbs.et:8051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/ecx-ca.crt \
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/ecx.cecbs.et/peers/peer0.ecx.cecbs.et/tls/ca.crt \
     --peerAddresses peer0.banks.cecbs.et:9051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/banks-ca.crt \
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/banks.cecbs.et/peers/peer0.banks.cecbs.et/tls/ca.crt \
     --peerAddresses peer0.nbe.cecbs.et:10051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/nbe-ca.crt \
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/nbe.cecbs.et/peers/peer0.nbe.cecbs.et/tls/ca.crt \
     --peerAddresses peer0.customs.cecbs.et:11051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/customs-ca.crt \
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/customs.cecbs.et/peers/peer0.customs.cecbs.et/tls/ca.crt \
     --peerAddresses peer0.shipping.cecbs.et:12051 \
-    --tlsRootCertFiles /etc/hyperledger/fabric/channel-artifacts/peer-tls/shipping-ca.crt 2>&1)
+    --tlsRootCertFiles /etc/hyperledger/fabric/peer-orgs/shipping.cecbs.et/peers/peer0.shipping.cecbs.et/tls/ca.crt 2>&1)
 echo "$COMMIT_OUTPUT" | grep -E "committed with status|Error" || true
 if ! echo "$COMMIT_OUTPUT" | grep -q "committed with status"; then
     echo -e "${RED}✗ Chaincode commit did not succeed — see output above${NC}"
@@ -819,15 +808,17 @@ if echo "$COMMITTED_INFO" | grep -q "Version: ${VERSION}" && echo "$COMMITTED_IN
     # (observed natively) vs ~400 ms on ECTA, so the new definition had
     # simply not landed on Banks yet when the query ran. ECTA is the
     # fastest peer to see the committed definition.
-    # Budget: 12 attempts x 15 s (~180 s). The server takes ~25 s to
-    # start and register, the commit block lands on ECTA in ~400 ms,
-    # and the first query can take extra seconds while the peer routes
-    # to the newly registered server; 180 s covers a slow start with
-    # margin and still fails well inside the 300 s invoke timeout, so
-    # a genuine failure reports its cause instead of hanging.
+    # Budget: 6 attempts x 10 s (~60 s). Reduced from 12x15s to avoid long hangs.
+    # The server takes ~25 s to start and register, the commit block lands on 
+    # ECTA in ~400 ms. 60s is enough for normal startup but fails faster if broken.
+    # Set SKIP_WARMUP=1 to skip this check entirely.
     WARMUP_OK=0
     WARMUP_OUT=""
-    for i in $(seq 1 12); do
+    if [ "${SKIP_WARMUP}" = "1" ]; then
+        echo -e "${YELLOW}  Skipping warm-up query (SKIP_WARMUP=1)${NC}"
+        WARMUP_OK=1
+    else
+    for i in $(seq 1 6); do
         WARMUP_OUT=$(docker exec peer0.ecta.cecbs.et peer chaincode query \
             -C coffeechannel -n coffee \
             -c '{"Args":["QueryAllLCs"]}' 2>&1)
@@ -836,15 +827,19 @@ if echo "$COMMITTED_INFO" | grep -q "Version: ${VERSION}" && echo "$COMMITTED_IN
             echo -e "${GREEN}✓ Chaincode containers initialized (warm-up query succeeded on peer0.ecta, attempt $i/12)${NC}"
             break
         fi
-        echo -e "${YELLOW}  Warm-up query attempt $i/12 failed; retrying in 15s...${NC}"
-        [ $i -lt 12 ] && sleep 15
+        echo -e "${YELLOW}  Warm-up query attempt $i/6 failed; retrying in 10s...${NC}"
+        [ $i -lt 6 ] && sleep 10
     done
+    fi
     if [ "$WARMUP_OK" -ne 1 ]; then
-        echo -e "${RED}✗ Warm-up query failed after 12 attempts (~180s) — the committed chaincode is not serving queries${NC}"
+        echo -e "${RED}✗ Warm-up query failed after 6 attempts (~60s) — the committed chaincode is not serving queries${NC}"
         echo -e "${RED}  Last query output (peer0.ecta, QueryAllLCs):${NC}"
         echo "$WARMUP_OUT"
         echo -e "${RED}  Chaincode server log (last 30 lines):${NC}"
         docker logs --tail 30 coffee-chaincode 2>&1 || true
+        echo ""
+        echo -e "${YELLOW}  Run: ./diagnose-chaincode.sh to debug${NC}"
+        echo -e "${YELLOW}  Or: SKIP_WARMUP=1 ./deploy-chaincode.sh to skip this check${NC}"
         exit 1
     fi
     # Post-launch re-check of the release/ copy: release/ only exists

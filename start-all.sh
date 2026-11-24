@@ -714,20 +714,22 @@ cleanup_ports() {
             continue
         fi
 
-        # Healthy live service on this port? Leave it alone.
-        if [ "$port" -eq "$API_PORT" ] && is_api_healthy; then
-            write_warning "Port $port is in use by the HEALTHY live API (PID(s): $pids) — leaving it running"
-            write_info "  └─ Re-run will NOT restart it; the API stays up. (API/UI startup is manual.)"
-            API_ALREADY_RUNNING=true
-            ports_left_running=$((ports_left_running + 1))
-            continue
-        fi
-        if [ "$port" -eq "$UI_PORT" ] && is_ui_running; then
-            write_warning "Port $port is in use by the live UI (PID(s): $pids) — leaving it running"
-            write_info "  └─ Re-run will NOT restart it; the UI stays up. (API/UI startup is manual.)"
-            UI_ALREADY_RUNNING=true
-            ports_left_running=$((ports_left_running + 1))
-            continue
+        # Healthy live service on this port? Leave it alone UNLESS --clean is used.
+        if [ "$CLEAN" != true ]; then
+            if [ "$port" -eq "$API_PORT" ] && is_api_healthy; then
+                write_warning "Port $port is in use by the HEALTHY live API (PID(s): $pids) — leaving it running"
+                write_info "  └─ Re-run will NOT restart it; the API stays up. (API/UI startup is manual.)"
+                API_ALREADY_RUNNING=true
+                ports_left_running=$((ports_left_running + 1))
+                continue
+            fi
+            if [ "$port" -eq "$UI_PORT" ] && is_ui_running; then
+                write_warning "Port $port is in use by the live UI (PID(s): $pids) — leaving it running"
+                write_info "  └─ Re-run will NOT restart it; the UI stays up. (API/UI startup is manual.)"
+                UI_ALREADY_RUNNING=true
+                ports_left_running=$((ports_left_running + 1))
+                continue
+            fi
         fi
 
         write_step "Port $port is in use by PID(s): $pids (not the healthy live service — terminating)"

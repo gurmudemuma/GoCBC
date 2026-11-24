@@ -67,6 +67,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -101,6 +102,7 @@ services:
       - ./blockchain/organizations/ordererOrganizations/cecbs.et/orderers/orderer.cecbs.et/msp/tlscacerts:/var/hyperledger/orderer-tls
       - ./blockchain/peer-config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - ./builders:/builders
+      - ./blockchain/organizations/peerOrganizations:/etc/hyperledger/fabric/peer-orgs:ro
       - peer0.ecta.cecbs.et:/var/hyperledger/production
     ports:
       - 7051:7051
@@ -131,6 +133,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -195,6 +198,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -259,6 +263,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -322,6 +327,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -386,6 +392,7 @@ services:
       - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=cecbs-network
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
       - CORE_PEER_PROFILE_ENABLED=false
       - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
       - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
@@ -449,19 +456,22 @@ services:
     build:
       context: ./chaincodes/coffee
       dockerfile: Dockerfile
-    image: coffee-chaincode:2.18
+    image: coffee-chaincode:1
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CORE_CHAINCODE_ID_NAME=coffee_2.18:535ab272f0148845d6040ce61439402bd7abb5e22da3891f828f1d9b144730cd
-      - CHAINCODE_TLS_DISABLED=false
-      - CHAINCODE_TLS_CERT_FILE=/app/tls/server-cert.pem
-      - CHAINCODE_TLS_KEY_FILE=/app/tls/server-key.pem
+      - CORE_CHAINCODE_ID_NAME=coffee:34530a7fcb2a72d6b3b4f5b731963ffd63c0d4c545541aa45bda1d329548abad
+      - CHAINCODE_TLS_DISABLED=true
+      - CHAINCODE_TLS_CERT_FILE=/certs/tls/server.crt
+      - CHAINCODE_TLS_KEY_FILE=/certs/tls/server.key
       - CORE_CHAINCODE_LOGGING_LEVEL=DEBUG
       - CORE_PEER_LOCALMSPID=ECTAMSP
       - GRPC_GO_LOG_VERBOSITY_LEVEL=99
       - GRPC_GO_LOG_SEVERITY_LEVEL=info
+      - CORE_PEER_ADDRESS=peer0.ecta.cecbs.et:7052
     ports:
       - "9999:9999"
+    volumes:
+      - ./chaincodes/coffee/tls:/certs/tls
     networks:
       - cecbs
     restart: unless-stopped

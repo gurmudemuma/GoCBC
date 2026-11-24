@@ -1,0 +1,122 @@
+[1m
+============================================================[0m
+[1mCECBS COMPLETE WORKFLOW TEST[0m
+[36mEthiopian Coffee Export End-to-End Process[0m
+[1m============================================================
+[0m
+[36m
+============================================================[0m
+[1mSTEP 0: Register Exporter (Prerequisite)[0m
+[36m============================================================[0m
+[32m✅ Logged in as ecta_admin (ECTA)[0m
+[33mℹ️  Exporter EXP6896621 already registered - skipping[0m
+[36m
+============================================================[0m
+[1mSTEP 1: Register Sales Contract (via ECTA admin)[0m
+[36m============================================================[0m
+[32m✅ Logged in as ecta_admin (ECTA)[0m
+[32m✅ Contract registered: CONTRACT_WF_322710[0m
+[33mℹ️  Total value: $170,000 USD for 20,000 kg[0m
+[36m
+============================================================[0m
+[1mSTEP 2: NBE: Approve Sales Contract[0m
+[36m============================================================[0m
+[32m✅ Logged in as nbe_admin (NBE)[0m
+[32m✅ Contract approved by NBE: CONTRACT_WF_322710[0m
+[36m
+============================================================[0m
+[1mSTEP 5: Create Shipment (via ECTA admin)[0m
+[36m============================================================[0m
+[32m✅ Shipment created: SHIP_WF_322710[0m
+[33mℹ️  Route: Sidamo → Djibouti Port → Los Angeles Port[0m
+[33mℹ️  Transport: SEA via Maersk Line | Vessel: MV Coffee Carrier[0m
+[36m
+============================================================[0m
+[1mSTEP 3: ECTA: Quality Inspection & Certification[0m
+[36m============================================================[0m
+[32m✅ Logged in as ecta_admin (ECTA)[0m
+[33mℹ️  Requesting quality inspection...[0m
+[32m✅ Inspection requested: INSP_WF_322710[0m
+[33mℹ️  Performing laboratory tests...[0m
+[32m✅ Laboratory tests completed[0m
+[33mℹ️  Issuing quality certificate...[0m
+[32m✅ Quality certificate issued: CERT-WF-322710[0m
+[33mℹ️  Grade: Grade 1 | Cupping Score: 87/100[0m
+[36m
+============================================================[0m
+[1mSTEP 4: BANKS: Request, Approve & Issue Letter of Credit (Forex Auto-Allocated)[0m
+[36m============================================================[0m
+[32m✅ Logged in as bank_admin (BANKS)[0m
+[33mℹ️  Requesting Letter of Credit...[0m
+[32m✅ LC requested: LC_WF_322710[0m
+[33mℹ️  Approving Letter of Credit...[0m
+[32m✅ LC approved: LC_WF_322710[0m
+[33mℹ️  LC approval auto-creates forex allocation[0m
+[33mℹ️  Issuing Letter of Credit...[0m
+[32m✅ LC issued: LC_WF_322710[0m
+[32m✅ Letter of Credit workflow completed![0m
+[33mℹ️  Amount: $170,000 USD | Status: ISSUED[0m
+[33mℹ️  Forex automatically allocated by ApproveLC chaincode function[0m
+[36m
+============================================================[0m
+[1mSTEP 6: CUSTOMS: Process Export Declaration[0m
+[36m============================================================[0m
+[32m✅ Logged in as customs_admin (CUSTOMS)[0m
+[33mℹ️  Submitting customs declaration...[0m
+[32m✅ Customs declaration submitted: DECL_WF_322710[0m
+[33mℹ️  Reviewing declaration...[0m
+[32m✅ Declaration reviewed - inspection scheduled[0m
+[33mℹ️  Performing physical inspection...[0m
+[32m✅ Physical inspection completed[0m
+[33mℹ️  Issuing customs clearance...[0m
+[32m✅ Customs cleared: CLR-WF-322710[0m
+[33mℹ️  Status: CLEARED | Ready for international shipment[0m
+[36m
+============================================================[0m
+[1mSTEP 7: SHIPPING: Confirm Shipment Departure[0m
+[36m============================================================[0m
+[32m✅ Logged in as shipping_admin (SHIPPING)[0m
+[33mℹ️  Issuing Bill of Lading...[0m
+[32m✅ Bill of Lading issued: BL-WF-322710[0m
+[33mℹ️  Vessel: MV Coffee Carrier (Voyage CC-2024-077)[0m
+[33mℹ️  Containers: MAEU1234567, MAEU1234568[0m
+[33mℹ️  Route: Djibouti → Los Angeles (ETA: 2026-08-07)[0m
+[33mℹ️  Seals: SEAL001, SEAL002[0m
+[36m
+============================================================[0m
+[1mSTEP 8: BANKS: Process Export Payment[0m
+[36m============================================================[0m
+[32m✅ Logged in as bank_admin (BANKS)[0m
+[33mℹ️  Initiating export payment...[0m
+[32m✅ Payment initiated: PAY-WF-322710[0m
+[33mℹ️  Submitting payment documents...[0m
+[32m✅ Payment documents submitted[0m
+[33mℹ️  Verifying payment compliance...[0m
+[32m✅ Payment documents verified[0m
+[33mℹ️  Settling payment with NBE retention...[0m
+[32m✅ Payment settled successfully![0m
+[33mℹ️  Gross Amount: $170,000 USD[0m
+[33mℹ️  NBE Retention (30%): $51,000 USD[0m
+[33mℹ️  Net to Exporter (70%): $119,000 USD[0m
+[33mℹ️  ETB Equivalent: 14,458,500 ETB @ 121.50 rate[0m
+[36m
+============================================================[0m
+[1mSTEP 9: VERIFICATION: Check Workflow Completion[0m
+[36m============================================================[0m
+[32m✅ Logged in as ecta_admin (ECTA)[0m
+[33mℹ️  Verifying contract status...[0m
+[32m✅ Contract Status: APPROVED[0m
+[33mℹ️  Verifying shipment status...[0m
+[32m✅ Shipment Status: LOADED[0m
+[32m
+============================================================[0m
+[1m🎉 WORKFLOW TEST COMPLETED SUCCESSFULLY! 🎉[0m
+[32m============================================================[0m
+[36m
+📊 WORKFLOW SUMMARY:[0m
+[36m   Contract ID: CONTRACT_WF_322710[0m
+[36m   Shipment ID: SHIP_WF_322710[0m
+[36m   Value: $170,000 USD[0m
+[36m   Quantity: 20,000 kg Grade 1 Arabica Sidamo[0m
+[36m   Status: Export process completed
+[0m

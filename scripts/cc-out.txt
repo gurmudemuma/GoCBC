@@ -1,0 +1,18 @@
+=== coffee-chaincode container status ===
+NAMES              STATUS                   PORTS
+coffee-chaincode   Exited (2) 2 hours ago   
+
+=== Full network info ===
+{"cecbs-network":{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"9b18f3d7ed1851a5cab6f00f29c82661f9d5f11933869fe3565465ea3ef32853","EndpointID":"","Gateway":"","IPAddress":"","MacAddress":"","IPPrefixLen":0,"IPv6Gateway":"","GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"DNSNames":["coffee-chaincode","d030cb0376bb"]}}
+
+=== Container logs (last 20) ===
+2026/06/29 10:26:18 Starting Coffee Chaincode - CCID: , Address: 0.0.0.0:9999
+2026/06/29 10:26:19 Starting chaincode server on 0.0.0.0:9999
+2026/06/29 10:26:19 Error starting coffee chaincode server: ccid must be specified
+panic: Error starting coffee chaincode server: ccid must be specified
+
+goroutine 1 [running]:
+log.Panicf({0xacce37?, 0x0?}, {0xc007e41ec0?, 0xc007e41f00?, 0x41d556?})
+	/usr/local/go/src/log/log.go:439 +0x65
+main.main()
+	/build/main.go:1206 +0x32e
